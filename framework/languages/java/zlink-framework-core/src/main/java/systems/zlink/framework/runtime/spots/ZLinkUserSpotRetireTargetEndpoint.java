@@ -1076,27 +1076,43 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             return ZLinkSerialExecutionQueue.yieldCurrent(
                                             actorJoin.notifyTargetJoined(
                                                     target.directAdmission(), target.staged()))
+                                    .handle((ignored, failure) -> failure)
                                     .thenCompose(
-                                            ignored ->
-                                                    ZLinkSerialExecutionQueue.yieldCurrent(
-                                                            actorJoin.submitSourceLeave(
-                                                                    request,
-                                                                    target.previousMembership(),
-                                                                    targetOwnerGeneration)))
+                                            failure -> {
+                                                if (failure != null) {
+                                                    return CompletableFuture.completedFuture(
+                                                            failure);
+                                                }
+                                                return ZLinkSerialExecutionQueue.yieldCurrent(
+                                                                actorJoin.submitSourceLeave(
+                                                                        request,
+                                                                        target.previousMembership(),
+                                                                        targetOwnerGeneration))
+                                                        .thenApply(ignored -> failure);
+                                            })
                                     .thenCompose(
-                                            ignored ->
+                                            failure ->
                                                     ZLinkSerialExecutionQueue.yieldCurrent(
-                                                            actorJoin.notifyTargetAccepted(
-                                                                    target.directAdmission(),
-                                                                    target.staged())))
-                                    .thenRun(() -> actorStaging.openAdmission(target.staged()))
+                                                                    actorJoin
+                                                                            .notifyTargetCompletion(
+                                                                                    target
+                                                                                            .directAdmission(),
+                                                                                    target.staged(),
+                                                                                    failure))
+                                                            .thenApply(ignored -> failure))
                                     .thenCompose(
-                                            ignored ->
-                                                    ZLinkSerialExecutionQueue.yieldCurrent(
-                                                            actorStaging.replayDirectJoin(
-                                                                    replay,
-                                                                    productionActorReplayer(
-                                                                            target, request))));
+                                            failure -> {
+                                                if (failure != null) {
+                                                    return CompletableFuture.<Void>failedFuture(
+                                                            failure);
+                                                }
+                                                actorStaging.openAdmission(target.staged());
+                                                return ZLinkSerialExecutionQueue.yieldCurrent(
+                                                        actorStaging.replayDirectJoin(
+                                                                replay,
+                                                                productionActorReplayer(
+                                                                        target, request)));
+                                            });
                         })
                 .thenCompose(
                         ignored ->

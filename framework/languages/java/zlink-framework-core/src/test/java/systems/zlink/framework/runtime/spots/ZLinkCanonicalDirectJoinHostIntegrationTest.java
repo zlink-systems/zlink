@@ -86,6 +86,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     private static final systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation
             OPEN = () -> false;
 
+    private static Scenario currentScenario;
+    private static final AtomicReference<CompletableFuture<ZLinkActorJoinCompletion>> COMPLETION =
+            new AtomicReference<>();
+
     private static final List<String> EVENTS = new CopyOnWriteArrayList<>();
     private static final AtomicReference<CompletableFuture<Void>> LEAVE_GATE =
             new AtomicReference<>();
@@ -133,6 +137,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     @EnumSource(Scenario.class)
     void actualHostsUseOneCanonicalOwnerForB1B2D1AndLifecycleOrdering(Scenario scenario)
             throws Exception {
+        currentScenario = scenario;
+        COMPLETION.set(new CompletableFuture<>());
         EVENTS.clear();
         ACCEPTED.set(null);
         ACCEPTED_STAGE.set(new CompletableFuture<>());
@@ -390,7 +396,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         @Override
                         public CompletionStage<Void> publish(
                                 ZLinkSpotRetireControl.StageRequest request) {
-                            return endpoint.publish(request);
+                            return endpoint.publish(request)
+                                    .whenComplete(
+                                            (ignored, failure) -> {
+                                                if (failure != null) {
+                                                    link.targetCompletion.completeExceptionally(
+                                                            failure);
+                                                }
+                                            });
                         }
 
                         @Override
@@ -570,6 +583,37 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertFalse(moved.isDone(), "the source turn boundary must own capture admission");
             activeTurn.complete(null);
             blocker.toCompletableFuture().get(1, TimeUnit.SECONDS);
+            if (scenario.joinedFailure() != null || scenario == Scenario.COMPLETION_FAILURE) {
+                ZLinkActorJoinCompletion completion = COMPLETION.get().get(4, TimeUnit.SECONDS);
+                if (scenario.joinedFailure() != null) {
+                    var failed =
+                            assertInstanceOf(ZLinkActorJoinCompletion.Failed.class, completion);
+                    assertEquals(operationId, failed.operationId());
+                    assertEquals(
+                            scenario == Scenario.JOINED_TYPED_FAILURE
+                                    ? ZLinkFrameworkErrorKind.DATA_LOST
+                                    : ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                            failed.kind());
+                    assertFalse(
+                            EVENTS.contains("leave.submit"),
+                            "failed target lifecycle must not submit source OnLeave");
+                    assertFalse(EVENTS.contains("source.leave"));
+                } else {
+                    assertEquals(
+                            operationId,
+                            assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, completion)
+                                    .operationId());
+                }
+                assertThrows(
+                        java.util.concurrent.ExecutionException.class,
+                        () -> link.targetCompletion.get(4, TimeUnit.SECONDS));
+                assertEquals(1, targetCommits.get(), "postcommit failure must preserve authority");
+                assertEquals(1, EVENTS.stream().filter("target.completion"::equals).count());
+                assertFalse(EVENTS.contains("target.open"), "failure must keep dispatch sealed");
+                assertFalse(EVENTS.stream().anyMatch(value -> value.startsWith("replay:")));
+                assertFalse(EVENTS.contains("command44"));
+                return;
+            }
             PUSH_SUBMITTED.get().get(4, TimeUnit.SECONDS);
             assertFalse(
                     link.targetCompletion.isDone(),
@@ -991,12 +1035,27 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     private enum Scenario {
         NORMAL(LeaveMode.DELIVER),
         LEAVE_FAILED_FUTURE(LeaveMode.FAILED_FUTURE),
-        LEAVE_THROW(LeaveMode.THROW);
+        LEAVE_THROW(LeaveMode.THROW),
+        JOINED_TYPED_FAILURE(LeaveMode.DELIVER),
+        JOINED_GENERIC_FAILURE(LeaveMode.DELIVER),
+        COMPLETION_FAILURE(LeaveMode.DELIVER);
 
         private final LeaveMode leaveMode;
 
         Scenario(LeaveMode leaveMode) {
             this.leaveMode = leaveMode;
+        }
+
+        RuntimeException joinedFailure() {
+            return switch (this) {
+                case JOINED_TYPED_FAILURE ->
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.DATA_LOST,
+                                "injected target joined failure");
+                case JOINED_GENERIC_FAILURE ->
+                        new IllegalStateException("injected target joined failure");
+                default -> null;
+            };
         }
 
         LeaveMode leaveMode() {
@@ -1484,7 +1543,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         @Override
         public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             EVENTS.add("target.joined");
-            return CompletableFuture.completedFuture(null);
+            RuntimeException failure = currentScenario.joinedFailure();
+            return failure == null
+                    ? CompletableFuture.completedFuture(null)
+                    : CompletableFuture.failedFuture(new CompletionException(failure));
         }
 
         @Override
@@ -1507,6 +1569,15 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
         @Override
         public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
+            EVENTS.add("target.completion");
+            COMPLETION.get().complete(completion);
+            if (completion instanceof ZLinkActorJoinCompletion.Failed) {
+                return CompletableFuture.completedFuture(null);
+            }
+            if (currentScenario == Scenario.COMPLETION_FAILURE) {
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException("injected completion callback failure"));
+            }
             var accepted = assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, completion);
             ACCEPTED.set(accepted.operationId());
             ACCEPTED_STAGE.get().complete(accepted.operationId());
