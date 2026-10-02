@@ -1097,17 +1097,18 @@ class spot_context_t
 
     std::vector<spot_packet_descriptor_t> packet_registry () const;
 
-    template <typename TActor>
-    task_t<actor_ref_t> leave_actor (const actor_ref_t &actor_ref, TActor &actor)
+    template <typename TActor> task_t<void> leave_actor (TActor &actor)
     {
-        return leave_actor_erased (
-          actor_ref, std::type_index (typeid (TActor)), &actor,
+        (void) co_await leave_actor_erased (
+          _state, actor.context ().actor_ref (), actor.context (),
+          std::type_index (typeid (TActor)), &actor,
           [] (void *actor_instance, const actor_ref_t &committed) {
               auto &typed_actor = *static_cast<TActor *> (actor_instance);
               if constexpr (requires { typed_actor.set_actor_ref (committed); }) {
                   typed_actor.set_actor_ref (committed);
               }
           });
+        co_return;
     }
 
     template <typename THandler>
@@ -1230,8 +1231,10 @@ class spot_context_t
                                              std::string packet_name,
                                              zlink::message_t payload);
     spot_context_t &register_packet_erased (std::string packet_name, std::type_index payload_type);
-    task_t<actor_ref_t>
-    leave_actor_erased (const actor_ref_t &actor_ref,
+    static task_t<actor_ref_t>
+    leave_actor_erased (std::shared_ptr<detail::spot_context_state_t> state,
+                        actor_ref_t actor_ref,
+                        actor_context_t &actor_context,
                         std::type_index actor_type,
                         void *actor,
                         std::function<void (void *, const actor_ref_t &)> update_actor_ref);
