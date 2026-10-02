@@ -1156,7 +1156,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Stream_node_shutdown_upper_bound_does_not_wait_for_cancellation_callback()
+    public async Task Stream_node_host_deadline_does_not_wait_for_cancellation_callback()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new CancellationAwareLifetime();
@@ -1227,7 +1227,9 @@ public sealed class StreamSessionForcedCleanupTests
             );
             await lifetime.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-            var shutdown = node.DisposeAsync().AsTask();
+            using var deadline = new CancellationTokenSource();
+            var shutdown = node.DisposeAsync(deadline.Token).AsTask();
+            deadline.Cancel();
             await lifetime.CancellationCallbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             await shutdown.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.Equal(0, lifetime.HandlerDisposeCount);
@@ -1245,7 +1247,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Stream_node_shutdown_upper_bound_does_not_wait_for_terminal_cancellation_callback()
+    public async Task Stream_node_host_deadline_does_not_wait_for_terminal_cancellation_callback()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new TerminalCancellationLifetime { CloseFromDispatch = true };
@@ -1290,7 +1292,9 @@ public sealed class StreamSessionForcedCleanupTests
             EmitJson(socket, routingId, new TerminalCancellationMessage());
             await lifetime.DisconnectedStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-            var shutdown = node.DisposeAsync().AsTask();
+            using var deadline = new CancellationTokenSource();
+            var shutdown = node.DisposeAsync(deadline.Token).AsTask();
+            deadline.Cancel();
             await lifetime.CancellationCallbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             await shutdown.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.Equal(0, lifetime.DependencyDisposeCount);
