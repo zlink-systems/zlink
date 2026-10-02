@@ -959,6 +959,24 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_TESTS
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
+  add_executable(test_cpp_framework_submit_result_contract
+    tests/Zlink.Framework.ContractTests/test_cpp_framework_submit_result_contract.cpp
+    framework/src/runtime/backend/raw_dealer_port.cpp
+    framework/src/runtime/dispatch/provider_task_context.cpp
+    framework/src/runtime/messaging/request_failure_mapper.cpp)
+  target_compile_features(test_cpp_framework_submit_result_contract PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_submit_result_contract PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_submit_result_contract PRIVATE zlink::cpp Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_submit_result_contract
+    COMMAND test_cpp_framework_submit_result_contract
+    LABELS "framework-contract;framework-unit;framework-foundation;raw-binding"
+    TIER unit
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_raw_route_port_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp
     framework/src/runtime/backend/raw_route_port.cpp)
@@ -2040,6 +2058,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       OpenSSL::SSL OpenSSL::Crypto)
   endif()
   add_zlink_framework_test(
+    test_cpp_framework_stream_liveness
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_liveness.cpp
+    "framework-unit;framework-contract;stream;liveness")
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_stream_liveness)
+  add_zlink_framework_test(
     test_cpp_framework_poll_interval_wait
     tests/Zlink.Framework.UnitTests/test_cpp_framework_poll_interval_wait.cpp
     "framework-unit;framework-regression")
@@ -2161,6 +2184,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 120
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_package)
+  add_zlink_connector_test(
+    test_cpp_stream_heartbeat_disabled
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_heartbeat_disabled.cpp
+    "connector-unit;connector-contract;stream;liveness"
+    contract)
   add_zlink_connector_test(
     test_cpp_stream_connector
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector.cpp

@@ -4257,7 +4257,7 @@ function readChannelEntry(reader: Reader, context: ServiceWireDecoderContext, en
 
 
   value["weight"] = readU32(reader, context, value, flags);
-  if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 100n) fail("weight constraint");
+  if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 10000n) fail("weight constraint");
 
 
 
@@ -4273,7 +4273,7 @@ function writeChannelEntry(input: ChannelEntry, writer: Writer, context: Service
 
   writeText8(value["channelName"], writer, context, value, flags);
   if (value["weight"] === undefined) fail("weight required");
-  if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 100n) fail("weight constraint");
+  if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 10000n) fail("weight constraint");
 
   writeU32(value["weight"], writer, context, value, flags);
 }
@@ -4451,7 +4451,7 @@ function readDescriptorExtension(reader: Reader, context: ServiceWireDecoderCont
             item.done("objectRole"); break;
       case 8:
             if (value["placementWeight"] !== undefined) fail("descriptor-extension duplicate"); value["placementWeight"] = readU32(item, context, value, flags);
-            if (numeric(value["placementWeight"]) < 0n || numeric(value["placementWeight"]) > 100n) fail("placementWeight constraint");
+            if (numeric(value["placementWeight"]) < 0n || numeric(value["placementWeight"]) > 10000n) fail("placementWeight constraint");
 
             item.done("placementWeight"); break;
       case 9:
@@ -4526,7 +4526,7 @@ function writeDescriptorExtension(input: DescriptorExtension, writer: Writer, co
     const item = new Writer(); writeObjectRole(value["objectRole"], item, context, value, flags); const itemBytes = item.result(); writeU8(7, body, context, value, flags); writeU32(itemBytes.length, body, context, value, flags); body.put(itemBytes);
   }
   if (value["placementWeight"] !== undefined) {
-    if (numeric(value["placementWeight"]) < 0n || numeric(value["placementWeight"]) > 100n) fail("placementWeight constraint");
+    if (numeric(value["placementWeight"]) < 0n || numeric(value["placementWeight"]) > 10000n) fail("placementWeight constraint");
 
     const item = new Writer(); writeU32(value["placementWeight"], item, context, value, flags); const itemBytes = item.result(); writeU8(8, body, context, value, flags); writeU32(itemBytes.length, body, context, value, flags); body.put(itemBytes);
   }
@@ -4660,7 +4660,7 @@ function readClientServerAdmission(reader: Reader, context: ServiceWireDecoderCo
 
 
     value["weight"] = readU32(body, context, value, flags);
-    if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 100n) fail("weight constraint");
+    if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 10000n) fail("weight constraint");
 
     value["runtimeState"] = readRuntimeState(body, context, value, flags);
 
@@ -4726,7 +4726,7 @@ function writeClientServerAdmission(input: ClientServerAdmission, writer: Writer
 
     writeNonzeroU64(numeric(value["descriptorRevision"]), body, context, value, flags);
     if (value["weight"] === undefined) fail("weight required");
-    if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 100n) fail("weight constraint");
+    if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 10000n) fail("weight constraint");
 
     writeU32(value["weight"], body, context, value, flags);
     if (value["runtimeState"] === undefined) fail("runtimeState required");

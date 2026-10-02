@@ -37,7 +37,6 @@ import type {
 } from '../foundation/service-stateful-wire-codec';
 import { routingIdsEqual } from '../routing-id';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
-import { crc32c } from '../foundation/service-relocation-runtime';
 import { putNewRelocationBlob, relocationBlobReference } from '../locations/relocation-blob';
 
 import {
@@ -81,7 +80,8 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
   }
 
   async reserve(
-    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>
+    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>,
+    signal?: AbortSignal
   ): Promise<ServiceInstanceAuthorityReserve> {
     const target = activation.target;
     const owner = this.requireOwner();
@@ -100,15 +100,15 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
     const stored = await putNewRelocationBlob(
       relocationStore,
       requestBytes,
-      CREATION_REQUEST_RETENTION_MS
+      CREATION_REQUEST_RETENTION_MS,
+      signal
     );
-    const storedRead = await relocationStore.read(stored.reference);
+    const storedRead = await relocationStore.read(stored.reference, signal);
     if (
       stored.reference.value.length === 0 ||
       stored.expiresAt.getTime() <= stored.storeNow.getTime() ||
       storedRead.kind !== 'found' ||
-      crc32c(storedRead.bytes) !== crc32c(requestBytes) ||
-      !Buffer.from(storedRead.bytes).equals(requestBytes)
+      Buffer.compare(storedRead.bytes, requestBytes) !== 0
     ) {
       await this.deleteOrphan(stored.reference);
       throw new Error('Relocation Store returned an invalid creation request receipt.');
@@ -116,40 +116,44 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
     let reserved: Awaited<ReturnType<ZLinkObjectCreationStore['reserve']>>;
     try {
       for (;;) {
-        reserved = await this.options.store.reserve({
-          key: { kind: 'instance_spot', globalId: target.targetSpotId },
-          intent: {
-            stableType: target.stableType,
-            requestContentReference: stored.reference.value,
-            requestSha256: requestHash,
-            requestEncodedSize: BigInt(requestBytes.byteLength)
-          },
-          target: {
-            meshName: this.options.meshName,
-            nodeRid: target.targetNodeRid,
-            nodeLifecycleGeneration: target.targetNodeGeneration,
-            owner
-          },
-          creatingPayload: encodeServiceInstanceAuthorityPayload({
-            state: 'coldActivating',
-            stableType: target.stableType,
-            spotId: target.targetSpotId,
-            ownerId: owner.ownerId,
-            ownerLeaseGeneration: owner.leaseGeneration,
-            ownerMeshName: this.options.meshName,
-            ownerNodeRid: target.targetNodeRid,
-            ownerNodeGeneration: target.targetNodeGeneration
-          }),
-          capacity: {
-            actors: 0,
-            spots: 1,
-            spotType: {
-              objectKind: 'instance_spot',
+        reserved = await this.options.store.reserve(
+          {
+            key: { kind: 'instance_spot', globalId: target.targetSpotId },
+            intent: {
               stableType: target.stableType,
-              count: 1
+              requestContentReference: stored.reference.value,
+              requestSha256: requestHash,
+              requestEncodedSize: BigInt(requestBytes.byteLength)
+            },
+            target: {
+              meshName: this.options.meshName,
+              nodeRid: target.targetNodeRid,
+              nodeLifecycleGeneration: target.targetNodeGeneration,
+              owner
+            },
+            creatingPayload: encodeServiceInstanceAuthorityPayload({
+              state: 'coldActivating',
+              stableType: target.stableType,
+              spotId: target.targetSpotId,
+              ownerId: owner.ownerId,
+              ownerLeaseGeneration: owner.leaseGeneration,
+              ownerMeshName: this.options.meshName,
+              ownerNodeRid: target.targetNodeRid,
+              ownerNodeGeneration: target.targetNodeGeneration
+            }),
+            capacity: {
+              actors: 0,
+              spots: 1,
+              spotType: {
+                objectKind: 'instance_spot',
+                stableType: target.stableType,
+                count: 1
+              }
             }
-          }
-        });
+          },
+          undefined,
+          activation.deadlineUnixMs
+        );
         if (reserved.kind !== 'alreadyExists') break;
         this.options.metrics?.recordInstanceSpotClaimConflict(
           this.options.meshName,
@@ -257,40 +261,45 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
   async commit(
     target: ServiceInstanceActivationTarget,
     reservation: ServiceInstanceActivationReservation,
-    spot: ServiceSpotState
+    spot: ServiceSpotState,
+    deadlineUnixMs?: bigint
   ): Promise<{ readonly kind: 'committed' | 'lost'; readonly route: ServiceInstanceRouteFence }> {
     const pending = this.requirePending(reservation);
     requireCommitIdentity(target, reservation, pending.creating, spot, this.options.meshName);
     let result;
     try {
-      result = await this.options.store.commit({
-        key: { kind: 'instance_spot', globalId: target.targetSpotId },
-        reservationId: pending.reservationId,
-        expectedStoreVersion: pending.creating.storeVersion.value,
-        target: {
-          meshName: this.options.meshName,
-          nodeRid: target.targetNodeRid,
-          nodeLifecycleGeneration: target.targetNodeGeneration,
-          owner: pending.owner
+      result = await this.options.store.commit(
+        {
+          key: { kind: 'instance_spot', globalId: target.targetSpotId },
+          reservationId: pending.reservationId,
+          expectedStoreVersion: pending.creating.storeVersion.value,
+          target: {
+            meshName: this.options.meshName,
+            nodeRid: target.targetNodeRid,
+            nodeLifecycleGeneration: target.targetNodeGeneration,
+            owner: pending.owner
+          },
+          readyPayload: encodeServiceInstanceAuthorityPayload({
+            state: 'ready',
+            stableType: spot.stableType,
+            spotId: spot.ref.spotId,
+            ownerId: pending.owner.ownerId,
+            ownerLeaseGeneration: pending.owner.leaseGeneration,
+            ownerMeshName: this.options.meshName,
+            ownerNodeRid: target.targetNodeRid,
+            ownerNodeGeneration: target.targetNodeGeneration,
+            activationRecovery: {
+              reference: pending.requestReference.value,
+              sha256: pending.requestSha256,
+              encodedSize: pending.requestEncodedSize,
+              inboxSequence: 1n,
+              replayCursor: 0n
+            }
+          })
         },
-        readyPayload: encodeServiceInstanceAuthorityPayload({
-          state: 'ready',
-          stableType: spot.stableType,
-          spotId: spot.ref.spotId,
-          ownerId: pending.owner.ownerId,
-          ownerLeaseGeneration: pending.owner.leaseGeneration,
-          ownerMeshName: this.options.meshName,
-          ownerNodeRid: target.targetNodeRid,
-          ownerNodeGeneration: target.targetNodeGeneration,
-          activationRecovery: {
-            reference: pending.requestReference.value,
-            sha256: pending.requestSha256,
-            encodedSize: pending.requestEncodedSize,
-            inboxSequence: 1n,
-            replayCursor: 0n
-          }
-        })
-      });
+        undefined,
+        deadlineUnixMs
+      );
     } catch (error) {
       if (error instanceof ZLinkFrameworkException) throw error;
       throw createInternalFrameworkException(

@@ -3,7 +3,6 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include <service_wire_constants.hpp>
 
-#include <tuple>
 
 namespace zlink::framework::runtime::messaging
 {
@@ -16,7 +15,15 @@ using kind_t = framework_error_kind_t;
 
 // The first entry for each ErrorKind is its outgoing representation. Later entries
 // retain incoming fine-code aliases and their existing diagnostic text.
-constexpr std::tuple<kind_t, failure_t, terminal_t, const char *> wire_failure_mapping[] = {
+struct wire_failure_mapping_t
+{
+    kind_t kind;
+    failure_t failure;
+    terminal_t terminal;
+    const char *message;
+    detail::boundary_error_t boundary = detail::boundary_error_t::none;
+};
+constexpr wire_failure_mapping_t wire_failure_mapping[] = {
   {kind_t::not_found, failure_t::requestTargetNotFound, terminal_t::notFound,
    " failed because the target was not found."},
   {kind_t::already_exists, failure_t::actorAlreadyExists, terminal_t::conflict,
@@ -25,7 +32,7 @@ constexpr std::tuple<kind_t, failure_t, terminal_t, const char *> wire_failure_m
    " failed because the object type did not match."},
   {kind_t::rejected, failure_t::requestRejected, terminal_t::rejected, " was rejected."},
   {kind_t::unavailable, failure_t::routeNotConnected, terminal_t::internalError,
-   " failed because the target route is not connected."},
+   " failed because the target route is not connected.", detail::boundary_error_t::disconnected},
   {kind_t::deadline_exceeded, failure_t::workerTimedOut, terminal_t::internalError,
    " timed out inside the worker."},
   {kind_t::shutting_down, failure_t::none, terminal_t::terminated, nullptr},
@@ -59,13 +66,56 @@ constexpr std::tuple<kind_t, failure_t, terminal_t, const char *> wire_failure_m
 std::optional<request_wire_failure_t>
 request_failure_mapper_t::target_failure_reply (framework_error_kind_t kind) const
 {
-    for (const auto &[mapped_kind, failure, terminal, message] : wire_failure_mapping) {
+    for (const auto &[mapped_kind, failure, terminal, message, boundary] : wire_failure_mapping) {
         if (mapped_kind == kind)
             return request_wire_failure_t{static_cast<std::uint32_t> (terminal),
                                           static_cast<std::uint32_t> (failure)};
     }
     return std::nullopt;
 }
+std::optional<foundation::operation_terminal_t>
+request_failure_mapper_t::transport_terminal (zlink::request_result_t terminal) const noexcept
+{
+    switch (terminal) {
+        case zlink::request_result_t::timed_out:
+            return foundation::operation_terminal_t::timed_out;
+        case zlink::request_result_t::terminated:
+            return foundation::operation_terminal_t::shutdown;
+        case zlink::request_result_t::not_connected:
+        case zlink::request_result_t::conflict:
+        case zlink::request_result_t::busy:
+        case zlink::request_result_t::backpressured:
+            return foundation::operation_terminal_t::transport_failed;
+        default:
+            return std::nullopt;
+    }
+}
+
+std::uint32_t
+request_failure_mapper_t::reply_failure_code (std::uint32_t terminal_result) const noexcept
+{
+    using protocol::framework_error_code;
+    framework_error_code failure;
+    switch (static_cast<protocol::request_terminal_result> (terminal_result)) {
+        case protocol::request_terminal_result::notFound:
+            failure = framework_error_code::requestTargetNotFound;
+            break;
+        case protocol::request_terminal_result::protocolError:
+            failure = framework_error_code::requestProtocolError;
+            break;
+        case protocol::request_terminal_result::internalError:
+            failure = framework_error_code::requestFailed;
+            break;
+        case protocol::request_terminal_result::rejected:
+            failure = framework_error_code::requestRejected;
+            break;
+        default:
+            failure = framework_error_code::none;
+            break;
+    }
+    return static_cast<std::uint32_t> (failure);
+}
+
 framework_exception_t
 request_failure_mapper_t::completion_exception (request_result_t result,
                                                 const std::string &operation_name) const
@@ -243,9 +293,11 @@ request_failure_mapper_t::reply_header_exception (std::uint32_t terminal_result,
     // Fine codes retain precedence even for an invalid terminal/code combination.
     // None is decoded by the unchanged source/native terminal fallback below.
     if (failure_code != static_cast<std::uint32_t> (failure_t::none)) {
-        for (const auto &[kind, failure, terminal, message] : wire_failure_mapping) {
+        for (const auto &[kind, failure, terminal, message, boundary] : wire_failure_mapping) {
             if (failure_code == static_cast<std::uint32_t> (failure))
-                return framework_exception_t (kind, operation_name + message);
+                return boundary == detail::boundary_error_t::none
+                         ? framework_exception_t (kind, operation_name + message)
+                         : detail::make_boundary_exception (boundary, operation_name + message);
         }
     }
     switch (static_cast<protocol::request_terminal_result> (terminal_result)) {

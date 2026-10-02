@@ -229,7 +229,8 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     )
                     .ConfigureAwait(false);
             }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            catch (Exception error)
+                when (ZLinkLocationStoreFailure.IsIndeterminate(error, cancellationToken))
             {
                 //  §10: an uncertain response is not guessed; the same key and
                 //  expected version are read again before any resubmission.
@@ -283,7 +284,8 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         {
             return await store.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception error)
+            when (ZLinkLocationStoreFailure.IsIndeterminate(error, cancellationToken))
         {
             //  The Store is still unavailable: the result stays unknown and the
             //  target keeps the same fence while its lease is valid.
@@ -541,11 +543,8 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     )
                     .ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch
+            catch (Exception error)
+                when (ZLinkLocationStoreFailure.IsIndeterminate(error, cancellationToken))
             {
                 var readBack = await store
                     .ReadAuthorityAsync(key, CancellationToken.None)

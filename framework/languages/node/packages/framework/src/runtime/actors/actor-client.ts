@@ -414,7 +414,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       );
     } catch (error) {
       if (isZLinkBackendResultError(error)) {
-        return classifySubmitResult(error.result, 'Actor send');
+        return classifySubmitResult(error.result, 'Actor send', error.phase);
       }
       throw mapSubmitError(error, 'Actor send');
     }

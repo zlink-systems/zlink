@@ -13,13 +13,11 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
-import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.binding.ZLinkJavaReadyRouteTestAccess;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.*;
 import systems.zlink.framework.runtime.internal.backend.*;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
@@ -41,6 +39,7 @@ import java.util.logging.Logger;
 final class ZLinkInstanceSpotCloseConformanceTest {
     private static final String MESH = "close-instance-mesh";
     private static final String TYPE = "close-instance";
+    private static final String RELOCATION_HOLD_TYPE = "close-relocation-hold";
     private static final Duration WAIT = Duration.ofSeconds(10);
     private static final Duration UNEXECUTED_TIMER_PERIOD = WAIT.multipliedBy(4);
     private static final String UNEXECUTED_TIMER_NAME = "close-unexecuted-timer";
@@ -105,179 +104,178 @@ final class ZLinkInstanceSpotCloseConformanceTest {
             try (ArrivalLog flow = new ArrivalLog(spotId);
                     ZLinkFrameworkRuntime runtime =
                             ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
-                runtime.route()
-                        .requestToSpot(spotId, new InitialProbe())
-                        .instanceSpot(TYPE)
-                        .inMesh(MESH)
-                        .timeout(WAIT)
-                        .submit(Reply.class)
-                        .toCompletableFuture()
-                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                var before = snapshot(repository, spotId);
-                var authority =
-                        new ZLinkServiceAuthorityPayloadCodec()
-                                .decode(before.payload())
-                                .orElseThrow();
-                var route =
-                        new ZLinkServiceM6BWireCodec.InstanceRouteFence(
-                                authority.nodeRid(),
-                                authority.nodeGeneration(),
-                                spotId,
-                                before.objectGeneration(),
-                                before.ownerId(),
-                                before.authorityOwnerGeneration() + 1,
-                                before.ownerLeaseGeneration(),
-                                before.storeVersion());
-                if (given.path("authority").asText().equals("Missing")) {
+                try {
                     runtime.route()
-                            .sendToSpot(spotId, new CloseProbe())
+                            .requestToSpot(spotId, new InitialProbe())
                             .instanceSpot(TYPE)
                             .inMesh(MESH)
-                            .submit()
+                            .timeout(WAIT)
+                            .submit(Reply.class)
                             .toCompletableFuture()
                             .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                    observation.closingEntered.get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                    observation.closingRelease.complete(null);
-                    assertTrue(observation.closeResult.get(WAIT.toSeconds(), TimeUnit.SECONDS));
-                    assertInstanceOf(
-                            ZLinkAuthorityMissing.class,
-                            repository
-                                    .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false)
-                                    .toCompletableFuture()
-                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS));
-                }
-                int factoriesBefore = observation.configureGenerations.size();
-                int handlersBefore = observation.pendingGenerations.size();
-                int placementBefore = store.missingPlacementAttempts.get();
-                AtomicInteger terminalCount = new AtomicInteger();
-                ZLinkFrameworkException failure = null;
-                String sendDiagnostic = null;
-                if (given.path("messageKind").asText().equals("request")) {
-                    Throwable terminal =
-                            ZLinkJavaReadyRouteTestAccess.rejectReadyRequest(
-                                            backend.mesh, route, intent.asBoolean(), terminalCount)
-                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                    failure = assertInstanceOf(ZLinkFrameworkException.class, terminal);
-                } else {
-                    var sourceOptions = new DefaultZLinkFrameworkOptions();
-                    sourceOptions.addLocationStore(store.inner);
-                    sourceOptions
-                            .addRouteMesh(MESH)
-                            .listen("tcp://127.0.0.1:0")
-                            .setRoutingId(RoutingId.from(spotId + "-source"))
-                            .objects()
-                            .server()
-                            .addEntrySpot(Entry.class);
-                    CapturingBackend sourceBackend = new CapturingBackend();
-                    try (var sourceRuntime =
-                            ZLinkFrameworkRuntimeTestAccess.start(sourceOptions, sourceBackend)) {
-                        long peerDeadline = System.nanoTime() + WAIT.toNanos();
-                        while (!backend.mesh.peers().stream()
-                                        .anyMatch(
-                                                peer ->
-                                                        peer.routingId()
-                                                                        .equals(
-                                                                                sourceBackend.mesh
-                                                                                        .routingId())
-                                                                && peer.state()
-                                                                        == MeshPeerState.ADMITTED)
-                                || !sourceBackend.mesh.peers().stream()
-                                        .anyMatch(
-                                                peer ->
-                                                        peer.routingId()
-                                                                        .equals(
-                                                                                backend.mesh
-                                                                                        .routingId())
-                                                                && peer.state()
-                                                                        == MeshPeerState
-                                                                                .ADMITTED)) {
-                            assertTrue(
-                                    System.nanoTime() < peerDeadline,
-                                    "Ready fixture source peer admission timed out");
-                            Thread.sleep(1);
-                        }
-                        long sourceGeneration =
-                                backend.mesh.peers().stream()
-                                        .filter(
-                                                peer ->
-                                                        peer.routingId()
-                                                                .equals(
-                                                                        sourceBackend.mesh
-                                                                                .routingId()))
-                                        .findFirst()
-                                        .orElseThrow()
-                                        .lifecycleGeneration();
-                        var serializer = new ZLinkJsonMessageSerializer();
-                        try (Message payload =
-                                Message.from(serializer.serialize(new PendingProbe()).bytes())) {
-                            List<Message> parts =
-                                    new ZLinkSpotRouteMessages(serializer)
-                                            .encodeSend(
-                                                    MESH,
-                                                    Optional.of(PendingProbe.class.getSimpleName()),
-                                                    payload,
-                                                    null,
-                                                    Map.of(),
-                                                    null);
-                            try {
-                                ZLinkJavaReadyRouteTestAccess.sendReady(
-                                                sourceBackend.mesh,
-                                                route,
-                                                sourceGeneration,
-                                                intent.asBoolean(),
-                                                parts)
+                    var before = snapshot(repository, spotId);
+                    var authority =
+                            new ZLinkServiceAuthorityPayloadCodec()
+                                    .decode(before.payload())
+                                    .orElseThrow();
+                    var route =
+                            new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                                    authority.nodeRid(),
+                                    authority.nodeGeneration(),
+                                    spotId,
+                                    before.objectGeneration(),
+                                    before.ownerId(),
+                                    before.authorityOwnerGeneration() + 1,
+                                    before.ownerLeaseGeneration(),
+                                    before.storeVersion());
+                    if (given.path("authority").asText().equals("Missing")) {
+                        runtime.route()
+                                .sendToSpot(spotId, new CloseProbe())
+                                .instanceSpot(TYPE)
+                                .inMesh(MESH)
+                                .submit()
+                                .toCompletableFuture()
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        observation.closingEntered.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        observation.closingRelease.complete(null);
+                        assertTrue(observation.closeResult.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                        assertInstanceOf(
+                                ZLinkAuthorityMissing.class,
+                                repository
+                                        .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false)
                                         .toCompletableFuture()
+                                        .get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                    }
+                    int factoriesBefore = observation.configureGenerations.size();
+                    int handlersBefore = observation.pendingGenerations.size();
+                    int placementBefore = store.missingPlacementAttempts.get();
+                    AtomicInteger terminalCount = new AtomicInteger();
+                    ZLinkFrameworkException failure = null;
+                    String sendDiagnostic = null;
+                    if (given.path("messageKind").asText().equals("request")) {
+                        Throwable terminal =
+                                ZLinkJavaReadyRouteTestAccess.rejectReadyRequest(
+                                                backend.mesh,
+                                                route,
+                                                intent.asBoolean(),
+                                                terminalCount)
                                         .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                            } finally {
-                                parts.forEach(Message::close);
+                        failure = assertInstanceOf(ZLinkFrameworkException.class, terminal);
+                    } else {
+                        var sourceOptions = new DefaultZLinkFrameworkOptions();
+                        sourceOptions.addLocationStore(store.inner);
+                        sourceOptions
+                                .addRouteMesh(MESH)
+                                .listen("tcp://127.0.0.1:0")
+                                .setRoutingId(RoutingId.from(spotId + "-source"))
+                                .objects()
+                                .server()
+                                .addEntrySpot(Entry.class);
+                        CapturingBackend sourceBackend = new CapturingBackend();
+                        try (var sourceRuntime =
+                                ZLinkFrameworkRuntimeTestAccess.start(
+                                        sourceOptions, sourceBackend)) {
+                            observeUntil(
+                                            runtime.routeMeshRuntime().observe(MESH, 8),
+                                            status ->
+                                                    status.isReady() && status.readyPeerCount() > 0)
+                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                            observeUntil(
+                                            sourceRuntime.routeMeshRuntime().observe(MESH, 8),
+                                            status ->
+                                                    status.isReady() && status.readyPeerCount() > 0)
+                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                            long sourceGeneration =
+                                    backend.mesh.peers().stream()
+                                            .filter(
+                                                    peer ->
+                                                            peer.routingId()
+                                                                    .equals(
+                                                                            sourceBackend.mesh
+                                                                                    .routingId()))
+                                            .findFirst()
+                                            .orElseThrow()
+                                            .lifecycleGeneration();
+                            var serializer = new ZLinkJsonMessageSerializer();
+                            try (Message payload =
+                                    Message.from(
+                                            serializer.serialize(new PendingProbe()).bytes())) {
+                                List<Message> parts =
+                                        new ZLinkSpotRouteMessages(serializer)
+                                                .encodeSend(
+                                                        MESH,
+                                                        Optional.of(
+                                                                PendingProbe.class.getSimpleName()),
+                                                        payload,
+                                                        null,
+                                                        Map.of(),
+                                                        null);
+                                try {
+                                    ZLinkJavaReadyRouteTestAccess.sendReady(
+                                                    sourceBackend.mesh,
+                                                    route,
+                                                    sourceGeneration,
+                                                    intent.asBoolean(),
+                                                    parts)
+                                            .toCompletableFuture()
+                                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                                } finally {
+                                    parts.forEach(Message::close);
+                                }
                             }
+                            String dropped =
+                                    flow.sendDropped.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                            assertTrue(
+                                    dropped.contains("error_type=ZLinkFrameworkException"),
+                                    dropped);
+                            sendDiagnostic = dropped;
                         }
-                        String dropped = flow.sendDropped.get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                        assertTrue(dropped.contains("error_type=ZLinkFrameworkException"), dropped);
-                        sendDiagnostic = dropped;
                     }
-                }
-                if (given.path("messageKind").asText().equals("send"))
-                    assertEquals(1, flow.sendDiagnosticCount.get());
-                for (var fields = expected.fields(); fields.hasNext(); ) {
-                    var field = fields.next();
-                    switch (field.getKey()) {
-                        case "messageTerminal" ->
-                                assertEquals(
-                                        field.getValue().asText(),
-                                        failure.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE
-                                                ? "Unavailable"
-                                                : failure.kind().toString());
-                        case "messageTerminalCount" ->
-                                assertEquals(field.getValue().asInt(), terminalCount.get());
-                        case "surface", "reason" ->
-                                assertTrue(
-                                        sendDiagnostic.contains(
-                                                field.getKey() + "=" + field.getValue().asText()),
-                                        sendDiagnostic);
-                        case "diagnostics" ->
-                                assertTrue(
-                                        sendDiagnostic.contains(
-                                                "error_type=ZLinkFrameworkException"),
-                                        sendDiagnostic);
-                        case "handlerCalls" ->
-                                assertEquals(
-                                        field.getValue().asInt(),
-                                        observation.pendingGenerations.size() - handlersBefore);
-                        case "factoryCalls" ->
-                                assertEquals(
-                                        field.getValue().asInt(),
-                                        observation.configureGenerations.size() - factoriesBefore);
-                        case "missingPlacementCalls" ->
-                                assertEquals(
-                                        field.getValue().asInt(),
-                                        store.missingPlacementAttempts.get() - placementBefore);
-                        default -> fail("unknown Ready route expectation " + field.getKey());
+                    if (given.path("messageKind").asText().equals("send"))
+                        assertEquals(1, flow.sendDiagnosticCount.get());
+                    for (var fields = expected.fields(); fields.hasNext(); ) {
+                        var field = fields.next();
+                        switch (field.getKey()) {
+                            case "messageTerminal" ->
+                                    assertEquals(
+                                            field.getValue().asText(),
+                                            failure.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE
+                                                    ? "Unavailable"
+                                                    : failure.kind().toString());
+                            case "messageTerminalCount" ->
+                                    assertEquals(field.getValue().asInt(), terminalCount.get());
+                            case "surface", "reason" ->
+                                    assertTrue(
+                                            sendDiagnostic.contains(
+                                                    field.getKey()
+                                                            + "="
+                                                            + field.getValue().asText()),
+                                            sendDiagnostic);
+                            case "diagnostics" ->
+                                    assertTrue(
+                                            sendDiagnostic.contains(
+                                                    "error_type=ZLinkFrameworkException"),
+                                            sendDiagnostic);
+                            case "handlerCalls" ->
+                                    assertEquals(
+                                            field.getValue().asInt(),
+                                            observation.pendingGenerations.size() - handlersBefore);
+                            case "factoryCalls" ->
+                                    assertEquals(
+                                            field.getValue().asInt(),
+                                            observation.configureGenerations.size()
+                                                    - factoriesBefore);
+                            case "missingPlacementCalls" ->
+                                    assertEquals(
+                                            field.getValue().asInt(),
+                                            store.missingPlacementAttempts.get() - placementBefore);
+                            default -> fail("unknown Ready route expectation " + field.getKey());
+                        }
                     }
+                } finally {
+                    observation.activeRelease.complete(null);
+                    observation.closingRelease.complete(null);
                 }
-            } finally {
-                observation.activeRelease.complete(null);
-                observation.closingRelease.complete(null);
             }
         }
     }
@@ -402,22 +400,22 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         }
         String name = branch == null ? "pending-before-close" : branch.path("name").asText();
         try (ArrivalLog flow = new ArrivalLog(spotId);
-                ZLinkFrameworkRuntime target =
-                        targetOptions == null
-                                ? null
-                                : ZLinkFrameworkRuntimeTestAccess.start(
-                                        targetOptions, new ZLinkJavaBackendAdapterFactory());
                 ZLinkFrameworkRuntime runtime =
                         ZLinkFrameworkRuntimeTestAccess.start(
                                 options, new ZLinkJavaBackendAdapterFactory())) {
             try {
                 if (host.equals("Relocating")) {
                     String holdId = spotId + "-hold";
-                    runtime.spotManager()
-                            .getOrCreate(holdId, "close-relocation-hold")
-                            .submit()
-                            .toCompletableFuture()
-                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    var hold =
+                            runtime.spotManager()
+                                    .getOrCreate(holdId, RELOCATION_HOLD_TYPE)
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    assertEquals(
+                            RoutingId.from(spotId),
+                            hold.spot().nodeRid(),
+                            "Relocating fixture hold must belong to the source host");
                     runtime.route()
                             .requestToSpot(holdId, new InitialProbe())
                             .inMesh(MESH)
@@ -426,331 +424,359 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                             .toCompletableFuture()
                             .get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 }
-                CompletableFuture<Reply> initial =
+                try (ZLinkFrameworkRuntime target =
+                        targetOptions == null
+                                ? null
+                                : ZLinkFrameworkRuntimeTestAccess.start(
+                                        targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+                    if (host.equals("Relocating")) {
+                        observeUntil(
+                                        runtime.routeMeshRuntime().observe(MESH, 8),
+                                        status -> status.isReady() && status.readyPeerCount() > 0)
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        observeUntil(
+                                        target.routeMeshRuntime().observe(MESH, 8),
+                                        status -> status.isReady() && status.readyPeerCount() > 0)
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    }
+                    CompletableFuture<Reply> initial =
+                            runtime.route()
+                                    .requestToSpot(spotId, new InitialProbe())
+                                    .instanceSpot(TYPE)
+                                    .inMesh(MESH)
+                                    .timeout(WAIT)
+                                    .submit(Reply.class)
+                                    .toCompletableFuture();
+                    observation.initialHandlerEntered.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    ZLinkAuthoritySnapshot before = snapshot(repository, spotId);
+                    CompletableFuture<Reply> pending = null;
+                    if (queuedBeforeClose) {
+                        pending = pending(runtime, spotId, true);
+                        flow.ownerArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        observation.activeRelease.complete(null);
+                    } else {
+                        assertEquals(
+                                before.objectGeneration(),
+                                initial.get(WAIT.toSeconds(), TimeUnit.SECONDS).generation());
                         runtime.route()
-                                .requestToSpot(spotId, new InitialProbe())
-                                .instanceSpot(TYPE)
-                                .inMesh(MESH)
-                                .timeout(WAIT)
-                                .submit(Reply.class)
-                                .toCompletableFuture();
-                observation.initialHandlerEntered.get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                ZLinkAuthoritySnapshot before = snapshot(repository, spotId);
-                CompletableFuture<Reply> pending = null;
-                if (queuedBeforeClose) {
-                    pending = pending(runtime, spotId, true);
-                    flow.ownerArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                    observation.activeRelease.complete(null);
-                } else {
-                    assertEquals(
-                            before.objectGeneration(),
-                            initial.get(WAIT.toSeconds(), TimeUnit.SECONDS).generation());
-                    runtime.route()
-                            .sendToSpot(spotId, new CloseProbe())
-                            .instanceSpot(TYPE)
-                            .inMesh(MESH)
-                            .submit()
-                            .toCompletableFuture()
-                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                }
-                try {
-                    CompletableFuture.anyOf(observation.closingEntered, observation.closeResult)
-                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                } catch (TimeoutException error) {
-                    throw new AssertionError(
-                            "Close progress timed out: events="
-                                    + observation.events
-                                    + ", closeResult.isDone="
-                                    + observation.closeResult.isDone()
-                                    + ", closingEntered.isDone="
-                                    + observation.closingEntered.isDone(),
-                            error);
-                }
-                assertTrue(
-                        observation.closingEntered.isDone(),
-                        "Close must enter OnClosing before its terminal result");
-                observation.closingEntered.get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                assertEquals(0, observation.pendingGenerations.size());
-                if (intent && !queuedBeforeClose) {
-                    pending = pending(runtime, spotId, true);
-                    flow.ownerArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                    if (!host.equals("Serving")) {
-                        runtime.route()
-                                .sendToSpot(spotId, new PendingProbe())
+                                .sendToSpot(spotId, new CloseProbe())
                                 .instanceSpot(TYPE)
                                 .inMesh(MESH)
                                 .submit()
                                 .toCompletableFuture()
                                 .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                        flow.sendArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                     }
-                } else if (name.equals("closing-message-without-intent")) {
-                    pending = pending(runtime, spotId, false);
-                    assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failure(pending).kind());
-                    assertEquals(1, observation.terminals.get());
-                }
-                CompletionStage<?> hostOperation = null;
-                if (host.equals("Draining")) {
-                    hostOperation = runtime.shutdown(WAIT);
-                    awaitHostState(runtime, ZLinkFrameworkRuntimeState.DRAINING, hostOperation);
-                } else if (host.equals("Relocating")) {
-                    hostOperation =
-                            runtime.relocate(
-                                    new ZLinkFrameworkRelocationOptions(
-                                            ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
-                                            null,
-                                            WAIT));
-                    awaitHostState(runtime, ZLinkFrameworkRuntimeState.RELOCATING, hostOperation);
-                }
-                if (host.equals("Relocating")) {
-                    // Public relocation holds readiness; only the before/after seal fixture needs
-                    // private access.
-                    var field = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
-                    field.setAccessible(true);
-                    var drains =
-                            (systems.zlink.framework.runtime.internal.drain
-                                            .ZLinkMeshDrainCoordinator)
-                                    field.get(runtime);
-                    assertFalse(drains.isSealed(MESH));
-                    if (relocationSeal.equals("after")) {
-                        drains.seal(MESH);
-                        assertTrue(drains.isSealed(MESH));
+                    try {
+                        CompletableFuture.anyOf(observation.closingEntered, observation.closeResult)
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    } catch (TimeoutException error) {
+                        throw new AssertionError(
+                                "Close progress timed out: events="
+                                        + observation.events
+                                        + ", closeResult.isDone="
+                                        + observation.closeResult.isDone()
+                                        + ", closingEntered.isDone="
+                                        + observation.closingEntered.isDone(),
+                                error);
                     }
-                }
-                observation.closingRelease.complete(null);
-                if (failInitialization) {
-                    observation
-                            .closeResult
-                            .handle(
-                                    (result, error) -> {
-                                        observation.events.add(
-                                                "closeResult=" + result + ";error=" + error);
-                                        flow.record("closeResult=" + result + ";error=" + error);
-                                        return null;
-                                    })
-                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                } else {
-                    assertTrue(observation.closeResult.get(WAIT.toSeconds(), TimeUnit.SECONDS));
-                }
-                boolean recreated = intent && host.equals("Serving") && !failInitialization;
-                if (pending != null && !name.equals("closing-message-without-intent")) {
-                    if (recreated) {
-                        Reply reply = pending.get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                        assertNotEquals(before.objectGeneration(), reply.generation());
-                        assertEquals("durable-state", reply.restored());
-                        assertEquals(List.of(reply.generation()), observation.pendingGenerations);
-                    } else {
-                        ZLinkFrameworkException terminal = failure(pending);
-                        if (failInitialization) {
-                            assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, terminal.kind());
-                            assertInstanceOf(IllegalStateException.class, terminal.getCause());
-                            assertTrue(terminal.metadata().isEmpty());
-                        } else if (!host.equals("Serving")) {
-                            assertEquals(
-                                    host.equals("Draining")
-                                            ? ZLinkFrameworkErrorKind.SHUTTING_DOWN
-                                            : ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                    terminal.kind());
+                    assertTrue(
+                            observation.closingEntered.isDone(),
+                            "Close must enter OnClosing before its terminal result");
+                    observation.closingEntered.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    assertEquals(0, observation.pendingGenerations.size());
+                    if (intent && !queuedBeforeClose) {
+                        pending = pending(runtime, spotId, true);
+                        flow.ownerArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        if (!host.equals("Serving")) {
+                            runtime.route()
+                                    .sendToSpot(spotId, new PendingProbe())
+                                    .instanceSpot(TYPE)
+                                    .inMesh(MESH)
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                            flow.sendArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        }
+                    } else if (name.equals("closing-message-without-intent")) {
+                        pending = pending(runtime, spotId, false);
+                        assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failure(pending).kind());
+                        assertEquals(1, observation.terminals.get());
+                    }
+                    CompletionStage<?> hostOperation = null;
+                    if (host.equals("Draining")) {
+                        hostOperation = runtime.shutdown(WAIT);
+                        awaitHostState(runtime, ZLinkFrameworkRuntimeState.DRAINING, hostOperation);
+                    } else if (host.equals("Relocating")) {
+                        hostOperation =
+                                runtime.relocate(
+                                        new ZLinkFrameworkRelocationOptions(
+                                                ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
+                                                null,
+                                                WAIT));
+                        awaitHostState(
+                                runtime, ZLinkFrameworkRuntimeState.RELOCATING, hostOperation);
+                    }
+                    if (host.equals("Relocating")) {
+                        // Only the before/after seal fixture needs private mesh drain access.
+                        var field = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
+                        field.setAccessible(true);
+                        var drains =
+                                (systems.zlink.framework.runtime.internal.drain
+                                                .ZLinkMeshDrainCoordinator)
+                                        field.get(runtime);
+                        assertFalse(drains.isSealed(MESH));
+                        if (relocationSeal.equals("after")) {
+                            drains.seal(MESH);
+                            assertTrue(drains.isSealed(MESH));
                         }
                     }
-                    assertEquals(1, observation.terminals.get());
-                }
-                assertEquals(1, observation.closingCalls.get());
-                assertTrue(observation.oldTimer.isDisposed());
-                assertEquals(0, observation.timerCalls.get());
-                assertOrdered(
-                        observation.events,
-                        List.of("closingCommitted", "onClosing", "localResourcesReleased"));
-                assertFalse(observation.pendingGenerations.contains(before.objectGeneration()));
-                if (recreated) {
-                    ZLinkAuthoritySnapshot after = snapshot(repository, spotId);
-                    assertNotEquals(before.objectGeneration(), after.objectGeneration());
-                    assertNotEquals(
-                            before.authorityOwnerGeneration(), after.authorityOwnerGeneration());
-                    assertEquals(before.ownerId(), after.ownerId());
-                    assertEquals(before.ownerLeaseGeneration(), after.ownerLeaseGeneration());
-                    assertEquals(before.allocation(), after.allocation());
-                    assertEquals(2, observation.initializations.size());
+                    observation.closingRelease.complete(null);
+                    if (failInitialization) {
+                        observation
+                                .closeResult
+                                .handle(
+                                        (result, error) -> {
+                                            observation.events.add(
+                                                    "closeResult=" + result + ";error=" + error);
+                                            flow.record(
+                                                    "closeResult=" + result + ";error=" + error);
+                                            return null;
+                                        })
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    } else {
+                        assertTrue(observation.closeResult.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                    }
+                    boolean recreated = intent && host.equals("Serving") && !failInitialization;
+                    if (pending != null && !name.equals("closing-message-without-intent")) {
+                        if (recreated) {
+                            Reply reply = pending.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                            assertNotEquals(before.objectGeneration(), reply.generation());
+                            assertEquals("durable-state", reply.restored());
+                            assertEquals(
+                                    List.of(reply.generation()), observation.pendingGenerations);
+                        } else {
+                            ZLinkFrameworkException terminal = failure(pending);
+                            if (failInitialization) {
+                                assertEquals(
+                                        ZLinkFrameworkErrorKind.INTERNAL_FAILURE, terminal.kind());
+                                assertInstanceOf(IllegalStateException.class, terminal.getCause());
+                                assertTrue(terminal.metadata().isEmpty());
+                            } else if (!host.equals("Serving")) {
+                                assertEquals(
+                                        host.equals("Draining")
+                                                ? ZLinkFrameworkErrorKind.SHUTTING_DOWN
+                                                : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        terminal.kind());
+                            }
+                        }
+                        assertEquals(1, observation.terminals.get());
+                    }
+                    assertEquals(1, observation.closingCalls.get());
+                    assertTrue(observation.oldTimer.isDisposed());
+                    assertEquals(0, observation.timerCalls.get());
                     assertOrdered(
                             observation.events,
-                            List.of(
-                                    "authorityReincarnated",
-                                    "newIncarnationInitialized",
-                                    "storedStateRestored",
-                                    "pendingIntentMessagesExecuted"));
-                } else {
-                    boolean missingPlacementBeforeInspection = flow.missingPlacement.isDone();
-                    assertInstanceOf(
-                            ZLinkAuthorityMissing.class,
-                            repository
-                                    .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false)
-                                    .toCompletableFuture()
-                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS));
-                    assertTrue(observation.pendingGenerations.isEmpty());
-                    if (failInitialization) {
-                        if (failConfigure) {
-                            assertEquals(1, observation.initializations.size());
-                            assertEquals(2, observation.configureGenerations.size());
-                            assertNotEquals(
-                                    before.objectGeneration(),
-                                    observation.configureGenerations.getLast());
-                            assertEquals(
-                                    observation.configureGenerations.getLast(),
-                                    observation.deletedGeneration);
-                        } else {
-                            assertEquals(2, observation.initializations.size());
-                            assertNotEquals(
-                                    before.objectGeneration(),
-                                    observation.initializations.getLast());
-                            assertEquals(
-                                    observation.initializations.getLast(),
-                                    observation.deletedGeneration);
-                        }
+                            List.of("closingCommitted", "onClosing", "localResourcesReleased"));
+                    assertFalse(observation.pendingGenerations.contains(before.objectGeneration()));
+                    if (recreated) {
+                        ZLinkAuthoritySnapshot after = snapshot(repository, spotId);
+                        assertNotEquals(before.objectGeneration(), after.objectGeneration());
+                        assertNotEquals(
+                                before.authorityOwnerGeneration(),
+                                after.authorityOwnerGeneration());
+                        assertEquals(before.ownerId(), after.ownerId());
+                        assertEquals(before.ownerLeaseGeneration(), after.ownerLeaseGeneration());
+                        assertEquals(before.allocation(), after.allocation());
+                        assertEquals(2, observation.initializations.size());
                         assertOrdered(
                                 observation.events,
                                 List.of(
                                         "authorityReincarnated",
-                                        "newGenerationDeleted",
-                                        "pendingMessagesTypedFailure"));
+                                        "newIncarnationInitialized",
+                                        "storedStateRestored",
+                                        "pendingIntentMessagesExecuted"));
                     } else {
-                        assertEquals(1, observation.initializations.size());
-                        assertTrue(observation.events.contains("authorityReleased"));
+                        boolean missingPlacementBeforeInspection = flow.missingPlacement.isDone();
+                        assertInstanceOf(
+                                ZLinkAuthorityMissing.class,
+                                repository
+                                        .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false)
+                                        .toCompletableFuture()
+                                        .get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                        assertTrue(observation.pendingGenerations.isEmpty());
+                        if (failInitialization) {
+                            if (failConfigure) {
+                                assertEquals(1, observation.initializations.size());
+                                assertEquals(2, observation.configureGenerations.size());
+                                assertNotEquals(
+                                        before.objectGeneration(),
+                                        observation.configureGenerations.getLast());
+                                assertEquals(
+                                        observation.configureGenerations.getLast(),
+                                        observation.deletedGeneration);
+                            } else {
+                                assertEquals(2, observation.initializations.size());
+                                assertNotEquals(
+                                        before.objectGeneration(),
+                                        observation.initializations.getLast());
+                                assertEquals(
+                                        observation.initializations.getLast(),
+                                        observation.deletedGeneration);
+                            }
+                            assertOrdered(
+                                    observation.events,
+                                    List.of(
+                                            "authorityReincarnated",
+                                            "newGenerationDeleted",
+                                            "pendingMessagesTypedFailure"));
+                        } else {
+                            assertEquals(1, observation.initializations.size());
+                            assertTrue(observation.events.contains("authorityReleased"));
+                        }
+                        if (!host.equals("Serving"))
+                            assertFalse(
+                                    missingPlacementBeforeInspection,
+                                    "accepted intent must not enter Missing placement after release");
+                        if (!host.equals("Serving")) {
+                            String dropped =
+                                    flow.sendDropped.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                            assertTrue(dropped.contains("action=drop"));
+                            assertTrue(
+                                    dropped.contains(
+                                            "reason="
+                                                    + (host.equals("Draining")
+                                                            ? "shutdown"
+                                                            : "stale_target")));
+                        }
                     }
-                    if (!host.equals("Serving"))
-                        assertFalse(
-                                missingPlacementBeforeInspection,
-                                "accepted intent must not enter Missing placement after release");
-                    if (!host.equals("Serving")) {
-                        String dropped = flow.sendDropped.get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                        assertTrue(dropped.contains("action=drop"));
-                        assertTrue(
-                                dropped.contains(
-                                        "reason="
-                                                + (host.equals("Draining")
-                                                        ? "shutdown"
-                                                        : "stale_target")));
+                    if (branch != null) {
+                        JsonNode expected = branch.path("expect");
+                        Set<String> expectedKeys =
+                                Set.of(
+                                        "order",
+                                        "authority",
+                                        "objectGeneration",
+                                        "authorityOwnerGeneration",
+                                        "owner",
+                                        "lease",
+                                        "capacity",
+                                        "oldHandlerCalls",
+                                        "newHandlerCalls",
+                                        "factoryCalls",
+                                        "thisHostFactoryCalls",
+                                        "messageTerminal",
+                                        "messageTerminalCount",
+                                        "messageTerminalByHost",
+                                        "sendDiagnosticsByHost",
+                                        "missingPlacementCalls");
+                        expected.fieldNames()
+                                .forEachRemaining(
+                                        key ->
+                                                assertTrue(
+                                                        expectedKeys.contains(key),
+                                                        "unknown close branch expectation " + key));
+                        List<String> order = new ArrayList<>();
+                        expected.path("order").forEach(item -> order.add(item.asText()));
+                        assertOrdered(observation.events, order);
+                        if (expected.has("authority")) {
+                            assertEquals(
+                                    recreated ? "Ready" : "Missing",
+                                    expected.path("authority").asText());
+                        }
+                        if (expected.has("factoryCalls")) {
+                            assertEquals(
+                                    expected.path("factoryCalls").asInt(),
+                                    observation.initializations.size() - 1);
+                        }
+                        if (expected.has("thisHostFactoryCalls")) {
+                            assertEquals(
+                                    expected.path("thisHostFactoryCalls").asInt(),
+                                    observation.initializations.size() - 1);
+                        }
+                        if (expected.has("objectGeneration")) {
+                            assertEquals(
+                                    "storeIssuedDifferent",
+                                    expected.path("objectGeneration").asText());
+                            assertNotEquals(
+                                    before.objectGeneration(), observation.reincarnatedGeneration);
+                            assertEquals(
+                                    observation.reincarnatedGeneration,
+                                    observation.initializations.getLast());
+                        }
+                        if (expected.has("authorityOwnerGeneration")) {
+                            assertEquals(
+                                    "storeIssuedDifferent",
+                                    expected.path("authorityOwnerGeneration").asText());
+                            assertNotEquals(
+                                    before.authorityOwnerGeneration(),
+                                    observation.reincarnatedOwnerGeneration);
+                        }
+                        if (expected.has("messageTerminal")) {
+                            assertEquals(
+                                    name.equals("closing-message-without-intent")
+                                            ? "NotFound"
+                                            : recreated ? "reply" : "typedFailure",
+                                    expected.path("messageTerminal").asText());
+                        }
+                        assertEquals(
+                                expected.path("oldHandlerCalls").asInt(),
+                                observation.pendingGenerations.stream()
+                                        .filter(g -> g == before.objectGeneration())
+                                        .count());
+                        if (expected.has("newHandlerCalls")) {
+                            assertEquals(
+                                    expected.path("newHandlerCalls").asInt(),
+                                    observation.pendingGenerations.size());
+                        }
+                        if (expected.has("messageTerminalByHost")) {
+                            String terminal =
+                                    host.equals("Draining") ? "ShuttingDown" : "Unavailable";
+                            assertEquals(
+                                    expected.path("messageTerminalByHost").path(host).asText(),
+                                    terminal);
+                            assertEquals(
+                                    terminal.equals("ShuttingDown")
+                                            ? ZLinkFrameworkErrorKind.SHUTTING_DOWN
+                                            : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                    failure(pending).kind());
+                        }
+                        if (expected.has("sendDiagnosticsByHost")) {
+                            String dropped =
+                                    flow.sendDropped.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                            JsonNode diagnostic = expected.path("sendDiagnosticsByHost").path(host);
+                            assertTrue(
+                                    dropped.contains("error_type=ZLinkFrameworkException"),
+                                    dropped);
+                            assertTrue(
+                                    dropped.contains(
+                                            "surface=" + diagnostic.path("surface").asText()),
+                                    dropped);
+                            assertTrue(
+                                    dropped.contains(
+                                            "reason=" + diagnostic.path("reason").asText()),
+                                    dropped);
+                        }
+                        if (expected.has("missingPlacementCalls")) {
+                            assertEquals(
+                                    expected.path("missingPlacementCalls").asInt(),
+                                    flow.missingPlacementCalls.get());
+                        }
+                        if (expected.has("messageTerminalCount")) {
+                            assertEquals(
+                                    expected.path("messageTerminalCount").asInt(),
+                                    observation.terminals.get());
+                        }
                     }
+                    if (host.equals("Relocating")) {
+                        runtime.shutdown(WAIT)
+                                .toCompletableFuture()
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    }
+                    if (hostOperation != null) {
+                        hostOperation.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                    }
+                    if (!host.equals("Serving")) assertEquals(1, flow.sendDiagnosticCount.get());
                 }
-                if (branch != null) {
-                    JsonNode expected = branch.path("expect");
-                    Set<String> expectedKeys =
-                            Set.of(
-                                    "order",
-                                    "authority",
-                                    "objectGeneration",
-                                    "authorityOwnerGeneration",
-                                    "owner",
-                                    "lease",
-                                    "capacity",
-                                    "oldHandlerCalls",
-                                    "newHandlerCalls",
-                                    "factoryCalls",
-                                    "thisHostFactoryCalls",
-                                    "messageTerminal",
-                                    "messageTerminalCount",
-                                    "messageTerminalByHost",
-                                    "sendDiagnosticsByHost",
-                                    "missingPlacementCalls");
-                    expected.fieldNames()
-                            .forEachRemaining(
-                                    key ->
-                                            assertTrue(
-                                                    expectedKeys.contains(key),
-                                                    "unknown close branch expectation " + key));
-                    List<String> order = new ArrayList<>();
-                    expected.path("order").forEach(item -> order.add(item.asText()));
-                    assertOrdered(observation.events, order);
-                    if (expected.has("authority")) {
-                        assertEquals(
-                                recreated ? "Ready" : "Missing",
-                                expected.path("authority").asText());
-                    }
-                    if (expected.has("factoryCalls")) {
-                        assertEquals(
-                                expected.path("factoryCalls").asInt(),
-                                observation.initializations.size() - 1);
-                    }
-                    if (expected.has("thisHostFactoryCalls")) {
-                        assertEquals(
-                                expected.path("thisHostFactoryCalls").asInt(),
-                                observation.initializations.size() - 1);
-                    }
-                    if (expected.has("objectGeneration")) {
-                        assertEquals(
-                                "storeIssuedDifferent", expected.path("objectGeneration").asText());
-                        assertNotEquals(
-                                before.objectGeneration(), observation.reincarnatedGeneration);
-                        assertEquals(
-                                observation.reincarnatedGeneration,
-                                observation.initializations.getLast());
-                    }
-                    if (expected.has("authorityOwnerGeneration")) {
-                        assertEquals(
-                                "storeIssuedDifferent",
-                                expected.path("authorityOwnerGeneration").asText());
-                        assertNotEquals(
-                                before.authorityOwnerGeneration(),
-                                observation.reincarnatedOwnerGeneration);
-                    }
-                    if (expected.has("messageTerminal")) {
-                        assertEquals(
-                                name.equals("closing-message-without-intent")
-                                        ? "NotFound"
-                                        : recreated ? "reply" : "typedFailure",
-                                expected.path("messageTerminal").asText());
-                    }
-                    assertEquals(
-                            expected.path("oldHandlerCalls").asInt(),
-                            observation.pendingGenerations.stream()
-                                    .filter(g -> g == before.objectGeneration())
-                                    .count());
-                    if (expected.has("newHandlerCalls")) {
-                        assertEquals(
-                                expected.path("newHandlerCalls").asInt(),
-                                observation.pendingGenerations.size());
-                    }
-                    if (expected.has("messageTerminalByHost")) {
-                        String terminal = host.equals("Draining") ? "ShuttingDown" : "Unavailable";
-                        assertEquals(
-                                expected.path("messageTerminalByHost").path(host).asText(),
-                                terminal);
-                        assertEquals(
-                                terminal.equals("ShuttingDown")
-                                        ? ZLinkFrameworkErrorKind.SHUTTING_DOWN
-                                        : ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                failure(pending).kind());
-                    }
-                    if (expected.has("sendDiagnosticsByHost")) {
-                        String dropped = flow.sendDropped.get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                        JsonNode diagnostic = expected.path("sendDiagnosticsByHost").path(host);
-                        assertTrue(dropped.contains("error_type=ZLinkFrameworkException"), dropped);
-                        assertTrue(
-                                dropped.contains("surface=" + diagnostic.path("surface").asText()),
-                                dropped);
-                        assertTrue(
-                                dropped.contains("reason=" + diagnostic.path("reason").asText()),
-                                dropped);
-                    }
-                    if (expected.has("missingPlacementCalls")) {
-                        assertEquals(
-                                expected.path("missingPlacementCalls").asInt(),
-                                flow.missingPlacementCalls.get());
-                    }
-                    if (expected.has("messageTerminalCount")) {
-                        assertEquals(
-                                expected.path("messageTerminalCount").asInt(),
-                                observation.terminals.get());
-                    }
-                }
-                if (host.equals("Relocating")) {
-                    runtime.shutdown(WAIT)
-                            .toCompletableFuture()
-                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                }
-                if (hostOperation != null) {
-                    hostOperation.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                }
-                if (!host.equals("Serving")) assertEquals(1, flow.sendDiagnosticCount.get());
             } finally {
                 observation.activeRelease.complete(null);
                 observation.closingRelease.complete(null);
@@ -818,45 +844,52 @@ final class ZLinkInstanceSpotCloseConformanceTest {
             ZLinkFrameworkRuntimeState expected,
             CompletionStage<?> operation)
             throws Exception {
+        CompletableFuture<Void> reached =
+                observeUntil(runtime.observe(), status -> status.state() == expected);
+        try {
+            CompletableFuture.anyOf(reached, operation.toCompletableFuture())
+                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            assertTrue(
+                    reached.isDone(),
+                    "Host operation completed before "
+                            + expected
+                            + ": "
+                            + operation.toCompletableFuture().getNow(null));
+            reached.get();
+        } finally {
+            reached.cancel(false);
+        }
+    }
+
+    private static <T> CompletableFuture<Void> observeUntil(
+            Flow.Publisher<systems.zlink.framework.monitoring.ZLinkObservedStatus<T>> publisher,
+            java.util.function.Predicate<T> accepted) {
         CompletableFuture<Void> reached = new CompletableFuture<>();
-        runtime.observe()
-                .subscribe(
-                        new Flow.Subscriber<
-                                systems.zlink.framework.monitoring.ZLinkObservedStatus<
-                                        ZLinkFrameworkRuntimeStatus>>() {
-                            private Flow.Subscription subscription;
+        reached.orTimeout(WAIT.toSeconds(), TimeUnit.SECONDS);
+        publisher.subscribe(
+                new Flow.Subscriber<>() {
+                    public void onSubscribe(Flow.Subscription subscription) {
+                        reached.whenComplete((ignored, error) -> subscription.cancel());
+                        subscription.request(Long.MAX_VALUE);
+                    }
 
-                            public void onSubscribe(Flow.Subscription value) {
-                                subscription = value;
-                                value.request(Long.MAX_VALUE);
-                            }
+                    public void onNext(
+                            systems.zlink.framework.monitoring.ZLinkObservedStatus<T> value) {
+                        if (accepted.test(value.status())) reached.complete(null);
+                    }
 
-                            public void onNext(
-                                    systems.zlink.framework.monitoring.ZLinkObservedStatus<
-                                                    ZLinkFrameworkRuntimeStatus>
-                                            value) {
-                                if (value.status().state() == expected) {
-                                    reached.complete(null);
-                                    subscription.cancel();
-                                }
-                            }
+                    public void onError(Throwable error) {
+                        reached.completeExceptionally(error);
+                    }
 
-                            public void onError(Throwable error) {
-                                reached.completeExceptionally(error);
-                            }
-
-                            public void onComplete() {
-                                if (!reached.isDone())
-                                    reached.completeExceptionally(
-                                            new AssertionError(
-                                                    "Host observation completed before "
-                                                            + expected));
-                            }
-                        });
-        CompletableFuture.anyOf(reached, operation.toCompletableFuture())
-                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-        assertTrue(reached.isDone(), "Host operation completed before " + expected);
-        reached.get();
+                    public void onComplete() {
+                        if (!reached.isDone())
+                            reached.completeExceptionally(
+                                    new AssertionError(
+                                            "Status observation completed before its condition"));
+                    }
+                });
+        return reached;
     }
 
     public record InitialProbe(String value) {
@@ -990,7 +1023,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
     private static void addRelocationHold(
             systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder objects) {
         objects.addSpotFactory(
-                "close-relocation-hold",
+                RELOCATION_HOLD_TYPE,
                 RelocationHold.class,
                 factory -> {
                     factory.executionMode(
@@ -1030,7 +1063,6 @@ final class ZLinkInstanceSpotCloseConformanceTest {
     public static final class RelocationHoldHandler
             implements ZLinkSpotRequestHandler<RelocationHold, InitialProbe, Reply> {
         public CompletionStage<Reply> handle(RelocationHold spot, InitialProbe request) {
-            spot.context().relocationReady().defer();
             return CompletableFuture.completedFuture(new Reply(0, null));
         }
     }

@@ -79,7 +79,8 @@ internal static class ZLinkDotNetBackendMappings
             monitorEvent.RoutingId,
             monitorEvent.LocalAddr,
             monitorEvent.RemoteAddr,
-            monitorEvent.Value
+            monitorEvent.Value,
+            monitorEvent.Flags
         );
     }
 

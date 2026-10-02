@@ -4,6 +4,7 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 
 #include "runtime/stateful/public_host_runtime.hpp"
+#include <zlink/framework/contracts/detail/handler_invocation.hpp>
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
@@ -61,6 +62,8 @@ classify_bound_session_bind_admission (bool local_actor_matches) noexcept
 
 namespace
 {
+
+constexpr std::chrono::hours instance_activation_recovery_retention{24};
 
 using ::zlink::framework::detail::mesh_trace_enabled;
 
@@ -1928,12 +1931,13 @@ public_host_runtime_t::admit_session_relocation_seal (
     return {true, std::move (immediate)};
 }
 
-task_t<bool>
-public_host_runtime_t::seal_session_remote (const zlink::routing_id_t &session_owner_node,
-                                            protocol::session_relocation_seal_t seal,
-                                            std::chrono::milliseconds timeout,
-                                            session_relocation_journal_capture_t capture_journal,
-                                            session_relocation_seal_completion_t completion)
+task_t<bool> public_host_runtime_t::seal_session_remote (
+  const zlink::routing_id_t &session_owner_node,
+  protocol::session_relocation_seal_t seal,
+  std::chrono::milliseconds timeout,
+  std::chrono::steady_clock::time_point operation_deadline,
+  session_relocation_journal_capture_t capture_journal,
+  session_relocation_seal_completion_t completion)
 {
     if (!capture_journal || !completion)
         throw std::invalid_argument (
@@ -1966,9 +1970,10 @@ public_host_runtime_t::seal_session_remote (const zlink::routing_id_t &session_o
     const auto weak_host = weak_from_this ();
     auto response = std::make_shared<
       std::function<void (foundation::operation_terminal_t, std::vector<std::uint8_t>)>> (
-      [weak_host, expected, relocation_key, relocations = std::move (relocations),
-       capture_journal = std::move (capture_journal), completion = std::move (completion)] (
-        foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) mutable {
+      [weak_host, expected, relocation_key, operation_deadline,
+       relocations = std::move (relocations), capture_journal = std::move (capture_journal),
+       completion = std::move (completion)] (foundation::operation_terminal_t terminal,
+                                             std::vector<std::uint8_t> payload) mutable {
           if (terminal != foundation::operation_terminal_t::completed) {
               completion (terminal, std::nullopt);
               return;
@@ -2006,7 +2011,7 @@ public_host_runtime_t::seal_session_remote (const zlink::routing_id_t &session_o
                 0,
                 capture_journal ()};
               stateful::durable_session_journal_store_t journal_store (relocations);
-              const auto root = journal_store.prepare (record);
+              const auto root = journal_store.prepare (record, operation_deadline);
               const auto recovered = journal_store.recover (root);
               if (!recovered || *recovered != record) {
                   journal_store.cleanup (root);
@@ -2039,7 +2044,12 @@ public_host_runtime_t::seal_session_remote (const zlink::routing_id_t &session_o
               completion (terminal, result);
           }
           catch (...) {
-              completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
+              const auto failure = detail::current_exception_result<void> ();
+              const auto *error = failure.error ();
+              completion (error && error->kind () == framework_error_kind_t::deadline_exceeded
+                            ? foundation::operation_terminal_t::timed_out
+                            : foundation::operation_terminal_t::transport_failed,
+                          std::nullopt);
           }
       });
 
@@ -3015,7 +3025,8 @@ public_host_runtime_t::relocation_target_fence (const relocation_target_attempt_
             coordinator.expected_authority_store_version,
             {coordinator.owner_id, static_cast<std::int64_t> (coordinator.lease_generation)},
             {attempt.prepare.target.target_owner_id,
-             static_cast<std::int64_t> (attempt.prepare.target.target_owner_lease_generation)}};
+             static_cast<std::int64_t> (attempt.prepare.target.target_owner_lease_generation)},
+            attempt.prepare.relocation};
 }
 
 public_host_runtime_t::relocation_target_settlement_t
@@ -3393,7 +3404,10 @@ bool public_host_runtime_t::submit_relocation_target_authority (
               attempt.sources.front (), attempt.targets.front (), target_owner, target_placement,
               attempt.restore_identity.reference, attempt.restore_identity.checksum_crc32c,
               attempt.restore_identity.inventory_digest, std::move (target_application_payload),
-              attempt.prepare.coordinator.expected_authority_store_version);
+              attempt.prepare.coordinator.expected_authority_store_version,
+              attempt.prepare.relocation,
+              {attempt.prepare.coordinator.owner_id,
+               static_cast<std::int64_t> (attempt.prepare.coordinator.lease_generation)});
             if (published.status != stateful::authority_publish_status_t::published
                 || !published.current || published.current->source != attempt.sources.front ())
                 return adopt_store_fences ();
@@ -4559,7 +4573,12 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     }
     const auto request_sha256 = runtime::sha256 (recovery_public);
     const auto recovery_checksum = stateful::maintenance_runtime_t::crc32c (recovery_bytes);
-    const auto recovery_root = instance_relocations->put (recovery_bytes, std::chrono::hours (24));
+    const auto recovery_root =
+      instance_relocations->put (recovery_bytes, instance_activation_recovery_retention,
+                                 std::chrono::steady_clock::now ()
+                                   + (std::chrono::system_clock::time_point (
+                                        std::chrono::milliseconds (request.target.deadline_unix_ms))
+                                      - std::chrono::system_clock::now ()));
     if (recovery_root.reference.empty () || recovery_root.checksum_crc32c != recovery_checksum) {
         reply_terminal ({105,
                          static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
@@ -4567,6 +4586,8 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
         co_return;
     }
     object_reserve_request_t reserve;
+    reserve.operation_deadline = std::chrono::system_clock::time_point (
+      std::chrono::milliseconds (request.target.deadline_unix_ms));
     reserve.key = {placement_object_kind_t::instance_spot, request.target.spot_id};
     reserve.intent.stable_type = request.target.stable_type;
     reserve.intent.request_content_reference = recovery_root.reference;
@@ -4632,7 +4653,8 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
         .inbox_sequence = 1,
         .replay_cursor = 0}};
     const auto committed = co_await store->commit (
-      {reserve.key, reservation->fence, encode_instance_spot_authority_payload (ready_state)});
+      {reserve.key, reservation->fence, encode_instance_spot_authority_payload (ready_state)}, {},
+      reserve.operation_deadline);
     const auto *created = std::get_if<object_committed_t> (&committed);
     const auto *already = std::get_if<object_already_committed_t> (&committed);
     if (already) {
@@ -5603,7 +5625,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     }
                     if (!materialized.accepted) {
                         (void) store
-                          ->abort ({{placement_object_kind_t::user_spot, global_id}, fence})
+                          ->abort ({{placement_object_kind_t::user_spot, global_id}, fence}, {},
+                                   std::chrono::system_clock::time_point (
+                                     std::chrono::milliseconds (request.deadline_unix_ms)))
                           .result ()
                           .value ();
                         (void) _objects.abort_create (local.attempt);
@@ -5617,7 +5641,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         ->commit ({{placement_object_kind_t::user_spot, global_id},
                                    fence,
                                    ready_user_spot_authority_payload (
-                                     exact_ref, request.stable_type, fence.target)})
+                                     exact_ref, request.stable_type, fence.target)},
+                                  {},
+                                  std::chrono::system_clock::time_point (
+                                    std::chrono::milliseconds (request.deadline_unix_ms)))
                         .result ()
                         .value ();
                     const auto *ready = std::get_if<object_committed_t> (&committed);
@@ -5812,10 +5839,18 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         protocol::framework_error_code::requestProtocolError));
             }
             catch (const std::exception &) {
+                const auto failure = detail::current_exception_result<void> ();
+                const auto *error = failure.error ();
+                const auto terminal =
+                  error && error->kind () == framework_error_kind_t::deadline_exceeded
+                    ? std::pair{protocol::request_terminal_result::timedOut,
+                                protocol::framework_error_code::none}
+                    : std::pair{protocol::request_terminal_result::internalError,
+                                protocol::framework_error_code::requestFailed};
                 if (mailbox_record.reply_token && mailbox_record.correlation)
-                    (void) _transport->reply_failure (
-                      mailbox_record, 105,
-                      static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed));
+                    (void) _transport->reply_failure (mailbox_record,
+                                                      static_cast<std::uint32_t> (terminal.first),
+                                                      static_cast<std::uint32_t> (terminal.second));
             }
             catch (...) {
                 if (mailbox_record.reply_token && mailbox_record.correlation)

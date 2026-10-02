@@ -646,7 +646,6 @@ class socket_lifecycle_coordinator_t
     socket_lifecycle_coordinator_t () :
         public_api_state (0),
         mailbox_ref_state (0),
-        destroy_pending (false),
         reaper_poller_value (NULL),
         destroyed (false),
         async_mailbox_active (false),
@@ -673,8 +672,6 @@ class socket_lifecycle_coordinator_t
     // registration is removed. This admission is held across the
     // registration lifetime rather than only during zlink_poller_add().
     bool acquire_poller_registration ();
-    // Returns true when this release removed the last mailbox/lifetime pin.
-    bool release_poller_registration ();
     bool enter_public_api_and_lock_sync ();
     bool begin_close_or_fail_busy ();
     bool public_close_requested () const;
@@ -702,9 +699,6 @@ class socket_lifecycle_coordinator_t
     void complete_deferred_close_handoff (mailbox_t *mailbox_,
                                           socket_base_t *socket_,
                                           int timeout_ms_);
-    void mark_destroy_pending ();
-    void clear_destroy_pending ();
-    bool is_destroy_pending () const;
     void set_reaper_poller (poller_t *poller_);
     poller_t *reaper_poller () const;
     void mark_destroyed ();
@@ -712,13 +706,14 @@ class socket_lifecycle_coordinator_t
     int mailbox_refcount ();
     bool try_inc_mailbox_ref ();
     void inc_mailbox_ref ();
-    bool dec_mailbox_ref ();
-    bool seal_mailbox_refs_if_zero ();
+    // Each returns true when the call sealed the pins: no pin is left and
+    // destruction was requested. That caller alone finishes destruction.
+    bool release_mailbox_ref ();
+    bool request_destroy ();
     bool mailbox_refs_sealed () const;
 
     std::atomic<uint64_t> public_api_state;
     std::atomic<uint32_t> mailbox_ref_state;
-    std::atomic<bool> destroy_pending;
     poller_t *reaper_poller_value;
     bool destroyed;
     std::atomic<bool> async_mailbox_active;

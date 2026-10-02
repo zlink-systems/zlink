@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using Systems.Zlink.Stream.Connector.Contracts;
+using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Streams;
@@ -14,6 +15,41 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StreamWireInteropTests
 {
+    [Fact]
+    public void Server_inbound_ping_responds_with_pong_without_a_liveness_sweep()
+    {
+        var socket = DispatchProxy.Create<IZLinkBackendStreamSocket, CapturingStreamSocketProxy>();
+        var capture = (CapturingStreamSocketProxy)(object)socket;
+        var stream = new ZLinkManagedStream(
+            socket,
+            RoutingId.From("heartbeat-session"),
+            new ZLinkCodecRegistryBuilder(),
+            "test"
+        );
+        var ping = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Control,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            ZlinkStreamControlProtocol.HeartbeatPingName,
+            ZlinkStreamMetadata.Empty
+        );
+
+        ZLinkStreamControlFrames.Dispatch(stream, ping, ReadOnlyMemory<byte>.Empty);
+
+        Assert.True(
+            CoreFrameCodec.TryDecode(
+                Assert.Single(capture.Frames),
+                out var headerBytes,
+                out var payload
+            )
+        );
+        var pong = new ConnectorHeaderCodec().Decode(headerBytes.ToArray());
+        Assert.Equal(ZlinkStreamMessageKind.Control, pong.Kind);
+        Assert.Equal(ZlinkStreamControlProtocol.HeartbeatPongName, pong.Name);
+        Assert.Empty(payload.ToArray());
+    }
+
     [Theory]
     [InlineData(true, "$zlink.actor.bound")]
     [InlineData(false, "$zlink.actor.unbound")]

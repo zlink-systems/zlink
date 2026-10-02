@@ -1,8 +1,11 @@
 package systems.zlink.framework.runtime.internal.calls;
 
 import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 import java.util.concurrent.CompletableFuture;
@@ -109,39 +112,35 @@ public final class ZLinkOneWayCalls {
                     }
                     Throwable cause = unwrap(error);
                     if (cause instanceof ZlinkSubmitException submit) {
-                        CompletionStage<Void> mapped =
-                                switch (submit.getResult()) {
-                                    case BACKPRESSURED -> oneWayStatus(BACKPRESSURED);
-                                    case NOT_ADMITTED ->
-                                            oneWayStatus(
-                                                    isRouteUnavailableErrno(submit.getNativeErrno())
-                                                            ? ROUTE_NOT_CONNECTED
-                                                            : BACKPRESSURED);
-                                    case NOT_CONNECTED -> oneWayStatus(ROUTE_NOT_CONNECTED);
-                                    case NOT_FOUND -> oneWayStatus(TARGET_NOT_FOUND);
-                                    case TERMINATED -> oneWayStatus(SHUTDOWN);
-                                    default -> null;
-                                };
-                        if (mapped != null) {
-                            mapped.whenComplete(
-                                    (unused, mappedError) ->
-                                            result.completeExceptionally(unwrap(mappedError)));
-                            return;
-                        }
+                        RequestResult terminal = toRequestResult(submit.getResult(), false);
+                        result.completeExceptionally(
+                                ZLinkFrameworkErrorOrigin.framework(
+                                        ZLinkBackendRequestResult.fromWireTerminal(terminal.value())
+                                                .toFrameworkErrorKind(),
+                                        submit.getMessage(),
+                                        submit));
+                        return;
                     }
                     result.completeExceptionally(cause);
                 });
         return result;
     }
 
-    private static boolean isRouteUnavailableErrno(int nativeErrno) {
-        // Async binding terminals can collapse an exact-route transport loss
-        // to NOT_ADMITTED. Preserve queue admission failures as
-        // DeadlineExceeded, but surface portable route-loss errno values as
-        // Unavailable.
-        return switch (nativeErrno) {
-            case 101, 107, 111, 113, 10051, 10057, 10061, 10065 -> true;
-            default -> false;
+    /** Owns the typed submit projection; capacity meaning depends on admission phase. */
+    public static RequestResult toRequestResult(SubmitResult result, boolean initialSubmission) {
+        return switch (result) {
+            case OK -> RequestResult.OK;
+            case BACKPRESSURED ->
+                    initialSubmission ? RequestResult.NOT_CONNECTED : RequestResult.TIMED_OUT;
+            case NOT_CONNECTED -> RequestResult.NOT_CONNECTED;
+            case NOT_FOUND -> RequestResult.NOT_FOUND;
+            case NOT_ADMITTED -> RequestResult.REJECTED;
+            case TERMINATED -> RequestResult.TERMINATED;
+            case INVALID_STATE -> RequestResult.INVALID_STATE;
+            case INVALID_ARGUMENT, INVALID_HANDLE, THREAD_VIOLATION ->
+                    RequestResult.INVALID_ARGUMENT;
+            case NOT_SUPPORTED -> RequestResult.NOT_SUPPORTED;
+            default -> RequestResult.INTERNAL_ERROR;
         };
     }
 

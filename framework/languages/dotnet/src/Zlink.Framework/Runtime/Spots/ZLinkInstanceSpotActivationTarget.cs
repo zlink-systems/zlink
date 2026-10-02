@@ -777,6 +777,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 .CommitAsync(
                     reservation,
                     ZLinkInstanceSpotAuthorityPayloadCodec.Encode(readyPayload),
+                    DateTimeOffset.FromUnixTimeMilliseconds(
+                        checked((long)operation.DeadlineUnixMs)
+                    ),
                     cancellationToken
                 )
                 .ConfigureAwait(false);

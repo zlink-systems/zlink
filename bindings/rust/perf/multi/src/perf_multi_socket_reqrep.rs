@@ -88,11 +88,11 @@ pub fn run_server(config: ReqRepConfig) {
     common::apply_multi_hwm(&router, &settings);
     router
         .common_options()
-        .set_send_timeout(Duration::from_millis(settings.send_timeout_ms))
+        .set_send_timeout(settings.send_timeout_ms)
         .expect("send timeout");
     router
         .common_options()
-        .set_receive_timeout(Duration::from_millis(settings.receive_timeout_ms))
+        .set_receive_timeout(settings.receive_timeout_ms)
         .expect("recv timeout");
     if matches!(args.transport.as_str(), "tls" | "wss") {
         let tls = common::resolve_perf_tls_paths().expect("TLS certs not found");
@@ -402,27 +402,27 @@ where
     S: ClientCommonOptions,
 {
     socket
-        .set_send_timeout(Duration::from_millis(settings.send_timeout_ms))
+        .set_send_timeout(settings.send_timeout_ms)
         .expect("send timeout");
     socket
-        .set_receive_timeout(Duration::from_millis(settings.receive_timeout_ms))
+        .set_receive_timeout(settings.receive_timeout_ms)
         .expect("recv timeout");
 }
 
 trait ClientCommonOptions {
-    fn set_send_timeout(&self, timeout: Duration) -> Result<(), ZlinkError>;
-    fn set_receive_timeout(&self, timeout: Duration) -> Result<(), ZlinkError>;
+    fn set_send_timeout(&self, timeout: i32) -> Result<(), ZlinkError>;
+    fn set_receive_timeout(&self, timeout: i32) -> Result<(), ZlinkError>;
 }
 
 macro_rules! impl_client_common_options {
     ($($socket:ty),+ $(,)?) => {
         $(
             impl ClientCommonOptions for $socket {
-                fn set_send_timeout(&self, timeout: Duration) -> Result<(), ZlinkError> {
+                fn set_send_timeout(&self, timeout: i32) -> Result<(), ZlinkError> {
                     Ok(self.common_options().set_send_timeout(timeout)?)
                 }
 
-                fn set_receive_timeout(&self, timeout: Duration) -> Result<(), ZlinkError> {
+                fn set_receive_timeout(&self, timeout: i32) -> Result<(), ZlinkError> {
                     Ok(self.common_options().set_receive_timeout(timeout)?)
                 }
             }

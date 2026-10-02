@@ -98,7 +98,7 @@ fn send_failure_does_not_leak() {
     router.router_options().set_mandatory(true).unwrap();
     router
         .common_options()
-        .set_send_timeout(Duration::from_millis(50))
+        .set_send_timeout(50)
         .unwrap();
 
     let rid = RoutingId::from(b"ghost");

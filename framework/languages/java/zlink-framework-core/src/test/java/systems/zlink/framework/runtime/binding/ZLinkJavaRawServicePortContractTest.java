@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RouterSocket;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import java.time.Duration;
 import java.util.List;
@@ -250,17 +253,21 @@ final class ZLinkJavaRawServicePortContractTest {
             assertThrows(ExecutionException.class, () -> failure.get(2, TimeUnit.SECONDS));
             assertConsumed(timedOut);
 
-            Message syncRejected = Message.from(new byte[] {10});
-            assertThrows(
-                    RuntimeException.class,
-                    () ->
-                            port.requestMessages(
+            Message routeRejected = Message.from(new byte[] {10});
+            var unavailable =
+                    port.requestMessages(
                                     caller,
                                     RoutingId.from("native-request-missing"),
-                                    List.of(syncRejected),
+                                    List.of(routeRejected),
                                     Duration.ofSeconds(2),
-                                    parts -> parts.getFirst().readByte(0)));
-            assertConsumed(syncRejected);
+                                    parts -> parts.getFirst().readByte(0))
+                            .toCompletableFuture();
+            var rejected =
+                    assertThrows(
+                            ExecutionException.class, () -> unavailable.get(2, TimeUnit.SECONDS));
+            var framework = assertInstanceOf(ZLinkFrameworkException.class, rejected.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, framework.kind());
+            assertConsumed(routeRejected);
         }
     }
 

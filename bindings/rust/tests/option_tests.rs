@@ -1,8 +1,6 @@
 //! Option Tests – verify typed option getter/setter per socket type,
 //! capability isolation, and enum/boolean surfaces.
 
-use std::time::Duration;
-
 use zlink::{AutoHwmProfile, Context, RidDuplicatePolicy, RoutingId, StreamSocket};
 
 #[test]
@@ -85,12 +83,28 @@ fn common_option_receive_high_water_mark() {
 }
 
 #[test]
-fn common_option_linger_duration() {
+fn common_signed_millisecond_options_preserve_core_values() {
     let ctx = Context::new().unwrap();
     let sock = ctx.pair_socket().unwrap();
-    // Typed Duration, not raw int
+    let options = sock.common_options();
+    assert_eq!(options.linger().unwrap(), -1);
+    for milliseconds in [-1, 0, 37, i32::MAX] {
+        options.set_linger(milliseconds).unwrap();
+        assert_eq!(options.linger().unwrap(), milliseconds);
+        options.set_send_timeout(milliseconds).unwrap();
+        assert_eq!(options.send_timeout().unwrap(), milliseconds);
+        options.set_receive_timeout(milliseconds).unwrap();
+        assert_eq!(options.receive_timeout().unwrap(), milliseconds);
+    }
+    options.set_linger(0).unwrap();
+}
+
+#[test]
+fn common_option_linger_milliseconds() {
+    let ctx = Context::new().unwrap();
+    let sock = ctx.pair_socket().unwrap();
     sock.common_options()
-        .set_linger(Duration::from_millis(200))
+        .set_linger(200)
         .unwrap();
 }
 

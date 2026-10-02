@@ -1,3 +1,4 @@
+import { macrotaskBoundary } from '../abort';
 import {
   diagnosticWorkName,
   guardStateLaneCompletion,
@@ -570,8 +571,4 @@ function validateNonNegative(value: number, field: string): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new RangeError(`${field} must be a non-negative safe integer.`);
   }
-}
-
-function macrotaskBoundary(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
 }

@@ -587,6 +587,9 @@ disconnect 이벤트가 사유를 인자로 함께 전달하는 것은 이 읽�
 | **`Manual`**(기본) | receive loop가 handler·error·disconnect·request callback을 직접 호출하지 않고 내부 큐에 넣는다. 사용자가 명시적으로 pump해 실행한다 |
 | `Immediate` | receive 경로에서 직접 실행한다 |
 
+`Manual`의 내부 큐는 용량을 이유로 callback 등록을 미루거나 거절하지 않는다. 등록한 callback은
+사용자가 pump할 때 등록 순서대로 실행한다.
+
 **기본값이 `Manual`인 이유는 게임 엔진 제약이다**(§2.2). 엔진 객체는 main thread 밖에서 다룰
 수 없으므로, main thread에서 pump해야 안전하다.
 

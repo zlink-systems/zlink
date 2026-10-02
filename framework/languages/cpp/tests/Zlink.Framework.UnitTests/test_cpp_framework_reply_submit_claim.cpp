@@ -65,8 +65,11 @@ submit_client_server_reply_and_release_claim (client_server::raw_client_server_s
                                               mesh::service_mailbox_record_t request)
 {
     const auto delivered =
-      server.reply (request, protocol::application_payload_t{"ClientServerReply",
-                                                             "application/json", bytes ("reply")});
+      server
+        .reply (request, protocol::application_payload_t{"ClientServerReply", "application/json",
+                                                         bytes ("reply")})
+        .result ()
+        .value ();
     const auto released = server.mailbox ().release (*claim);
     return std::make_pair (delivered, released);
 }

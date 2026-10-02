@@ -2684,7 +2684,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             [head, payload]
         );
         if (submit != SubmitResult.Ok)
-            CompleteManagedOperation(operation, ToRequestResult(submit), 0, Array.Empty<Message>());
+            CompleteManagedOperation(
+                operation,
+                ZLinkSubmitFailureMapper.ToRequestResult(submit, completionFailure: false),
+                0,
+                Array.Empty<Message>()
+            );
         return SubmitResult.Ok;
     }
 
@@ -3868,7 +3873,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (submit != SubmitResult.Ok)
                 CompleteManagedOperation(
                     operation,
-                    ToRequestResult(submit),
+                    ZLinkSubmitFailureMapper.ToRequestResult(submit, completionFailure: false),
                     0,
                     Array.Empty<Message>()
                 );
@@ -4852,14 +4857,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
         return SubmitResult.Ok;
     }
-
-    private static RequestResult ToRequestResult(SubmitResult result) =>
-        result switch
-        {
-            SubmitResult.Backpressured => RequestResult.Backpressured,
-            SubmitResult.NotConnected => RequestResult.NotConnected,
-            _ => RequestResult.Terminated,
-        };
 
     private async ValueTask<InstanceSpotActivationTerminal> SubmitForwardedInstanceSpotRequestAsync(
         Peer peer,
@@ -10323,7 +10320,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             complete(
                 pending,
-                ToRequestResult((SubmitResult)(int)error.Result),
+                ZLinkSubmitFailureMapper.ToRequestResult(
+                    (SubmitResult)(int)error.Result,
+                    completionFailure: true
+                ),
                 Array.Empty<Message>()
             );
         }

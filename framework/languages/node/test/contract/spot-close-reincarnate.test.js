@@ -220,7 +220,7 @@ for (const { state, sealed } of [
       statefulExecution: { admissionOpen: () => false, hostState: () => state },
       instanceSpotApplicationTargetProvider: () => ({ stableType: 'room', objectGeneration: ready.objectGeneration }),
       admission: { claim() { arrived.resolve(); return { close() { applicationReleases++; } }; } },
-      dispatchErrors: { flow: { flowCreationEnabled: () => false, accepts: () => false },
+      dispatchErrors: { captureEnabled: () => true, flow: { flowCreationEnabled: () => false, accepts: () => false },
         report(event) {
           if (failures.length === 0) terminalEvents.push('pendingMessagesTerminated');
           failures.push(event);
@@ -261,7 +261,7 @@ for (const { state, sealed } of [
     const expected = framework.ZLinkFrameworkErrorKind[expectation.messageTerminalByHost[hostName]];
     assert.equal(replies.length, send ? 0 : expectation.messageTerminalCount);
     if (!send) assert.throws(() => protocol.decodeChannelReply(replies[0]), (error) => error.kind === expected);
-    assert.ok(failures.length > 0, 'released intent must leave a diagnostic');
+    assert.equal(failures.length, expectation.messageTerminalCount, 'released intent must report exactly once');
     const diagnostic = expectation.sendDiagnosticsByHost[hostName];
     for (const failure of failures) {
       assert.equal(failure.error.kind, framework.ZLinkFrameworkErrorKind[diagnostic.kind]);
@@ -479,4 +479,37 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
       ...(second?.parts ?? []), ...(second?.replies.flat() ?? []),
       ...(lateNoIntent?.parts ?? []), ...(lateNoIntent?.replies.flat() ?? [])]) part.close();
   });
+}
+
+
+for (const targetMissing of [true, false]) {
+  for (const request of [false, true]) {
+    test(`Instance missing ${targetMissing ? 'target' : 'handler'} has one final ${request ? 'request' : 'send'} diagnostic`, async () => {
+      const { ZLinkRoutedSpotPacketDispatch } = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');
+      const { dispatchReasonFromError } = require('../../packages/framework/dist/runtime/diagnostics/dispatch-error-details');
+      const intermediate = [];
+      const terminal = [];
+      const finalReport = error => terminal.push({ error, reason: dispatchReasonFromError(error) });
+      const dispatch = new ZLinkRoutedSpotPacketDispatch({
+        resolveActivation: () => targetMissing ? undefined : { handlers: { snapshot: () => [] } },
+        dispatchErrors: { captureEnabled: () => true, report: event => intermediate.push(event) }
+      });
+      const context = { channelName: 'instance',
+        activationRecord: { activationRecord: { kind: 'instanceSpot' } },
+        onOneWayError: finalReport };
+      if (request) {
+        await assert.rejects(dispatch.request('missing-room', 'Ping', {}, context), error => {
+          assert.ok(error instanceof framework.ZLinkConfigurationException);
+          finalReport(error);
+          return true;
+        });
+      } else {
+        assert.equal(await dispatch.send('missing-room', 'Ping', {}, context), undefined);
+      }
+      assert.equal(intermediate.length, 0);
+      assert.equal(terminal.length, 1);
+      assert.equal(terminal[0].reason, request ? 'handler_exception' : 'no_handler');
+      assert.equal(terminal[0].error.kind, request ? undefined : framework.ZLinkFrameworkErrorKind.NotFound);
+    });
+  }
 }

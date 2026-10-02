@@ -195,7 +195,7 @@ public final class ZLinkActorCreationCoordinator
                         creating,
                         ZLinkPlacementCapacityBundle.actor(1));
         return locations
-                .reserve(request, OPEN)
+                .reserve(request, () -> System.currentTimeMillis() >= deadline)
                 .thenCompose(
                         result -> {
                             if (result instanceof ZLinkObjectAlreadyExists exists) {
@@ -501,7 +501,7 @@ public final class ZLinkActorCreationCoordinator
                         node.status().routingId(),
                         node.status().lifecycleGeneration());
         return locations
-                .commit(reservation, ready, terminal, OPEN)
+                .commit(reservation, ready, terminal, request.intent().deadlineUnixMs())
                 .thenCompose(
                         status -> {
                             if (status == ZLinkObjectCommitResult.COMMITTED

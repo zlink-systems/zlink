@@ -5,6 +5,7 @@
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/channels/channel_socket_options.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
+#include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/transport/listener_identity.hpp"
 
 #include <zlink/Contracts/Eventing/poller.hpp>
@@ -117,17 +118,6 @@ liveness_connection_identity (const protocol::client_server_server_admission_t &
     if (!server.server_routing_id.empty ())
         return server.server_routing_id;
     return {server.advertised_endpoint.begin (), server.advertised_endpoint.end ()};
-}
-
-foundation::operation_terminal_t request_failure (detail::backend::raw_request_result_t result)
-{
-    if (result == detail::backend::raw_request_result_t::timed_out) {
-        return foundation::operation_terminal_t::timed_out;
-    }
-    if (result == detail::backend::raw_request_result_t::terminated) {
-        return foundation::operation_terminal_t::shutdown;
-    }
-    return foundation::operation_terminal_t::transport_failed;
 }
 
 class pending_request_guard_t
@@ -1137,10 +1127,10 @@ task_t<void> raw_client_server_client_t::begin_admission_request (
                   const result_t<detail::backend::raw_request_completion_t> &settled) {
           trace_client_server_lazy ("client-admission-complete", [&] {
               return std::string ("settled=") + (settled ? "true" : "false")
-                     + (settled
-                          ? " result=" + std::to_string (static_cast<int> (settled.value ().result))
-                              + " parts=" + std::to_string (settled.value ().parts.size ())
-                          : std::string ());
+                     + (settled ? " result="
+                                    + std::to_string (static_cast<int> (settled.value ().terminal))
+                                    + " parts=" + std::to_string (settled.value ().parts.size ())
+                                : std::string ());
           });
           (void) state->lane.try_post ([state, connection, connection_generation, settled] {
               state->admission_in_flight = false;
@@ -1151,7 +1141,7 @@ task_t<void> raw_client_server_client_t::begin_admission_request (
                   state->admission.emplace (control_reply_state_t::parked_reply_t{
                     connection, connection_generation,
                     detail::backend::raw_request_completion_t{
-                      detail::backend::raw_request_result_t::failed, {}}});
+                      zlink::request_result_t::internal_error, {}}});
               }
           });
       });
@@ -1214,7 +1204,7 @@ task_t<bool> raw_client_server_client_t::apply_pending_control_replies (
             //  pair cannot admit or reject the current connection.
             trace_client_server_lazy ("client-admission-stale-discard", [&] {
                 return "channel=" + _options.admission.channel_name
-                       + " result=" + std::to_string (static_cast<int> (completion.result));
+                       + " result=" + std::to_string (static_cast<int> (completion.terminal));
             });
             //  The current (new) connection still needs its own admission.
             const auto retry_state = co_await _lane.run_task ([this] {
@@ -1228,7 +1218,7 @@ task_t<bool> raw_client_server_client_t::apply_pending_control_replies (
             const auto &port = retry_state.second;
             if (request && port)
                 co_await begin_admission_request (port);
-        } else if (completion.result == detail::backend::raw_request_result_t::ok
+        } else if (completion.terminal == zlink::request_result_t::ok
                    && completion.parts.size () == 1) {
             try {
                 const auto header = protocol::decode_header (completion.parts.front ());
@@ -1275,8 +1265,7 @@ task_t<bool> raw_client_server_client_t::apply_pending_control_replies (
             continue;
         }
         const auto &completion = probe.second.completion;
-        if (completion.result != detail::backend::raw_request_result_t::ok
-            || completion.parts.size () != 1) {
+        if (completion.terminal != zlink::request_result_t::ok || completion.parts.size () != 1) {
             continue;
         }
         try {
@@ -1397,11 +1386,15 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     auto completion = co_await port->request (wire, timeout);
     trace_client_server_lazy ("client-request-complete", [&] {
         return "channel=" + channel + " correlation=" + correlation_id
-               + " result=" + std::to_string (static_cast<int> (completion.result))
+               + " result=" + std::to_string (static_cast<int> (completion.terminal))
                + " parts=" + std::to_string (completion.parts.size ());
     });
-    if (completion.result != detail::backend::raw_request_result_t::ok) {
-        co_return client_server_request_completion_t{request_failure (completion.result)};
+    if (completion.terminal != zlink::request_result_t::ok) {
+        if (const auto terminal =
+              messaging::request_failure_mapper_t{}.transport_terminal (completion.terminal)) {
+            co_return client_server_request_completion_t{*terminal};
+        }
+        throw messaging::map_request_result_exception (completion.terminal, "ClientServer request");
     }
     //  Spec 32-framework-error-model:91-92 — a malformed ClientServer reply
     //  is ProtocolError, not a transport failure; report it as a completed

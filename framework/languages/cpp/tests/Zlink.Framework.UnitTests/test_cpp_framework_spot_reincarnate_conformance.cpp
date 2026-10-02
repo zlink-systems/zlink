@@ -486,11 +486,7 @@ class relocation_hold_spot_t final : public zf::spot_t<zf::actor_t>
     {
         _context.handlers ().add_handler<&relocation_hold_spot_t::hold> ();
     }
-    reply_t hold (const warm_request_t &)
-    {
-        _context.relocation_ready ().defer ();
-        return {};
-    }
+    reply_t hold (const warm_request_t &) { return {}; }
     zf::task_t<zf::spot_create_response_t> on_create (const zf::message_t &) override
     {
         co_return zf::spot_create_response_t::accept ();

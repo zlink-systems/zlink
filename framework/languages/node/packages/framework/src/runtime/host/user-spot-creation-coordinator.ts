@@ -117,9 +117,10 @@ export class ZLinkUserSpotCreationCoordinator {
     ) => Promise<ZLinkLocalSpotCreateResult>,
     discard?: (signal?: AbortSignal) => Promise<void>
   ): Promise<ZLinkUserSpotCreationResult> {
-    const deadline = createDeadline(request.timeoutMs, request.signal);
-    const deadlineMs = performance.now() + request.timeoutMs;
     const deadlineUnixMs = Date.now() + request.timeoutMs;
+    const remainingMs = Math.max(0, deadlineUnixMs - Date.now());
+    const deadline = createDeadline(remainingMs, request.signal);
+    const deadlineMs = performance.now() + remainingMs;
     const signal = deadline.signal;
     signal.throwIfAborted();
     const sha256 = createHash('sha256').update(request.requestPayload).digest();
@@ -195,7 +196,8 @@ export class ZLinkUserSpotCreationCoordinator {
               }
             }
           },
-          signal
+          signal,
+          BigInt(deadlineUnixMs)
         );
       } catch (error) {
         deadline.close();
@@ -538,7 +540,8 @@ export class ZLinkUserSpotCreationCoordinator {
               }
             }
           },
-          signal
+          signal,
+          record.deadlineUnixMs
         );
         await discard?.(signal);
         return {
@@ -573,7 +576,8 @@ export class ZLinkUserSpotCreationCoordinator {
               ownerNodeGeneration: current.allocation.descriptorLifecycleGeneration
             })
           },
-          signal
+          signal,
+          record.deadlineUnixMs
         );
       } catch (error) {
         throw createInternalFrameworkException(

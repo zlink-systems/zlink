@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include <zlink/framework/contracts/errors/error.hpp>
@@ -12,18 +13,6 @@ namespace zlink::framework::runtime::user_spot_terminal
 inline framework_error_kind_t map_user_spot_wire_failure (const protocol::reply_header_t &header,
                                                           bool creation)
 {
-    if (header.terminal_result
-        == static_cast<std::uint32_t> (protocol::request_terminal_result::timedOut))
-        return framework_error_kind_t::deadline_exceeded;
-    //  Spec 32-framework-error-model:91-92 — a reply that could not be
-    //  processed (including a synthesized protocolError terminal from a
-    //  malformed decode) is ProtocolError.
-    if (header.terminal_result
-        == static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError))
-        return framework_error_kind_t::protocol_error;
-    if (header.terminal_result
-        == static_cast<std::uint32_t> (protocol::request_terminal_result::notConnected))
-        return framework_error_kind_t::unavailable;
     // No eligible node can host the Spot; waiting on a queue cannot make a
     // placement target appear.
     if (creation
@@ -31,17 +20,6 @@ inline framework_error_kind_t map_user_spot_wire_failure (const protocol::reply_
              == static_cast<std::uint32_t> (protocol::request_terminal_result::backpressured)
         && header.failure_code == static_cast<std::uint32_t> (protocol::framework_error_code::none))
         return framework_error_kind_t::unavailable;
-    //  Spec 32-framework-error-model:99-103 — a remote target's operation-table/
-    //  queue saturation (Conflict(107)/Busy(108)+None) is the target's own
-    //  resource, so Unavailable. This matches
-    //  the request-path reply_header_exception remote mapper.
-    if ((header.terminal_result
-           == static_cast<std::uint32_t> (protocol::request_terminal_result::conflict)
-         || header.terminal_result
-              == static_cast<std::uint32_t> (protocol::request_terminal_result::busy))
-        && header.failure_code == static_cast<std::uint32_t> (protocol::framework_error_code::none))
-        return framework_error_kind_t::unavailable;
-
     switch (static_cast<protocol::framework_error_code> (header.failure_code)) {
         case protocol::framework_error_code::spotCreateFailed:
             return framework_error_kind_t::internal_failure;
@@ -49,12 +27,6 @@ inline framework_error_kind_t map_user_spot_wire_failure (const protocol::reply_
             return framework_error_kind_t::not_found;
         case protocol::framework_error_code::spotTypeMismatch:
             return framework_error_kind_t::type_mismatch;
-        case protocol::framework_error_code::requestRejected:
-            return framework_error_kind_t::rejected;
-        case protocol::framework_error_code::requestProtocolError:
-            return framework_error_kind_t::protocol_error;
-        case protocol::framework_error_code::requestFailed:
-            return framework_error_kind_t::internal_failure;
         case protocol::framework_error_code::workerQueueFull:
             // Legacy peers may still report workerQueueFull for an unavailable
             // remote target.
@@ -73,15 +45,9 @@ inline framework_error_kind_t map_user_spot_wire_failure (const protocol::reply_
             break;
     }
 
-    //  Spec 32-framework-error-model:118 — terminal 103 is Terminated, which is
-    //  ShuttingDown; only terminal 106 (Rejected) maps to rejected.
-    if (header.terminal_result
-        == static_cast<std::uint32_t> (protocol::request_terminal_result::terminated))
-        return framework_error_kind_t::shutting_down;
-    if (header.terminal_result
-        == static_cast<std::uint32_t> (protocol::request_terminal_result::rejected))
-        return framework_error_kind_t::rejected;
-    return framework_error_kind_t::internal_failure;
+    return messaging::request_failure_mapper_t{}
+      .reply_header_exception (header.terminal_result, header.failure_code, "User Spot request")
+      .kind ();
 }
 
 inline framework_error_kind_t map_user_spot_operation_failure (

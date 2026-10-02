@@ -788,7 +788,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                  .owner = {target.owner_id, target.lease_generation}},
       .creating_payload = target_actor_authority_payload (actor_authority_state_t::creating,
                                                           stable_type, actor_id, target),
-      .capacity_bundle = {.actor_slots = 1}};
+      .capacity_bundle = {.actor_slots = 1},
+      .operation_deadline = operation_deadline};
     while (std::chrono::steady_clock::now () < deadline) {
         const auto reserved = co_await _location_store->reserve (reserve);
         if (const auto *existing = std::get_if<object_already_exists_t> (&reserved)) {
@@ -851,8 +852,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                         unavailable_peer_epochs.insert (
                           {target.rid.to_hex (), target.lifecycle_generation, *target_peer_epoch});
                     }
-                    (void) co_await await_result (
-                      _location_store->abort ({reserve.key, winner->fence}));
+                    (void) co_await await_result (_location_store->abort (
+                      {reserve.key, winner->fence}, {}, operation_deadline));
                     co_await refresh_candidates ();
                     if (candidates.empty ())
                         co_return result_t<actor_create_result_t>::failure (
@@ -1408,6 +1409,9 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
     for (const auto value : creating_text)
         creating_payload.push_back (static_cast<std::byte> (static_cast<unsigned char> (value)));
     object_reserve_request_t reserve_request;
+    reserve_request.operation_deadline =
+      std::chrono::time_point_cast<std::chrono::system_clock::duration> (
+        std::chrono::system_clock::now () + (deadline - std::chrono::steady_clock::now ()));
     reserve_request.key = key;
     reserve_request.intent.stable_type = stable_type;
     reserve_request.intent.request_content_reference =
@@ -1928,19 +1932,6 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                           *running, [this, running, original_command, terminal,
                                      done] (const result_t<zlink::message_t> &reply) {
                               if (!reply) {
-                                  const auto *error = reply.error ();
-                                  detail::dispatch_error_reporter_t (_dispatch_options)
-                                    .report_lazy ([&] {
-                                        return message_dispatch_error_event_t{
-                                          .surface = dispatch_error_surface_t::spot_route,
-                                          .message_kind = dispatch_message_kind_t::request,
-                                          .reason = detail::dispatch_reason_from_error (error),
-                                          .action = dispatch_error_action_t::reply_error,
-                                          .packet_name =
-                                            original_command->application_payload.packet_name,
-                                          .spot_id = original_command->activation.target.spot_id,
-                                          .exception = std::make_exception_ptr (*error)};
-                                    });
                                   const auto failure =
                                     messaging::request_failure_mapper_t{}.target_failure_reply (
                                       reply.error_kind ());

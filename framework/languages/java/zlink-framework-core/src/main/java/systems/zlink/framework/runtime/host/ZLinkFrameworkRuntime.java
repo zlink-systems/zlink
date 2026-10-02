@@ -223,7 +223,15 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         //  so start() can roll a failed start back through the close routine.
         opened.set(this);
         ZLinkFrameworkLocationSubsystem locationSubsystem =
-                ZLinkFrameworkLocationSubsystem.create(this.registration, runtimeHandlers);
+                ZLinkFrameworkLocationSubsystem.create(
+                        this.registration,
+                        runtimeHandlers,
+                        () -> {
+                            if (!closeGate.closing()) {
+                                shutdown();
+                            }
+                            return terminationDeadline.get();
+                        });
         if (this.registration.relocationStore() != null) {
             runtimeHandlers.add(
                     systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore.class,
@@ -1526,6 +1534,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             CompletableFuture<ZLinkTerminationResult> completion,
             Duration deadline,
             ZLinkTerminationReason forcedReason) {
+        if (locationRuntime != null) {
+            locationRuntime.cancelStartup();
+        }
         drain(deadline)
                 .whenComplete(
                         (result, failure) -> {
@@ -2064,6 +2075,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private CompletionStage<Void> closeCoreAsync() {
+        if (activeTermination.get() == null) {
+            terminationDeadline.set(Instant.now().plus(DEFAULT_TERMINATION_DEADLINE));
+        }
         ZLinkFrameworkRuntimeState currentState = runtimeState.get();
         if (currentState != ZLinkFrameworkRuntimeState.STOPPED
                 && currentState != ZLinkFrameworkRuntimeState.ERROR) {
@@ -2077,7 +2091,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (channels != null) {
             channels.beginClose();
         }
-        ZLinkFrameworkShutdown shutdown = new ZLinkFrameworkShutdown();
+        ZLinkFrameworkShutdown shutdown = new ZLinkFrameworkShutdown(terminationDeadline.get());
         // Close completion admission after accepted runtime components have
         // finished their teardown, so graceful drain can still publish the
         // replies it already accepted.
@@ -2098,13 +2112,14 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (locationRuntime != null) {
             shutdown.defer("location_close", locationRuntime::close);
             shutdown.defer("location_lifecycle_close", locationLifecycle::close);
-            shutdown.deferStage("location_stop", locationRuntime::stop);
+            shutdown.deferStage(
+                    "location_stop", () -> locationRuntime.stop(terminationDeadline.get()));
             if (objectDescriptors != null) {
                 shutdown.deferStage("descriptor_remove", objectDescriptors::remove);
             }
         }
         if (spots != null) {
-            shutdown.deferStage(
+            shutdown.deferCloseStage(
                     "spot_close",
                     () -> {
                         if (spotRuntimeStopped.compareAndSet(false, true)) {
@@ -2117,13 +2132,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             shutdown.defer("channel_close", channels::close);
         }
         if (locationAutoConnectHost != null) {
-            shutdown.deferStage("auto_connect_stop", locationAutoConnectHost::stop);
+            shutdown.deferCloseStage("auto_connect_stop", locationAutoConnectHost::stop);
         }
         if (actors != null) {
-            shutdown.deferStage("instance_close", actors::closeAsync);
+            shutdown.deferCloseStage("instance_close", actors::closeAsync);
         }
         if (streams != null) {
-            shutdown.deferStage("stream_close", streams::closeAsync);
+            shutdown.deferCloseStage("stream_close", streams::closeAsync);
         }
         return shutdown.closeAsync()
                 .whenComplete(

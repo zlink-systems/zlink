@@ -102,12 +102,12 @@ impl<'a> CommonSocketOptions<'a> {
         Self { inner }
     }
 
-    /// Sets how long `close` waits to deliver still-queued messages.
-    pub fn set_linger(&self, d: Duration) -> Result<(), ConfigError> {
-        self.inner.set_linger(d)
+    /// Sets Core linger milliseconds; -1 means unlimited waiting during close.
+    pub fn set_linger(&self, milliseconds: i32) -> Result<(), ConfigError> {
+        self.inner.set_linger(milliseconds)
     }
-    /// Returns the configured linger duration.
-    pub fn linger(&self) -> Result<Duration, ConfigError> {
+    /// Returns Core linger milliseconds, including -1 for unlimited waiting.
+    pub fn linger(&self) -> Result<i32, ConfigError> {
         self.inner.linger()
     }
     /// Sets the maximum outbound bytes queued before the socket applies
@@ -128,20 +128,20 @@ impl<'a> CommonSocketOptions<'a> {
     pub fn receive_high_water_mark(&self) -> Result<u64, ConfigError> {
         self.inner.receive_high_water_mark()
     }
-    /// Sets how long a blocking send waits to enqueue a message before failing.
-    pub fn set_send_timeout(&self, d: Duration) -> Result<(), ConfigError> {
-        self.inner.set_send_timeout(d)
+    /// Sets Core send timeout milliseconds; -1 means unlimited waiting.
+    pub fn set_send_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
+        self.inner.set_send_timeout(milliseconds)
     }
-    /// Returns the configured send timeout.
-    pub fn send_timeout(&self) -> Result<Duration, ConfigError> {
+    /// Returns Core send timeout milliseconds, including -1 for unlimited waiting.
+    pub fn send_timeout(&self) -> Result<i32, ConfigError> {
         self.inner.send_timeout()
     }
-    /// Sets how long a blocking receive waits for a message before failing.
-    pub fn set_receive_timeout(&self, d: Duration) -> Result<(), ConfigError> {
-        self.inner.set_receive_timeout(d)
+    /// Sets Core receive timeout milliseconds; -1 means unlimited waiting.
+    pub fn set_receive_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
+        self.inner.set_receive_timeout(milliseconds)
     }
-    /// Returns the configured receive timeout.
-    pub fn receive_timeout(&self) -> Result<Duration, ConfigError> {
+    /// Returns Core receive timeout milliseconds, including -1 for unlimited waiting.
+    pub fn receive_timeout(&self) -> Result<i32, ConfigError> {
         self.inner.receive_timeout()
     }
     /// Sets whether messages are queued only to fully established connections;

@@ -18,11 +18,13 @@ export interface ZLinkRuntimeStartRollbackParts {
   readonly spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
   readonly channelRuntime?: ZLinkChannelRuntimeManager;
   readonly ownedStores?: readonly ZLinkRuntimeOwnedStore[];
+  readonly shutdownSignal?: AbortSignal;
 }
 
 export interface ZLinkRuntimeStopParts {
   readonly state: ZLinkFrameworkExecutionState;
   readonly cleanupDeadline?: Date;
+  readonly shutdownSignal?: AbortSignal;
   readonly locationSnapshot: ZLinkLocationRuntimeStopSnapshot;
   readonly streamRuntime?: ZLinkStreamRuntimeManager;
   readonly spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
@@ -37,14 +39,13 @@ export async function rollbackRuntimeStart(parts: ZLinkRuntimeStartRollbackParts
     parts.spotNodeRuntime?.dispose(),
     parts.channelRuntime?.dispose()
   ]);
-  await parts.startedLocationRuntime?.stop().catch(() => undefined);
+  await parts.startedLocationRuntime?.stop(parts.shutdownSignal).catch(() => undefined);
   await parts.context.dispose().catch(() => undefined);
   await disposeOwnedStores(parts.ownedStores);
 }
 
 export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<void> {
   const state = parts.state;
-  state.abortController.abort();
   const errors: unknown[] = [];
   await runShutdownStep(errors, () => parts.streamRuntime?.dispose());
   await runShutdownStep(errors, () =>
@@ -53,7 +54,7 @@ export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<vo
   await runShutdownStep(errors, () => parts.channelRuntime?.dispose());
   await runShutdownStep(errors, () => parts.serviceRelocation?.dispose());
   await runShutdownStep(errors, () => parts.locationSnapshot.lifecycle?.dispose());
-  await runShutdownStep(errors, () => parts.locationSnapshot.runtime?.stop());
+  await runShutdownStep(errors, () => parts.locationSnapshot.runtime?.stop(parts.shutdownSignal));
   await Promise.allSettled(state.listenerTasks);
   await runShutdownStep(errors, () => state.dispose());
   await disposeOwnedStores(parts.ownedStores, errors);

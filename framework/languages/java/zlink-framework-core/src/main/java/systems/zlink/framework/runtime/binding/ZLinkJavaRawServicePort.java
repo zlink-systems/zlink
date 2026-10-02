@@ -4,7 +4,6 @@ import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.errors.ZlinkRecvException;
-import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyToken;
@@ -14,6 +13,7 @@ import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterRoute;
 import systems.zlink.contracts.sockets.RouterSocket;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
@@ -240,9 +240,13 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         } catch (RuntimeException failure) {
             RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(failure, true);
             return CompletableFuture.failedFuture(
-                    terminal == RequestResult.INTERNAL_ERROR
+                    terminal == null
                             ? failure
-                            : new ZlinkRequestException(terminal).initCause(failure));
+                            : new ZLinkFrameworkException(
+                                    ZLinkJavaRawMeshNode.backendResult(terminal)
+                                            .toFrameworkErrorKind(),
+                                    failure.getMessage(),
+                                    failure));
         } finally {
             if (!completionOwns) {
                 Message.closeAll(ownedMessages);

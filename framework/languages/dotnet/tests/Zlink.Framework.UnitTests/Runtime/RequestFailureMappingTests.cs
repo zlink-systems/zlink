@@ -289,6 +289,11 @@ public sealed class RequestFailureMappingTests
     [InlineData(SubmitResult.NotAdmitted, ZLinkFrameworkErrorKind.Rejected)]
     [InlineData(SubmitResult.Terminated, ZLinkFrameworkErrorKind.ShuttingDown)]
     [InlineData(SubmitResult.NotFound, ZLinkFrameworkErrorKind.NotFound)]
+    [InlineData(SubmitResult.InvalidArgument, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(SubmitResult.InvalidHandle, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(SubmitResult.InvalidState, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(SubmitResult.ThreadViolation, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(SubmitResult.Backpressured, ZLinkFrameworkErrorKind.Unavailable)]
     public void Submit_Maps_Native_Result_To_Framework_Error(
         SubmitResult result,
         ZLinkFrameworkErrorKind expected
@@ -297,6 +302,24 @@ public sealed class RequestFailureMappingTests
         var error = ZLinkSubmitFailureMapper.CreateException(result, "request");
 
         Assert.Equal(expected, error.Kind);
+        var fromException = Assert.IsType<ZLinkFrameworkException>(
+            ZLinkRequestFailureMapper.CreateSubmitException(
+                new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result),
+                "request",
+                completionFailure: false
+            )
+        );
+        Assert.Equal(error.Kind, fromException.Kind);
+        if (result == SubmitResult.Backpressured)
+        {
+            var completed = Assert.IsType<ZLinkFrameworkException>(
+                ZLinkRequestFailureMapper.CreateSubmitException(
+                    new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.Backpressured),
+                    "WRITABLE completion"
+                )
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, completed.Kind);
+        }
     }
 
     [Theory]

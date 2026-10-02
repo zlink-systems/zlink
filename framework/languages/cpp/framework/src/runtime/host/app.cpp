@@ -1464,17 +1464,17 @@ void app_t::_apply_zlink_framework ()
             mesh_node->configure_bound_session_relocation_resolver (
               [actor_gateway_runtime, &location_store,
                mesh_name = mesh_node->mesh_name ()] (const runtime::stateful::object_ref_t &source)
-                -> std::optional<detail::bound_session_relocation_route_t> {
+                -> task_t<std::optional<detail::bound_session_relocation_route_t>> {
                   if (source.kind != runtime::stateful::object_kind_t::actor
                       || source.object_generation == 0 || source.authority_owner_generation == 0)
-                      return std::nullopt;
+                      co_return std::nullopt;
 
                   const auto actor =
                     detail::actor_ref_access_t::make (node_rid_t::from_string (source.node_id), {},
                                                       source.key, source.object_generation);
                   const auto route = actor_gateway_runtime.bound_session_route (actor);
                   if (!route || !route->session_rid)
-                      return std::nullopt;
+                      co_return std::nullopt;
                   if (route->object_generation != source.object_generation
                       || route->authority_owner_generation != source.authority_owner_generation
                       || route->node_generation == 0 || route->binding_generation == 0) {
@@ -1483,8 +1483,7 @@ void app_t::_apply_zlink_framework ()
 
                   location_page_request_t page;
                   do {
-                      auto listed =
-                        location_store.list_mesh_nodes (mesh_name, page).result ().value ();
+                      auto listed = co_await location_store.list_mesh_nodes (mesh_name, page);
                       const auto owner = std::find_if (
                         listed.items.begin (), listed.items.end (),
                         [&route] (const mesh_node_descriptor_t &descriptor) {
@@ -1496,7 +1495,7 @@ void app_t::_apply_zlink_framework ()
                               throw std::runtime_error (
                                 "Bound Session owner has no exact lease fence");
                           }
-                          return detail::bound_session_relocation_route_t{
+                          co_return detail::bound_session_relocation_route_t{
                             route->node_rid,
                             route->node_generation,
                             {owner->owner_id, owner->lease_generation},
@@ -3973,8 +3972,10 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         try {
             auto provider = state.services.build_provider ();
             if (auto location_runtime = provider.get<runtime::location_runtime_t> ()) {
-                if (!location_runtime->get ().cleanup_owner ()) {
-                    force (shutdown_force_reason_t::teardown_failed);
+                if (!location_runtime->get ().cleanup_owner (deadline_at)) {
+                    force (std::chrono::steady_clock::now () >= deadline_at
+                             ? shutdown_force_reason_t::deadline_exceeded
+                             : shutdown_force_reason_t::teardown_failed);
                 }
             }
         }

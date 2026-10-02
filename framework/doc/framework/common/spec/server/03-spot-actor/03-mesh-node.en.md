@@ -328,6 +328,11 @@ attempts connect and reconnect only while the intent exists.
   that peer's lifecycle termination.** Transport loss or the mere absence of a peer is a
   transient state that reconnection can recover. How a durable operation consumes this
   fact is defined by [Actor Model §8.1](04-actor-model.en.md#81-failure).
+- **When the binding rejects a connect, only that attempt fails and the intent remains.**
+  The intent owner reports the binding's typed error as is through the runtime error
+  reporting path and calls connect again at the same intent's next reconcile. A rejection
+  neither removes the intent nor ends discovery of other peers or the host lifecycle. A
+  rejection is not turned into a success flag that discards its cause.
 
 The following diagram shows the order in which a physical connection is
 established — the identity exchanged in the handshake must pass admission

@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.locations;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -21,10 +22,12 @@ import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStoreMissingCondition;
 import systems.zlink.framework.locationprovider.ZLinkStorePut;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadMissing;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreVersionCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteConflict;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
@@ -57,12 +60,13 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 
 final class ZLinkProviderCreationTerminalTest {
     private static final ZLinkCreationOperationIdentity OPERATION =
             new ZLinkCreationOperationIdentity(
                     RoutingId.from(new byte[] {0, (byte) 0xff, 0x10}), 7L, 1L, 0xabcdefL);
-    private static final Duration ORIGINAL_DEADLINE = Duration.ofSeconds(17);
+    static final Duration ORIGINAL_DEADLINE = Duration.ofSeconds(17);
     private static final Duration RETENTION = Duration.ofMinutes(5);
 
     @ParameterizedTest
@@ -161,10 +165,31 @@ final class ZLinkProviderCreationTerminalTest {
 
     @ParameterizedTest
     @EnumSource(ZLinkCreationTerminalState.class)
-    void conditionalConflictPublishesNeitherTerminalNorStateTransition(
+    void authorityVersionConflictPublishesNeitherTerminalNorStateTransition(
             ZLinkCreationTerminalState state) {
         var fixture = new Fixture();
-        fixture.provider.conflictNextWrite = true;
+        fixture.provider.conflictNextWrite =
+                request -> {
+                    var key =
+                            request.conditions().stream()
+                                    .filter(ZLinkStoreVersionCondition.class::isInstance)
+                                    .map(ZLinkStoreVersionCondition.class::cast)
+                                    .findFirst()
+                                    .orElseThrow()
+                                    .key();
+                    var current =
+                            assertInstanceOf(
+                                    ZLinkStoreReadFound.class,
+                                    await(fixture.provider.delegate.read(key, () -> false)));
+                    await(
+                            fixture.provider.delegate.write(
+                                    new ZLinkStoreWriteRequest(
+                                            List.of(),
+                                            List.of(
+                                                    new ZLinkStorePut(
+                                                            key, current.value().bytes(), null))),
+                                    () -> false));
+                };
 
         assertEquals(stale(state), fixture.complete(fixture.terminal(state)));
         assertEquals(1, fixture.provider.writes.size());
@@ -177,7 +202,7 @@ final class ZLinkProviderCreationTerminalTest {
                         await(
                                 fixture.repository.read(
                                         fixture.reservation.authorityKey(), () -> false)));
-        assertEquals(fixture.reservation.storeVersion(), authority.storeVersion());
+        assertNotEquals(fixture.reservation.storeVersion(), authority.storeVersion());
         assertEquals(ZLinkPlacementAllocationState.PENDING, authority.allocation().state());
         assertTrue(authority.pendingCreation().isPresent());
         assertInstanceOf(
@@ -304,6 +329,42 @@ final class ZLinkProviderCreationTerminalTest {
                                         fixture.repository.readCreationTerminal(
                                                 OPERATION, () -> false)))
                         .terminalEnvelope());
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = ZLinkCreationTerminalState.class,
+            names = {"REJECTED", "FAILED"})
+    void deadlineFreeTerminalCleanupDoesNotResubmitConflict(ZLinkCreationTerminalState state) {
+        var fixture = new Fixture();
+        fixture.provider.conflictNextWrite = ignored -> {};
+        assertEquals(stale(state), fixture.complete(fixture.terminal(state)));
+        assertEquals(1, fixture.provider.writes.size());
+        assertInstanceOf(
+                ZLinkCreationTerminalMissing.class,
+                await(fixture.repository.readCreationTerminal(OPERATION, () -> false)));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void deadlineFreeCleanupDoesNotResubmitConflict(boolean abort) {
+        var fixture = new Fixture();
+        fixture.provider.conflictNextWrite = ignored -> {};
+        if (abort) {
+            assertEquals(
+                    ZLinkObjectAbortResult.STALE,
+                    await(fixture.repository.abort(fixture.reservation, () -> false)));
+        } else {
+            assertEquals(
+                    ZLinkObjectCommitResult.STALE,
+                    await(
+                            fixture.repository.commit(
+                                    fixture.reservation, new byte[] {9}, () -> false)));
+        }
+        assertEquals(1, fixture.provider.writes.size());
+        assertInstanceOf(
+                ZLinkCreationTerminalMissing.class,
+                await(fixture.repository.readCreationTerminal(OPERATION, () -> false)));
     }
 
     @Test
@@ -545,7 +606,7 @@ final class ZLinkProviderCreationTerminalTest {
         return stage.toCompletableFuture().join();
     }
 
-    private static final class Fixture {
+    static final class Fixture {
         final StoreClock clock = new StoreClock();
         final RecordingProvider provider = new RecordingProvider(clock);
         final ZLinkProviderLocationRepository repository =
@@ -639,11 +700,11 @@ final class ZLinkProviderCreationTerminalTest {
         }
     }
 
-    private static final class RecordingProvider implements ZLinkLocationStore {
+    static final class RecordingProvider implements ZLinkLocationStore {
         final StoreClock clock;
         final ZLinkInMemoryProviderLocationStore delegate;
         final List<ZLinkStoreWriteRequest> writes = new ArrayList<>();
-        boolean conflictNextWrite;
+        Consumer<ZLinkStoreWriteRequest> conflictNextWrite;
 
         RecordingProvider(StoreClock clock) {
             this.clock = clock;
@@ -675,8 +736,10 @@ final class ZLinkProviderCreationTerminalTest {
                 }
             }
             writes.add(request);
-            if (conflictNextWrite) {
-                conflictNextWrite = false;
+            if (conflictNextWrite != null) {
+                var conflict = conflictNextWrite;
+                conflictNextWrite = null;
+                conflict.accept(request);
                 return CompletableFuture.completedFuture(
                         new ZLinkStoreWriteConflict(clock.instant()));
             }
@@ -691,7 +754,7 @@ final class ZLinkProviderCreationTerminalTest {
         }
     }
 
-    private static final class StoreClock extends Clock {
+    static final class StoreClock extends Clock {
         private final Instant origin = Instant.parse("2040-01-01T00:00:00Z");
         private long elapsedNanos;
 

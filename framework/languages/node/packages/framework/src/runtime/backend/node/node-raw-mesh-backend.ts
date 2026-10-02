@@ -117,6 +117,7 @@ import {
   ServiceWireProtocolError,
   type ServiceApplicationPayload
 } from '../../foundation/service-wire-m6a-codec';
+import { submitToRequestResult } from '../../messaging/submission-result';
 import { internalFrameworkWireReply } from '../../framework-errors-internal';
 import type {
   ZLinkBackendActorRef,
@@ -2507,7 +2508,7 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
       terminalResult:
         failure.operation === 'request'
           ? failure.result
-          : submitFailureTerminal(failure.result, failure.phase),
+          : submitToRequestResult(failure.result, failure.phase),
       failureCode: 0
     };
   }
@@ -2532,31 +2533,6 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
     terminalResult: RequestResult.InternalError,
     failureCode: ServiceWireFrameworkErrorCode.requestFailed
   };
-}
-
-function submitFailureTerminal(result: number, phase: 'submit' | 'completion'): number {
-  switch (result) {
-    case SubmitResult.Backpressured:
-      return phase === 'submit' ? RequestResult.NotConnected : RequestResult.Backpressured;
-    case SubmitResult.NotConnected:
-      return RequestResult.NotConnected;
-    case SubmitResult.NotFound:
-      return RequestResult.NotFound;
-    case SubmitResult.NotAdmitted:
-      return RequestResult.Rejected;
-    case SubmitResult.InvalidHandle:
-    case SubmitResult.InvalidArgument:
-    case SubmitResult.ThreadViolation:
-      return RequestResult.InvalidArgument;
-    case SubmitResult.InvalidState:
-      return RequestResult.InvalidState;
-    case SubmitResult.NotSupported:
-      return RequestResult.NotSupported;
-    case SubmitResult.Terminated:
-      return RequestResult.Terminated;
-    default:
-      return RequestResult.InternalError;
-  }
 }
 
 function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {

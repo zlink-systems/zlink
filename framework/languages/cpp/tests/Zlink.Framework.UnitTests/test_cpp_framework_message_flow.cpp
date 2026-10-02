@@ -322,9 +322,16 @@ int main ()
               .exception = std::make_exception_ptr (std::runtime_error (message))});
         });
         const auto type = std::string (typeid (std::runtime_error).name ());
-        if (!observed || observed->exception || observed->error_type != type
+        if (!observed || !observed->exception || observed->error_type != type
             || observed->error_message != expected)
             return 40;
+        try {
+            std::rethrow_exception (observed->exception);
+        }
+        catch (const std::runtime_error &error) {
+            if (std::string (error.what ()) != message)
+                return 40;
+        }
         if (!contains (out, "error_type=" + type) || !contains (out, "error_message=" + expected)
             || contains (out, "Bearer auth") || contains (out, "Bearer standalone")
             || contains (out, "password=p") || contains (out, "token=t")

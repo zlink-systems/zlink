@@ -1166,7 +1166,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         ZLinkPlacementCapacityBundle.spot(
                                 ZLinkPlacementObjectKind.USER_SPOT, stableType, 1));
         return locations
-                .reserve(reserve, () -> false)
+                .reserve(reserve, () -> System.currentTimeMillis() >= deadline)
                 .thenCompose(
                         result -> {
                             if (result instanceof ZLinkObjectAlreadyExists exists) {
@@ -2775,7 +2775,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         .INSTANCE_SPOT,
                                 stableType,
                                 1));
-        return store.reserve(request, () -> false)
+        return store.reserve(request, () -> System.currentTimeMillis() >= deadline)
                 .thenCompose(
                         result -> {
                             systems.zlink.framework.runtime.internal.locations

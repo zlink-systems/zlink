@@ -12,6 +12,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <mutex>
@@ -19,6 +20,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -883,7 +885,7 @@ bool verify_degraded_host_republishes_descriptor_after_owner_claim ()
     auto store = std::make_shared<recovering_location_store_t> ();
     auto relocation_store =
       std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ();
-    constexpr auto renew_timeout = std::chrono::seconds (1);
+    constexpr auto renew_timeout = std::chrono::milliseconds (500);
     auto &options = app.add_zlink_framework ();
     options.add_location_store (store);
     options.add_relocation_store (relocation_store);
@@ -2139,8 +2141,14 @@ int main ()
     auto cancelled_waiter =
       running.shutdown (std::chrono::seconds (2), cancelled_source.get_token ());
     const auto &cancelled = cancelled_waiter.result ();
-    if (cancelled || !cancelled.error ()
-        || cancelled.error ()->code () != std::make_error_code (std::errc::operation_canceled)) {
+    bool waiter_cancelled = false;
+    try {
+        cancelled.value ();
+    }
+    catch (const std::system_error &error) {
+        waiter_cancelled = error.code () == std::make_error_code (std::errc::operation_canceled);
+    }
+    if (!waiter_cancelled) {
         std::cerr << "wait cancellation must cancel only the joining waiter\n";
         service_view->release ();
         run_thread.join ();

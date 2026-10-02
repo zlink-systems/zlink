@@ -1762,6 +1762,10 @@ export class DefaultZLinkSpotManager {
           contentType: envelope.header.contentType,
           awaitFirstHandlerTurn: record.kind === ReceiveKind.InstanceSpotActivation,
           activationRecord: record,
+          onOneWayError: this.options.dispatchErrors?.captureEnabled()
+            ? (error: unknown) =>
+                this.reportInstanceDispatchFailure(meshName, spotId, record, envelope, false, error)
+            : undefined,
           workOptions: zlinkSerialWorkOptions(
             envelope.payload.byteLength,
             record.applicationMetadata?.byteLength ??
@@ -1832,6 +1836,7 @@ export class DefaultZLinkSpotManager {
           target?.stableType
         );
       } catch (error) {
+        this.reportInstanceDispatchFailure(meshName, spotId, record, envelope, request, error);
         const reason = request
           ? dispatchReasonFromError(error)
           : instanceDispatchErrorReason(error);
@@ -1848,26 +1853,38 @@ export class DefaultZLinkSpotManager {
           );
           return;
         }
-        this.options.dispatchErrors?.report({
-          surface: ZLinkDispatchErrorSurface.InstanceSpot,
-          messageKind: ZLinkDispatchMessageKind.Request,
-          packetName: envelope.packetName,
-          channelName: envelope.header.channelName,
-          meshName,
-          correlationId: envelope.header.correlationId ?? undefined,
-          sourceRid: record.sourceNodeRid === null ? undefined : String(record.sourceNodeRid),
-          spotId: String(spotId),
-          instanceSpotType: this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId)
-            ?.stableType,
-          activationState: 'closing',
-          flowId: envelope.header.flowId,
-          flowOrigin: envelope.header.flowOrigin,
-          reason,
-          action: ZLinkDispatchErrorAction.ReplyError,
-          error
-        });
+
         requireMeshSpotReply(record.reply(encodeChannelErrorReplyParts(envelope.header, error)));
       }
+    });
+  }
+
+  private reportInstanceDispatchFailure(
+    meshName: string,
+    spotId: RoutingId,
+    record: ReceiveRecord,
+    envelope: ReturnType<typeof decodeChannelEnvelope>,
+    request: boolean,
+    error: unknown
+  ): void {
+    if (!this.options.dispatchErrors?.captureEnabled()) return;
+    this.options.dispatchErrors?.report({
+      surface: ZLinkDispatchErrorSurface.InstanceSpot,
+      messageKind: request ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
+      packetName: envelope.packetName,
+      channelName: envelope.header.channelName,
+      meshName,
+      correlationId: envelope.header.correlationId ?? undefined,
+      sourceRid: record.sourceNodeRid === null ? undefined : String(record.sourceNodeRid),
+      spotId: String(spotId),
+      instanceSpotType: this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId)
+        ?.stableType,
+      activationState: 'closing',
+      flowId: envelope.header.flowId,
+      flowOrigin: envelope.header.flowOrigin,
+      reason: dispatchReasonFromError(error),
+      action: request ? ZLinkDispatchErrorAction.ReplyError : ZLinkDispatchErrorAction.Drop,
+      error
     });
   }
 
@@ -2013,10 +2030,7 @@ export class DefaultZLinkSpotManager {
         record.reply(
           this.encodeMeshActorReply(record.parts[0], ZLinkStreamMessageKind.Error, {
             message: error instanceof Error ? error.message : String(error),
-            kind:
-              error instanceof ZLinkFrameworkException
-                ? error.kind
-                : ZLinkFrameworkErrorKind.InternalFailure
+            kind: spotActorFailureKind(error)
           })
         )
       );
@@ -2671,10 +2685,7 @@ export class DefaultZLinkSpotManager {
                   {
                     ...completion,
                     status: 'failed',
-                    kind:
-                      error instanceof ZLinkFrameworkException
-                        ? error.kind
-                        : ZLinkFrameworkErrorKind.InternalFailure
+                    kind: spotActorFailureKind(error)
                   },
                   entryActor,
                   completion.actor,
@@ -3021,16 +3032,29 @@ export class DefaultZLinkSpotManager {
     const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
     const targetsEntry =
       entrySpotId !== undefined && String(admission.admission.spotId) === String(entrySpotId);
-    if (targetsEntry) {
-      await this.options.dispatchEntryActorJoin?.(meshName, actor, []);
-    } else {
-      const activation = this.activations.resolve(meshName, admission.admission.spotId);
-      if (activation === undefined) {
-        throw new Error(`Actor Join relocation '${relocationId}' target Spot is not active.`);
+    const activation = targetsEntry
+      ? undefined
+      : this.activations.resolve(meshName, admission.admission.spotId);
+    let lifecycleFailure: { readonly error: unknown } | undefined;
+    try {
+      if (targetsEntry) {
+        await this.options.dispatchEntryActorJoin?.(meshName, actor, []);
+      } else {
+        if (activation === undefined) {
+          throw new Error(`Actor Join relocation '${relocationId}' target Spot is not active.`);
+        }
+        await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
       }
-      await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
+    } catch (error) {
+      lifecycleFailure = { error };
     }
-    await submitSourceLeave(admission.admission.actorRef.nodeRid);
+    if (lifecycleFailure === undefined) {
+      const sourceLeave = submitSourceLeave(admission.admission.actorRef.nodeRid);
+      this.options.detachedTaskRunner.runDetached(
+        `actor Join source leave ${actor.context.actorId}`,
+        () => sourceLeave
+      );
+    }
     if (
       outcome.deferredJoinCompletion !== undefined &&
       this.options.actorTransferRuntime !== undefined
@@ -3038,20 +3062,26 @@ export class DefaultZLinkSpotManager {
       const submitMailbox = targetsEntry
         ? <T>(operation: () => Promise<T>): Promise<T> => operation()
         : <T>(operation: () => Promise<T>): Promise<T> => {
-            const activation = this.activations.resolve(meshName, admission.admission.spotId);
             if (activation === undefined) {
               throw new Error(`Actor Join relocation '${relocationId}' target mailbox is missing.`);
             }
             return activation.executeActor(actor.context.actorId, operation);
           };
       await this.options.actorTransferRuntime.deliverDeferredJoinCompletion(
-        outcome.deferredJoinCompletion,
+        lifecycleFailure === undefined
+          ? outcome.deferredJoinCompletion
+          : {
+              ...outcome.deferredJoinCompletion,
+              status: 'failed',
+              kind: spotActorFailureKind(lifecycleFailure.error)
+            },
         actor,
         actorRef,
         submitMailbox,
         signal
       );
     }
+    if (lifecycleFailure !== undefined) throw lifecycleFailure.error;
     this.formalRemoteActorAdmissions.markCommitted(relocationId, actor);
     return true;
   }
@@ -3285,6 +3315,12 @@ export class DefaultZLinkSpotManager {
       messageFollowOrigin
     );
   }
+}
+
+function spotActorFailureKind(error: unknown): ZLinkFrameworkErrorKind {
+  return error instanceof ZLinkFrameworkException
+    ? error.kind
+    : ZLinkFrameworkErrorKind.InternalFailure;
 }
 
 function instanceDispatchErrorReason(error: unknown): ZLinkDispatchErrorReason {

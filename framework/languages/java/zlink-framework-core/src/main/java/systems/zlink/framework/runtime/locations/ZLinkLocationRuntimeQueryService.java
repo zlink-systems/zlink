@@ -569,7 +569,10 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
 
     private ZLinkPageRequest normalize(ZLinkPageRequest page) {
         ZLinkPageRequest safe = page == null ? ZLinkPageRequest.firstPage() : page;
-        return safe.pageSize() > 0 ? safe : new ZLinkPageRequest(1000, safe.continuationToken());
+        return safe.pageSize() > 0
+                ? safe
+                : new ZLinkPageRequest(
+                        ZLinkPageRequest.firstPage().pageSize(), safe.continuationToken());
     }
 
     private ZLinkPageRequest boundedPage(ZLinkPageRequest page) {

@@ -313,17 +313,19 @@ class test_location_repository_t : public zlink::framework::location_repository_
 
     zlink::framework::task_t<zlink::framework::object_commit_result_t>
     commit (zlink::framework::object_commit_request_t request,
-            std::stop_token cancellation = {}) override
+            std::stop_token cancellation = {},
+            std::chrono::system_clock::time_point operation_deadline = {}) override
     {
-        return _inner.commit (std::move (request), cancellation);
+        return _inner.commit (std::move (request), cancellation, operation_deadline);
     }
 
     zlink::framework::task_t<zlink::framework::object_abort_result_t>
     abort (zlink::framework::object_abort_request_t request,
-           std::stop_token cancellation = {}) override
+           std::stop_token cancellation = {},
+           std::chrono::system_clock::time_point operation_deadline = {}) override
     {
         abort_count.fetch_add (1, std::memory_order_relaxed);
-        return _inner.abort (std::move (request), cancellation);
+        return _inner.abort (std::move (request), cancellation, operation_deadline);
     }
 
     zlink::framework::task_t<zlink::framework::aggregate_prepare_result_t>

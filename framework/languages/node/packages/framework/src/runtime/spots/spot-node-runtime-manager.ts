@@ -86,7 +86,11 @@ import {
   type ZLinkLocationEventSink,
   type ZLinkLocationRuntimeStores
 } from '../locations';
-import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
+import {
+  classifySubmitResult,
+  ZLinkSubmitStatus,
+  type ZLinkSubmitResult
+} from '../messaging/submission-result';
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import type { ZLinkDetachedTaskRunner } from './spot-actor-join-dispatch';
 import { ZLinkEntrySpotActivation } from './spot-entry-activation';
@@ -1234,26 +1238,12 @@ export function createFrameworkEntrySpotId(prefix: string): string {
 }
 
 function mapPublishSubmitStatus(result: number): ZLinkSubmitStatus {
-  switch (result) {
-    case SubmitResult.Ok:
-      return ZLinkSubmitStatus.Submitted;
-    case SubmitResult.Backpressured:
-    case SubmitResult.NotAdmitted:
-      return ZLinkSubmitStatus.Backpressured;
-    case SubmitResult.NotFound:
-      // A publish with no matching subscriber is a successful zero-recipient
-      // operation, not an operation-specific not-found failure.
-      return ZLinkSubmitStatus.Submitted;
-    case SubmitResult.NotConnected:
-      return ZLinkSubmitStatus.RouteNotConnected;
-    case SubmitResult.Terminated:
-    case SubmitResult.InvalidHandle:
-      return ZLinkSubmitStatus.Shutdown;
-    default:
-      throw new ZLinkConfigurationException(
-        `Logical Multicast failed with submit result '${result}'.`
-      );
-  }
+  // Source publication preserves its local admission status before commit.
+  if (result === SubmitResult.NotAdmitted || result === SubmitResult.Backpressured)
+    return ZLinkSubmitStatus.Backpressured;
+  // A publish with no matching subscriber succeeds with zero recipients.
+  if (result === SubmitResult.NotFound) return ZLinkSubmitStatus.Submitted;
+  return classifySubmitResult(result, 'Logical Multicast').status;
 }
 
 function requireEntrySpotReply(result: number): void {

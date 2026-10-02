@@ -876,10 +876,10 @@ class actor_client_impl_t final : public actor_client_t
                           detail::boundary_error_t::shutdown, "actor send runtime is stopped");
                     }
                     co_return result_t<std::optional<zlink::message_t>>::failure (
-                      runtime::messaging::map_submit_result_error_kind (submit),
+                      runtime::messaging::map_submit_result_exception (submit, "Actor submission")
+                        .kind (),
                       "actor send was not accepted (result "
-                        + std::to_string (static_cast<int> (submit)) + ", errno "
-                        + std::to_string (errno) + ")");
+                        + std::to_string (static_cast<int> (submit)) + ")");
                 }
                 co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
             }
@@ -893,7 +893,8 @@ class actor_client_impl_t final : public actor_client_t
                       detail::boundary_error_t::shutdown, "actor request runtime is stopped");
                 }
                 co_return result_t<std::optional<zlink::message_t>>::failure (
-                  runtime::messaging::map_submit_result_error_kind (submit),
+                  runtime::messaging::map_submit_result_exception (submit, "Actor submission")
+                    .kind (),
                   "actor request was not accepted");
             }
             auto reply = co_await wait_for_actor_completion (runtime, operation_id);

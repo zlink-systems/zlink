@@ -32,7 +32,6 @@ import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
-import systems.zlink.framework.locationprovider.ZLinkStoreWriteConflict;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -258,6 +257,7 @@ final class ZLinkSpotCloseConformanceTest {
                 0, fixture.path("invariants").path("oldIncarnationPendingHandlerCalls").asInt());
         assertEquals(1, fixture.path("invariants").path("messageTerminalsPerRequest").asInt());
         List<String> failures = new ArrayList<>();
+        List<Throwable> failureCauses = new ArrayList<>();
         // Both context surfaces return the Close completion result.
         for (Class<?> surface :
                 List.of(
@@ -279,6 +279,7 @@ final class ZLinkSpotCloseConformanceTest {
                 runScenario(scenario);
             } catch (AssertionError | Exception failure) {
                 failures.add(name + ": " + failure);
+                failureCauses.add(failure);
             }
             ran.add(name);
         }
@@ -290,6 +291,7 @@ final class ZLinkSpotCloseConformanceTest {
                 ZLinkInstanceSpotCloseConformanceTest.runBranch(branch);
             } catch (AssertionError | Exception failure) {
                 failures.add(name + ": " + failure);
+                failureCauses.add(failure);
             }
             ranBranches.add(name);
         }
@@ -299,9 +301,15 @@ final class ZLinkSpotCloseConformanceTest {
                 ZLinkInstanceSpotCloseConformanceTest.runReadyRouteCase(routeCase);
             } catch (AssertionError | Exception failure) {
                 failures.add(routeCase.path("name").asText() + ": " + failure);
+                failureCauses.add(failure);
             }
         }
-        assertEquals(List.of(), failures);
+        try {
+            assertEquals(List.of(), failures);
+        } catch (AssertionError assertion) {
+            failureCauses.forEach(assertion::addSuppressed);
+            throw assertion;
+        }
     }
 
     private static void runScenario(JsonNode scenario) throws Exception {
@@ -794,8 +802,54 @@ final class ZLinkSpotCloseConformanceTest {
                                                             .startsWith("authority\0")
                                                     && delete.key().value().endsWith(authorityKey));
             if (authorityPut && conflictNextAuthorityPut.compareAndSet(true, false)) {
-                return CompletableFuture.completedFuture(
-                        new ZLinkStoreWriteConflict(java.time.Instant.now()));
+                ZLinkStoreKey key =
+                        request.mutations().stream()
+                                .filter(ZLinkStorePut.class::isInstance)
+                                .map(ZLinkStorePut.class::cast)
+                                .map(ZLinkStorePut::key)
+                                .filter(
+                                        candidate ->
+                                                candidate.value().startsWith("authority\0")
+                                                        && candidate.value().endsWith(authorityKey))
+                                .findFirst()
+                                .orElseThrow();
+                return inner.read(key, cancellation)
+                        .thenCompose(
+                                read -> {
+                                    var current =
+                                            (systems.zlink.framework.locationprovider
+                                                            .ZLinkStoreReadFound)
+                                                    read;
+                                    return inner.write(
+                                                    new ZLinkStoreWriteRequest(
+                                                            List.of(),
+                                                            List.of(
+                                                                    new ZLinkStorePut(
+                                                                            key,
+                                                                            current.value().bytes(),
+                                                                            null))),
+                                                    cancellation)
+                                            .thenCompose(
+                                                    rewritten -> {
+                                                        var applied =
+                                                                (ZLinkStoreWriteApplied) rewritten;
+                                                        assertNotEquals(
+                                                                current.value().version(),
+                                                                applied.putVersions().get(key));
+                                                        return inner.write(request, cancellation)
+                                                                .thenApply(
+                                                                        result -> {
+                                                                            assertInstanceOf(
+                                                                                    systems.zlink
+                                                                                            .framework
+                                                                                            .locationprovider
+                                                                                            .ZLinkStoreWriteConflict
+                                                                                            .class,
+                                                                                    result);
+                                                                            return result;
+                                                                        });
+                                                    });
+                                });
             }
             if (authorityDelete && failNextAuthorityDelete.compareAndSet(true, false)) {
                 return CompletableFuture.failedFuture(
