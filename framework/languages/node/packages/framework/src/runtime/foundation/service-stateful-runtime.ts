@@ -115,7 +115,6 @@ const STATEFUL_OPERATION_RETRY_TICK_MS = 20;
 
 const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 
-const ACTOR_ROUTE_STALE = 21;
 const SPOT_MOVING = 34;
 const USER_SPOT_OPERATION_CAPACITY = 65_536;
 const USER_SPOT_OPERATION_REPLAY_RETENTION_MS = 5 * 60_000;
@@ -1332,10 +1331,13 @@ export class ServiceStatefulRuntime {
     const pending = this.operations.register(timeoutMs);
     const target = this.acceptSpotAuthority(requested);
     if (target === undefined) {
-      this.operations.reply(pending.id, {
-        terminalResult: RequestResult.NotFound,
-        failureCode: ACTOR_ROUTE_STALE
-      });
+      this.operations.reply(
+        pending.id,
+        internalFrameworkWireReply(
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+          'stale-generation'
+        )
+      );
       return pending;
     }
     const header = encodeSpotHeader('spotRequest', sourceSpotId, target, pending.id, {
@@ -1390,10 +1392,13 @@ export class ServiceStatefulRuntime {
     const pending = this.operations.register(timeoutMs);
     const route = this.tryActorFence(target);
     if (route === undefined) {
-      this.operations.reply(pending.id, {
-        terminalResult: RequestResult.NotFound,
-        failureCode: ACTOR_ROUTE_STALE
-      });
+      this.operations.reply(
+        pending.id,
+        internalFrameworkWireReply(
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+          'stale-generation'
+        )
+      );
       return pending;
     }
     const header = encodeActorHeader(
@@ -1906,10 +1911,13 @@ export class ServiceStatefulRuntime {
       delivery.binding.sessionRid !== sessionRid ||
       delivery.binding.bindingGeneration !== expectedBindingGeneration
     ) {
-      this.operations.reply(pending.id, {
-        terminalResult: RequestResult.NotFound,
-        failureCode: ACTOR_ROUTE_STALE
-      });
+      this.operations.reply(
+        pending.id,
+        internalFrameworkWireReply(
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+          'stale-generation'
+        )
+      );
       return pending;
     }
     this.sessionDeliveries.delete(actorKey(actor));
@@ -4488,10 +4496,13 @@ export class ServiceStatefulRuntime {
         ? this.tryActorFence(actor)
         : this.acceptCanonicalActorFence(actor, canonical.actorFence);
     if (target === undefined || actorRoute === undefined) {
-      this.operations.reply(pending.id, {
-        terminalResult: RequestResult.NotFound,
-        failureCode: ACTOR_ROUTE_STALE
-      });
+      this.operations.reply(
+        pending.id,
+        internalFrameworkWireReply(
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+          'stale-generation'
+        )
+      );
       return;
     }
     if (canonical !== undefined) {
@@ -5531,12 +5542,15 @@ function actorLocation(actor: ServiceActorState): ActorLocation {
 
 function failure(error: unknown): ServiceStatefulResult {
   if (error instanceof ServiceStaleGenerationError) {
-    return { terminalResult: RequestResult.NotFound, failureCode: ACTOR_ROUTE_STALE };
+    return internalFrameworkWireReply(
+      ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+      'stale-generation'
+    );
   }
   if (error instanceof ZLinkFrameworkException) {
     return internalFrameworkWireReply(error);
   }
-  return { terminalResult: RequestResult.InternalError, failureCode: 17 };
+  return internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.RequestFailed);
 }
 
 function actorKey(actor: ServiceActorRef): string {

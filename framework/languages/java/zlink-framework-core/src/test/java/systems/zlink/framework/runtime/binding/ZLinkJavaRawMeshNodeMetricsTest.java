@@ -357,7 +357,11 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                     List.of(
                             ZLinkFrameworkErrorKind.REJECTED,
                             ZLinkFrameworkErrorKind.SHUTTING_DOWN,
-                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR)) {
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                            ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            ZLinkFrameworkErrorKind.INTERNAL_FAILURE)) {
                 String type = kind.name();
                 spots.registerInstanceSpotType(
                         type,
@@ -378,6 +382,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                         switch (kind) {
                             case SHUTTING_DOWN -> "shutdown";
                             case PROTOCOL_ERROR -> "decode_error";
+                            case NOT_FOUND, TYPE_MISMATCH -> "stale_target";
                             default -> "no_handler";
                         });
             }

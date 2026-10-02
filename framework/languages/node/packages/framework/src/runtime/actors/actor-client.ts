@@ -36,10 +36,10 @@ import {
   type ZLinkSpotSerialTurn
 } from '../execution';
 import { remainingActorRequestTimeout, waitActorReply } from './actor-request-deadline';
-import { ServiceWireFrameworkErrorCode } from '../foundation/service-wire-constants.generated';
 import {
   createInternalFrameworkException,
   internalFrameworkErrorKind,
+  internalFrameworkErrorKindFromWireFailureCode,
   ZLinkFrameworkInternalErrorKind
 } from '../framework-errors-internal';
 import type { ZLinkResolvedActorRoute, ZLinkStoreLocationResolvers } from '../locations';
@@ -852,54 +852,6 @@ function mapSubmitError(error: unknown, operationName: string): Error {
   );
 }
 
-//  Ownership-aware Actor remote-reply translator (spec 32:81-118, 99-103):
-//  the reply comes from a remote target, so a fine framework failure code
-//  refines the coarse terminal, and a terminal-only conflict/busy is the
-//  target's owner/queue state (retryable stale/Unavailable), never a
-//  source-owned queue exhaustion. Backpressure never appears on this reply
-//  path. Internal kinds are preserved so the stale-actor re-resolve retry
-//  (isStaleActorError) keeps working.
-function actorFailureCodeKind(failureErrno: number): ZLinkFrameworkInternalErrorKind | undefined {
-  switch (failureErrno) {
-    case ServiceWireFrameworkErrorCode.actorAlreadyExists:
-      return ZLinkFrameworkInternalErrorKind.ActorAlreadyExists;
-    case ServiceWireFrameworkErrorCode.actorTypeMismatch:
-      return ZLinkFrameworkInternalErrorKind.ActorTypeMismatch;
-    case ServiceWireFrameworkErrorCode.spotTypeMismatch:
-      return ZLinkFrameworkInternalErrorKind.SpotTypeMismatch;
-    case ServiceWireFrameworkErrorCode.actorSessionNotBound:
-      return ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
-    case ServiceWireFrameworkErrorCode.handlerNotFound:
-    case ServiceWireFrameworkErrorCode.requestTargetNotFound:
-      return ZLinkFrameworkInternalErrorKind.RequestTargetNotFound;
-    case ServiceWireFrameworkErrorCode.payloadDecodeFailed:
-    case ServiceWireFrameworkErrorCode.requestProtocolError:
-      return ZLinkFrameworkInternalErrorKind.RequestProtocolError;
-    //  routeNotConnected(13) and a remote worker queue full(18) are Unavailable.
-    case ServiceWireFrameworkErrorCode.routeNotConnected:
-    case ServiceWireFrameworkErrorCode.workerQueueFull:
-      return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
-    case ServiceWireFrameworkErrorCode.requestRejected:
-      return ZLinkFrameworkInternalErrorKind.RequestRejected;
-    case ServiceWireFrameworkErrorCode.workerTimedOut:
-      return ZLinkFrameworkInternalErrorKind.WorkerTimedOut;
-    case ServiceWireFrameworkErrorCode.requestFailed:
-      return ZLinkFrameworkInternalErrorKind.RequestFailed;
-    case ServiceWireFrameworkErrorCode.workerFailed:
-      return ZLinkFrameworkInternalErrorKind.WorkerFailed;
-    case ServiceWireFrameworkErrorCode.actorLocationStale:
-      return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
-    case ServiceWireFrameworkErrorCode.spotGenerationStale:
-      return ZLinkFrameworkInternalErrorKind.ActorGenerationStale;
-    case ServiceWireFrameworkErrorCode.spotMoving:
-      return ZLinkFrameworkInternalErrorKind.ActorMoving;
-    case ServiceWireFrameworkErrorCode.relocationDataLost:
-      return ZLinkFrameworkInternalErrorKind.RelocationDataLost;
-    default:
-      return undefined;
-  }
-}
-
 function actorTerminalKind(result: number): ZLinkFrameworkInternalErrorKind {
   switch (result) {
     case RequestResult.TimedOut:
@@ -915,7 +867,7 @@ function actorTerminalKind(result: number): ZLinkFrameworkInternalErrorKind {
     case RequestResult.NotConnected:
       return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
     //  A terminal-only conflict/busy on a remote actor reply is the target's
-    //  stale/owner state: retryable ActorLocationStale (-> Unavailable).
+    //  stale/owner state: ActorLocationStale (Unavailable).
     case RequestResult.Conflict:
     case RequestResult.Busy:
       return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
@@ -924,8 +876,12 @@ function actorTerminalKind(result: number): ZLinkFrameworkInternalErrorKind {
   }
 }
 
+// The shared table preserves Actor fine kinds; without a recognized fine code,
+// the remote owner/queue terminal supplies the classification.
 function mapRequestResult(result: number, failureErrno: number, operationName: string): Error {
-  const kind = actorFailureCodeKind(failureErrno) ?? actorTerminalKind(result);
+  const kind =
+    internalFrameworkErrorKindFromWireFailureCode(failureErrno, 'actor') ??
+    actorTerminalKind(result);
   return createInternalFrameworkException(
     kind,
     `${operationName} failed with request result ${result}` +

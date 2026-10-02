@@ -1,3 +1,7 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
+using Context = Zlink.Framework.Runtime.Messaging.ZLinkRequestFailureMapper.FailureContext;
+using FailureCode = Systems.Zlink.Framework.Runtime.Protocol.ServiceWireConstants.FrameworkErrorCode;
+
 namespace Zlink.Framework.UnitTests;
 
 public sealed class RequestFailureMappingTests
@@ -586,6 +590,227 @@ public sealed class RequestFailureMappingTests
                 105,
                 19,
                 payload
+            )
+        );
+    }
+}
+
+public sealed class RequestWireFailureTableTests
+{
+    [Fact]
+    public void Every_mapping_row_obeys_schema_terminal_failure_integrity()
+    {
+        foreach (var mapping in ZLinkRequestFailureMapper.Mappings)
+            Assert.True(
+                ServiceWireConstants.ValidTerminalFailure((uint)mapping.Result, (uint)mapping.Code),
+                $"{mapping.Context}/{mapping.Kind}: {mapping.Result}/{mapping.Code}"
+            );
+        Assert.False(
+            ServiceWireConstants.ValidTerminalFailure(
+                (uint)RequestResult.Conflict,
+                (uint)FailureCode.ActorCreateRejected
+            )
+        );
+    }
+
+    [Theory]
+    [InlineData(
+        ZLinkFrameworkErrorKind.NotFound,
+        RequestResult.NotFound,
+        (int)FailureCode.RequestTargetNotFound
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.AlreadyExists,
+        RequestResult.Conflict,
+        (int)FailureCode.ActorAlreadyExists
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.TypeMismatch,
+        RequestResult.Conflict,
+        (int)FailureCode.SpotTypeMismatch
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.Rejected,
+        RequestResult.Rejected,
+        (int)FailureCode.RequestRejected
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.Unavailable,
+        RequestResult.InternalError,
+        (int)FailureCode.RouteNotConnected
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.DeadlineExceeded,
+        RequestResult.InternalError,
+        (int)FailureCode.WorkerTimedOut
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.ShuttingDown,
+        RequestResult.Terminated,
+        (int)FailureCode.None
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.ProtocolError,
+        RequestResult.ProtocolError,
+        (int)FailureCode.RequestProtocolError
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.InvalidOperation,
+        RequestResult.InvalidState,
+        (int)FailureCode.None
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.DataLost,
+        RequestResult.InternalError,
+        (int)FailureCode.RelocationDataLost
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.InternalFailure,
+        RequestResult.InternalError,
+        (int)FailureCode.RequestFailed
+    )]
+    public void General_representatives_round_trip_with_coarse_terminal(
+        ZLinkFrameworkErrorKind kind,
+        RequestResult result,
+        int code
+    )
+    {
+        var reply = ZLinkRequestFailureMapper.TargetFailureReply(
+            new ZLinkFrameworkException(kind, "target")
+        );
+        Assert.Equal((result, (FailureCode)code), reply);
+        var received = Assert.IsType<ZLinkFrameworkException>(
+            ZLinkRequestFailureMapper.CreateCompletionException(result, (int)code, "source")
+        );
+        Assert.Equal(kind, received.Kind);
+    }
+
+    [Theory]
+    [InlineData(
+        (int)Context.ActorTarget,
+        ZLinkFrameworkErrorKind.TypeMismatch,
+        RequestResult.Conflict,
+        (int)FailureCode.ActorTypeMismatch
+    )]
+    [InlineData(
+        (int)Context.ActorRelocation,
+        ZLinkFrameworkErrorKind.InvalidOperation,
+        RequestResult.Conflict,
+        (int)FailureCode.ActorLocationStale
+    )]
+    [InlineData(
+        (int)Context.SpotRelocation,
+        ZLinkFrameworkErrorKind.InvalidOperation,
+        RequestResult.Conflict,
+        (int)FailureCode.SpotGenerationStale
+    )]
+    [InlineData(
+        (int)Context.ActorRelocation,
+        ZLinkFrameworkErrorKind.NotConfigured,
+        RequestResult.NotFound,
+        (int)FailureCode.HandlerNotFound
+    )]
+    [InlineData(
+        (int)Context.SpotRelocation,
+        ZLinkFrameworkErrorKind.ShuttingDown,
+        RequestResult.InternalError,
+        (int)FailureCode.RequestFailed
+    )]
+    [InlineData(
+        (int)Context.SpotControl,
+        ZLinkFrameworkErrorKind.Unavailable,
+        RequestResult.Conflict,
+        (int)FailureCode.SpotMoving
+    )]
+    [InlineData(
+        (int)Context.SpotControl,
+        ZLinkFrameworkErrorKind.AlreadyExists,
+        RequestResult.InternalError,
+        (int)FailureCode.SpotCreateFailed
+    )]
+    [InlineData(
+        (int)Context.SpotControl,
+        ZLinkFrameworkErrorKind.NotFound,
+        RequestResult.InternalError,
+        (int)FailureCode.RequestFailed
+    )]
+    [InlineData(
+        (int)Context.ActorCreate,
+        ZLinkFrameworkErrorKind.AlreadyExists,
+        RequestResult.Conflict,
+        (int)FailureCode.ActorAlreadyExists
+    )]
+    [InlineData(
+        (int)Context.ActorCreate,
+        ZLinkFrameworkErrorKind.Unavailable,
+        RequestResult.InternalError,
+        (int)FailureCode.ActorCreateFailed
+    )]
+    [InlineData(
+        (int)Context.ActorDestroy,
+        ZLinkFrameworkErrorKind.NotFound,
+        RequestResult.NotFound,
+        (int)FailureCode.ActorRouteNotFound
+    )]
+    [InlineData(
+        (int)Context.ActorDestroy,
+        ZLinkFrameworkErrorKind.ProtocolError,
+        RequestResult.Conflict,
+        (int)FailureCode.ActorLocationStale
+    )]
+    [InlineData(
+        (int)Context.ActorJoin,
+        ZLinkFrameworkErrorKind.InvalidOperation,
+        RequestResult.Conflict,
+        (int)FailureCode.ActorLocationStale
+    )]
+    [InlineData(
+        (int)Context.ActorJoin,
+        ZLinkFrameworkErrorKind.ShuttingDown,
+        RequestResult.InternalError,
+        (int)FailureCode.RequestFailed
+    )]
+    public void Object_contexts_keep_existing_representatives(
+        int context,
+        ZLinkFrameworkErrorKind kind,
+        RequestResult result,
+        int code
+    )
+    {
+        Assert.Equal(
+            (result, (FailureCode)code),
+            ZLinkRequestFailureMapper.TargetFailureReply(
+                new ZLinkFrameworkException(kind, "target"),
+                context: (Context)context
+            )
+        );
+    }
+
+    [Fact]
+    public void Existing_fallbacks_and_relocation_receive_kind_are_preserved()
+    {
+        Assert.Equal(
+            (RequestResult.InternalError, FailureCode.RequestFailed),
+            ZLinkRequestFailureMapper.TargetFailureReply(
+                new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NotConfigured, "target")
+            )
+        );
+        Assert.Equal(
+            (RequestResult.InternalError, FailureCode.RequestFailed),
+            ZLinkRequestFailureMapper.TargetFailureReply(new Exception("target"))
+        );
+        Assert.Null(ZLinkRequestFailureMapper.ClassifyFineFailure(0));
+        Assert.Null(ZLinkRequestFailureMapper.ClassifyFineFailure(int.MaxValue));
+        Assert.Equal(
+            ZLinkFrameworkErrorKind.InvalidOperation,
+            ZLinkRequestFailureMapper.RelocationFailureKind()
+        );
+        Assert.Equal(
+            FailureCode.RelocationDataLost,
+            ZLinkRequestFailureMapper.TargetFailureCode(
+                new Zlink.Framework.Runtime.Locations.ZLinkRelocationDataLostException("lost"),
+                1,
+                Context.ActorRelocation
             )
         );
     }

@@ -67,7 +67,7 @@ test('canonical Join public error kinds retain their exact wire terminals', () =
     [ZLinkFrameworkErrorKind.TypeMismatch, 107, 4],
     [ZLinkFrameworkErrorKind.ProtocolError, 104, 16],
     [ZLinkFrameworkErrorKind.InvalidOperation, 107, 21],
-    [ZLinkFrameworkErrorKind.NotFound, 102, 1],
+    [ZLinkFrameworkErrorKind.NotFound, 102, 14],
     [ZLinkFrameworkErrorKind.Unavailable, 105, ServiceWireFrameworkErrorCode.routeNotConnected],
     [ZLinkFrameworkErrorKind.Rejected, 106, 15]
   ] as const;

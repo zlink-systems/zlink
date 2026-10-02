@@ -2803,14 +2803,8 @@ export class ZLinkFrameworkRuntimeHost
         );
       }
       const binding = record.kindData;
-      const replyBindingFailure = (
-        kind: ZLinkFrameworkInternalErrorKind,
-        message: string
-      ): void => {
-        const terminal =
-          kind === ZLinkFrameworkInternalErrorKind.ActorGenerationStale
-            ? { terminalResult: RequestResult.InvalidState, failureCode: 0 }
-            : internalFrameworkWireReply(createInternalFrameworkException(kind, message));
+      const replyBindingFailure = (kind: ZLinkFrameworkInternalErrorKind): void => {
+        const terminal = internalFrameworkWireReply(kind, 'actor-binding');
         if (
           record.replyFailure?.(terminal.terminalResult, terminal.failureCode) !== SubmitResult.Ok
         ) {
@@ -2834,17 +2828,11 @@ export class ZLinkFrameworkRuntimeHost
         nativeActorRef.actorId !== binding.actor.actorId ||
         !routingIdsEqual(nativeActorRef.nodeRid, binding.actor.nodeRid)
       ) {
-        replyBindingFailure(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          `Actor '${binding.actor.actorId}' binding target is no longer current.`
-        );
+        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
         return;
       }
       if (nativeActorRef.generation !== binding.actor.generation) {
-        replyBindingFailure(
-          ZLinkFrameworkInternalErrorKind.ActorGenerationStale,
-          `Actor '${binding.actor.actorId}' binding object generation is stale.`
-        );
+        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorGenerationStale);
         return;
       }
       const node =
@@ -2859,10 +2847,7 @@ export class ZLinkFrameworkRuntimeHost
         state.locationGeneration !== binding.authorityOwnerGeneration ||
         state.isMoving
       ) {
-        replyBindingFailure(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          `Actor '${binding.actor.actorId}' binding authority fence is stale.`
-        );
+        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
         return;
       }
       const sessionOwnerIsLocal =
@@ -2893,10 +2878,7 @@ export class ZLinkFrameworkRuntimeHost
         binding.sessionRid
       );
       if (target === undefined) {
-        replyBindingFailure(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          `Actor '${binding.actor.actorId}' Session route is unavailable.`
-        );
+        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
         return;
       }
       const installed = state.installBoundSessionBinding({
@@ -2909,10 +2891,7 @@ export class ZLinkFrameworkRuntimeHost
         bindingGeneration: binding.bindingGeneration
       });
       if (!installed) {
-        replyBindingFailure(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          `Actor '${binding.actor.actorId}' Session binding generation is stale.`
-        );
+        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
         return;
       }
       replyBindingSuccess();

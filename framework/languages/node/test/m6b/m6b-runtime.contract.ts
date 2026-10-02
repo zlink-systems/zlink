@@ -6563,11 +6563,15 @@ test('Ready Instance request ends on a disconnected stale route without resubmis
   assert.equal(invalidations, 1);
 });
 
-test('Instance target-not-found refreshes a Missing authority into one cold activation', async () => {
+test('Instance target-not-found completes once and a new call cold-activates Missing authority', async () => {
   let invalidations = 0;
   let refreshReads = 0;
   let directAttempts = 0;
   let missingAttempts = 0;
+  const targetFailure = createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+    'closed target'
+  );
   const readyTarget = {
     routerChannelId: 'mesh',
     targetNodeRid: 'node-a',
@@ -6631,10 +6635,7 @@ test('Instance target-not-found refreshes a Missing authority into one cold acti
       },
       async requestToSpot() {
         directAttempts += 1;
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-          'closed target'
-        );
+        throw targetFailure;
       }
     },
     meshNames: () => ['mesh'],
@@ -6669,15 +6670,34 @@ test('Instance target-not-found refreshes a Missing authority into one cold acti
   });
 
   class Lookup {}
-  const reply = await address.requestToSpotAddress('instance-42', new Lookup(), {
-    instanceSpot: true,
-    instanceSpotType: 'chat-room',
-    initialMeshName: 'mesh'
-  });
+  const request = () =>
+    address.requestToSpotAddress('instance-42', new Lookup(), {
+      instanceSpot: true,
+      instanceSpotType: 'chat-room',
+      initialMeshName: 'mesh'
+    });
 
-  assert.equal(reply, 'reactivated');
+  // Spot Address and Submit §5: stale-target completion preserves the original
+  // failure; cache invalidation does not re-resolve or resubmit this operation.
+  await assert.rejects(request(), (error: unknown) => error === targetFailure);
   assert.equal(directAttempts, 1);
   assert.equal(invalidations, 1);
+  assert.equal(refreshReads, 0);
+  assert.equal(missingAttempts, 0);
+
+  // A separate application call still finds the old Ready owner and fails once.
+  await assert.rejects(request(), (error: unknown) => error === targetFailure);
+  assert.equal(directAttempts, 2);
+  assert.equal(invalidations, 2);
+  assert.equal(refreshReads, 1);
+  assert.equal(missingAttempts, 0);
+
+  // Only this new call resolves Missing and submits one cold activation.
+  const reply = await request();
+
+  assert.equal(reply, 'reactivated');
+  assert.equal(directAttempts, 2);
+  assert.equal(invalidations, 2);
   assert.equal(refreshReads, 2);
   assert.equal(missingAttempts, 1);
 });

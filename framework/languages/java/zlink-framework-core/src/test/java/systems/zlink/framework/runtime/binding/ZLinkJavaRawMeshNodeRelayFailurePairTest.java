@@ -20,6 +20,62 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
  */
 final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
     @Test
+    void everyCppIncomingAliasRetainsItsGeneralMeaning() {
+        int[] codes = {4, 8, 9, 12, 18, 20, 21, 33, 34};
+        ZLinkFrameworkErrorKind[] kinds = {
+            ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+            ZLinkFrameworkErrorKind.INVALID_OPERATION,
+            ZLinkFrameworkErrorKind.NOT_FOUND,
+            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+            ZLinkFrameworkErrorKind.UNAVAILABLE,
+            ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+            ZLinkFrameworkErrorKind.UNAVAILABLE,
+            ZLinkFrameworkErrorKind.INVALID_OPERATION,
+            ZLinkFrameworkErrorKind.UNAVAILABLE
+        };
+        for (int i = 0; i < codes.length; i++) {
+            assertEquals(
+                    kinds[i],
+                    ZLinkBackendRequestResult.INTERNAL_ERROR.toFrameworkErrorKind(codes[i]),
+                    "cpp alias " + codes[i]);
+        }
+    }
+
+    @Test
+    void everyCppRepresentativeRoundTripsIncludingCoarseNoneTerminals() {
+        ZLinkFrameworkErrorKind[] kinds = {
+            ZLinkFrameworkErrorKind.NOT_FOUND, ZLinkFrameworkErrorKind.ALREADY_EXISTS,
+            ZLinkFrameworkErrorKind.TYPE_MISMATCH, ZLinkFrameworkErrorKind.REJECTED,
+            ZLinkFrameworkErrorKind.UNAVAILABLE, ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+            ZLinkFrameworkErrorKind.SHUTTING_DOWN, ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+            ZLinkFrameworkErrorKind.INVALID_OPERATION, ZLinkFrameworkErrorKind.DATA_LOST,
+            ZLinkFrameworkErrorKind.INTERNAL_FAILURE
+        };
+        int[][] cppPairs = {
+            {102, 14}, {107, 3}, {107, 7}, {106, 15}, {105, 13}, {105, 19}, {103, 0}, {104, 16},
+            {111, 0}, {105, 35}, {105, 17}
+        };
+        for (int i = 0; i < kinds.length; i++) {
+            int[] actual =
+                    ZLinkJavaRawMeshNode.relayedFailurePair(
+                            new ZLinkFrameworkException(kinds[i], "cpp representative"));
+            assertArrayEquals(cppPairs[i], actual, kinds[i].name());
+            assertTrue(ServiceWireConstants.validTerminalFailure(actual[0], actual[1]));
+            assertEquals(
+                    kinds[i],
+                    ZLinkBackendRequestResult.fromWireTerminal(actual[0])
+                            .toFrameworkErrorKind(actual[1]),
+                    kinds[i].name());
+        }
+        assertEquals(ZLinkFrameworkErrorKind.values().length - 1, kinds.length);
+        assertArrayEquals(
+                new int[] {105, 17},
+                ZLinkJavaRawMeshNode.relayedFailurePair(
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.NOT_CONFIGURED, "fallback")));
+    }
+
+    @Test
     void unavailableActorJoinPreservesPublicErrorKind() {
         int[] pair =
                 ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(

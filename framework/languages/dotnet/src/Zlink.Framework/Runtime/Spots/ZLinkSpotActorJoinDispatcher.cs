@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -351,43 +352,11 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
     {
         if (joinRequest is not ZLinkMeshActorJoinRequest meshRequest)
             return;
-        var terminal = exception is ZLinkFrameworkException framework
-            ? framework.Kind switch
-            {
-                ZLinkFrameworkErrorKind.TypeMismatch => (
-                    RequestResult.Conflict,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
-                ),
-                ZLinkFrameworkErrorKind.ProtocolError => (
-                    RequestResult.ProtocolError,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
-                ),
-                ZLinkFrameworkErrorKind.InvalidOperation => (
-                    RequestResult.Conflict,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-                ),
-                ZLinkFrameworkErrorKind.NotFound => (
-                    RequestResult.NotFound,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
-                ),
-                ZLinkFrameworkErrorKind.Unavailable => (
-                    RequestResult.InternalError,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
-                ),
-                ZLinkFrameworkErrorKind.Rejected => (
-                    RequestResult.Rejected,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestRejected
-                ),
-                _ => (
-                    RequestResult.InternalError,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
-                ),
-            }
-            : (
-                RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
-            );
-        meshRequest.ReplyTerminal(terminal.Item1, terminal.Item2);
+        var terminal = ZLinkRequestFailureMapper.TargetFailureReply(
+            exception,
+            context: ZLinkRequestFailureMapper.FailureContext.ActorJoin
+        );
+        meshRequest.ReplyTerminal(terminal.Result, (uint)terminal.FailureCode);
     }
 
     private readonly record struct JoinPayload(

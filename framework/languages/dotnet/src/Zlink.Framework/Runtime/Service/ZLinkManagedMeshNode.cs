@@ -6847,23 +6847,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         byte objectKind
     )
     {
-        if (exception is ZLinkRelocationDataLostException)
-            return ServiceWireConstants.FrameworkErrorCode.RelocationDataLost;
-        return exception is ZLinkFrameworkException framework
-            ? framework.Kind switch
-            {
-                ZLinkFrameworkErrorKind.InvalidOperation => objectKind == 1
-                    ? ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-                    : ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale,
-                ZLinkFrameworkErrorKind.NotConfigured => ServiceWireConstants
-                    .FrameworkErrorCode
-                    .HandlerNotFound,
-                ZLinkFrameworkErrorKind.ShuttingDown => ServiceWireConstants
-                    .FrameworkErrorCode
-                    .RequestFailed,
-                _ => ZLinkRequestFailureMapper.TargetFailureCode(exception, objectKind),
-            }
-            : ZLinkRequestFailureMapper.TargetFailureCode(exception, objectKind);
+        return ZLinkRequestFailureMapper.TargetFailureCode(
+            exception,
+            objectKind,
+            objectKind == 1
+                ? ZLinkRequestFailureMapper.FailureContext.ActorRelocation
+                : ZLinkRequestFailureMapper.FailureContext.SpotRelocation
+        );
     }
 
     private async Task<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareRelocationTargetAsync(
@@ -7098,7 +7088,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             pending.Ready.TrySetException(
                 new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    ZLinkRequestFailureMapper.RelocationFailureKind(),
                     $"The target rejected canonical relocation ({failure.FailureCode}).",
                     ZLinkRetryAdvice.DoNotRetry
                 )
@@ -8430,36 +8420,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private static UserSpotOperationTerminal MapUserSpotException(ZLinkFrameworkException exception)
     {
-        return exception.Kind switch
-        {
-            ZLinkFrameworkErrorKind.InvalidOperation => new UserSpotOperationTerminal(
-                RequestResult.Conflict,
-                ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
-            ),
-            ZLinkFrameworkErrorKind.Unavailable => new UserSpotOperationTerminal(
-                RequestResult.Conflict,
-                ServiceWireConstants.FrameworkErrorCode.SpotMoving
-            ),
-            ZLinkFrameworkErrorKind.TypeMismatch => new UserSpotOperationTerminal(
-                RequestResult.Conflict,
-                ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch
-            ),
-            ZLinkFrameworkErrorKind.AlreadyExists => new UserSpotOperationTerminal(
-                RequestResult.InternalError,
-                ServiceWireConstants.FrameworkErrorCode.SpotCreateFailed
-            ),
-            ZLinkFrameworkErrorKind.ProtocolError => new UserSpotOperationTerminal(
-                RequestResult.ProtocolError,
-                ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
-            ),
-            //  Schema terminal-failure-integrity: requestFailed(17) pairs
-            //  only with internalError(105); the retry hint is conveyed by the
-            //  fine code's public classification, not the wire terminal.
-            _ => new UserSpotOperationTerminal(
-                RequestResult.InternalError,
-                ServiceWireConstants.FrameworkErrorCode.RequestFailed
-            ),
-        };
+        var terminal = ZLinkRequestFailureMapper.TargetFailureReply(
+            exception,
+            context: ZLinkRequestFailureMapper.FailureContext.SpotControl
+        );
+        return new UserSpotOperationTerminal(terminal.Result, terminal.FailureCode);
     }
 
     private void ProcessActorCreateOperation(
@@ -8703,17 +8668,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         catch (ZLinkFrameworkException exception)
         {
-            terminal = exception.Kind switch
-            {
-                ZLinkFrameworkErrorKind.NotFound => new ActorDestroyOperationTerminal(
-                    RequestResult.NotFound,
-                    ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
-                ),
-                _ => new ActorDestroyOperationTerminal(
-                    RequestResult.Conflict,
-                    ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-                ),
-            };
+            var failure = ZLinkRequestFailureMapper.TargetFailureReply(
+                exception,
+                context: ZLinkRequestFailureMapper.FailureContext.ActorDestroy
+            );
+            terminal = new ActorDestroyOperationTerminal(failure.Result, failure.FailureCode);
         }
         catch (OperationCanceledException)
         {
@@ -8963,28 +8922,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkFrameworkException exception
     )
     {
-        return exception.Kind switch
-        {
-            ZLinkFrameworkErrorKind.TypeMismatch => new ActorCreateOperationTerminal(
-                RequestResult.Conflict,
-                ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
-            ),
-            ZLinkFrameworkErrorKind.AlreadyExists => new ActorCreateOperationTerminal(
-                RequestResult.Conflict,
-                ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists
-            ),
-            ZLinkFrameworkErrorKind.ProtocolError => new ActorCreateOperationTerminal(
-                RequestResult.ProtocolError,
-                ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
-            ),
-            //  Schema terminal-failure-integrity: actorCreateFailed(2) pairs
-            //  only with internalError(105); the retry hint is conveyed by the
-            //  fine code's public classification, not the wire terminal.
-            _ => new ActorCreateOperationTerminal(
-                RequestResult.InternalError,
-                ServiceWireConstants.FrameworkErrorCode.ActorCreateFailed
-            ),
-        };
+        var terminal = ZLinkRequestFailureMapper.TargetFailureReply(
+            exception,
+            context: ZLinkRequestFailureMapper.FailureContext.ActorCreate
+        );
+        return new ActorCreateOperationTerminal(terminal.Result, terminal.FailureCode);
     }
 
     private void ProcessAdmission(
@@ -10099,7 +10041,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 && failure.FailureCode != ServiceWireConstants.FrameworkErrorCode.None
             )
                 throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    ZLinkRequestFailureMapper.RelocationFailureKind(),
                     $"The target rejected canonical relocation ({failure.FailureCode}).",
                     ZLinkRetryAdvice.DoNotRetry
                 );
