@@ -11778,7 +11778,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         SendOperation? exactFirstAttempt = null
     )
     {
-        if (routeGeneration == 0 || head is not null && !IsValidControlHead(command, head))
+        if (
+            head is null && routeGeneration == 0
+            || head is not null && !IsValidControlHead(command, head)
+        )
             return false;
 
         var key = new ControlSendKey(target, routeGeneration, command);
