@@ -462,7 +462,8 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
                 awaitUninterruptibly(releaseRegistration);
             }
             try {
-                return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS) && !closed;
+                readable.acquire();
+                return !closed;
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return false;

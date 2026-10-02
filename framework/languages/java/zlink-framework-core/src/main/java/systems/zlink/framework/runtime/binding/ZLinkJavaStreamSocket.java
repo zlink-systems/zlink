@@ -202,7 +202,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             ZLinkBackendSocketMonitorEvent event;
             MonitorEventType eventType;
             try {
-                if (!eventMonitor.waitForReadable(ZLinkBackendSocketMonitor.RECEIVE_POLL_TIMEOUT)) {
+                if (!eventMonitor.waitForReadable(ZLinkBackendSocketMonitor.WAIT_UNTIL_EVENT)) {
                     continue;
                 }
                 event = eventMonitor.recvDontWait();

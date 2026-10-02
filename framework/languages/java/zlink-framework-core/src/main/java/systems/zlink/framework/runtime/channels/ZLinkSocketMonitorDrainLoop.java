@@ -19,7 +19,7 @@ final class ZLinkSocketMonitorDrainLoop {
                             Thread current = Thread.currentThread();
                             while (!current.isInterrupted() && !monitor.isClosed()) {
                                 if (!monitor.waitForReadable(
-                                        ZLinkBackendSocketMonitor.RECEIVE_POLL_TIMEOUT)) {
+                                        ZLinkBackendSocketMonitor.WAIT_UNTIL_EVENT)) {
                                     continue;
                                 }
                                 ZLinkBackendSocketMonitorEvent event;
