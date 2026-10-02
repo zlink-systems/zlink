@@ -33,7 +33,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
     [InlineData(ActorFenceMismatch.ObjectGeneration)]
     [InlineData(ActorFenceMismatch.NodeRid)]
     [InlineData(ActorFenceMismatch.NodeGeneration)]
-    public async Task Canonical_actor_join_authority_fence_mismatch_returns_location_stale(
+    public async Task Canonical_actor_join_authority_fence_mismatch_returns_invalid_operation(
         ActorFenceMismatch mismatch
     )
     {
@@ -52,13 +52,13 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
 
         AssertTerminal(
             reply,
-            RequestResult.Conflict,
-            ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
+            RequestResult.InvalidState,
+            ServiceWireConstants.FrameworkErrorCode.None
         );
     }
 
     [Fact]
-    public async Task Canonical_actor_join_store_resolved_type_mismatch_returns_actor_type_mismatch()
+    public async Task Canonical_actor_join_store_resolved_type_mismatch_returns_type_mismatch()
     {
         await using var fixture = await WireAdmissionFixture.CreateAsync();
         var state = fixture.Runtime.GetOrCreateActorState(WireAdmissionFixture.ActorId);
@@ -75,7 +75,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         AssertTerminal(
             reply,
             RequestResult.Conflict,
-            ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
+            ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch
         );
     }
 

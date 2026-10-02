@@ -306,6 +306,26 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         return admitRoute(received, null);
     }
 
+    CompletionStage<Void> admitExisting(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceSpotMessage
+                    message,
+            ZLinkBackendReceived received) {
+        var route = message.route();
+        if (!context.nodeRid().equals(route.targetNodeRid())
+                || !authorityFenceMatches(
+                        route.ownerId(), route.leaseGeneration(), route.authorityOwnerGeneration())
+                || (hasExpectedNodeGeneration()
+                        && expectedNodeGeneration() != route.targetNodeGeneration())) {
+            received.close();
+            return CompletableFuture.failedFuture(
+                    systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin.framework(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Instance Spot owner fence changed"));
+        }
+        return admitRoute(received);
+    }
+
     CompletionStage<Void> admitRoute(
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         var hostRejection = host.spotHostAdmissionFailure(context.spotId());
@@ -317,12 +337,24 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         trackRouteReceived(received);
         CompletionStage<Void> admitted;
         try {
+            ParsedPacket observed = null;
+            systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.State flow = null;
+            if (host.flowCaptureEnabled()) {
+                try {
+                    observed = ZLinkSpotRuntime.parsePacket(received.parts());
+                    flow =
+                            observed.header() == null
+                                    ? ZLinkSpotFlowFrame.decode(received.parts())
+                                    : ZLinkSpotFlowFrame.fromEnvelopeHeader(observed.header());
+                } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
+                    failRouteInvalidFlow(received, invalidEnvelope);
+                    if (admission != null) admission.complete(null);
+                    return CompletableFuture.completedFuture(null);
+                }
+            }
             admitted =
-                    context.enqueueDispatch(
-                            ZLinkReceiveBatchBudget.bytesOf(
-                                    received.parts(),
-                                    received.applicationMetadataSize(),
-                                    received.acceptedJournalRecordSize()),
+                    context.enqueueMessage(
+                            received,
                             () -> {
                                 ParsedPacket packet;
                                 try {
@@ -339,6 +371,26 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                 return dispatchSpotRouteHandler(received, packet);
                             },
                             admission);
+            if (observed != null) {
+                try (var ignored =
+                        systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext
+                                .enterOrCreate(
+                                        flow,
+                                        systems.zlink.framework.monitoring.ZLinkFlowOrigin
+                                                .INBOUND)) {
+                    host.traceSpotRouteFlow(
+                            systems.zlink.framework.runtime.internal.diagnostics
+                                    .ZLinkMessageFlowOutcome.RECEIVED,
+                            received.isRequest()
+                                    ? systems.zlink.framework.runtime.internal.diagnostics
+                                            .ZLinkDispatchMessageKind.REQUEST
+                                    : systems.zlink.framework.runtime.internal.diagnostics
+                                            .ZLinkDispatchMessageKind.SEND,
+                            observed.packetName(),
+                            received.requestSeq(),
+                            context.spotId());
+                }
+            }
         } catch (RuntimeException | Error failure) {
             if (admission != null) admission.completeExceptionally(failure);
             closeRouteReceived(received);
@@ -402,6 +454,23 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     private CompletionStage<Boolean> closeWithReason(ZLinkSpotCloseReason reason) {
+        CompletableFuture<Boolean> result = new CompletableFuture<>();
+        return context.enqueueClose(
+                        () -> closeOnLifecycle(reason).thenAccept(result::complete),
+                        message ->
+                                host.replayClosedInstanceMessage(
+                                        this, (ZLinkBackendReceived) message),
+                        () ->
+                                existingCloseCoordinator() != null
+                                        && existingCloseCoordinator().committed())
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) result.completeExceptionally(failure);
+                        })
+                .thenCompose(ignored -> result);
+    }
+
+    private CompletionStage<Boolean> closeOnLifecycle(ZLinkSpotCloseReason reason) {
         boolean initiatedInsideTurn = context.isCurrentDispatchTurn();
         ZLinkSpotCloseCoordinator existing = existingCloseCoordinator();
         if (existing != null) {
@@ -446,7 +515,8 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                         List.of(
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         () -> {
-                                                            context.sealClosingAdmission();
+                                                            context.ownerQueue()
+                                                                    .commitLifecycleTransition();
                                                             return CompletableFuture
                                                                     .completedFuture(null);
                                                         }),
@@ -469,15 +539,12 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                                 context.runClosing(
                                                                                         initiatedInsideTurn,
                                                                                         () ->
-                                                                                                context
-                                                                                                        .runLifecycleExecution(
-                                                                                                                () ->
-                                                                                                                        spot
-                                                                                                                                .onClosing(
-                                                                                                                                        new ZLinkSpotClosingContext(
-                                                                                                                                                reason,
-                                                                                                                                                Instant
-                                                                                                                                                        .now())))))),
+                                                                                                spot
+                                                                                                        .onClosing(
+                                                                                                                new ZLinkSpotClosingContext(
+                                                                                                                        reason,
+                                                                                                                        Instant
+                                                                                                                                .now()))))),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         () -> {
                                                             backendSpot.closeInstanceSpot();
@@ -486,6 +553,13 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                         }),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         () -> {
+                                                            context.ownerQueue()
+                                                                    .pendingMessages()
+                                                                    .forEach(
+                                                                            message ->
+                                                                                    transferRouteReceived(
+                                                                                            (ZLinkBackendReceived)
+                                                                                                    message));
                                                             closeActiveRouteReceives();
                                                             return CompletableFuture
                                                                     .completedFuture(null);
@@ -568,6 +642,14 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                 }
                             }
                         });
+    }
+
+    CompletionStage<Void> replayMessage(ZLinkBackendReceived received) {
+        trackRouteReceived(received);
+        return context.runLifecycleExecution(
+                () ->
+                        dispatchSpotRouteHandler(
+                                received, ZLinkSpotRuntime.parsePacket(received.parts())));
     }
 
     CompletionStage<Void> closeResourcesAsync() {

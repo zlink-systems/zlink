@@ -226,6 +226,7 @@ export interface ZLinkSpotRoutedTransport {
 }
 
 export interface ZLinkSpotRoutedSendOptions {
+  readonly instanceSpot?: boolean;
   readonly packetName?: string;
   /** Internal end-to-end budget remaining for route admission. */
   readonly timeoutMs?: number;

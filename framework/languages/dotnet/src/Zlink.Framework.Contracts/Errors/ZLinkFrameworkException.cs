@@ -16,6 +16,8 @@ public sealed class ZLinkFrameworkException : Exception
 
     public ZLinkFrameworkErrorKind Kind { get; }
 
+    internal int FrameworkFailureCode { get; init; }
+
     internal ZLinkRetryAdvice RetryAdvice { get; }
 
     /// <summary>

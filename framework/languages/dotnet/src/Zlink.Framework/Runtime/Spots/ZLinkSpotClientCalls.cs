@@ -150,7 +150,7 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
             return;
         }
 
-        var call = new ZLinkRouteSpotSendCall<TMessage>(runtime, handle, message);
+        var call = new ZLinkRouteSpotSendCall<TMessage>(runtime, handle, message, _instanceIntent);
         call.Metadata(_metadata.Snapshot());
         await call.Async(cancellationToken).ConfigureAwait(false);
     }
@@ -342,7 +342,12 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             terminator,
             _executionScope
         );
-        var call = new ZLinkRouteSpotRequestCall<TRequest>(runtime, handle, request);
+        var call = new ZLinkRouteSpotRequestCall<TRequest>(
+            runtime,
+            handle,
+            request,
+            _instanceIntent
+        );
         call.Timeout(timeout);
         call.Metadata(_metadata.Snapshot());
         return await call.ExecuteAfterTerminatorAsync<TReply>(terminator, cancellationToken)

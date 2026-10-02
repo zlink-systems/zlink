@@ -186,11 +186,11 @@ public sealed class StreamSessionForcedCleanupTests
                     kind == ZlinkStreamMessageKind.Control
                         ? session.TryEnqueueControlPacket(
                             Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
-                            Message.From([])
+                            Message.From(Array.Empty<byte>())
                         )
                         : session.TryEnqueuePacket(
                             Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
-                            Message.From([])
+                            Message.From(Array.Empty<byte>())
                         );
                 Assert.Equal(ZLinkSerialPostAdmission.Accepted, admission);
                 session.CheckLiveness();

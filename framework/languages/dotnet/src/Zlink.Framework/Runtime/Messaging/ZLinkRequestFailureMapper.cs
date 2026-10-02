@@ -1,9 +1,263 @@
 using Systems.Zlink.Framework.Runtime.Protocol;
+using FailureCode = Systems.Zlink.Framework.Runtime.Protocol.ServiceWireConstants.FrameworkErrorCode;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
 internal static class ZLinkRequestFailureMapper
 {
+    internal readonly record struct WireFailureMapping(
+        ZLinkFrameworkErrorKind Kind,
+        FailureCode Code,
+        RequestResult Result,
+        bool Receive,
+        bool Send,
+        FailureCode? CodeOnlyCode = null
+    );
+
+    // Error model §2.1 owns all receive codes and outgoing representatives.
+    private static readonly WireFailureMapping[] WireFailureMappings =
+    [
+        new(
+            ZLinkFrameworkErrorKind.NotFound,
+            FailureCode.RequestTargetNotFound,
+            RequestResult.NotFound,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.NotFound,
+            FailureCode.ActorRouteNotFound,
+            RequestResult.NotFound,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.NotFound,
+            FailureCode.SpotRouteNotFound,
+            RequestResult.NotFound,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.NotFound,
+            FailureCode.HandlerNotFound,
+            RequestResult.NotFound,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.NotFound,
+            FailureCode.RouteHandlerNotFound,
+            RequestResult.NotFound,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.NotFound,
+            FailureCode.ActorDispatchHandlerNotFound,
+            RequestResult.NotFound,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.AlreadyExists,
+            FailureCode.ActorAlreadyExists,
+            RequestResult.Conflict,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.TypeMismatch,
+            FailureCode.SpotTypeMismatch,
+            RequestResult.Conflict,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.TypeMismatch,
+            FailureCode.ActorTypeMismatch,
+            RequestResult.Conflict,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Rejected,
+            FailureCode.RequestRejected,
+            RequestResult.Rejected,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Rejected,
+            FailureCode.ActorCreateRejected,
+            RequestResult.Rejected,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            FailureCode.RouteNotConnected,
+            RequestResult.InternalError,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            FailureCode.WorkerQueueFull,
+            RequestResult.Rejected,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            FailureCode.ActorLocationStale,
+            RequestResult.Conflict,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            FailureCode.SpotMoving,
+            RequestResult.Conflict,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.DeadlineExceeded,
+            FailureCode.WorkerTimedOut,
+            RequestResult.InternalError,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.ProtocolError,
+            FailureCode.RequestProtocolError,
+            RequestResult.ProtocolError,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.ProtocolError,
+            FailureCode.PayloadDecodeFailed,
+            RequestResult.ProtocolError,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.InvalidOperation,
+            FailureCode.ActorSessionNotBound,
+            RequestResult.NotFound,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.InvalidOperation,
+            FailureCode.SpotGenerationStale,
+            RequestResult.Conflict,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.DataLost,
+            FailureCode.RelocationDataLost,
+            RequestResult.InternalError,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.InternalFailure,
+            FailureCode.RequestFailed,
+            RequestResult.InternalError,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.InternalFailure,
+            FailureCode.WorkerFailed,
+            RequestResult.InternalError,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.InternalFailure,
+            FailureCode.ActorCreateFailed,
+            RequestResult.InternalError,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.InternalFailure,
+            FailureCode.SpotCreateFailed,
+            RequestResult.InternalError,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.NotConfigured,
+            FailureCode.RequestFailed,
+            RequestResult.InternalError,
+            false,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.ShuttingDown,
+            FailureCode.None,
+            RequestResult.Terminated,
+            false,
+            true,
+            FailureCode.RouteNotConnected
+        ),
+        new(
+            ZLinkFrameworkErrorKind.InvalidOperation,
+            FailureCode.None,
+            RequestResult.InvalidState,
+            false,
+            true,
+            FailureCode.RequestFailed
+        ),
+    ];
+    internal static ReadOnlySpan<WireFailureMapping> Mappings => WireFailureMappings;
+
+    public static (RequestResult Result, FailureCode FailureCode) TargetFailureReply(
+        Exception error
+    )
+    {
+        var row = TargetFailureMapping(error);
+        return (row.Result, row.Code);
+    }
+
+    private static WireFailureMapping TargetFailureMapping(Exception error)
+    {
+        var framework = error as ZLinkFrameworkException;
+        var kind =
+            error is Zlink.Framework.Runtime.Locations.ZLinkRelocationDataLostException
+                ? ZLinkFrameworkErrorKind.DataLost
+                : framework?.Kind ?? ZLinkFrameworkErrorKind.InternalFailure;
+        var cause = framework;
+        while (cause is not null)
+        {
+            if (cause.FrameworkFailureCode != (int)FailureCode.None)
+                foreach (var row in WireFailureMappings)
+                    if (
+                        row.Receive
+                        && row.Kind == kind
+                        && (int)row.Code == cause.FrameworkFailureCode
+                    )
+                        return row;
+            cause = cause.InnerException as ZLinkFrameworkException;
+        }
+        foreach (var row in WireFailureMappings)
+            if (row.Send && row.Kind == kind)
+                return row;
+        throw new InvalidOperationException("The failure representative mapping is missing.");
+    }
+
+    public static FailureCode TargetFailureCode(Exception error)
+    {
+        var row = TargetFailureMapping(error);
+        return row.CodeOnlyCode ?? row.Code;
+    }
+
     public static Exception CreateChannelCompletionException(
         RequestResult result,
         string operationName
@@ -24,26 +278,22 @@ internal static class ZLinkRequestFailureMapper
         return CreateCompletionException(result, operationName);
     }
 
-    //  Terminal replies carry a fine failure code. A recognised code is the
-    //  peer naming its own reason and keeps its kind, except a target-not-found
-    //  code on a channel: a select-one call names no target, so "not found"
-    //  there is the empty eligible set the coarse rule above already covers.
+    // Recognized fine codes retain their kind on every reply path.
     public static Exception CreateChannelCompletionException(
         RequestResult result,
         int failureErrno,
         string operationName
     )
     {
-        if (
-            (ServiceWireConstants.FrameworkErrorCode)failureErrno
-                != ServiceWireConstants.FrameworkErrorCode.RequestTargetNotFound
-            && ClassifyFineFailure(failureErrno) is { } kind
-        )
+        if (ClassifyFineFailure(failureErrno) is { } kind)
             return new ZLinkFrameworkException(
                 kind,
                 operationName,
                 innerException: CreateRequestException(result)
-            );
+            )
+            {
+                FrameworkFailureCode = failureErrno,
+            };
         return CreateChannelCompletionException(result, operationName);
     }
 
@@ -68,7 +318,10 @@ internal static class ZLinkRequestFailureMapper
             $"{operationName} failed with result '{result}' "
                 + $"(framework error code {failureErrno}).",
             innerException: CreateRequestException(result)
-        );
+        )
+        {
+            FrameworkFailureCode = failureErrno,
+        };
     }
 
     //  Fine failure-code table shared with ZLinkBackendSpotNodeWrapper's
@@ -77,47 +330,14 @@ internal static class ZLinkRequestFailureMapper
     //  no fine refinement, leaving the coarse terminal to classify.
     internal static ZLinkFrameworkErrorKind? ClassifyFineFailure(int failureErrno)
     {
-        return (ServiceWireConstants.FrameworkErrorCode)failureErrno switch
-        {
-            ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
-            or ServiceWireConstants.FrameworkErrorCode.HandlerNotFound
-            or ServiceWireConstants.FrameworkErrorCode.RequestTargetNotFound =>
-                ZLinkFrameworkErrorKind.NotFound,
-            ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists =>
-                ZLinkFrameworkErrorKind.AlreadyExists,
-            ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
-            or ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch =>
-                ZLinkFrameworkErrorKind.TypeMismatch,
-            //  actorSessionNotBound(8): a bound-session precondition was violated,
-            //  an invalid operation in the current state — not NotFound/Rejected
-            //  (spec 32-framework-error-model; matches the Java reference table).
-            ServiceWireConstants.FrameworkErrorCode.ActorSessionNotBound =>
-                ZLinkFrameworkErrorKind.InvalidOperation,
-            ServiceWireConstants.FrameworkErrorCode.ActorCreateRejected
-            or ServiceWireConstants.FrameworkErrorCode.RequestRejected =>
-                ZLinkFrameworkErrorKind.Rejected,
-            ServiceWireConstants.FrameworkErrorCode.PayloadDecodeFailed
-            or ServiceWireConstants.FrameworkErrorCode.RequestProtocolError =>
-                ZLinkFrameworkErrorKind.ProtocolError,
-            //  workerQueueFull(18) on a remote reply is the target's queue state,
-            //  a resource this runtime does not own -> Unavailable.
-            ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-            or ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
-            or ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull
-            or ServiceWireConstants.FrameworkErrorCode.SpotMoving =>
-                ZLinkFrameworkErrorKind.Unavailable,
-            ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale =>
-                ZLinkFrameworkErrorKind.InvalidOperation,
-            ServiceWireConstants.FrameworkErrorCode.RelocationDataLost =>
-                ZLinkFrameworkErrorKind.DataLost,
-            ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut =>
-                ZLinkFrameworkErrorKind.DeadlineExceeded,
-            ServiceWireConstants.FrameworkErrorCode.RequestFailed
-            or ServiceWireConstants.FrameworkErrorCode.WorkerFailed =>
-                ZLinkFrameworkErrorKind.InternalFailure,
-            _ => null,
-        };
+        foreach (var row in WireFailureMappings)
+            if (row.Receive && (int)row.Code == failureErrno)
+                return row.Kind;
+        return null;
     }
+
+    internal static ZLinkFrameworkErrorKind RelocationFailureKind(FailureCode code) =>
+        ClassifyFineFailure((int)code) ?? ZLinkFrameworkErrorKind.ProtocolError;
 
     public static ZLinkFrameworkException CreateCompletionException(
         RequestResult result,

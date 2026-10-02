@@ -408,7 +408,10 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         }
         catch (Exception ex)
             when (ex is not OperationCanceledException
-                || (!cancellationToken.IsCancellationRequested && !_closeCts.IsCancellationRequested))
+                || (
+                    !cancellationToken.IsCancellationRequested && !_closeCts.IsCancellationRequested
+                )
+            )
         {
             throw new ZlinkStreamException(MapConnectException(ex, cancellationToken));
         }
@@ -851,10 +854,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         );
     }
 
-    private ZlinkStreamError MapConnectException(
-        Exception ex,
-        CancellationToken cancellationToken
-    )
+    private ZlinkStreamError MapConnectException(Exception ex, CancellationToken cancellationToken)
     {
         if (ex is ZlinkStreamException stream)
             return stream.Error;
@@ -869,13 +869,13 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         }
         return ex switch
         {
-            OperationCanceledException canceled when !cancellationToken.IsCancellationRequested
-                && !_closeCts.IsCancellationRequested =>
-                new ZlinkStreamError(
-                    ZlinkStreamErrorCode.ConnectTimeout,
-                    "Connect timed out.",
-                    canceled
-                ),
+            OperationCanceledException canceled
+                when !cancellationToken.IsCancellationRequested
+                    && !_closeCts.IsCancellationRequested => new ZlinkStreamError(
+                ZlinkStreamErrorCode.ConnectTimeout,
+                "Connect timed out.",
+                canceled
+            ),
             _ => new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Connect failed.", ex),
         };
     }

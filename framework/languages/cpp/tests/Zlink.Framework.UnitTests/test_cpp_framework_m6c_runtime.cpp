@@ -2145,50 +2145,54 @@ void test_generation_barrier_quiesces_yield_spot_and_timer (test_context_t &test
                   "the current pre-Cutover abort must reopen application ingress");
 }
 
-void test_close_barrier_waits_and_abort_restores_ingress (test_context_t &test)
+void test_close_eligibility_preserves_execution_and_deletion_is_fenced (test_context_t &test)
 {
     stateful_object_runtime_t objects;
     const auto spot = create_spot (objects, object_kind_t::user_spot, "closing-spot");
     test.require (objects.enqueue (spot, turn_domain_t::application, {1, {1}})
                     == stateful_error_t::none,
-                  "close barrier test turn must enqueue");
+                  "eligibility test turn must enqueue");
     const auto [claim_error, claim] = objects.try_claim (spot, turn_domain_t::application);
     test.require (claim_error == stateful_error_t::none && claim && claim->sequence == 1,
-                  "Spot lane must be active before close");
-
-    std::atomic<bool> close_completed = false;
-    stateful_error_t close_error = stateful_error_t::conflict;
-    std::optional<spot_close_token_t> close_token;
-    std::thread closing ([&] {
-        auto result = objects.begin_close_spot (spot);
-        close_error = result.first;
-        close_token = std::move (result.second);
-        close_completed.store (true, std::memory_order_release);
-    });
-
-    const bool sealed = wait_until_bounded (
-      [&] { return objects.register_timer (spot, {1, 1000, 1000, 1}) == stateful_error_t::moving; },
-      std::chrono::seconds (5));
-    test.require (sealed && !close_completed.load (std::memory_order_acquire),
-                  "close must seal timer admission and wait for the active Spot lane");
-    test.require (objects.enqueue (spot, turn_domain_t::application, {2, {2}})
-                    == stateful_error_t::none,
-                  "application ingress during close must be retained");
+                  "Spot lane must be active before eligibility is read");
+    test.require (objects.can_close_spot (spot) == std::pair{stateful_error_t::none, true},
+                  "eligibility must return without waiting for the active application turn");
+    test.require (objects.find (object_kind_t::user_spot, spot.key) == spot
+                    && objects.register_timer (spot, {1, 1000, 1000, 1}) == stateful_error_t::none
+                    && objects.cancel_timer (spot, 1) == stateful_error_t::none,
+                  "eligibility must preserve the exact object and timer admission");
+    test.require (
+      objects.enqueue (spot, turn_domain_t::application, {2, {2}}) == stateful_error_t::none
+        && objects.complete_claim (spot, turn_domain_t::application) == stateful_error_t::none,
+      "eligibility must preserve application ingress and current turn completion");
+    const auto [next_error, next] = objects.try_claim (spot, turn_domain_t::application);
+    test.require (next_error == stateful_error_t::none && next && next->sequence == 2,
+                  "eligibility must not hold the next accepted application turn");
     test.require (objects.complete_claim (spot, turn_domain_t::application)
                     == stateful_error_t::none,
-                  "active Spot lane must complete before close continues");
-    closing.join ();
-    test.require (close_error == stateful_error_t::none && close_token,
-                  "close must return its generation token after quiescence");
-    test.require (objects.abort_close_spot (*close_token) == stateful_error_t::none
-                    && objects.commit_close_spot (*close_token)
-                         == stateful_error_t::generation_stale,
-                  "only the current close generation may reopen or commit");
-    const auto [held_error, held] = objects.try_claim (spot, turn_domain_t::application);
-    test.require (held_error == stateful_error_t::none && held && held->sequence == 2,
-                  "close abort must restore held ingress");
+                  "the execution owner completes application work before local release");
+    auto stale = spot;
+    ++stale.object_generation;
+    test.require (objects.can_close_spot (stale).first == stateful_error_t::generation_stale
+                    && objects.close_spot (stale).first == stateful_error_t::generation_stale
+                    && objects.find (object_kind_t::user_spot, spot.key) == spot,
+                  "stale eligibility and deletion must preserve the current generation");
+    const auto actor = create_actor (objects, "closing-member");
+    const auto [join_error, join] = objects.begin_membership_move (actor, spot);
+    const auto [membership_error, member] = objects.commit_membership_move (join);
+    test.require (join_error == stateful_error_t::none && membership_error == stateful_error_t::none
+                    && objects.can_close_spot (spot) == std::pair{stateful_error_t::none, false}
+                    && objects.close_spot (spot) == std::pair{stateful_error_t::none, false}
+                    && objects.find (object_kind_t::user_spot, spot.key) == spot,
+                  "active Actor membership keeps eligibility false and preserves the Spot");
+    test.require (objects.destroy_actor (member) == stateful_error_t::none
+                    && objects.can_close_spot (spot) == std::pair{stateful_error_t::none, true},
+                  "removing the last member makes the same exact Spot eligible");
+    test.require (objects.close_spot (spot) == std::pair{stateful_error_t::none, true}
+                    && !objects.find (object_kind_t::user_spot, spot.key)
+                    && objects.close_spot (spot).first == stateful_error_t::not_found,
+                  "exact local release deletes once and never retains a Close token");
 }
-
 void test_envelope_round_trip (test_context_t &test)
 {
     namespace protocol = zlink::framework::runtime::protocol;
@@ -6206,9 +6210,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
 
     const auto closing_capped =
       create_spot (normal_lane_caps, object_kind_t::user_spot, "closing-normal-cap");
-    const auto [close_error, close_token] = normal_lane_caps.begin_close_spot (closing_capped);
+    const auto [close_error, close_eligible] = normal_lane_caps.can_close_spot (closing_capped);
     test.require (
-      close_error == stateful_error_t::none && close_token
+      close_error == stateful_error_t::none && close_eligible
         && normal_lane_caps.enqueue (
              closing_capped, turn_domain_t::application,
              {99, std::vector<std::uint8_t> (2u * limits::fixed_work_byte_cost + 5, 0x62)})
@@ -6219,9 +6223,10 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
              == stateful_error_t::none
         && normal_lane_caps.enqueue (closing_capped, turn_domain_t::application, {3, {}})
              == stateful_error_t::none,
-      "closing objects must retain work beyond former lane limits");
-    if (close_token)
-        (void) normal_lane_caps.abort_close_spot (*close_token);
+      "Close eligibility must preserve work beyond former lane limits");
+    test.require (normal_lane_caps.close_spot (closing_capped)
+                    == std::pair{stateful_error_t::none, true},
+                  "eligible Spot local release must succeed");
 }
 
 void test_advertised_receive_chunk_limit_wiring (test_context_t &test)
@@ -6373,7 +6378,7 @@ int main ()
       test, std::make_shared<memory_authority_store_t> ());
     test_temporary_channel_request_yield_owns_call_state (test);
     test_accepted_message_payload_is_deserialized_once (test);
-    test_close_barrier_waits_and_abort_restores_ingress (test);
+    test_close_eligibility_preserves_execution_and_deletion_is_fenced (test);
     test_envelope_round_trip (test);
     test_actor_join_recovery_round_trip (test);
     test_spot_restore_stages_before_publication (test);

@@ -233,7 +233,8 @@ final class ZLinkChannelCallRuntime {
             result.completeExceptionally(
                     ZLinkFrameworkErrorOrigin.framework(
                             reply.result().toFrameworkErrorKind(reply.failureCode()),
-                            "channel request failed: " + reply.result()));
+                            "channel request failed: " + reply.result(),
+                            reply.failureCode()));
             return;
         }
         if (ZLinkChannelRuntime.isFrameworkErrorReply(reply.parts())) {

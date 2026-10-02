@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/service_topology_registry.hpp"
+#include "runtime/dispatch/blocking_task.hpp"
 #include "runtime/client_server/weighted_selector.hpp"
 #include <opentelemetry/metrics/provider.h>
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
@@ -161,47 +162,88 @@ bool service_topology_registry_t::selectable (const service_node_descriptor_t &d
     return found != descriptor.channels.end () && found->name == channel_name && found->weight != 0;
 }
 
+std::function<void ()>
+service_topology_registry_t::publish_local_on_lane (service_node_descriptor_t descriptor)
+{
+    if (!valid_descriptor (descriptor))
+        throw std::invalid_argument ("published service descriptor is invalid");
+    std::function<void ()> changed;
+    if (descriptor.mesh_name != _local.mesh_name
+        || descriptor.node_routing_id != _local.node_routing_id
+        || descriptor.lifecycle_generation != _local.lifecycle_generation) {
+        throw std::invalid_argument ("published service descriptor changes the local identity");
+    }
+    if (descriptor.descriptor_revision <= _local.descriptor_revision) {
+        throw std::invalid_argument ("published service descriptor revision is not increasing");
+    }
+    const bool resolving_bound_endpoint = _local.state == service_node_state_t::preparing
+                                          && descriptor.state == service_node_state_t::serving;
+    if (!immutable_fields_match (_local, descriptor, resolving_bound_endpoint)) {
+        throw std::invalid_argument ("published service descriptor changes immutable fields");
+    }
+    _local = std::move (descriptor);
+    for (auto it = _not_required_peers.begin (); it != _not_required_peers.end ();) {
+        if (!route_mesh_connection_not_required (_local, it->second))
+            it = _not_required_peers.erase (it);
+        else
+            ++it;
+    }
+    changed = _change_handler;
+    return changed;
+}
+
 void service_topology_registry_t::publish_local (service_node_descriptor_t descriptor)
 {
-    if (!valid_descriptor (descriptor)) {
-        throw std::invalid_argument ("published service descriptor is invalid");
-    }
-    auto changed =
-      _lane
-        .run ([&, this] {
-            std::function<void ()> changed;
-            if (descriptor.mesh_name != _local.mesh_name
-                || descriptor.node_routing_id != _local.node_routing_id
-                || descriptor.lifecycle_generation != _local.lifecycle_generation) {
-                throw std::invalid_argument (
-                  "published service descriptor changes the local identity");
-            }
-            if (descriptor.descriptor_revision <= _local.descriptor_revision) {
-                throw std::invalid_argument (
-                  "published service descriptor revision is not increasing");
-            }
-            const bool resolving_bound_endpoint =
-              _local.state == service_node_state_t::preparing
-              && descriptor.state == service_node_state_t::serving;
-            if (!immutable_fields_match (_local, descriptor, resolving_bound_endpoint)) {
-                throw std::invalid_argument (
-                  "published service descriptor changes immutable fields");
-            }
-            _local = std::move (descriptor);
-            for (auto it = _not_required_peers.begin (); it != _not_required_peers.end ();) {
-                if (!route_mesh_connection_not_required (_local, it->second))
-                    it = _not_required_peers.erase (it);
-                else
-                    ++it;
-            }
-            changed = _change_handler;
-            return changed;
-        })
-        .get ();
+    auto changed = _lane
+                     .run ([this, descriptor = std::move (descriptor)] () mutable {
+                         return publish_local_on_lane (std::move (descriptor));
+                     })
+                     .get ();
     if (changed)
         changed ();
 }
 
+std::vector<admitted_peer_t>
+service_topology_registry_t::publish_local_snapshot (service_node_descriptor_t descriptor)
+{
+    auto publication = _lane
+                         .run ([this, descriptor = std::move (descriptor)] () mutable {
+                             auto changed = publish_local_on_lane (std::move (descriptor));
+                             return std::pair{peers_on_lane (), std::move (changed)};
+                         })
+                         .get ();
+    if (publication.second)
+        publication.second ();
+    return std::move (publication.first);
+}
+
+task_t<std::pair<service_node_descriptor_t, std::vector<admitted_peer_t>>>
+service_topology_registry_t::publish_draining_snapshot ()
+{
+    using publication_t = std::pair<service_node_descriptor_t, std::vector<admitted_peer_t>>;
+    return runtime::run_blocking_step<publication_t> ([this] () -> task_t<publication_t> {
+        auto publication =
+          _lane
+            .run ([this] {
+                auto descriptor = _local;
+                std::function<void ()> changed;
+                if (descriptor.state != service_node_state_t::draining) {
+                    if (descriptor.descriptor_revision
+                        == std::numeric_limits<std::uint64_t>::max ())
+                        throw std::overflow_error ("service descriptor revision is exhausted");
+                    descriptor.state = service_node_state_t::draining;
+                    ++descriptor.descriptor_revision;
+                    changed = publish_local_on_lane (descriptor);
+                }
+                return std::tuple{std::move (descriptor), peers_on_lane (), std::move (changed)};
+            })
+            .get ();
+        if (std::get<2> (publication))
+            std::get<2> (publication) ();
+        co_return publication_t{std::move (std::get<0> (publication)),
+                                std::move (std::get<1> (publication))};
+    });
+}
 void service_topology_registry_t::set_change_handler (std::function<void ()> handler)
 {
     _lane.run ([&, this] { _change_handler = std::move (handler); }).get ();

@@ -63,6 +63,8 @@ internal sealed class ZLinkDrainAdmissionGate
 
     public bool IsDraining => RunState(() => _draining != 0);
 
+    internal ZLinkDrainOwner DrainOwner => RunState(() => _owner);
+
     public bool BeginDrain() => BeginDrain(ZLinkDrainOwner.Relocation);
 
     internal bool BeginDrain(ZLinkDrainOwner owner)

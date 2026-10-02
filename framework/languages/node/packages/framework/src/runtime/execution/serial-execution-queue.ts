@@ -29,13 +29,18 @@ export const ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS: Required<ZLinkSerialSchedul
 export interface ZLinkSerialWorkRecord<T> {
   readonly acceptedSequence: bigint;
   readonly lane: ZLinkSerialWorkLane;
-  readonly operation: () => Promise<T> | T;
+  operation: () => Promise<T> | T;
   readonly context?: unknown;
   resolve(value: T): void;
   reject(reason: unknown): void;
   /** Releases this owner's reservation exactly once after the real terminal. */
   release(): void;
   fail(reason: unknown): void;
+}
+
+/** The active lifecycle owner decides which existing application records can run. */
+export interface ZLinkSerialLifecycleContext {
+  canExecuteApplication(record: ZLinkSerialWorkRecord<unknown>): boolean;
 }
 
 /** Readiness work that must complete without claiming the serial owner. */
@@ -149,8 +154,15 @@ export class ZLinkSerialExecutionQueue {
   }
 
   /** Holds lifecycle FIFO through an operation result while its application turns can run. */
-  submitLifecycleOperation<T>(operation: () => Promise<T> | T): Promise<T> {
-    return this.admit(operation, { lane: 'lifecycle' }, undefined, undefined, true);
+  submitLifecycleOperation<T>(
+    operation: () => Promise<T> | T,
+    context?: ZLinkSerialLifecycleContext
+  ): Promise<T> {
+    return this.admit(operation, { lane: 'lifecycle' }, context, undefined, true);
+  }
+
+  visitPendingApplication(visitor: (record: ZLinkSerialWorkRecord<unknown>) => void): void {
+    for (const record of this.application.records) visitor(record);
   }
 
   get hasPendingWork(): boolean {
@@ -326,11 +338,7 @@ export class ZLinkSerialExecutionQueue {
     } finally {
       this.draining = false;
       this.claimStartedAt = undefined;
-      if (
-        !waitingForPreparation &&
-        (this.application.records.length > 0 ||
-          (this.activeLifecycle === undefined && this.lifecycle.records.length > 0))
-      ) {
+      if (!waitingForPreparation && this.selectNext() !== undefined) {
         this.scheduleDrain();
       } else {
         if (!this.hasPendingWork) {
@@ -346,26 +354,34 @@ export class ZLinkSerialExecutionQueue {
         readonly record: SerialWorkRecord<unknown>;
       }
     | undefined {
-    const applicationReady = this.application.records.length > 0;
+    const lifecycleOwner = this.activeLifecycle?.context as ZLinkSerialLifecycleContext | undefined;
+    const applicationRecord =
+      lifecycleOwner === undefined
+        ? this.application.records[0]
+        : this.application.records.find((record) => lifecycleOwner.canExecuteApplication(record));
+    const applicationReady = applicationRecord !== undefined;
     const lifecycleReady = this.activeLifecycle === undefined && this.lifecycle.records.length > 0;
     if (!applicationReady && !lifecycleReady) return undefined;
     if (!applicationReady) {
       return { lane: 'lifecycle', record: this.lifecycle.records[0]! };
     }
     if (!lifecycleReady) {
-      return { lane: 'application', record: this.application.records[0]! };
+      return { lane: 'application', record: applicationRecord! };
     }
     if (!this.lifecycleDebt && this.lifecycleStreak < this.lifecycleBurstLimit) {
       return { lane: 'lifecycle', record: this.lifecycle.records[0]! };
     }
-    return { lane: 'application', record: this.application.records[0]! };
+    return { lane: 'application', record: applicationRecord! };
   }
 
   private takeSelected(selection: {
     readonly lane: ZLinkSerialWorkLane;
     readonly record: SerialWorkRecord<unknown>;
   }): ZLinkSerialWorkRecord<unknown> {
-    const record = selection.lane === 'lifecycle' ? this.takeLifecycle() : this.takeApplication();
+    const record =
+      selection.lane === 'lifecycle'
+        ? this.takeLifecycle()
+        : this.takeApplication(selection.record);
     if (record !== selection.record) {
       throw new Error('The selected serial work record changed before owner claim.');
     }
@@ -382,10 +398,12 @@ export class ZLinkSerialExecutionQueue {
     return record;
   }
 
-  private takeApplication(): ZLinkSerialWorkRecord<unknown> {
+  private takeApplication(selected: SerialWorkRecord<unknown>): ZLinkSerialWorkRecord<unknown> {
     this.lifecycleStreak = 0;
     this.lifecycleDebt = false;
-    return this.application.records.shift()!;
+    if (this.application.records[0] === selected) return this.application.records.shift()!;
+    const index = this.application.records.indexOf(selected);
+    return this.application.records.splice(index, 1)[0]!;
   }
 
   private startPreparation(record: SerialWorkRecord<unknown>): void {

@@ -69,8 +69,33 @@ final class ZLinkChannelSpotTerminalTest {
                                 operationId) -> {
                             probe.submissions++;
                             probe.operationIds.add(operationId);
-                            return CompletableFuture.failedFuture(terminal);
+                            return registry.submit(
+                                    operationId,
+                                    timeout,
+                                    () -> CompletableFuture.failedFuture(terminal),
+                                    replies -> replies.forEach(Message::close));
                         });
+        probe.readySend =
+                payload ->
+                        runtime.sendToSpot(
+                                probe.address.routerChannelId(),
+                                probe.address.targetNodeRid(),
+                                probe.address.spotId(),
+                                probe.address.spotGeneration(),
+                                probe.address.authorityOwnerGeneration(),
+                                probe.address.ownerLeaseGeneration(),
+                                java.util.List.of(payload));
+        probe.readyRequest =
+                (payload, timeout) ->
+                        runtime.requestToSpot(
+                                probe.address.routerChannelId(),
+                                probe.address.targetNodeRid(),
+                                probe.address.spotId(),
+                                probe.address.spotGeneration(),
+                                probe.address.authorityOwnerGeneration(),
+                                probe.address.ownerLeaseGeneration(),
+                                java.util.List.of(payload),
+                                timeout);
         try (Message payload = Message.from(new byte[] {1})) {
             java.util.concurrent.CompletionStage<?> result;
             if (request) {

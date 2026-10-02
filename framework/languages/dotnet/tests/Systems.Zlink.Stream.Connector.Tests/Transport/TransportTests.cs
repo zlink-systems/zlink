@@ -26,16 +26,27 @@ public sealed partial class StreamConnectorTests
         {
             using var accepted = await listener.AcceptTcpClientAsync();
             await using var ssl = new SslStream(accepted.GetStream(), false);
-            var failure = await Record.ExceptionAsync(() => ssl.AuthenticateAsServerAsync(certificate));
-            Assert.True(failure is null or System.Security.Authentication.AuthenticationException or IOException);
+            var failure = await Record.ExceptionAsync(() =>
+                ssl.AuthenticateAsServerAsync(certificate)
+            );
+            Assert.True(
+                failure
+                    is null
+                        or System.Security.Authentication.AuthenticationException
+                        or IOException
+            );
         });
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"{scheme}://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-        });
-        var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () => await connector.Connect.Async());
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"{scheme}://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            }
+        );
+        var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+            await connector.Connect.Async()
+        );
         Assert.Equal(ZlinkStreamErrorCode.TlsValidationFailed, failure.Error.Code);
         Assert.NotNull(failure.Error.Exception);
         await server;
@@ -52,18 +63,26 @@ public sealed partial class StreamConnectorTests
             using var accepted = await listener.AcceptTcpClientAsync();
             var buffer = new byte[1024];
             await accepted.GetStream().ReadAsync(buffer);
-            await accepted.GetStream().WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 400 Bad Request\r\n\r\n"));
+            await accepted
+                .GetStream()
+                .WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 400 Bad Request\r\n\r\n"));
             while (await accepted.GetStream().ReadAsync(buffer) > 0) { }
         });
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tls://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-        });
-        var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () => await connector.Connect.Async());
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tls://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            }
+        );
+        var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+            await connector.Connect.Async()
+        );
         Assert.Equal(ZlinkStreamErrorCode.Disconnected, failure.Error.Code);
-        Assert.IsType<System.Security.Authentication.AuthenticationException>(failure.Error.Exception);
+        Assert.IsType<System.Security.Authentication.AuthenticationException>(
+            failure.Error.Exception
+        );
         await server;
     }
 

@@ -5,6 +5,74 @@ namespace Zlink.Framework.SampleRegressionTests;
 public sealed partial class RegressionTests
 {
     [Fact]
+    public void GameQuest_Close_Replay_Uses_Callback_Entry_And_Runtime_Generation()
+    {
+        var sampleRoot = ResolveSampleRoot("GameQuest");
+        var spot = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "QuestMission",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "PlayerQuestSpot",
+                "PlayerQuestSpot.cs"
+            )
+        );
+        Assert.Contains("gamequest-owner closing-entered", spot, StringComparison.Ordinal);
+        Assert.DoesNotContain("gamequest-owner closed", spot, StringComparison.Ordinal);
+        Assert.Contains("objectGeneration={ObjectGeneration}", spot, StringComparison.Ordinal);
+        Assert.DoesNotContain("private int Generation", spot, StringComparison.Ordinal);
+        var processor = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "QuestMission",
+                "Application",
+                "QuestEventProcessor.cs"
+            )
+        );
+        Assert.Contains(
+            "replayed player={PlayerId} rehydrationCount={RehydrationCount} objectGeneration={ObjectGeneration}",
+            processor,
+            StringComparison.Ordinal
+        );
+
+        var client = ReadSource(Path.Combine(sampleRoot, "Client", "GameQuestClientScenario.cs"));
+        var closeReplay = client[
+            client.IndexOf("var closeOwner", StringComparison.Ordinal)..client.IndexOf(
+                "var ruinsCompleted",
+                StringComparison.Ordinal
+            )
+        ];
+        Assert.Equal(1, closeReplay.Split(".Request(", StringSplitOptions.None).Length - 1);
+        Assert.Contains("new SyncQuestProgressReq", closeReplay, StringComparison.Ordinal);
+        Assert.True(
+            closeReplay.IndexOf("topology.CloseReplayReleaseFile", StringComparison.Ordinal)
+                < closeReplay.IndexOf("new SyncQuestProgressReq", StringComparison.Ordinal)
+        );
+
+        foreach (var runnerName in new[] { "run_sample.sh", "run_sample.ps1" })
+        {
+            var runner = ReadSource(Path.Combine(sampleRoot, runnerName));
+            Assert.Contains("gamequest-owner closing-entered", runner, StringComparison.Ordinal);
+            Assert.DoesNotContain("gamequest-owner closed", runner, StringComparison.Ordinal);
+            Assert.Contains(
+                "gamequest-mission replayed player=player-alice rehydrationCount=2",
+                runner,
+                StringComparison.Ordinal
+            );
+            Assert.Contains("objectGeneration=([1-9][0-9]*)", runner, StringComparison.Ordinal);
+            Assert.Contains(
+                "Close replay must execute in a different runtime ObjectGeneration",
+                runner,
+                StringComparison.Ordinal
+            );
+        }
+    }
+
+    [Fact]
     public void GameQuest_Uses_One_Physical_Mesh_And_Instance_Spot_Owners()
     {
         var sampleRoot = ResolveSampleRoot("GameQuest");

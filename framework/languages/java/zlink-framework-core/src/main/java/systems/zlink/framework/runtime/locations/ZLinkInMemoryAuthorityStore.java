@@ -102,40 +102,29 @@ final class ZLinkInMemoryAuthorityStore {
                 () -> {
                     Instant now = clock.instant();
                     Row current = rows.get(key);
-                    if (!matches(current, expectation)) {
+                    if (!matches(current, expectation)
+                            || current == null
+                            || current.allocation.state() != ZLinkPlacementAllocationState.ACTIVE
+                            || (!(mutation instanceof ZLinkAuthorityRestore)
+                                    && participantIsPrepared(key))) {
                         return completed(
                                 new ZLinkAuthorityConflict(
                                         current == null
                                                 ? new ZLinkAuthorityMissing(now)
                                                 : snapshot(current, now)));
                     }
+                    if (!(mutation instanceof ZLinkAuthorityRestore)
+                            && !ownerLeaseIsLive.test(current.owner)) {
+                        return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
+                    }
                     if (mutation instanceof ZLinkAuthorityDelete) {
-                        if (current == null
-                                || current.allocation.state()
-                                        != ZLinkPlacementAllocationState.ACTIVE) {
-                            return completed(
-                                    new ZLinkAuthorityConflict(
-                                            current == null
-                                                    ? new ZLinkAuthorityMissing(now)
-                                                    : snapshot(current, now)));
-                        }
-                        if (!ownerLeaseIsLive.test(current.owner)) {
-                            return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
-                        }
                         adjustActive(current.allocation, current.allocation.capacityBundle(), -1);
                         rows.remove(key);
                         return completed(new ZLinkAuthorityDeleted(nextVersion(), now));
                     }
                     if (mutation instanceof ZLinkAuthorityRestore restore) {
-                        if (current == null
-                                || current.allocation.state()
-                                        != ZLinkPlacementAllocationState.ACTIVE
-                                || !current.owner.equals(restore.expectedOwner())) {
-                            return completed(
-                                    new ZLinkAuthorityConflict(
-                                            current == null
-                                                    ? new ZLinkAuthorityMissing(now)
-                                                    : snapshot(current, now)));
+                        if (!current.owner.equals(restore.expectedOwner())) {
+                            return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
                         }
                         if (revision == Long.MAX_VALUE) {
                             return completed(new ZLinkAuthorityGenerationExhausted());
@@ -151,27 +140,25 @@ final class ZLinkInMemoryAuthorityStore {
                         rows.put(key, stored);
                         return completed(stored(stored, now));
                     }
-                    ZLinkAuthorityPut put = (ZLinkAuthorityPut) mutation;
-                    if (current == null
-                            || current.allocation.state() != ZLinkPlacementAllocationState.ACTIVE) {
-                        return completed(
-                                new ZLinkAuthorityConflict(
-                                        current == null
-                                                ? new ZLinkAuthorityMissing(now)
-                                                : snapshot(current, now)));
-                    }
-                    if (!ownerLeaseIsLive.test(current.owner)) {
-                        return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
-                    }
-                    if (revision == Long.MAX_VALUE) {
+                    byte[] reincarnatePayload = ZLinkAuthorityMutation.reincarnatePayload(mutation);
+                    if (revision == Long.MAX_VALUE
+                            || (reincarnatePayload != null
+                                    && (objectGeneration == Long.MAX_VALUE
+                                            || authorityOwnerGeneration == Long.MAX_VALUE))) {
                         return completed(new ZLinkAuthorityGenerationExhausted());
                     }
                     Row stored =
                             new Row(
                                     nextVersion(),
-                                    put.payload(),
-                                    current.objectGeneration,
-                                    current.authorityOwnerGeneration,
+                                    reincarnatePayload != null
+                                            ? reincarnatePayload
+                                            : ((ZLinkAuthorityPut) mutation).payload(),
+                                    reincarnatePayload != null
+                                            ? ++objectGeneration
+                                            : current.objectGeneration,
+                                    reincarnatePayload != null
+                                            ? ++authorityOwnerGeneration
+                                            : current.authorityOwnerGeneration,
                                     current.owner,
                                     current.allocation);
                     rows.put(key, stored);

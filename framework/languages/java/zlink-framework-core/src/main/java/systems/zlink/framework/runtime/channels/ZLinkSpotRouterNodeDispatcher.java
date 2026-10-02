@@ -155,7 +155,8 @@ final class ZLinkSpotRouterNodeDispatcher {
                 result.completeExceptionally(
                         ZLinkFrameworkErrorOrigin.framework(
                                 reply.result().toFrameworkErrorKind(reply.failureCode()),
-                                "SPOT route request failed: " + reply.result()));
+                                "SPOT route request failed: " + reply.result(),
+                                reply.failureCode()));
                 return;
             }
             List<Message> replyParts = ZLinkChannelRuntime.copyMessages(reply.parts());

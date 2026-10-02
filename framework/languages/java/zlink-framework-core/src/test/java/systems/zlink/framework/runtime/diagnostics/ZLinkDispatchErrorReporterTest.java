@@ -15,6 +15,15 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 
 class ZLinkDispatchErrorReporterTest {
     @Test
+    void frameworkErrorMessageContainsOnlyTheOriginalMessage() {
+        var error =
+                new systems.zlink.framework.errors.ZLinkFrameworkException(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "owner unavailable");
+        assertEquals("owner unavailable", ZLinkDispatchErrorReporter.errorDetails(error).message());
+    }
+
+    @Test
     void offSkipsFlowTracingBeforeConstructingAnEvent() {
         ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
         options.messageFlow(ZLinkMessageFlowLogMode.OFF);

@@ -28,7 +28,7 @@ public final class QuestStore implements AutoCloseable {
     }
 
     public void activate(String playerId) {
-        state(playerId);
+        states.put(playerId, restorePlayer(playerId));
     }
 
     public Messages.QuestProcessingMsg apply(Messages.GameplayMsg event) {

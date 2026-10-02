@@ -48,7 +48,6 @@ class dispatch_error_reporter_t
             auto error = diagnostic_event_sink_t::exception_summary (event.exception);
             event.error_type = std::move (error.type);
             event.error_message = std::move (error.message);
-            event.exception = {};
         }
         if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
             event.flow_id.reset ();
@@ -250,6 +249,7 @@ dispatch_reason_from_error (const framework_exception_t *error) noexcept
             case detail::boundary_error_t::shutdown:
                 return dispatch_error_reason_t::shutdown;
             case detail::boundary_error_t::stale_generation:
+            case detail::boundary_error_t::disconnected:
                 return dispatch_error_reason_t::stale_target;
             default:
                 break;

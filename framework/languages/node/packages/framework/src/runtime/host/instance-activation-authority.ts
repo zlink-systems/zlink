@@ -20,6 +20,7 @@ import { ZLinkFrameworkException } from '../../contracts';
 import {
   decodeServiceInstanceAuthorityPayload,
   decodeServiceReadySpotAuthority,
+  decodeServiceClosingSpotAuthority,
   encodeServiceInstanceAuthorityPayload
 } from '../foundation/service-authority-payload-codec';
 import type {
@@ -153,16 +154,6 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
           undefined,
           activation.deadlineUnixMs
         );
-        if (reserved.kind === 'conflict' || reserved.kind === 'alreadyExists') {
-          const existingState =
-            reserved.current.kind === 'snapshot'
-              ? decodeServiceInstanceAuthorityPayload(reserved.current.payload)?.state
-              : undefined;
-          if (existingState === 'closing') {
-            await this.awaitClosingRelease(target, activation.deadlineUnixMs);
-            continue;
-          }
-        }
         if (reserved.kind !== 'alreadyExists') break;
         this.options.metrics?.recordInstanceSpotClaimConflict(
           this.options.meshName,
@@ -492,32 +483,6 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
     );
   }
 
-  private async awaitClosingRelease(
-    target: ServiceInstanceActivationTarget,
-    deadlineUnixMs: bigint
-  ): Promise<void> {
-    const key = authorityKey(target.targetSpotId);
-    const deadlineMs = performance.now() + Number(deadlineUnixMs - BigInt(Date.now()));
-    while (performance.now() <= deadlineMs) {
-      const current = await this.options.store.readAuthority(key);
-      if (current.kind !== 'snapshot') return;
-      const decoded = decodeServiceInstanceAuthorityPayload(current.payload);
-      if (
-        current.allocation.objectKind !== 'instance_spot' ||
-        current.allocation.stableType !== target.stableType ||
-        decoded?.kind !== 'instance_spot' ||
-        decoded.spotId !== target.targetSpotId
-      ) {
-        throw new Error('Instance authority changed to a different Spot while closing.');
-      }
-      if (decoded.state !== 'closing') return;
-      await waitForActivationJoin(deadlineMs);
-    }
-    throw new Error(
-      `Instance Spot '${target.targetSpotId}' close did not release authority before deadline.`
-    );
-  }
-
   private requirePending(reservation: ServiceInstanceActivationReservation): PendingReservation {
     const pending = this.pending.get(reservation.token);
     if (pending === undefined || pending.creating.objectGeneration !== reservation.attempt) {
@@ -531,12 +496,14 @@ function readyRead(
   snapshot: ZLinkAuthoritySnapshot,
   target: ServiceInstanceActivationTarget
 ): ServiceInstanceAuthorityRead {
-  const decoded = decodeServiceReadySpotAuthority(snapshot.payload);
+  const decoded =
+    decodeServiceReadySpotAuthority(snapshot.payload) ??
+    decodeServiceClosingSpotAuthority(snapshot.payload);
   const creating = decodeServiceInstanceAuthorityPayload(snapshot.payload);
   if (
     creating?.state === 'coldActivating' &&
     snapshot.allocation.objectKind === 'instance_spot' &&
-    snapshot.allocation.state === 'reserved' &&
+    (snapshot.allocation.state === 'reserved' || snapshot.allocation.state === 'active') &&
     creating.stableType === target.stableType &&
     creating.spotId === target.targetSpotId &&
     creating.ownerId === snapshot.ownerId &&
@@ -550,7 +517,8 @@ function readyRead(
     return {
       kind: 'creating',
       objectGeneration: snapshot.objectGeneration,
-      authorityOwnerGeneration: snapshot.authorityOwnerGeneration
+      authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
+      authority: snapshot
     };
   }
   if (
@@ -569,14 +537,16 @@ function readyRead(
   ) {
     return { kind: 'missing' };
   }
-  return { kind: 'ready', route: routeFromSnapshot(snapshot) };
+  return { kind: 'ready', route: routeFromSnapshot(snapshot), authority: snapshot };
 }
 
 function readyExisting(
   snapshot: ZLinkAuthoritySnapshot,
   target: ServiceInstanceActivationTarget
 ): Extract<ServiceInstanceAuthorityRead, { readonly kind: 'ready' }> {
-  const decoded = decodeServiceReadySpotAuthority(snapshot.payload);
+  const decoded =
+    decodeServiceReadySpotAuthority(snapshot.payload) ??
+    decodeServiceClosingSpotAuthority(snapshot.payload);
   if (
     decoded?.kind !== 'instance_spot' ||
     decoded.stableType !== target.stableType ||
@@ -591,7 +561,7 @@ function readyExisting(
   ) {
     throw new Error('Existing Instance authority is not a matching Ready allocation.');
   }
-  return { kind: 'ready', route: routeFromSnapshot(snapshot) };
+  return { kind: 'ready', route: routeFromSnapshot(snapshot), authority: snapshot };
 }
 
 async function waitForActivationJoin(deadlineMs: number): Promise<void> {
@@ -628,7 +598,9 @@ function requireCommitIdentity(
 }
 
 function routeFromSnapshot(snapshot: ZLinkAuthoritySnapshot): ServiceInstanceRouteFence {
-  const decoded = decodeServiceReadySpotAuthority(snapshot.payload);
+  const decoded =
+    decodeServiceReadySpotAuthority(snapshot.payload) ??
+    decodeServiceClosingSpotAuthority(snapshot.payload);
   if (decoded?.kind !== 'instance_spot') {
     throw new Error('Instance authority is not Ready.');
   }

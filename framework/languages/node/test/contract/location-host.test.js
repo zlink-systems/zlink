@@ -605,7 +605,7 @@ test('degraded host rejects object messages and timers until owner lease recover
       undefined,
       undefined,
       undefined,
-      scenario.runtime.createSpotManagerOptions().statefulExecutionAllowed
+      scenario.runtime.createSpotManagerOptions().statefulExecution.admissionOpen
     );
     class LeaseTimerHandler {
       async handle() { timerTicks += 1; }

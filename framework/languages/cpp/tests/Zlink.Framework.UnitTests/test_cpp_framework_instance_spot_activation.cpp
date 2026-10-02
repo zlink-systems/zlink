@@ -233,15 +233,18 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     runtime.bind_spot_address_resolver (resolver);
 
     std::atomic_int activations{0};
+    std::atomic_int ready_requests{0};
     runtime.bind_instance_spot_activator (
       [&] (const zlink::framework::spot_id_t &spot_id,
-           const zlink::framework::detail::spot_activation_intent_t &intent, const std::string &,
-           std::type_index,
+           const zlink::framework::detail::spot_activation_intent_t &intent,
+           const std::optional<zlink::framework::runtime::spot_address_t> &cached_route,
+           const std::string &, std::type_index,
            std::function<zlink::framework::serialized_payload_t (
              zlink::framework::serializer_registry_t &)>,
            const std::map<std::string, std::string> &)
         -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           EXPECT_EQ ("cart-17", std::string (spot_id));
+          EXPECT_FALSE (cached_route);
           EXPECT_EQ (std::optional<std::string> ("commerce"), intent.mesh_name);
           EXPECT_EQ (std::optional<std::string> ("shopping-cart"), intent.stable_type);
           ++activations;
@@ -250,12 +253,16 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
           resolver.addresses.insert_or_assign ("cart-17", address);
           co_return zlink::framework::result_t<void>::success ();
       },
-      [] (const auto &, const auto &, std::string, std::type_index, auto, std::chrono::milliseconds,
-          auto) {
+      [&] (const auto &, const auto &, const auto &cached_route, std::string, std::type_index, auto,
+           std::chrono::milliseconds, auto) {
+          EXPECT_TRUE (cached_route);
+          EXPECT_EQ ("commerce", cached_route->mesh_name);
+          EXPECT_EQ ("cart-node", cached_route->node_rid.to_string ());
+          ++ready_requests;
           return zlink::framework::task_t<zlink::message_t> (
-            zlink::framework::result_t<zlink::message_t>::failure (
-              zlink::framework::framework_error_kind_t::internal_failure,
-              "Ready resolve should bypass cold activation"));
+            zlink::framework::result_t<zlink::message_t>::success (
+              zlink::framework::detail::encoded_payload_to_raw (
+                serializers.get<reply_t> ().serialize (reply_t{71}))));
       });
 
     std::atomic_int sends{0};
@@ -302,7 +309,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     EXPECT_EQ (71, reply.value ().value);
     EXPECT_EQ (1, activations.load ());
     EXPECT_EQ (0, sends.load ());
-    EXPECT_EQ (1, requests.load ());
+    EXPECT_EQ (0, requests.load ());
+    EXPECT_EQ (1, ready_requests.load ());
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation, MissingWithoutIntentDoesNotActivate)
@@ -315,13 +323,13 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingWithoutIntentDoesNotActivate)
     runtime.bind_spot_address_resolver (resolver);
     std::atomic_int activations{0};
     runtime.bind_instance_spot_activator (
-      [&] (const auto &, const auto &, const auto &, auto, auto,
+      [&] (const auto &, const auto &, const auto &, const auto &, auto, auto,
            const auto &) -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           ++activations;
           co_return zlink::framework::result_t<void>::failure (
             zlink::framework::framework_error_kind_t::internal_failure, "must not activate");
       },
-      [&] (const auto &, const auto &, auto, auto, auto, auto, auto) {
+      [&] (const auto &, const auto &, const auto &, auto, auto, auto, auto, auto) {
           ++activations;
           return zlink::framework::task_t<zlink::message_t> (
             zlink::framework::result_t<zlink::message_t>::failure (
@@ -347,13 +355,13 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingRequestUsesDefaultTimeoutForC
 
     std::chrono::milliseconds observed_timeout{0};
     runtime.bind_instance_spot_activator (
-      [] (const auto &, const auto &, const auto &, auto, auto,
+      [] (const auto &, const auto &, const auto &, const auto &, auto, auto,
           const auto &) -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           co_return zlink::framework::result_t<void>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
             "unused one-way activation");
       },
-      [&observed_timeout] (const auto &, const auto &, auto, auto, auto,
+      [&observed_timeout] (const auto &, const auto &, const auto &, auto, auto, auto,
                            std::chrono::milliseconds timeout, auto) {
           observed_timeout = timeout;
           return zlink::framework::task_t<zlink::message_t> (
@@ -384,14 +392,14 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     runtime.bind_spot_address_resolver (resolver);
     std::atomic_int activations{0};
     runtime.bind_instance_spot_activator (
-      [&] (const auto &, const auto &, const auto &, auto, auto,
+      [&] (const auto &, const auto &, const auto &, const auto &, auto, auto,
            const auto &) -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           ++activations;
           co_return zlink::framework::result_t<void>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
             "simulated cold activation rejection");
       },
-      [] (const auto &, const auto &, auto, auto, auto, auto, auto) {
+      [] (const auto &, const auto &, const auto &, auto, auto, auto, auto, auto) {
           return zlink::framework::task_t<zlink::message_t> (
             zlink::framework::result_t<zlink::message_t>::failure (
               zlink::framework::framework_error_kind_t::internal_failure, "unused"));
@@ -423,21 +431,30 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     runtime.bind_spot_address_resolver (resolver);
 
     std::atomic_int cold_activations{0};
+    std::atomic_int ready_failures{0};
     runtime.bind_instance_spot_activator (
-      [] (const auto &, const auto &, const auto &, auto, auto,
+      [] (const auto &, const auto &, const auto &, const auto &, auto, auto,
           const auto &) -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           co_return zlink::framework::result_t<void>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
             "unused one-way activation");
       },
-      [&serializers,
-       &cold_activations] (const zlink::framework::spot_id_t &spot_id,
-                           const zlink::framework::detail::spot_activation_intent_t &intent,
-                           std::string, std::type_index, auto, std::chrono::milliseconds,
-                           auto) -> zlink::framework::task_t<zlink::message_t> {
+      [&serializers, &cold_activations, &ready_failures] (
+        const zlink::framework::spot_id_t &spot_id,
+        const zlink::framework::detail::spot_activation_intent_t &intent,
+        const std::optional<zlink::framework::runtime::spot_address_t> &cached_route, std::string,
+        std::type_index, auto, std::chrono::milliseconds,
+        auto) -> zlink::framework::task_t<zlink::message_t> {
           EXPECT_EQ ("player-alice", std::string (spot_id));
           EXPECT_EQ (std::optional<std::string> ("gamequest"), intent.mesh_name);
           EXPECT_EQ (std::optional<std::string> ("player-quest"), intent.stable_type);
+          if (cached_route) {
+              ++ready_failures;
+              co_return zlink::framework::detail::result_access_t::failure<zlink::message_t> (
+                zlink::framework::detail::make_framework_origin_exception (
+                  zlink::framework::framework_error_kind_t::shutting_down,
+                  "spot serial queue is closed or stopping"));
+          }
           ++cold_activations;
           /* Models OnInitialize replaying the durable event stream before the
            * activation-owned first request is dispatched. */
@@ -484,7 +501,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
                          .result ();
     ASSERT_FALSE (stale);
     EXPECT_EQ (zlink::framework::framework_error_kind_t::shutting_down, stale.error_kind ());
-    EXPECT_EQ (1, direct_requests.load ());
+    EXPECT_EQ (0, direct_requests.load ());
+    EXPECT_EQ (1, ready_failures.load ());
     EXPECT_EQ (0, cold_activations.load ());
     EXPECT_FALSE (resolver.addresses.contains ("player-alice"));
 
@@ -495,7 +513,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
                               .result ();
     ASSERT_TRUE (rehydrated);
     EXPECT_EQ (3, rehydrated.value ().value);
-    EXPECT_EQ (1, direct_requests.load ());
+    EXPECT_EQ (0, direct_requests.load ());
+    EXPECT_EQ (1, ready_failures.load ());
     EXPECT_EQ (1, cold_activations.load ());
     EXPECT_EQ (2, resolver.reads.load ());
 }

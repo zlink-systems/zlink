@@ -1126,6 +1126,34 @@ int main ()
         rejected_instance_activation = true;
     }
     assert (rejected_instance_activation);
+    auto ready_instance = instance_activation;
+    ready_instance.target.mesh_name.clear ();
+    ready_instance.target.stable_type.clear ();
+    ready_instance.target.descriptor_version.clear ();
+    ready_instance.target.deadline_unix_ms = 0;
+    ready_instance.target.object_generation = 13;
+    ready_instance.target.authority_owner_generation = 17;
+    ready_instance.target.owner_id = "owner-1";
+    ready_instance.target.owner_lease_generation = 19;
+    ready_instance.target.store_version = "store-23";
+    for (const bool intent : {false, true}) {
+        ready_instance.target.instance_intent = intent;
+        const auto encoded_ready =
+          protocol::encode_instance_spot_activation_header (ready_instance);
+        assert (encoded_ready[5] == 1);
+        assert (protocol::decode_instance_spot_activation_header (encoded_ready) == ready_instance);
+        auto invalid_intent = encoded_ready;
+        const auto route_length = (std::size_t (encoded_ready[6]) << 8) | encoded_ready[7];
+        invalid_intent[7 + route_length] = 2;
+        bool rejected_intent = false;
+        try {
+            (void) protocol::decode_instance_spot_activation_header (invalid_intent);
+        }
+        catch (const protocol::service_wire_error_t &) {
+            rejected_intent = true;
+        }
+        assert (rejected_intent);
+    }
     const protocol::instance_activation_recovery_t instance_recovery{
       instance_activation,
       from_hex ("01010574726163650003616263"),
@@ -1879,6 +1907,7 @@ int main ()
         put_u64 (route, 10);
         put_u64 (route, 11);
         put_text16 (route, "store-1");
+        route.push_back (static_cast<std::uint8_t> (true)); // Ready의 필수 instanceIntent bool8.
         put_body16 (body, route);
         put_u64 (body, 8);
         body.push_back (1);

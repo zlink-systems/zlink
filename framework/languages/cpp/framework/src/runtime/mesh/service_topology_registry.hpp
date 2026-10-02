@@ -113,6 +113,9 @@ class service_topology_registry_t
                                           std::vector<std::string> metric_channel_names = {});
 
     void publish_local (service_node_descriptor_t descriptor);
+    std::vector<admitted_peer_t> publish_local_snapshot (service_node_descriptor_t descriptor);
+    task_t<std::pair<service_node_descriptor_t, std::vector<admitted_peer_t>>>
+    publish_draining_snapshot ();
     service_node_descriptor_t local_descriptor () const;
     task_t<std::tuple<service_node_descriptor_t,
                       std::vector<admitted_peer_t>,
@@ -136,6 +139,7 @@ class service_topology_registry_t
     void observe_channel_metrics (opentelemetry::metrics::ObserverResult result, bool closed) const;
 
   private:
+    std::function<void ()> publish_local_on_lane (service_node_descriptor_t descriptor);
     std::vector<admitted_peer_t> peers_on_lane () const;
     std::vector<service_node_descriptor_t> not_required_peers_on_lane () const;
     struct byte_vector_less_t

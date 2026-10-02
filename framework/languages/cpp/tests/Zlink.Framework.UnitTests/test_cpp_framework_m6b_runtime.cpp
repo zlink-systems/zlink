@@ -10,11 +10,13 @@
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
@@ -48,6 +50,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <future>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -108,6 +111,14 @@ class counting_location_repository_t final
     : public zlink::framework::runtime::in_memory_location_repository_t
 {
   public:
+    zlink::framework::task_t<zlink::framework::object_reserve_result_t>
+    reserve (zlink::framework::object_reserve_request_t request,
+             std::stop_token cancellation = {}) override
+    {
+        reservation_calls.fetch_add (1, std::memory_order_relaxed);
+        return in_memory_location_repository_t::reserve (std::move (request), cancellation);
+    }
+
     zlink::framework::task_t<zlink::framework::authority_read_result_t>
     read_authority (zlink::framework::authority_key_t key,
                     std::stop_token cancellation = {}) override
@@ -132,6 +143,8 @@ class counting_location_repository_t final
             const auto decoded =
               zlink::framework::runtime::decode_instance_spot_authority_payload (*payload);
             if (decoded) {
+                if (activation_recovery_write_observer)
+                    activation_recovery_write_observer (key, *decoded);
                 const std::lock_guard lock (activation_recovery_writes_mutex);
                 activation_recovery_writes.emplace_back (
                   key.value, decoded->activation_recovery
@@ -157,6 +170,10 @@ class counting_location_repository_t final
     }
 
     std::atomic<std::size_t> authority_reads{0};
+    std::atomic<std::size_t> reservation_calls{0};
+    std::function<void (const zlink::framework::authority_key_t &,
+                        const zlink::framework::runtime::instance_spot_authority_payload_t &)>
+      activation_recovery_write_observer;
 
   private:
     std::mutex activation_recovery_writes_mutex;
@@ -5751,9 +5768,29 @@ void verify_remote_user_spot_create_close_terminal_once ()
 
     auto source = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("user-source")}});
-    auto target = std::make_shared<host::public_host_runtime_t> (
+    std::vector<message_dispatch_error_event_t> instance_dispatch_diagnostics;
+    std::mutex instance_dispatch_diagnostics_mutex;
+    const auto dispatch_diagnostic_snapshot = [&] {
+        const std::lock_guard lock (instance_dispatch_diagnostics_mutex);
+        return instance_dispatch_diagnostics;
+    };
+    auto target_options =
       host::host_options_t{.mesh = mesh::raw_mesh_node_options_t{descriptor ("user-target")},
-                           .user_spot_operation_replay_retention = 50ms});
+                           .user_spot_operation_replay_retention = 50ms};
+    target_options.mesh.dispatch.message_flow (message_flow_log_mode_t::normal);
+    detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      target_options.mesh.dispatch, [&] (const message_dispatch_error_event_t &event) {
+          if (event.surface == dispatch_error_surface_t::instance_spot) {
+              assert (event.action
+                      == (event.message_kind == dispatch_message_kind_t::request
+                            ? dispatch_error_action_t::reply_error
+                            : dispatch_error_action_t::drop));
+              assert (event.error_message);
+              const std::lock_guard lock (instance_dispatch_diagnostics_mutex);
+              instance_dispatch_diagnostics.push_back (event);
+          }
+      });
+    auto target = std::make_shared<host::public_host_runtime_t> (std::move (target_options));
     std::size_t materialize_count = 0;
     target->configure_user_spot_operations (
       store,
@@ -5768,22 +5805,58 @@ void verify_remote_user_spot_create_close_terminal_once ()
     std::size_t instance_activation_count = 0;
     std::size_t instance_prepare_count = 0;
     bool fail_recovery_dispatch_once = false;
+    std::optional<framework_error_kind_t> injected_activation_failure;
+    dispatch_error_reason_t injected_failure_reason = dispatch_error_reason_t::handler_exception;
     bool close_during_instance_turn = false;
+    std::size_t recovery_barrier_finishes = 0;
+    std::size_t recovery_accepted_finishes = 0;
+    struct recovery_barrier_t final : detail::deferred_barrier_t
+    {
+        explicit recovery_barrier_t (std::size_t &finishes) : _finishes (finishes) {}
+        result_t<void> activate (std::function<void ()> work) override
+        {
+            ++_finishes;
+            work ();
+            return result_t<void>::success ();
+        }
+        result_t<void> activate_async (async_work_t work) override
+        {
+            ++_finishes;
+            work ([] (result_t<void> result) { assert (result); });
+            return result_t<void>::success ();
+        }
+        void cancel () noexcept override { assert (false); }
+        std::size_t &_finishes;
+    };
     auto instance_relocations = std::make_shared<memory_relocation_repository_t> ();
     const std::weak_ptr<host::public_host_runtime_t> weak_target = target;
     target->configure_instance_spot_operations (
       store, instance_relocations, [owner] { return owner->token; },
       host::instance_spot_activation_materializer_t{
-        [&instance_prepare_count] (const protocol::instance_spot_activation_header_t &activation) {
+        [&instance_prepare_count] (const protocol::instance_spot_activation_header_t &activation,
+                                   const authority_snapshot_t &) {
             ++instance_prepare_count;
             assert (!activation.target.spot_id.empty ());
             return true;
         },
         [&instance_activation_count, &store, &fail_recovery_dispatch_once,
-         &close_during_instance_turn,
-         weak_target] (const protocol::instance_spot_activation_header_t &activation,
-                       const std::optional<std::vector<std::uint8_t>> &metadata,
-                       const protocol::application_payload_t &application) {
+         &close_during_instance_turn, &recovery_barrier_finishes, &recovery_accepted_finishes,
+         &injected_activation_failure,
+         weak_target] (std::shared_ptr<const protocol::instance_activation_recovery_t> command,
+                       std::function<task_t<zlink::message_t> (std::function<void ()> &)>,
+                       std::shared_ptr<detail::deferred_barrier_t> *activation_terminal) {
+            const auto &activation = command->activation;
+            const auto &metadata = command->metadata;
+            const auto &application = command->application_payload;
+            if (injected_activation_failure) {
+                const auto failure =
+                  runtime::messaging::request_failure_mapper_t{}.target_failure_reply (
+                    *injected_activation_failure);
+                assert (failure);
+                return task_t<host::instance_spot_activation_result_t> (
+                  result_t<host::instance_spot_activation_result_t>::success (
+                    {failure->terminal_result, failure->failure_code, std::nullopt}));
+            }
             ++instance_activation_count;
             assert (activation.target.stable_type == "quest");
             assert (activation.request);
@@ -5804,6 +5877,14 @@ void verify_remote_user_spot_create_close_terminal_once ()
                 throw std::runtime_error ("simulated process failure after Ready publication");
             }
             std::function<void ()> accepted_turn_terminal;
+            if (store->activation_recovery_write_observer) {
+                assert (activation_terminal);
+                *activation_terminal =
+                  std::make_shared<recovery_barrier_t> (recovery_barrier_finishes);
+                accepted_turn_terminal = [&recovery_accepted_finishes] {
+                    ++recovery_accepted_finishes;
+                };
+            }
             if (close_during_instance_turn) {
                 const auto runtime = weak_target.lock ();
                 assert (runtime);
@@ -5819,9 +5900,11 @@ void verify_remote_user_spot_create_close_terminal_once ()
                     assert (released && released.value ());
                 };
             }
-            return host::instance_spot_activation_result_t{
-              0, 0, protocol::application_payload_t{"quest.reply", "application/json", {'{', '}'}},
-              std::move (accepted_turn_terminal)};
+            return task_t<host::instance_spot_activation_result_t> (
+              result_t<host::instance_spot_activation_result_t>::success (
+                {0, 0,
+                 protocol::application_payload_t{"quest.reply", "application/json", {'{', '}'}},
+                 std::move (accepted_turn_terminal)}));
         }});
     source->start ();
     target->start ();
@@ -5881,6 +5964,184 @@ void verify_remote_user_spot_create_close_terminal_once ()
     assert (instance_prepare_count == 1);
     assert (instance_activation_count == 1);
 
+    assert (instance_relocations->size () == 0);
+
+    const auto ready_authority = store
+                                   ->read_authority (zlink::framework::runtime::spot_authority_key (
+                                     replay_instance_request.target.spot_id))
+                                   .result ()
+                                   .value ();
+    const auto *instance_ready = std::get_if<authority_snapshot_t> (&ready_authority);
+    assert (instance_ready
+            && instance_ready->allocation.state == placement_allocation_state_t::active);
+    std::ifstream close_fixture_input (ZLINK_SPOT_CLOSE_CONFORMANCE_PATH);
+    assert (close_fixture_input);
+    const auto close_fixture = nlohmann::json::parse (close_fixture_input);
+    std::uint64_t ready_case_operation = 1000;
+    const auto verify_ready_route_cases = [&] (const std::string &authority,
+                                               const authority_snapshot_t &ready) {
+        for (const auto &scenario : close_fixture.at ("readyRouteCases")) {
+            const auto &given = scenario.at ("given");
+            const auto &expected = scenario.at ("expect");
+            if (given.at ("authority") != authority)
+                continue;
+            assert (given.at ("ownerFence") == "mismatch");
+            for (const auto &intent : given.at ("instanceIntent")) {
+                auto request = replay_instance_request;
+                request.operation = {123, ready_case_operation++};
+                request.has_metadata = false;
+                if (injected_activation_failure)
+                    request.target.spot_id = "instance-recover";
+                request.target.object_generation = ready.object_generation;
+                request.target.authority_owner_generation =
+                  ready.authority_owner_generation + (injected_activation_failure ? 0 : 1);
+                request.target.owner_id = ready.owner.owner_id;
+                request.target.owner_lease_generation =
+                  static_cast<std::uint64_t> (ready.owner.lease_generation);
+                request.target.store_version = ready.store_version;
+                request.target.instance_intent = intent.get<bool> ();
+                request.request = given.at ("messageKind") == "request";
+                const auto prepares_before = instance_prepare_count;
+                const auto handlers_before = instance_activation_count;
+                const auto reservations_before = store->reservation_calls.load ();
+                const auto reads_before = store->authority_reads.load ();
+                instance_reply_header.reset ();
+                instance_reply_payload.reset ();
+                {
+                    const std::lock_guard lock (instance_dispatch_diagnostics_mutex);
+                    instance_dispatch_diagnostics.clear ();
+                }
+                std::size_t terminal_count = 0;
+                if (request.request) {
+                    assert (source
+                              ->activate_instance_spot_remote (
+                                target->status ().routing_id (), request, std::nullopt,
+                                {"quest.start", "application/json", {'{', '}'}}, 5s,
+                                [&] (foundation::operation_terminal_t terminal,
+                                     protocol::reply_header_t header,
+                                     std::optional<protocol::application_payload_t> payload) {
+                                    assert (terminal
+                                            == foundation::operation_terminal_t::completed);
+                                    ++terminal_count;
+                                    instance_reply_header = header;
+                                    instance_reply_payload = std::move (payload);
+                                })
+                              .result ()
+                              .value ());
+                } else {
+                    assert (source
+                              ->send_instance_spot_activation_remote (
+                                target->status ().routing_id (), request, std::nullopt,
+                                {"quest.start", "application/json", {'{', '}'}})
+                              .result ()
+                              .value ());
+                }
+                deadline = std::chrono::steady_clock::now () + 5s;
+                while ((request.request ? !instance_reply_header
+                                        : dispatch_diagnostic_snapshot ().empty ())
+                       && std::chrono::steady_clock::now () < deadline) {
+                    (void) target->dispatch_ready (dispatch);
+                    (void) source->dispatch_ready (dispatch);
+                    std::this_thread::sleep_for (1ms);
+                }
+                assert (store->authority_reads.load () > reads_before);
+                if (injected_activation_failure) {
+                    const auto diagnostics = dispatch_diagnostic_snapshot ();
+                    assert (diagnostics.size () == 1);
+                    const auto &event = diagnostics.front ();
+                    assert (event.message_kind
+                            == (request.request ? dispatch_message_kind_t::request
+                                                : dispatch_message_kind_t::send));
+                    const auto expected_failure =
+                      runtime::messaging::request_failure_mapper_t{}.target_failure_reply (
+                        *injected_activation_failure);
+                    const auto expected_error =
+                      runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
+                        expected_failure->terminal_result, expected_failure->failure_code,
+                        "Instance Spot activation");
+                    assert (event.reason == injected_failure_reason);
+                    assert (event.error_message == expected_error.what ());
+                    if (request.request) {
+                        assert (terminal_count == 1 && instance_reply_header);
+                        assert (instance_reply_header->terminal_result
+                                == expected_failure->terminal_result);
+                        assert (instance_reply_header->failure_code
+                                == expected_failure->failure_code);
+                    } else {
+                        assert (!instance_reply_header);
+                    }
+                    continue;
+                }
+                if (request.request) {
+                    assert (instance_reply_header);
+                    const auto kind = runtime::messaging::request_failure_mapper_t{}
+                                        .reply_header_exception (
+                                          instance_reply_header->terminal_result,
+                                          instance_reply_header->failure_code, "Ready owner fence")
+                                        .kind ();
+                    const auto terminal_name =
+                      kind == framework_error_kind_t::unavailable ? "Unavailable" : "unexpected";
+                    assert (expected.at ("messageTerminal") == terminal_name);
+                    assert (expected.at ("messageTerminalCount") == terminal_count);
+                    assert (!instance_reply_payload);
+                    const auto diagnostics = dispatch_diagnostic_snapshot ();
+                    assert (diagnostics.size () == 1);
+                    assert (diagnostics.front ().message_kind == dispatch_message_kind_t::request);
+                    assert (diagnostics.front ().action == dispatch_error_action_t::reply_error);
+                    assert (diagnostics.front ().reason == dispatch_error_reason_t::stale_target);
+                } else {
+                    assert (!instance_reply_header);
+                    std::vector<std::string> expected_diagnostics;
+                    for (const auto &expected_kind : expected.at ("diagnostics")) {
+                        assert (expected_kind == "Unavailable");
+                        const auto wire =
+                          runtime::messaging::request_failure_mapper_t{}.target_failure_reply (
+                            framework_error_kind_t::unavailable);
+                        assert (wire);
+                        expected_diagnostics.emplace_back (
+                          runtime::messaging::request_failure_mapper_t{}
+                            .reply_header_exception (wire->terminal_result, wire->failure_code,
+                                                     "Instance Spot activation")
+                            .what ());
+                    }
+                    const auto diagnostics = dispatch_diagnostic_snapshot ();
+                    assert (diagnostics.size () == expected_diagnostics.size ());
+                    for (std::size_t index = 0; index < diagnostics.size (); ++index) {
+                        const auto &event = diagnostics[index];
+                        assert (event.error_message == expected_diagnostics[index]);
+                        assert (detail::enum_name (event.surface)
+                                == expected.at ("surface").get<std::string> ());
+                        assert (detail::enum_name (event.reason)
+                                == expected.at ("reason").get<std::string> ());
+                        assert (event.exception);
+                        try {
+                            std::rethrow_exception (event.exception);
+                        }
+                        catch (const framework_exception_t &error) {
+                            assert (error.kind () == framework_error_kind_t::unavailable);
+                        }
+                    }
+                }
+                assert (expected.at ("factoryCalls") == instance_prepare_count - prepares_before);
+                assert (expected.at ("handlerCalls")
+                        == instance_activation_count - handlers_before);
+                assert (expected.at ("missingPlacementCalls")
+                        == store->reservation_calls.load () - reservations_before);
+            }
+        }
+    };
+    verify_ready_route_cases ("Ready", *instance_ready);
+    const auto after_stale_ready =
+      store
+        ->read_authority (
+          zlink::framework::runtime::spot_authority_key (replay_instance_request.target.spot_id))
+        .result ()
+        .value ();
+    const auto *unchanged_ready = std::get_if<authority_snapshot_t> (&after_stale_ready);
+    assert (unchanged_ready && unchanged_ready->store_version == instance_ready->store_version);
+    assert (unchanged_ready->object_generation == instance_ready->object_generation);
+    assert (unchanged_ready->authority_owner_generation
+            == instance_ready->authority_owner_generation);
     assert (instance_relocations->size () == 0);
 
     instance_reply_header.reset ();
@@ -5980,11 +6241,34 @@ void verify_remote_user_spot_create_close_terminal_once ()
     assert (before_recovery_payload && before_recovery_payload->activation_recovery
             && before_recovery_payload->activation_recovery->inbox_sequence == 1
             && before_recovery_payload->activation_recovery->replay_cursor == 0);
+    store->activation_recovery_write_observer = [&] (const authority_key_t &key, const auto &) {
+        assert (key.value == recovery_authority_key.value);
+        assert (recovery_barrier_finishes == 0 && recovery_accepted_finishes == 0);
+        throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                     "injected startup recovery cursor Store failure");
+    };
+    try {
+        (void) target->recover_instance_spot_activations ();
+        assert (false);
+    }
+    catch (const framework_exception_t &error) {
+        assert (error.kind () == framework_error_kind_t::internal_failure);
+    }
+    assert (recovery_barrier_finishes == 1 && recovery_accepted_finishes == 1);
+    assert (instance_relocations->size () == 1);
+    recovery_barrier_finishes = 0;
+    recovery_accepted_finishes = 0;
+    store->activation_recovery_write_observer = [&] (const authority_key_t &key, const auto &) {
+        assert (key.value == recovery_authority_key.value);
+        assert (recovery_barrier_finishes == 0 && recovery_accepted_finishes == 0);
+    };
     store->clear_activation_recovery_writes ();
     assert (target->recover_instance_spot_activations () == 1);
+    store->activation_recovery_write_observer = {};
+    assert (recovery_barrier_finishes == 1 && recovery_accepted_finishes == 1);
     assert (instance_relocations->size () == 0);
-    assert (instance_prepare_count == 5);
-    assert (instance_activation_count == 5);
+    assert (instance_prepare_count == 6);
+    assert (instance_activation_count == 6);
     const auto recovery_writes = store->activation_recovery_write_snapshot ();
     assert (recovery_writes.size () == 2);
     assert (recovery_writes[0].first == recovery_authority_key.value
@@ -6021,8 +6305,16 @@ void verify_remote_user_spot_create_close_terminal_once ()
     }
     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
     assert (instance_reply_payload && instance_reply_payload->packet_name == "quest.reply");
-    assert (instance_prepare_count == 6);
-    assert (instance_activation_count == 6);
+    assert (instance_prepare_count == 7);
+    assert (instance_activation_count == 7);
+
+    // 이 Ready authority는 아래 turn 안의 Close가 정상 Release한다.
+    const auto released_read =
+      store->read_authority (runtime::spot_authority_key (replay_instance_request.target.spot_id))
+        .result ()
+        .value ();
+    const auto *released = std::get_if<authority_snapshot_t> (&released_read);
+    assert (released);
 
     auto closing_instance_request = replay_instance_request;
     closing_instance_request.operation = {123, 458};
@@ -6059,6 +6351,26 @@ void verify_remote_user_spot_create_close_terminal_once ()
         .result ()
         .value ()));
     close_during_instance_turn = false;
+
+    verify_ready_route_cases ("Missing", *released);
+    assert (std::holds_alternative<authority_missing_t> (
+      store->read_authority (runtime::spot_authority_key (replay_instance_request.target.spot_id))
+        .result ()
+        .value ()));
+
+    // Inject the materializer results from missing activation, sealed admission,
+    // and handler failure at the terminal owner's existing request/send route.
+    for (const auto &[kind, reason] :
+         {std::pair{framework_error_kind_t::not_found, dispatch_error_reason_t::handler_missing},
+          std::pair{framework_error_kind_t::rejected, dispatch_error_reason_t::handler_exception},
+          std::pair{framework_error_kind_t::shutting_down, dispatch_error_reason_t::shutdown},
+          std::pair{framework_error_kind_t::internal_failure,
+                    dispatch_error_reason_t::handler_exception}}) {
+        injected_activation_failure = kind;
+        injected_failure_reason = reason;
+        verify_ready_route_cases ("Ready", *after_recovery_snapshot);
+    }
+    injected_activation_failure.reset ();
 
     const auto unix_deadline =
       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
@@ -6619,18 +6931,111 @@ void verify_relocation_id_generation_retries_collisions ()
     assert (next == candidates.size ());
 }
 
-// Cross-language failure-code alignment: relocationDataLost(35) is
-// reserved for a verified checksum/assembly/digest/conflict integrity
-// failure and must classify distinctly from requestFailed(17), which the
-// encode side now uses for restore/factory/staging internal failures
-// (complete_relocation_assembly's register_relocation_target_queue
-// conflict, factory/restore exception, retried-restore-still-failing, and
-// duplicate attempt-key branches — public_host_runtime.cpp). Also pins
-// that a shutdown-shaped code (requestFailed) never classifies as
-// data_lost, and that an unrecognized code falls back to internal_failure
-// rather than being silently ignored.
+void verify_draining_target_relocation_prepare (bool already_accepted)
+{
+    auto source = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("prepare-source")}});
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("prepare-target")}});
+    int prepares = 0;
+    target->configure_actor_join_relocation (
+      [&] (const protocol::relocation_prepare_t &) -> std::optional<bool> {
+          ++prepares;
+          return std::nullopt;
+      },
+      [] (stateful::frozen_object_state_t &, const stateful::object_ref_t &,
+          const protocol::relocation_prepare_t &) { return true; },
+      [] (const stateful::object_ref_t &)
+        -> std::optional<std::tuple<std::string, std::string, std::uint64_t>> {
+          return std::nullopt;
+      },
+      [] (const std::string &, const stateful::object_ref_t &) {},
+      [] (const stateful::object_ref_t &, std::uint64_t, std::uint64_t) { return true; });
+    source->start ();
+    target->start ();
+    target->configure_session_route_owner ([] {
+        return std::make_optional (zlink::framework::location_owner_token_t{"prepare-owner", 7});
+    });
+    const auto source_status = source->status ();
+    const auto target_status = target->status ();
+    assert (source->connect_peer (target->transport ().endpoint (), target_status.routing_id ()));
+    const auto dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
+                              std::vector<zlink::message_t>) {};
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while ((!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ())
+            || !target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()))
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) source->dispatch_ready (dispatch);
+        (void) target->dispatch_ready (dispatch);
+    }
+    const protocol::relocation_prepare_t prepare{
+      {801, 802},
+      1,
+      {"prepare-coordinator", 1, source_status.routing_id ().to_bytes (),
+       source_status.lifecycle_generation (), "prepare-store"},
+      {target_status.routing_id ().to_bytes (), target_status.lifecycle_generation (),
+       "prepare-owner", 7},
+      protocol::relocation_role_t::source,
+      {protocol::relocation_object_kind_t::actor, {}, "prepare-actor", 1, 1},
+      source_status.routing_id ().to_bytes (),
+      source_status.lifecycle_generation (),
+      1,
+      1,
+      1,
+      1};
+    std::optional<zlink::framework::task_t<mesh::relocation_prepare_response_t>> initial;
+    if (already_accepted) {
+        initial.emplace (source->transport ().request_relocation_prepare (
+          target_status.routing_id ().to_bytes (), prepare, 2s));
+        while (prepares < 1 && std::chrono::steady_clock::now () < deadline) {
+            (void) await_task (target->dispatch_ready (dispatch));
+            (void) source->dispatch_ready (dispatch);
+        }
+        assert (prepares == 1);
+        assert (!initial->await_ready ());
+    }
+    await_task (target->transport ().publish_draining ());
+    assert (target->status ().state == host::node_status_t::state_t::draining);
+    auto pending = source->transport ().request_relocation_prepare (
+      target_status.routing_id ().to_bytes (), prepare, 2s);
+    if (already_accepted) {
+        while (prepares < 2 && std::chrono::steady_clock::now () < deadline) {
+            (void) await_task (target->dispatch_ready (dispatch));
+            (void) source->dispatch_ready (dispatch);
+        }
+        assert (prepares == 2);
+        const auto chunk = stateful::make_relocation_state_chunk (
+          prepare.relocation, prepare.target_attempt_generation, prepare.coordinator,
+          prepare.object, std::vector<std::uint8_t>{1}, 0, 1);
+        assert (await_task (source->transport ().send_relocation_control (
+          target_status.routing_id ().to_bytes (), chunk)));
+    }
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
+        (void) target->dispatch_ready (dispatch);
+        (void) source->dispatch_ready (dispatch);
+    }
+    const auto response = await_task (std::move (pending));
+    assert (!response.ready);
+    if (already_accepted) {
+        assert (!response.failed);
+        const auto accepted = await_task (std::move (*initial));
+        assert (accepted.failed);
+        assert (accepted.failed->failure_code
+                == static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost));
+    } else {
+        assert (response.failed);
+        assert (response.failed->failure_code
+                == static_cast<std::uint32_t> (protocol::framework_error_code::routeNotConnected));
+    }
+    target->close ();
+    source->close ();
+}
+
+// Code-only receive classification preserves verified integrity failures and
+// keeps InternalFailure distinct from DataLost, including unknown-code fallback.
 void verify_relocation_failure_code_classification_is_distinct ()
 {
+    using zlink::framework::framework_error_kind_t;
     assert (host::classify_relocation_failure_code (
               static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost))
             == zlink::framework::framework_error_kind_t::data_lost);
@@ -6649,34 +7054,22 @@ void verify_relocation_failure_code_classification_is_distinct ()
               static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost))
             != host::classify_relocation_failure_code (
               static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)));
-    // The rest of the reference table (spec 15 rows), pinned 1:1.
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::requestRejected))
-            == zlink::framework::framework_error_kind_t::rejected);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError))
-            == zlink::framework::framework_error_kind_t::protocol_error);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::workerQueueFull))
-            == zlink::framework::framework_error_kind_t::unavailable);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::workerTimedOut))
-            == zlink::framework::framework_error_kind_t::deadline_exceeded);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::actorTypeMismatch))
-            == zlink::framework::framework_error_kind_t::type_mismatch);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch))
-            == zlink::framework::framework_error_kind_t::type_mismatch);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::handlerNotFound))
-            == zlink::framework::framework_error_kind_t::not_configured);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::routeNotConnected))
-            == zlink::framework::framework_error_kind_t::unavailable);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::requestTargetNotFound))
-            == zlink::framework::framework_error_kind_t::not_found);
+    std::ifstream mapping_input (ZLINK_ERROR_MAPPING_CONFORMANCE_PATH);
+    const auto fixture = nlohmann::json::parse (mapping_input);
+    const std::map<std::string, framework_error_kind_t> kinds{
+      {"NotFound", framework_error_kind_t::not_found},
+      {"AlreadyExists", framework_error_kind_t::already_exists},
+      {"TypeMismatch", framework_error_kind_t::type_mismatch},
+      {"Rejected", framework_error_kind_t::rejected},
+      {"Unavailable", framework_error_kind_t::unavailable},
+      {"DeadlineExceeded", framework_error_kind_t::deadline_exceeded},
+      {"ProtocolError", framework_error_kind_t::protocol_error},
+      {"InvalidOperation", framework_error_kind_t::invalid_operation},
+      {"DataLost", framework_error_kind_t::data_lost},
+      {"InternalFailure", framework_error_kind_t::internal_failure}};
+    for (const auto &row : fixture.at ("receive"))
+        assert (host::classify_relocation_failure_code (row.at ("failureCode"))
+                == kinds.at (row.at ("kind")));
     // An unrecognized wire code is internal_failure, not ignored/dropped.
     assert (host::classify_relocation_failure_code (999999u)
             == zlink::framework::framework_error_kind_t::internal_failure);
@@ -6756,6 +7149,8 @@ int main (int argc, char **argv)
     verify_relocation_assembly_rejects_mismatched_identity_chunk ();
     verify_relocation_assembly_rejects_checksum_mismatch ();
     verify_relocation_id_generation_retries_collisions ();
+    verify_draining_target_relocation_prepare (false);
+    verify_draining_target_relocation_prepare (true);
     verify_relocation_failure_code_classification_is_distinct ();
     return 0;
 }

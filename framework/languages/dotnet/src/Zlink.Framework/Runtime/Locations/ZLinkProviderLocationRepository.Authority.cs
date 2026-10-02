@@ -297,11 +297,35 @@ internal sealed partial class ZLinkProviderLocationRepository
             nextAllocation = targetAllocation;
         }
 
-        // ObjectGeneration/AuthorityOwnerGeneration live only on this single
-        // authority row now (checklist C-2b) -- current.Meta already carries
-        // both, atomically consistent by construction, so there is no
-        // separate GenerationKey read/condition to reconcile against.
+        var nextObjectGeneration = current.Meta.ObjectGeneration;
         var nextAuthorityOwnerGeneration = current.Meta.AuthorityOwnerGeneration;
+        if (put.GenerationTransition == ZLinkAuthorityGenerationTransition.Reincarnate)
+        {
+            var objectCounter = await ReadObjectGenerationCounterAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var ownerCounter = await ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (objectCounter.Value == MaximumGeneration || ownerCounter.Value == MaximumGeneration)
+                return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
+            nextObjectGeneration = objectCounter.Value;
+            nextAuthorityOwnerGeneration = ownerCounter.Value;
+            AddCondition(conditions, objectCounter.Condition);
+            AddCondition(conditions, ownerCounter.Condition);
+            mutations.Add(
+                new ZLinkStoreMutation.Put(
+                    ObjectGenerationCounterKey(),
+                    EncodeGenerationCounter(nextObjectGeneration + 1),
+                    null
+                )
+            );
+            mutations.Add(
+                new ZLinkStoreMutation.Put(
+                    AuthorityOwnerGenerationCounterKey(),
+                    EncodeGenerationCounter(nextAuthorityOwnerGeneration + 1),
+                    null
+                )
+            );
+        }
         if (changesOwner)
         {
             var counter = await ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
@@ -336,6 +360,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         var meta = current.Meta with
         {
             Payload = put.Payload.ToArray(),
+            ObjectGeneration = nextObjectGeneration,
             AuthorityOwnerGeneration = nextAuthorityOwnerGeneration,
             OwnerId = targetOwner.OwnerId,
             OwnerLeaseGeneration = targetOwner.LeaseGeneration,
@@ -4506,7 +4531,10 @@ internal sealed partial class ZLinkProviderLocationRepository
     {
         if (mutation is not ZLinkAuthorityMutation.Put put)
             return;
-        var preserve = put.GenerationTransition == ZLinkAuthorityGenerationTransition.Preserve;
+        var preserve =
+            put.GenerationTransition
+            is ZLinkAuthorityGenerationTransition.Preserve
+                or ZLinkAuthorityGenerationTransition.Reincarnate;
         var changesOwner = put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
         if (
             !preserve && !changesOwner
@@ -4569,6 +4597,11 @@ internal sealed partial class ZLinkProviderLocationRepository
                 string.IsNullOrWhiteSpace(participant.Key.Value)
                 || string.IsNullOrWhiteSpace(participant.ExpectedStoreVersion)
                 || participant.AuthorityPayload.Length > 1024 * 1024
+                || participant.OwnerTransition
+                    is not (
+                        ZLinkAuthorityGenerationTransition.Preserve
+                        or ZLinkAuthorityGenerationTransition.NewOwner
+                    )
             )
         )
             throw new ArgumentOutOfRangeException(nameof(request));
