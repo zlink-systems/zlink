@@ -4367,10 +4367,12 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
         return output;
     };
     const auto join_existing = [&] (authority_read_result_t current) -> task_t<bool> {
-        while (const auto *snapshot = std::get_if<authority_snapshot_t> (&current)) {
+        for (;;) {
+            const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
             if (request.target.authority_owner_generation != 0) {
                 // Ready Instance direct의 object generation은 target 판정에 쓰지 않는다.
-                if (snapshot->allocation.state != placement_allocation_state_t::active
+                // authority가 없으면 owner fence가 다른 것이다(Spot address messaging §9).
+                if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
                     || snapshot->authority_owner_generation
                          != request.target.authority_owner_generation
                     || snapshot->owner.owner_id != request.target.owner_id
@@ -4391,6 +4393,8 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                 request.target.stable_type = snapshot->allocation.stable_type;
                 request.target.mesh_name = snapshot->allocation.target.mesh_name;
             }
+            if (!snapshot)
+                co_return false;
             if (snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
                 || snapshot->allocation.stable_type != request.target.stable_type) {
                 reply_terminal (
@@ -4495,10 +4499,12 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
             zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
             current = co_await store->read_authority (authority_key);
         }
-        co_return false;
     };
     const auto current = co_await run_blocking_step<authority_read_result_t> (
       [store, authority_key] { return store->read_authority (authority_key); });
+    if (co_await join_existing (current)) {
+        co_return;
+    }
     if (std::holds_alternative<authority_missing_t> (current)
         && instance_materializer.select_target) {
         const auto selected = instance_materializer.select_target (request);
@@ -4517,9 +4523,6 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
             forward_activation (target, request.target.target_node_generation);
             co_return;
         }
-    }
-    if (co_await join_existing (current)) {
-        co_return;
     }
     const auto recovery_bytes = protocol::encode_instance_activation_recovery (*owned_command);
     std::vector<std::byte> recovery_public;

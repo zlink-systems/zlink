@@ -6145,6 +6145,14 @@ void verify_remote_user_spot_create_close_terminal_once ()
     assert (instance_prepare_count == 7);
     assert (instance_activation_count == 7);
 
+    // 이 Ready authority는 아래 turn 안의 Close가 정상 Release한다.
+    const auto released_read =
+      store->read_authority (runtime::spot_authority_key (replay_instance_request.target.spot_id))
+        .result ()
+        .value ();
+    const auto *released = std::get_if<authority_snapshot_t> (&released_read);
+    assert (released);
+
     auto closing_instance_request = replay_instance_request;
     closing_instance_request.operation = {123, 458};
     closing_instance_request.target.deadline_unix_ms =
@@ -6180,6 +6188,55 @@ void verify_remote_user_spot_create_close_terminal_once ()
         .result ()
         .value ()));
     close_during_instance_turn = false;
+
+    // 정상 Release 뒤 Missing에 도착한 오래된 Ready 요청은 owner fence가 다르므로
+    // Unavailable로 끝나고 다시 배치하지 않는다(Spot address messaging §9).
+    auto missing_ready_request = replay_instance_request;
+    missing_ready_request.operation = {123, 460};
+    missing_ready_request.has_metadata = false;
+    missing_ready_request.target.object_generation = released->object_generation;
+    missing_ready_request.target.authority_owner_generation = released->authority_owner_generation;
+    missing_ready_request.target.owner_id = released->owner.owner_id;
+    missing_ready_request.target.owner_lease_generation =
+      static_cast<std::uint64_t> (released->owner.lease_generation);
+    missing_ready_request.target.store_version = released->store_version;
+    missing_ready_request.target.instance_intent = true;
+    const auto prepares_before_missing_ready = instance_prepare_count;
+    const auto activations_before_missing_ready = instance_activation_count;
+    instance_reply_header.reset ();
+    instance_reply_payload.reset ();
+    assert (source
+              ->activate_instance_spot_remote (
+                target->status ().routing_id (), missing_ready_request, std::nullopt,
+                {"quest.start", "application/json", {'{', '}'}}, 5s,
+                [&] (foundation::operation_terminal_t terminal, protocol::reply_header_t header,
+                     std::optional<protocol::application_payload_t> payload) {
+                    assert (terminal == foundation::operation_terminal_t::completed);
+                    instance_reply_header = header;
+                    instance_reply_payload = std::move (payload);
+                })
+              .result ()
+              .value ());
+    deadline = std::chrono::steady_clock::now () + 5s;
+    while (!instance_reply_header && std::chrono::steady_clock::now () < deadline) {
+        (void) target->dispatch_ready (dispatch);
+        (void) source->dispatch_ready (dispatch);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (instance_reply_header);
+    assert (runtime::messaging::request_failure_mapper_t{}
+              .reply_header_exception (instance_reply_header->terminal_result,
+                                       instance_reply_header->failure_code, "Missing Ready owner")
+              .kind ()
+            == framework_error_kind_t::unavailable);
+    assert (!instance_reply_payload);
+    assert (instance_prepare_count == prepares_before_missing_ready
+            && instance_activation_count == activations_before_missing_ready);
+    assert (std::holds_alternative<authority_missing_t> (
+      store->read_authority (runtime::spot_authority_key (replay_instance_request.target.spot_id))
+        .result ()
+        .value ()));
+
 
     const auto unix_deadline =
       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
