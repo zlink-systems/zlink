@@ -4753,15 +4753,13 @@ final class ZLinkJavaRawMeshNode
         }
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
         if (reporter != null && reporter.captureEnabled()) {
-            ZLinkDispatchErrorReason reason = ZLinkDispatchErrorReason.HANDLER_MISSING;
+            ZLinkDispatchErrorReason reason = ZLinkDispatchErrorReason.HANDLER_EXCEPTION;
             if (cause instanceof ZLinkFrameworkException framework) {
                 reason =
                         switch (framework.kind()) {
-                            case SHUTTING_DOWN -> ZLinkDispatchErrorReason.SHUTDOWN;
-                            case NOT_FOUND, TYPE_MISMATCH -> ZLinkDispatchErrorReason.STALE_TARGET;
-                            case UNAVAILABLE -> ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE;
-                            case PROTOCOL_ERROR -> ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED;
-                            default -> ZLinkDispatchErrorReason.HANDLER_MISSING;
+                            case NOT_FOUND, TYPE_MISMATCH, UNAVAILABLE ->
+                                    ZLinkDispatchErrorReason.STALE_TARGET;
+                            default -> ZLinkDispatchErrorReporter.reasonFrom(framework.kind());
                         };
             }
             reporter.report(

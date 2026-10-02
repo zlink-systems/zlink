@@ -7794,7 +7794,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     else if (_logicalMulticastDispatchErrors is { Enabled: true } reporter)
                         reporter.Report(
                             new ZLinkDispatchFailure(
-                                ZLinkDispatchErrorSurface.SpotRoute,
+                                ZLinkDispatchErrorSurface.InstanceSpot,
                                 ZLinkDispatchMessageKind.Send,
                                 ZLinkDispatchErrorReason.StaleTarget,
                                 ZLinkDispatchErrorAction.Drop,

@@ -10,6 +10,7 @@
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -5765,7 +5766,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
 
     auto source = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("user-source")}});
-    std::vector<std::string> instance_send_diagnostics;
+    std::vector<message_dispatch_error_event_t> instance_send_diagnostics;
     std::mutex instance_send_diagnostics_mutex;
     const auto send_diagnostic_snapshot = [&] {
         const std::lock_guard lock (instance_send_diagnostics_mutex);
@@ -5777,12 +5778,11 @@ void verify_remote_user_spot_create_close_terminal_once ()
     target_options.mesh.dispatch.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
       target_options.mesh.dispatch, [&] (const message_dispatch_error_event_t &event) {
-          if (event.surface == dispatch_error_surface_t::instance_spot
-              && event.message_kind == dispatch_message_kind_t::send) {
+          if (event.message_kind == dispatch_message_kind_t::send) {
               assert (event.action == dispatch_error_action_t::drop);
               assert (event.error_message);
               const std::lock_guard lock (instance_send_diagnostics_mutex);
-              instance_send_diagnostics.push_back (*event.error_message);
+              instance_send_diagnostics.push_back (event);
           }
       });
     auto target = std::make_shared<host::public_host_runtime_t> (std::move (target_options));
@@ -6052,7 +6052,23 @@ void verify_remote_user_spot_create_close_terminal_once ()
                                                      "Instance Spot activation")
                             .what ());
                     }
-                    assert (send_diagnostic_snapshot () == expected_diagnostics);
+                    const auto diagnostics = send_diagnostic_snapshot ();
+                    assert (diagnostics.size () == expected_diagnostics.size ());
+                    for (std::size_t index = 0; index < diagnostics.size (); ++index) {
+                        const auto &event = diagnostics[index];
+                        assert (event.error_message == expected_diagnostics[index]);
+                        assert (detail::enum_name (event.surface)
+                                == expected.at ("surface").get<std::string> ());
+                        assert (detail::enum_name (event.reason)
+                                == expected.at ("reason").get<std::string> ());
+                        assert (event.exception);
+                        try {
+                            std::rethrow_exception (event.exception);
+                        }
+                        catch (const framework_exception_t &error) {
+                            assert (error.kind () == framework_error_kind_t::unavailable);
+                        }
+                    }
                 }
                 assert (expected.at ("factoryCalls") == instance_prepare_count - prepares_before);
                 assert (expected.at ("handlerCalls")

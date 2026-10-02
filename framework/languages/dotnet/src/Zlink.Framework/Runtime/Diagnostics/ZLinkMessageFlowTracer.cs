@@ -536,9 +536,7 @@ internal static class ZLinkTraceFormat
         if (error is null)
             return default;
 
-        var message = error is ZLinkFrameworkException frameworkError
-            ? $"{frameworkError.Kind}: {error.Message}"
-            : error.Message;
+        var message = error.Message;
         if (!string.IsNullOrEmpty(message))
         {
             var lineEnd = message.IndexOfAny(['\r', '\n']);

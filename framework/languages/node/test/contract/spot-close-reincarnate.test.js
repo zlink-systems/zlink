@@ -262,8 +262,12 @@ for (const { state, sealed } of [
     assert.equal(replies.length, send ? 0 : expectation.messageTerminalCount);
     if (!send) assert.throws(() => protocol.decodeChannelReply(replies[0]), (error) => error.kind === expected);
     assert.ok(failures.length > 0, 'released intent must leave a diagnostic');
-    for (const failure of failures) assert.equal(failure.error.kind,
-      framework.ZLinkFrameworkErrorKind[expectation.sendDiagnosticsByHost[hostName]]);
+    const diagnostic = expectation.sendDiagnosticsByHost[hostName];
+    for (const failure of failures) {
+      assert.equal(failure.error.kind, framework.ZLinkFrameworkErrorKind[diagnostic.kind]);
+      assert.equal(failure.surface, diagnostic.surface);
+      assert.equal(failure.reason, diagnostic.reason);
+    }
     assert.equal(applicationReleases, 1);
     assert.equal(initializations, 1);
     assert.equal(initializations - 1, expectation.thisHostFactoryCalls);

@@ -186,8 +186,16 @@
           "Relocating": "Unavailable"
         },
         "sendDiagnosticsByHost": {
-          "Draining": "ShuttingDown",
-          "Relocating": "Unavailable"
+          "Draining": {
+            "kind": "ShuttingDown",
+            "surface": "instance_spot",
+            "reason": "shutdown"
+          },
+          "Relocating": {
+            "kind": "Unavailable",
+            "surface": "instance_spot",
+            "reason": "stale_target"
+          }
         }
       }
     },
@@ -265,7 +273,9 @@
         ],
         "handlerCalls": 0,
         "factoryCalls": 0,
-        "missingPlacementCalls": 0
+        "missingPlacementCalls": 0,
+        "surface": "instance_spot",
+        "reason": "stale_target"
       }
     },
     {
@@ -306,7 +316,9 @@
         ],
         "handlerCalls": 0,
         "factoryCalls": 0,
-        "missingPlacementCalls": 0
+        "missingPlacementCalls": 0,
+        "surface": "instance_spot",
+        "reason": "stale_target"
       }
     }
   ]

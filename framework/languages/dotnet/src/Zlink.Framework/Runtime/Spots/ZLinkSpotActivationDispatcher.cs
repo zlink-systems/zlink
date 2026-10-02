@@ -564,7 +564,7 @@ internal sealed class ZLinkSpotActivationDispatcher
                 );
                 _dispatchErrors.Report(
                     new ZLinkDispatchFailure(
-                        ZLinkDispatchErrorSurface.SpotRoute,
+                        ZLinkDispatchErrorSurface.InstanceSpot,
                         ZLinkDispatchMessageKind.Send,
                         error
                             is ZLinkFrameworkException

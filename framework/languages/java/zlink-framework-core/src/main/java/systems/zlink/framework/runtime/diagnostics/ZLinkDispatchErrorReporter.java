@@ -163,6 +163,16 @@ public final class ZLinkDispatchErrorReporter {
                         errorDetails.message()));
     }
 
+    public static ZLinkDispatchErrorReason reasonFrom(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind kind) {
+        return switch (kind) {
+            case NOT_FOUND -> ZLinkDispatchErrorReason.HANDLER_MISSING;
+            case PROTOCOL_ERROR -> ZLinkDispatchErrorReason.INVALID_FRAME;
+            case SHUTTING_DOWN -> ZLinkDispatchErrorReason.SHUTDOWN;
+            default -> ZLinkDispatchErrorReason.HANDLER_EXCEPTION;
+        };
+    }
+
     public long reportedCount() {
         return reportedCount.get();
     }
@@ -181,9 +191,6 @@ public final class ZLinkDispatchErrorReporter {
         if (message == null) {
             message = "";
         }
-        if (current
-                instanceof systems.zlink.framework.errors.ZLinkFrameworkException frameworkError)
-            message = frameworkError.kind() + ": " + message;
         if (!message.isEmpty()) {
             int carriageReturn = message.indexOf('\r');
             int lineFeed = message.indexOf('\n');

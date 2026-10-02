@@ -2129,9 +2129,15 @@ for (const scenario of spotCloseFixture.readyRouteCases) {
       harness.runtime.setDispatchErrorReporter(
         {
           captureEnabled: () => true,
-          report: (event: { readonly error?: unknown }) => {
+          report: (event: {
+            readonly error?: unknown;
+            readonly surface: string;
+            readonly reason: string;
+          }) => {
             assert.ok(event.error instanceof ZLinkFrameworkException);
             diagnostics.push(ZLinkFrameworkErrorKind[event.error.kind]);
+            assert.equal(event.surface, scenario.expect.surface);
+            assert.equal(event.reason, scenario.expect.reason);
           }
         } as unknown as import('../../packages/framework/src/runtime/channels/dispatch-error-reporter').ZLinkDispatchErrorReporter,
         'mesh'

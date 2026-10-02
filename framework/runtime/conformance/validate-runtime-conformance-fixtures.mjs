@@ -3522,8 +3522,8 @@ function validateSpotCloseBranches(fixture) {
           "Relocating": "Unavailable"
         },
         "sendDiagnosticsByHost": {
-          "Draining": "ShuttingDown",
-          "Relocating": "Unavailable"
+          "Draining": { "kind": "ShuttingDown", "surface": "instance_spot", "reason": "shutdown" },
+          "Relocating": { "kind": "Unavailable", "surface": "instance_spot", "reason": "stale_target" }
         }
       }
     },
@@ -3600,6 +3600,8 @@ function validateSpotCloseBranches(fixture) {
         "diagnostics": [
           "Unavailable"
         ],
+        "surface": "instance_spot",
+        "reason": "stale_target",
         "handlerCalls": 0,
         "factoryCalls": 0,
         "missingPlacementCalls": 0
@@ -3641,6 +3643,8 @@ function validateSpotCloseBranches(fixture) {
         "diagnostics": [
           "Unavailable"
         ],
+        "surface": "instance_spot",
+        "reason": "stale_target",
         "handlerCalls": 0,
         "factoryCalls": 0,
         "missingPlacementCalls": 0
@@ -3670,6 +3674,10 @@ for (const corrupt of [
   (fixture) => { fixture.closeBranches[2].expect.messageTerminalByHost.Draining = 'Unavailable'; },
   (fixture) => { fixture.closeBranches[2].expect.messageTerminalByHost.Relocating = 'ShuttingDown'; },
   (fixture) => { delete fixture.closeBranches[2].expect.sendDiagnosticsByHost; },
+  (fixture) => { fixture.closeBranches[2].expect.sendDiagnosticsByHost.Draining.reason = 'stale_target'; },
+  (fixture) => { fixture.closeBranches[2].expect.sendDiagnosticsByHost.Relocating.surface = 'spot_route'; },
+  (fixture) => { delete fixture.readyRouteCases[1].expect.surface; },
+  (fixture) => { fixture.readyRouteCases[3].expect.reason = 'location_unavailable'; },
   (fixture) => { fixture.closeBranches[2].given.relocationSeal = ['after']; },
   (fixture) => { fixture.readyRouteCases[0].expect.messageTerminal = 'NotFound'; },
   (fixture) => { fixture.readyRouteCases[0].expect.missingPlacementCalls = 1; },

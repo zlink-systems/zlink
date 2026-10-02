@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -13,6 +14,7 @@
 #include <zlink/framework.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <fstream>
@@ -135,6 +137,9 @@ struct evidence_t
     std::promise<void> relocation_readiness_held;
     std::vector<std::string> send_diagnostics;
     std::vector<std::string> send_error_types;
+    std::vector<std::string> send_surfaces;
+    std::vector<std::string> send_reasons;
+    std::vector<zf::framework_error_kind_t> send_error_kinds;
     std::mutex mutex;
     std::promise<void> closing_entered;
     zf::task_completion_source_t<void> closing_release;
@@ -529,11 +534,20 @@ class exercise_t final : public zf::hosted_service_t
     {
         _worker = std::thread ([this, services] () mutable {
             try {
-                const auto until = std::chrono::steady_clock::now () + request_timeout;
-                while (!_app->is_ready () && std::chrono::steady_clock::now () < until)
-                    std::this_thread::yield ();
-                if (!_app->is_ready ())
-                    throw std::runtime_error ("source host did not reach Serving");
+                auto serving = std::make_shared<std::promise<void>> ();
+                auto observed = serving->get_future ();
+                auto completed = std::make_shared<std::atomic_bool> (false);
+                auto &runtime = services.get_required<zf::framework_runtime_t> ();
+                auto observation = runtime.observe (
+                  runtime_observer_capacity,
+                  [serving, completed] (
+                    const zf::observed_status_t<zf::framework_runtime_status_t> &status) {
+                      if (status.status.state == zf::framework_runtime_state_t::serving
+                          && !completed->exchange (true))
+                          serving->set_value ();
+                  });
+                require_ready (observed, "source host did not reach Serving");
+                observation->close ();
                 run (services);
             }
             catch (const std::exception &error) {
@@ -671,12 +685,17 @@ class exercise_t final : public zf::hosted_service_t
             }
             _evidence->relocation_readiness_held.set_value ();
             auto &meshes = services.get_required<zf::route_mesh_runtime_t> ();
-            const auto until = std::chrono::steady_clock::now () + request_timeout;
-            while (meshes.snapshot (mesh).ready_peer_count == 0
-                   && std::chrono::steady_clock::now () < until)
-                std::this_thread::yield ();
-            if (meshes.snapshot (mesh).ready_peer_count == 0)
-                throw std::runtime_error ("target host peer did not become Ready");
+            auto ready = std::make_shared<std::promise<void>> ();
+            auto observed = ready->get_future ();
+            auto completed = std::make_shared<std::atomic_bool> (false);
+            auto observation = meshes.observe (
+              mesh, runtime_observer_capacity,
+              [ready, completed] (const zf::observed_status_t<zf::mesh_node_snapshot_t> &status) {
+                  if (status.status.ready_peer_count != 0 && !completed->exchange (true))
+                      ready->set_value ();
+              });
+            require_ready (observed, "target host peer did not become Ready");
+            observation->close ();
         }
         const auto warmed = route.request_to_spot (zf::spot_id_t (spot_id), warm_request_t{})
                               .instance_spot (stable_type)
@@ -918,12 +937,20 @@ void configure_app (zf::app_t &app,
           options.configure_dispatch (),
           [evidence] (const zf::message_dispatch_error_event_t &event) {
               if (event.packet_name != intent_send_t::packet_name || !event.error_message
-                  || event.surface != zf::dispatch_error_surface_t::instance_spot
                   || event.message_kind != zf::dispatch_message_kind_t::send)
                   return;
               std::lock_guard lock (evidence->mutex);
               evidence->send_diagnostics.push_back (*event.error_message);
               evidence->send_error_types.push_back (event.error_type.value_or (""));
+              evidence->send_surfaces.emplace_back (zf::detail::enum_name (event.surface));
+              evidence->send_reasons.emplace_back (zf::detail::enum_name (event.reason));
+              ASSERT_TRUE (event.exception);
+              try {
+                  std::rethrow_exception (event.exception);
+              }
+              catch (const zf::framework_exception_t &error) {
+                  evidence->send_error_kinds.push_back (error.kind ());
+              }
               if (evidence->send_diagnostics.size () == 1)
                   evidence->send_terminated.set_value ();
           });
@@ -1080,8 +1107,16 @@ void check_branch (branch_t kind,
           {"Unavailable", zf::framework_error_kind_t::unavailable}};
         EXPECT_EQ (kinds.at (expect.at ("messageTerminalByHost").at (host).get<std::string> ()),
                    exercise->intent_result->error_kind ());
+        const auto &diagnostic = expect.at ("sendDiagnosticsByHost").at (host);
+        EXPECT_EQ ((std::vector<std::string>{diagnostic.at ("surface").get<std::string> ()}),
+                   evidence->send_surfaces);
+        EXPECT_EQ ((std::vector<std::string>{diagnostic.at ("reason").get<std::string> ()}),
+                   evidence->send_reasons);
+        EXPECT_EQ ((std::vector<zf::framework_error_kind_t>{
+                     kinds.at (diagnostic.at ("kind").get<std::string> ())}),
+                   evidence->send_error_kinds);
         const auto wire = zf::runtime::messaging::request_failure_mapper_t{}.target_failure_reply (
-          kinds.at (expect.at ("sendDiagnosticsByHost").at (host).get<std::string> ()));
+          kinds.at (diagnostic.at ("kind").get<std::string> ()));
         ASSERT_TRUE (wire);
         EXPECT_EQ ((std::vector<std::string>{zf::runtime::messaging::request_failure_mapper_t{}
                                                .reply_header_exception (wire->terminal_result,

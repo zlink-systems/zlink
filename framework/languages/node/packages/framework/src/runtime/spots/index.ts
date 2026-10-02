@@ -1,3 +1,4 @@
+import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import type {
   ActorRef,
   RoutingId,
@@ -1831,7 +1832,9 @@ export class DefaultZLinkSpotManager {
           target?.stableType
         );
       } catch (error) {
-        const reason = instanceDispatchErrorReason(error);
+        const reason = request
+          ? dispatchReasonFromError(error)
+          : instanceDispatchErrorReason(error);
         if (!request) {
           this.traceInstanceMessage(
             ZLinkMessageFlowOutcome.Dropped,

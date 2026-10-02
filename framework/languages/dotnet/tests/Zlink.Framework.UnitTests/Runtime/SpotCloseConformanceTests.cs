@@ -70,7 +70,7 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         string expectedReason
     ) => await RunAcceptedReadySendDiagnosticAsync(hostMode, sealedAdmission, expectedReason);
 
-    private async Task<string> RunAcceptedReadySendDiagnosticAsync(
+    private async Task<SendDiagnosticObservation> RunAcceptedReadySendDiagnosticAsync(
         string hostMode,
         bool sealedAdmission,
         string expectedReason
@@ -128,7 +128,10 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                     && line.Contains("\"action\":\"drop\"", StringComparison.Ordinal)
                     && line.Contains($"\"reason\":\"{expectedReason}\"", StringComparison.Ordinal)
             );
-            return await ObserveSendDiagnosticKindAsync(flowPath);
+            var diagnostic = await ObserveSendDiagnosticAsync(flowPath);
+            Assert.Equal("instance_spot", diagnostic.Surface);
+            Assert.Equal(expectedReason, diagnostic.Reason);
+            return diagnostic;
         }
         finally
         {
@@ -774,16 +777,22 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                         var expected = branch.GetProperty("expect");
                         AssertCloseBranch(expected, observed, mode);
                         if (expected.TryGetProperty("sendDiagnosticsByHost", out var diagnostics))
-                            Assert.Equal(
-                                diagnostics.GetProperty(mode).GetString(),
-                                await RunAcceptedReadySendDiagnosticAsync(
-                                    mode,
-                                    seal == "after",
-                                    diagnostics.GetProperty(mode).GetString() == "ShuttingDown"
-                                        ? "shutdown"
-                                        : "stale_target"
-                                )
+                        {
+                            var diagnostic = diagnostics.GetProperty(mode);
+                            var observedDiagnostic = await RunAcceptedReadySendDiagnosticAsync(
+                                mode,
+                                seal == "after",
+                                diagnostic.GetProperty("reason").GetString()!
                             );
+                            Assert.Equal(
+                                diagnostic.GetProperty("surface").GetString(),
+                                observedDiagnostic.Surface
+                            );
+                            Assert.Equal(
+                                diagnostic.GetProperty("reason").GetString(),
+                                observedDiagnostic.Reason
+                            );
+                        }
                     }
                 }
             }
@@ -884,7 +893,8 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                 );
             }
         );
-        string terminal;
+        string? terminal = null;
+        SendDiagnosticObservation? sendDiagnostic = null;
         var terminalCount = 0;
         if (given.GetProperty("messageKind").GetString() == "request")
         {
@@ -909,7 +919,7 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                 new("stale"),
                 instanceIntent
             ).Async();
-            terminal = await ObserveSendDiagnosticKindAsync(flowPath);
+            sendDiagnostic = await ObserveSendDiagnosticAsync(flowPath);
         }
         foreach (var field in expected.EnumerateObject())
         {
@@ -922,10 +932,14 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                     Assert.Equal(field.Value.GetInt32(), terminalCount);
                     break;
                 case "diagnostics":
-                    Assert.Equal(
-                        field.Value.EnumerateArray().Select(static item => item.GetString()),
-                        new[] { terminal }
-                    );
+                    Assert.NotNull(sendDiagnostic);
+                    Assert.Equal(1, field.Value.GetArrayLength());
+                    break;
+                case "surface":
+                    Assert.Equal(field.Value.GetString(), sendDiagnostic!.Surface);
+                    break;
+                case "reason":
+                    Assert.Equal(field.Value.GetString(), sendDiagnostic!.Reason);
                     break;
                 case "handlerCalls":
                     Assert.Equal(field.Value.GetInt32(), host.State.HandlerCalls - handlersBefore);
@@ -947,7 +961,9 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         }
     }
 
-    private static async Task<string> ObserveSendDiagnosticKindAsync(string flowPath)
+    private sealed record SendDiagnosticObservation(string Surface, string Reason);
+
+    private static async Task<SendDiagnosticObservation> ObserveSendDiagnosticAsync(string flowPath)
     {
         using var deadline = new CancellationTokenSource(Wait);
         while (true)
@@ -963,10 +979,10 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                     nameof(ZLinkFrameworkException),
                     tags.RootElement.GetProperty("error_type").GetString()
                 );
-                var message = tags.RootElement.GetProperty("error_message").GetString()!;
-                var kind = message[..message.IndexOf(':')];
-                Assert.True(Enum.TryParse<ZLinkFrameworkErrorKind>(kind, out _));
-                return kind;
+                return new SendDiagnosticObservation(
+                    tags.RootElement.GetProperty("surface").GetString()!,
+                    tags.RootElement.GetProperty("reason").GetString()!
+                );
             }
             await Task.Yield();
         }
@@ -1343,7 +1359,10 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                     Assert.Equal(field.Value.GetInt32(), observed.FactoryCalls);
                     break;
                 case "sendDiagnosticsByHost":
-                    Assert.Equal(observed.Terminal, field.Value.GetProperty(hostMode).GetString());
+                    Assert.Equal(
+                        observed.Terminal,
+                        field.Value.GetProperty(hostMode).GetProperty("kind").GetString()
+                    );
                     break;
                 case "missingPlacementCalls":
                     Assert.Equal(field.Value.GetInt32(), observed.MissingPlacementCalls);
