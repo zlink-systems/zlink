@@ -55,6 +55,8 @@ interface ZLinkRoutedSpotPacketContext {
   readonly signal?: AbortSignal;
   /** Wait until a recovered activation has actually entered its first handler. */
   readonly awaitFirstHandlerTurn?: boolean;
+  /** Retains the caller's Instance address intent through an incarnation boundary. */
+  readonly activationRecord?: import('../foundation/service-runtime-contracts').ReceiveRecord;
 }
 
 export class ZLinkRoutedSpotPacketDispatch {
@@ -143,14 +145,46 @@ export class ZLinkRoutedSpotPacketDispatch {
       activation.meshName === undefined
         ? undefined
         : this.options.claimApplicationWork?.(activation.meshName);
-    const runHandler = async () => {
+    const runHandler = async (failure?: unknown) => {
       try {
+        if (failure !== undefined) throw failure;
+        const current = this.options.resolveActivation(spotId);
+        if (
+          current === undefined ||
+          (current !== activation &&
+            context.activationRecord?.activationRecord?.activation !== 'missing')
+        ) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+            `Spot '${String(spotId)}' is not active.`
+          );
+        }
+        if (
+          context.activationRecord?.deadlineUnixMs !== undefined &&
+          context.activationRecord.deadlineUnixMs < BigInt(Date.now())
+        ) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+            `Spot '${String(spotId)}' request deadline has expired.`
+          );
+        }
+        const currentRegistrations =
+          current === activation
+            ? registrations
+            : current.handlers
+                .snapshot()
+                .filter(
+                  (registration) =>
+                    registration.kind === 'packet' &&
+                    (registration.packetName ?? registration.handlerType.name) ===
+                      (packetName ?? '')
+                );
         // Decode only after the Spot has acquired both application admission
         // and its execution authority.
         const payload = decodePayload();
-        for (const registration of registrations) {
+        for (const registration of currentRegistrations) {
           const handler = await resolveLifecycleHandler(
-            activation.spot,
+            current.spot,
             registration.handlerType as Type<
               | ZLinkSpotPacketHandler<ZLinkSpot, unknown>
               | ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
@@ -160,7 +194,7 @@ export class ZLinkRoutedSpotPacketDispatch {
           resolveFirstHandlerTurn?.();
           resolveFirstHandlerTurn = undefined;
           releaseApplicationJobPermitBeforeHandler();
-          response = await handler.handle(activation.spot, payload, {
+          response = await handler.handle(current.spot, payload, {
             channelName: context.channelName,
             contentType: context.contentType,
             packetName: packetName!,
@@ -188,15 +222,25 @@ export class ZLinkRoutedSpotPacketDispatch {
             },
             (error) => this.reportFailure(spotId, packetName, context, false, error),
             context.workOptions,
-            { signal: context.signal }
+            { signal: context.signal },
+            context.activationRecord?.activationRecord?.activation === 'missing'
+              ? async (failure?: unknown) => {
+                  try {
+                    await runHandler(failure);
+                  } finally {
+                    detachedApplicationPermit?.releaseAfterInternalProcessing();
+                    applicationClaim?.close();
+                  }
+                }
+              : undefined
           );
-          await firstHandlerTurn;
         } catch (error) {
           detached = false;
           detachedApplicationPermit?.releaseAfterInternalProcessing();
           rejectFirstHandlerTurn?.(error);
           throw error;
         }
+        await firstHandlerTurn;
       } else {
         if (activation.serial.isCurrentTurn) {
           throw createInternalFrameworkException(
@@ -204,7 +248,13 @@ export class ZLinkRoutedSpotPacketDispatch {
             `Spot '${spotId}' cannot await a request to its current serial turn.`
           );
         }
-        await activation.serial.execute(runHandler, context.workOptions);
+        await activation.serial.execute(
+          runHandler,
+          context.workOptions,
+          context.activationRecord?.activationRecord?.activation === 'missing'
+            ? runHandler
+            : undefined
+        );
       }
     } catch (error) {
       this.reportFailure(spotId, packetName, context, returnResponse, error);

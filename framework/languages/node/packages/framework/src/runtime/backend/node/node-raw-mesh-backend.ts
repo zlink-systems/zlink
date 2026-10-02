@@ -2352,6 +2352,9 @@ function decodeStatefulRecord(
           : decodeMultipart(application.payload),
     ...(stateful.isPending === undefined ? {} : { isPending: stateful.isPending }),
     ...(stateful.deadlineUnixMs === undefined ? {} : { deadlineUnixMs: stateful.deadlineUnixMs }),
+    ...(stateful.activationRecord === undefined
+      ? {}
+      : { activationRecord: stateful.activationRecord }),
     ...(stateful.messageFollowOrigin === undefined
       ? {}
       : { messageFollowOrigin: stateful.messageFollowOrigin }),

@@ -169,7 +169,59 @@ export class ZLinkSpotLocationClaims {
     tracked.storeVersion = result.storeVersion.value;
     onCommitted();
     return {
-      release: async () => undefined
+      release: () => this.release(meshName, spotId),
+      reincarnate: async (initialize) => {
+        const reincarnated = await store.compareExchangeAuthority(key, result.storeVersion, {
+          kind: 'put',
+          generationTransition: 'reincarnate',
+          payload: replaceServiceRelocationAuthorityApplicationPayload(
+            result.payload,
+            encodeServiceInstanceAuthorityPayload({ ...decoded, state: 'coldActivating' })
+          )
+        });
+        if (reincarnated.kind !== 'stored') {
+          throw createInternalFrameworkException(
+            reincarnated.kind === 'generationExhausted'
+              ? ZLinkFrameworkInternalErrorKind.InvalidOperation
+              : ZLinkFrameworkInternalErrorKind.SpotMoving,
+            `Instance Spot '${String(spotId)}' Closing authority changed before reincarnation.`
+          );
+        }
+        this.trackInstanceAuthority({
+          ...tracked,
+          objectGeneration: reincarnated.objectGeneration,
+          authorityOwnerGeneration: reincarnated.authorityOwnerGeneration,
+          storeVersion: reincarnated.storeVersion.value
+        });
+        this.invalidateSpotRoute?.(spotId);
+        try {
+          await initialize({ ...reincarnated, kind: 'snapshot', stableType: tracked.stableType });
+          const ready = await store.compareExchangeAuthority(key, reincarnated.storeVersion, {
+            kind: 'put',
+            generationTransition: 'preserve',
+            payload: replaceServiceRelocationAuthorityApplicationPayload(
+              reincarnated.payload,
+              encodeServiceInstanceAuthorityPayload({ ...decoded, state: 'ready' })
+            )
+          });
+          if (ready.kind !== 'stored') {
+            throw createInternalFrameworkException(
+              ready.kind === 'generationExhausted'
+                ? ZLinkFrameworkInternalErrorKind.InvalidOperation
+                : ZLinkFrameworkInternalErrorKind.SpotMoving,
+              `Instance Spot '${String(spotId)}' reincarnation authority changed before initialization completed.`
+            );
+          }
+          const latest = this.spots.get(canonical);
+          if (latest?.kind === 'authority' && latest.objectGeneration === ready.objectGeneration) {
+            latest.storeVersion = ready.storeVersion.value;
+          }
+          return { ...ready, kind: 'snapshot', stableType: tracked.stableType };
+        } catch (error) {
+          await this.release(meshName, spotId, reincarnated.objectGeneration);
+          throw error;
+        }
+      }
     };
   }
 
@@ -354,6 +406,11 @@ export interface ZLinkTrackedInstanceAuthority {
 
 export interface ZLinkInstanceClosingAuthority {
   release(): Promise<void>;
+  reincarnate?(
+    initialize: (
+      authority: ZLinkAuthoritySnapshot & { readonly stableType: string }
+    ) => Promise<void>
+  ): Promise<ZLinkAuthoritySnapshot & { readonly stableType: string }>;
 }
 
 interface TrackedLegacySpot {

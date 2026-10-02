@@ -1,6 +1,8 @@
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ZLinkFrameworkException } from '../../contracts';
+import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
+import { decodeServiceClosingSpotAuthority } from './service-authority-payload-codec';
 import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
@@ -179,6 +181,7 @@ export interface ServiceStatefulMailboxData {
   readonly isPending?: () => boolean;
   /** Carries the local operation deadline into the lifecycle dispatch lane. */
   readonly deadlineUnixMs?: bigint;
+  readonly activationRecord?: Extract<ServiceStatefulWireRecord, { readonly kind: 'instanceSpot' }>;
   readonly onTerminalCompletion?: () => void | Promise<void>;
   /** Decoded only by the canonical command-28 generator path. */
   readonly canonicalApplicationPayload?: ServiceApplicationPayload;
@@ -268,8 +271,13 @@ export type ServiceInstanceAuthorityRead =
       readonly kind: 'creating';
       readonly objectGeneration: bigint;
       readonly authorityOwnerGeneration: bigint;
+      readonly authority?: ZLinkAuthoritySnapshot;
     }
-  | { readonly kind: 'ready'; readonly route: ServiceInstanceRouteFence };
+  | {
+      readonly kind: 'ready';
+      readonly route: ServiceInstanceRouteFence;
+      readonly authority?: ZLinkAuthoritySnapshot;
+    };
 
 export type ServiceInstanceAuthorityReserve =
   | { readonly kind: 'reserved'; readonly reservation: ServiceInstanceActivationReservation }
@@ -426,7 +434,7 @@ export class ServiceStatefulRuntime {
   private readonly pendingInstanceActivations = new Map<
     string,
     Promise<{
-      readonly spot: ServiceSpotState;
+      readonly spot: Pick<ServiceSpotState, 'ref'>;
       readonly route: ServiceInstanceRouteFence;
     }>
   >();
@@ -2382,7 +2390,7 @@ export class ServiceStatefulRuntime {
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'instanceSpot' }>,
     payloadFrame: Buffer,
-    spot: ServiceSpotState,
+    spot: Pick<ServiceSpotState, 'ref'>,
     localReply?: NonNullable<ServiceStatefulMailboxData['reply']>,
     onTerminalCompletion?: NonNullable<ServiceStatefulMailboxData['onTerminalCompletion']>,
     metadataFrame?: Buffer,
@@ -2434,6 +2442,8 @@ export class ServiceStatefulRuntime {
       ...(record.operationKind === 'request' ? { correlation: record.replyRouteId } : {}),
       ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
       targetSpot: spot.ref,
+      activationRecord: record,
+      ...(record.activation === 'missing' ? { deadlineUnixMs: record.deadlineUnixMs } : {}),
       ...(metadataFrame === undefined ? {} : { applicationMetadata: metadataFrame }),
       ...(terminalCompletion === undefined ? {} : { onTerminalCompletion: terminalCompletion }),
       ...(record.operationKind === 'request'
@@ -2975,7 +2985,10 @@ export class ServiceStatefulRuntime {
     >,
     payloadFrame: Buffer,
     metadataFrame?: Buffer
-  ): Promise<{ readonly spot: ServiceSpotState; readonly route: ServiceInstanceRouteFence }> {
+  ): Promise<{
+    readonly spot: Pick<ServiceSpotState, 'ref'>;
+    readonly route: ServiceInstanceRouteFence;
+  }> {
     const key = instanceActivationKey(record);
     const pending = this.pendingInstanceActivations.get(key);
     if (pending !== undefined) return pending;
@@ -2997,7 +3010,10 @@ export class ServiceStatefulRuntime {
     >,
     payloadFrame: Buffer,
     metadataFrame?: Buffer
-  ): Promise<{ readonly spot: ServiceSpotState; readonly route: ServiceInstanceRouteFence }> {
+  ): Promise<{
+    readonly spot: Pick<ServiceSpotState, 'ref'>;
+    readonly route: ServiceInstanceRouteFence;
+  }> {
     const target = record.target;
     if (
       target.targetNodeRid !== this.nodeRid ||
@@ -3013,6 +3029,46 @@ export class ServiceStatefulRuntime {
 
     const local = this.registry.spot(target.targetSpotId);
     const current = await authority.read(target);
+    if (
+      current.kind === 'creating' &&
+      current.authority?.allocation.state === 'active' &&
+      this.instanceApplicationLifecycle?.isMaterializing?.(target) === true
+    ) {
+      return {
+        spot: { ref: { spotId: target.targetSpotId, generation: current.objectGeneration } },
+        route: {
+          targetSpotId: target.targetSpotId,
+          targetNodeRid: this.nodeRid,
+          targetNodeGeneration: this.nodeGeneration,
+          objectGeneration: current.objectGeneration,
+          authorityOwnerGeneration: current.authorityOwnerGeneration,
+          ownerId: current.authority.ownerId,
+          leaseGeneration: current.authority.ownerLeaseGeneration,
+          storeVersion: current.authority.storeVersion.value
+        }
+      };
+    }
+    if (
+      current.kind === 'ready' &&
+      current.authority !== undefined &&
+      decodeServiceClosingSpotAuthority(current.authority.payload) !== undefined
+    ) {
+      if (current.route.targetNodeRid !== this.nodeRid) {
+        throw new ServiceInstanceActivationRedirectError(current.route);
+      }
+      if (
+        current.route.targetNodeGeneration !== this.nodeGeneration ||
+        (local !== undefined &&
+          !routeMatchesLocal(current.route, local, this.nodeRid, this.nodeGeneration)) ||
+        (local === undefined && this.instanceApplicationLifecycle?.isMaterialized(target) !== true)
+      ) {
+        throw new ServiceStaleGenerationError('spot', target.targetSpotId);
+      }
+      return {
+        spot: { ref: { spotId: target.targetSpotId, generation: current.route.objectGeneration } },
+        route: current.route
+      };
+    }
     if (!this.acceptsLocalMissingInstancePlacement()) {
       if (current.kind === 'ready' && current.route.targetNodeRid !== this.nodeRid) {
         throw new ServiceInstanceActivationRedirectError(current.route);

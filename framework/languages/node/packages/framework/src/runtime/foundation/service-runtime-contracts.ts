@@ -270,6 +270,10 @@ export interface ReceiveRecord {
   readonly isPending?: () => boolean;
   /** Absolute deadline used by the local lifecycle dispatch fence. */
   readonly deadlineUnixMs?: bigint;
+  readonly activationRecord?: Extract<
+    import('./service-stateful-wire-codec').ServiceStatefulWireRecord,
+    { readonly kind: 'instanceSpot' }
+  >;
   readonly messageFollowOrigin?: ZLinkMessageFollowOrigin;
   readonly onTerminalCompletion?: () => void | Promise<void>;
   readonly applicationJobPermit?: ApplicationJobPermitPort;

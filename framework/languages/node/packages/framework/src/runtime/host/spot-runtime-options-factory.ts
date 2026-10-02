@@ -51,18 +51,24 @@ export interface ZLinkSpotRuntimeOptionsFactoryOptions {
     meshName: string,
     spotId: string,
     onCommitted: () => void
-  ) => Promise<{ release(): Promise<void> } | undefined>;
+  ) => Promise<
+    import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority | undefined
+  >;
   readonly beginInstanceClosingAuthority: (
     meshName: string,
     spotId: string,
     onCommitted: () => void
-  ) => Promise<{ release(): Promise<void> } | undefined>;
+  ) => Promise<
+    import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority | undefined
+  >;
   readonly beginUserClosingAuthority: (
     meshName: string,
     spotId: string,
     objectGeneration: bigint,
     onCommitted: () => void
-  ) => Promise<{ release(): Promise<void> } | undefined>;
+  ) => Promise<
+    import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority | undefined
+  >;
   readonly createLocationSpotRouteResolver: () => ZLinkSpotRouteResolver | undefined;
   readonly boundSessionRelay: ZLinkBoundSessionRelay;
   readonly actorHandoff: ZLinkActorHandoffCoordinator;
@@ -163,8 +169,48 @@ export class ZLinkSpotRuntimeOptionsFactory {
         this.options.releaseInstanceAuthority(meshName, String(spotId), objectGeneration),
       beginInstanceIdleClosingAuthority: (meshName, spotId, onCommitted) =>
         this.options.beginInstanceIdleClosingAuthority(meshName, String(spotId), onCommitted),
-      beginInstanceClosingAuthority: (meshName, spotId, onCommitted) =>
-        this.options.beginInstanceClosingAuthority(meshName, String(spotId), onCommitted),
+      beginInstanceClosingAuthority: async (meshName, spotId, onCommitted) => {
+        const authority = await this.options.beginInstanceClosingAuthority(
+          meshName,
+          String(spotId),
+          onCommitted
+        );
+        if (authority?.reincarnate === undefined) return authority;
+        return {
+          release: () => authority.release(),
+          reincarnate: async (initialize) => {
+            const current = await authority.reincarnate!(initialize);
+            const node = this.options.spotNodeRuntime()?.meshNode(meshName);
+            const route = {
+              targetSpotId: String(spotId),
+              targetNodeRid: String(current.allocation.descriptor.rid),
+              targetNodeGeneration: current.allocation.descriptorLifecycleGeneration,
+              objectGeneration: current.objectGeneration,
+              authorityOwnerGeneration: current.authorityOwnerGeneration,
+              ownerId: current.ownerId,
+              leaseGeneration: current.ownerLeaseGeneration,
+              storeVersion: current.storeVersion.value
+            };
+            node?.restoreSpotAuthority?.(
+              String(spotId),
+              'instance_spot',
+              current.stableType,
+              current.objectGeneration,
+              current.authorityOwnerGeneration
+            );
+            node?.registerInstanceIntent?.(current.stableType, route);
+            node?.rememberSpotRoute?.({
+              spot: { spotId: String(spotId), generation: current.objectGeneration },
+              targetNodeRid: route.targetNodeRid,
+              targetNodeGeneration: route.targetNodeGeneration,
+              authorityOwnerGeneration: route.authorityOwnerGeneration,
+              ownerLeaseGeneration: route.leaseGeneration,
+              storeVersion: route.storeVersion
+            });
+            return current;
+          }
+        };
+      },
       beginUserClosingAuthority: (meshName, spotId, objectGeneration, onCommitted) =>
         this.options.beginUserClosingAuthority(
           meshName,

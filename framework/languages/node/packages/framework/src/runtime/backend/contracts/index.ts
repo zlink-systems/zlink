@@ -249,6 +249,12 @@ export interface ZLinkBackendMeshNode {
         readonly objectGeneration: bigint;
       }
     | undefined;
+  registerInstanceIntent?(
+    instanceType: string,
+    route: import('../../foundation/service-stateful-wire-codec').ServiceInstanceRouteFence,
+    expectedCurrentRoute?:
+      import('../../foundation/service-stateful-wire-codec').ServiceInstanceRouteFence | null
+  ): void;
   waitForInstanceApplicationQuiescence?(spotId: string, signal?: AbortSignal): Promise<void>;
   restoreUserSpotAuthority?(
     spotId: string,
