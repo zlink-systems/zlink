@@ -1249,6 +1249,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                         "zlink.stream.connections.active", 1, Map.of());
                                 ZLinkRuntimeMetrics.increment(
                                         "zlink.stream.connections.opened", Map.of());
+                                dispatchConnected(state);
                             }
                             return current;
                         });
@@ -1260,7 +1261,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             }
             return existing;
         }
-        dispatchConnected(state);
         return state;
     }
 

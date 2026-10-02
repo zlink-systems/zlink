@@ -209,6 +209,77 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void heartbeatContractConcurrentCreationConnectsBeforeFirstPacket() throws Exception {
+        FakeStream stream = new FakeStream();
+        ZLinkStreamRuntime runtime =
+                startDeterministic(stream, new java.util.concurrent.atomic.AtomicLong());
+        CompletableFuture<Void> readyConstructing = new CompletableFuture<>();
+        CompletableFuture<Void> dataConstructing = new CompletableFuture<>();
+        CompletableFuture<Void> published = new CompletableFuture<>();
+        CompletableFuture<Void> releaseReady = new CompletableFuture<>();
+        AtomicReference<Thread> readyThread = new AtomicReference<>();
+        var laneField = ZLinkStreamRuntime.class.getDeclaredField("stateLane");
+        laneField.setAccessible(true);
+        laneField.set(
+                runtime,
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(
+                        command -> {
+                            command.run();
+                            if (Thread.currentThread() == readyThread.get()
+                                    && TestSession.createdCount.get() == 1) {
+                                // Hold the creator after publication has released the state lane.
+                                published.complete(null);
+                                releaseReady.join();
+                            }
+                        }));
+        TestSession.constructionHook =
+                () -> {
+                    if (Thread.currentThread() == readyThread.get()) {
+                        readyConstructing.complete(null);
+                        dataConstructing.join();
+                    } else {
+                        dataConstructing.complete(null);
+                        published.join();
+                    }
+                };
+        TestSession.recordCreationCallbacks = true;
+        CompletableFuture<Void> ready =
+                CompletableFuture.runAsync(
+                        () -> {
+                            readyThread.set(Thread.currentThread());
+                            stream.errorHandler.handle(
+                                    PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+                        });
+        CompletableFuture<Void> data = null;
+        try {
+            readyConstructing.get(5, TimeUnit.SECONDS);
+            data =
+                    CompletableFuture.runAsync(
+                            () -> {
+                                try {
+                                    dispatchDeterministic(runtime, "initial", false);
+                                } catch (Exception failure) {
+                                    throw new CompletionException(failure);
+                                }
+                            });
+            published.get(5, TimeUnit.SECONDS);
+            data.get(5, TimeUnit.SECONDS);
+            TestSession session = TestSession.created.getFirst();
+            assertEquals(List.of("connected", "packet"), session.creationCallbacks);
+            assertEquals(List.of("initial"), session.packetNames);
+            assertEquals(2, TestSession.createdCount.get());
+        } finally {
+            releaseReady.complete(null);
+            dataConstructing.complete(null);
+            published.complete(null);
+            ready.get(5, TimeUnit.SECONDS);
+            if (data != null) {
+                data.get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
     void heartbeatContractSlowConstructionPreservesApplicationIdleStart() throws Exception {
         FakeStream stream = new FakeStream();
         var clock = new java.util.concurrent.atomic.AtomicLong();
@@ -366,6 +437,7 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.holdFirstDispatch = false;
         TestSession.failNextConstruction = false;
         TestSession.constructionHook = null;
+        TestSession.recordCreationCallbacks = false;
         TestSession.replacementMode = ReplacementMode.NONE;
         TestSession.decodeWirePayload = false;
         TestSession.replyOnDispatch = false;
@@ -1464,6 +1536,8 @@ final class ZLinkStreamRuntimeIngressTest {
         private static volatile boolean holdFirstDispatch;
         private static volatile boolean failNextConstruction;
         private static volatile Runnable constructionHook;
+        private static volatile boolean recordCreationCallbacks;
+        private final List<String> creationCallbacks = new CopyOnWriteArrayList<>();
         private static volatile ReplacementMode replacementMode = ReplacementMode.NONE;
         private static volatile boolean decodeWirePayload;
         private static volatile boolean replyOnDispatch;
@@ -1501,6 +1575,9 @@ final class ZLinkStreamRuntimeIngressTest {
 
         @Override
         public CompletionStage<Void> onConnected() {
+            if (recordCreationCallbacks) {
+                creationCallbacks.add("connected");
+            }
             connected.complete(this);
             return CompletableFuture.completedFuture(null);
         }
@@ -1538,6 +1615,9 @@ final class ZLinkStreamRuntimeIngressTest {
         @Override
         public CompletionStage<Void> onDispatch(
                 ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+            if (recordCreationCallbacks) {
+                creationCallbacks.add("packet");
+            }
             if (decodeWirePayload) {
                 decodedWirePayload.set(payload.decode(WirePayload.class));
             }
