@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -102,12 +103,14 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     CompletionStage<ZLinkTimer> add(
             String name, Duration period, Class<?> handlerType, ZLinkTimerOptions options) {
-        AddedTimer added = inStateLane(() -> addCore(name, period, handlerType, options));
-        if (added.previous() != null) {
-            added.previous().close();
-        }
-        added.timer().start();
-        return CompletableFuture.completedFuture(added.timer());
+        return stateLane
+                .runAsync(() -> addCore(name, period, handlerType, options))
+                .thenApplyAsync(
+                        added -> {
+                            if (added.previous() != null) added.previous().close();
+                            added.timer().start();
+                            return added.timer();
+                        });
     }
 
     private AddedTimer addCore(
@@ -308,13 +311,13 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         private final Class<?> handlerType;
         private final ZLinkTimerOptions options;
         private final ZLinkSpotTimerSchedule schedule;
-        private boolean disposed;
+        private volatile boolean disposed;
         private ScheduledFuture<?> future;
         private ScheduleAttempt scheduled;
         private Instant nextScheduledAt;
         private ZLinkSpotTimerSchedule.PendingTick pendingTick;
         private ActiveDispatch activeDispatch;
-        private CompletableFuture<Void> finalization;
+        private final CompletableFuture<Void> finalization = new CompletableFuture<>();
 
         ManagedTimer(
                 String name, Duration period, Class<?> handlerType, ZLinkTimerOptions options) {
@@ -402,78 +405,133 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
         private void dispatchPending(ZLinkSpotTimerSchedule.PendingTick selected) {
             ZLinkTimerTick tick = selected.tick();
-            dispatch.enqueue(
-                            name,
-                            () -> {
-                                HandlerInvocation invocation =
-                                        inStateLane(
-                                                () -> {
-                                                    if (disposed
-                                                            || frozen
-                                                            || pendingTick != selected) {
-                                                        return null;
-                                                    }
-                                                    activeDispatch =
-                                                            new ActiveDispatch(
-                                                                    selected,
-                                                                    new CompletableFuture<>());
-                                                    return new HandlerInvocation(spot, handlerType);
-                                                });
-                                return invocation == null
-                                        ? CompletableFuture.completedFuture(null)
-                                        : invokeHandler(
-                                                        invocation.spot(),
-                                                        invocation.handlerType(),
-                                                        tick)
-                                                .whenComplete(
-                                                        (ignored, error) ->
-                                                                completeDispatch(
-                                                                        selected, tick, error));
-                            })
+            dispatch.enqueue(name, () -> dispatchClaimed(selected, tick))
                     .whenComplete(
                             (ignored, error) -> {
-                                if (error != null
-                                        && inStateLane(
-                                                () ->
-                                                        activeDispatch == null
-                                                                || activeDispatch.tick()
-                                                                        != selected)) {
-                                    completeDispatch(selected, tick, error);
+                                if (error != null) {
+                                    stateLane
+                                            .runAsync(
+                                                    () ->
+                                                            activeDispatch == null
+                                                                    || activeDispatch.tick()
+                                                                            != selected)
+                                            .whenComplete(
+                                                    (notStarted, ownerFailure) -> {
+                                                        if (ownerFailure != null) {
+                                                            reportCompletionFailure(ownerFailure);
+                                                        } else if (notStarted) {
+                                                            completeDispatch(
+                                                                    selected, tick, error, null);
+                                                        }
+                                                    });
                                 }
                             });
         }
 
-        private void completeDispatch(
-                ZLinkSpotTimerSchedule.PendingTick selected, ZLinkTimerTick tick, Throwable error) {
-            DispatchResult result =
-                    inStateLane(
+        private CompletionStage<Void> dispatchClaimed(
+                ZLinkSpotTimerSchedule.PendingTick selected, ZLinkTimerTick tick) {
+            CompletionStage<HandlerInvocation> claim =
+                    stateLane.tryRunNow(
                             () -> {
-                                boolean stillCurrent =
-                                        !frozen && !disposed && pendingTick == selected;
-                                CompletableFuture<Void> dispatchCompletion =
-                                        activeDispatch != null && activeDispatch.tick() == selected
-                                                ? activeDispatch.completion()
-                                                : null;
-                                if (!stillCurrent) {
-                                    return new DispatchResult(
-                                            false, null, null, dispatchCompletion);
-                                }
-                                boolean stopped =
-                                        error != null && options.stopOnUnhandledException();
-                                if (error == null) {
-                                    schedule.markDelivered(selected);
-                                }
-                                SchedulePlan next = null;
-                                FinalizationPlan stopFinalization = null;
-                                if (stopped) {
-                                    stopFinalization = finalizationPlanOnLane();
-                                } else {
-                                    pendingTick = null;
-                                    next = prepareScheduleCore(schedule.delayAfterDispatchNanos());
-                                }
-                                return new DispatchResult(
-                                        true, stopFinalization, next, dispatchCompletion);
+                                if (disposed || frozen || pendingTick != selected) return null;
+                                activeDispatch =
+                                        new ActiveDispatch(selected, new CompletableFuture<>());
+                                return new HandlerInvocation(
+                                        spot, handlerType, activeDispatch.completion());
                             });
+            if (claim == null) {
+                return ZLinkSerialExecutionQueue.yieldCurrent(stateLane.runAsync(() -> null))
+                        .thenCompose(ignored -> dispatchClaimed(selected, tick));
+            }
+            return claim.thenCompose(
+                    invocation ->
+                            invocation == null
+                                    ? CompletableFuture.completedFuture(null)
+                                    : invokeHandler(
+                                                    invocation.spot(),
+                                                    invocation.handlerType(),
+                                                    tick)
+                                            .whenComplete(
+                                                    (ignored, error) ->
+                                                            completeDispatch(
+                                                                    selected,
+                                                                    tick,
+                                                                    error,
+                                                                    invocation.completion())));
+        }
+
+        private void completeDispatch(
+                ZLinkSpotTimerSchedule.PendingTick selected,
+                ZLinkTimerTick tick,
+                Throwable error,
+                CompletableFuture<Void> dispatchCompletionFallback) {
+            CompletionStage<DispatchResult> preparation;
+            try {
+                preparation =
+                        stateLane.runAsync(
+                                () -> {
+                                    boolean stillCurrent =
+                                            !frozen && !disposed && pendingTick == selected;
+                                    CompletableFuture<Void> dispatchCompletion =
+                                            activeDispatch != null
+                                                            && activeDispatch.tick() == selected
+                                                    ? activeDispatch.completion()
+                                                    : null;
+                                    if (!stillCurrent) {
+                                        return new DispatchResult(
+                                                false, null, null, dispatchCompletion);
+                                    }
+                                    boolean stopped =
+                                            error != null && options.stopOnUnhandledException();
+                                    if (error == null) {
+                                        schedule.markDelivered(selected);
+                                    }
+                                    SchedulePlan next = null;
+                                    FinalizationPlan stopFinalization = null;
+                                    if (stopped) {
+                                        stopFinalization = finalizationPlanOnLane();
+                                    } else {
+                                        pendingTick = null;
+                                        next =
+                                                prepareScheduleCore(
+                                                        schedule.delayAfterDispatchNanos());
+                                    }
+                                    return new DispatchResult(
+                                            true, stopFinalization, next, dispatchCompletion);
+                                });
+            } catch (RuntimeException failure) {
+                if (dispatchCompletionFallback != null) {
+                    dispatchCompletionFallback.completeExceptionally(failure);
+                }
+                reportCompletionFailure(failure);
+                return;
+            }
+            preparation.whenComplete(
+                    (result, failure) -> {
+                        if (failure != null) {
+                            if (dispatchCompletionFallback != null) {
+                                dispatchCompletionFallback.completeExceptionally(failure);
+                            }
+                            reportCompletionFailure(failure);
+                            return;
+                        }
+                        publishDispatchCompletion(result, selected, tick, error);
+                    });
+        }
+
+        private void reportCompletionFailure(Throwable failure) {
+            Logger.getLogger(ZLinkSpotTimerRegistry.class.getName())
+                    .log(
+                            java.util.logging.Level.WARNING,
+                            "Timer completion ownership failed",
+                            failure);
+        }
+
+        private void publishDispatchCompletion(
+                DispatchResult result,
+                ZLinkSpotTimerSchedule.PendingTick selected,
+                ZLinkTimerTick tick,
+                Throwable error) {
             Throwable completionFailure = null;
             try {
                 if (result.stillCurrent() && error != null) {
@@ -552,44 +610,45 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
         @Override
         public boolean isDisposed() {
-            return inStateLane(this::isDisposedCore);
+            return disposed;
         }
 
         @Override
         public CompletionStage<Void> cancel() {
-            return getOrStartFinalization();
+            return getOrStartFinalizationAsync();
         }
 
         @Override
         public void close() {
-            getOrStartFinalization();
-        }
-
-        private CompletableFuture<Void> getOrStartFinalization() {
-            FinalizationPlan plan = inStateLane(this::finalizationPlanOnLane);
-            if (plan.start()) {
-                completeFinalization(plan);
-            }
-            return plan.finalization();
-        }
-
-        private CompletionStage<Void> getOrStartFinalizationAsync() {
-            return stateLane
-                    .runAsync(this::finalizationPlanOnLane)
-                    .thenCompose(
-                            plan -> {
-                                if (plan.start()) {
-                                    completeFinalization(plan);
-                                }
-                                return plan.finalization();
+            getOrStartFinalizationAsync()
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null) reportCompletionFailure(unwrap(failure));
                             });
         }
 
+        private CompletableFuture<Void> getOrStartFinalizationAsync() {
+            try {
+                stateLane
+                        .runAsync(this::finalizationPlanOnLane)
+                        .whenComplete(
+                                (plan, failure) -> {
+                                    if (failure != null) {
+                                        finalization.completeExceptionally(unwrap(failure));
+                                    } else if (plan.start()) {
+                                        completeFinalization(plan);
+                                    }
+                                });
+            } catch (RuntimeException | Error failure) {
+                finalization.completeExceptionally(failure);
+            }
+            return finalization;
+        }
+
         private FinalizationPlan finalizationPlanOnLane() {
-            if (finalization != null) {
+            if (disposed) {
                 return new FinalizationPlan(finalization, null, null, false);
             }
-            finalization = new CompletableFuture<>();
             timers.remove(name, this);
             Optional<ScheduledFuture<?>> task = disposeCore();
             return new FinalizationPlan(
@@ -650,7 +709,8 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     private record ResumePlan(ZLinkSpotTimerSchedule.PendingTick pendingTick, long delayNanos) {}
 
-    private record HandlerInvocation(Object spot, Class<?> handlerType) {}
+    private record HandlerInvocation(
+            Object spot, Class<?> handlerType, CompletableFuture<Void> completion) {}
 
     private record ActiveDispatch(
             ZLinkSpotTimerSchedule.PendingTick tick, CompletableFuture<Void> completion) {}

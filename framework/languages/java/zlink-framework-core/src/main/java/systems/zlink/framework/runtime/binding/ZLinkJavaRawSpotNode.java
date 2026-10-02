@@ -52,12 +52,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Framework-owned service runtime projected over the raw MeshNode transport. Stateful Spot and
  * Actor identity remains inside the Framework runtime.
  */
 final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmissionBacked {
+    private static final Logger LOGGER = Logger.getLogger(ZLinkJavaRawSpotNode.class.getName());
     private final ZLinkJavaRawMeshNode owner;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, ZLinkJavaRawSpot> spots = new ConcurrentHashMap<>();
@@ -448,6 +451,16 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
     @Override
     public boolean hasPendingActorRequests() {
         return !actorRequests.isEmpty();
+    }
+
+    @Override
+    public CompletionStage<Void> awaitPendingActorRequests() {
+        // The request caller owns its result. Drain joins only terminal lifetime.
+        var pending =
+                actorRequests.values().stream()
+                        .map(request -> request.handle((reply, failure) -> (Void) null))
+                        .toArray(CompletableFuture[]::new);
+        return CompletableFuture.allOf(pending);
     }
 
     @Override
@@ -1620,6 +1633,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                     return true;
                 }
             } catch (RuntimeException relayFailure) {
+                try {
+                    if (failure != null) failure.accept(relayFailure);
+                    else LOGGER.log(Level.WARNING, "message follow relay failed", relayFailure);
+                } finally {
+                    terminalRelease.run();
+                }
+                return true;
             }
         }
         ZLinkBackendActorRef currentActor = actor == null ? null : actors.get(actor.actorId());
@@ -1658,8 +1678,6 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
         long requestId = header.request() ? nextActorRequestSequence.getAndIncrement() : 0;
         if (header.request()) {
             actorRemoteReplies.put(requestId, reply);
-            CompletableFuture.delayedExecutor(30, TimeUnit.SECONDS)
-                    .execute(() -> actorRemoteReplies.remove(requestId, reply));
         }
         List<ZLinkBackendActorReceived> messages = new ArrayList<>(parts.size());
         if (parts.isEmpty()) {
@@ -1791,13 +1809,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
         }
         dispatched.whenComplete(
                 (ignored, error) -> {
+                    if (header.request()) {
+                        actorRemoteReplies.remove(requestId, reply);
+                    }
                     if (error == null) {
                         return;
                     }
                     Throwable cause = unwrapActorDispatchFailure(error);
-                    if (header.request()) {
-                        actorRemoteReplies.remove(requestId, reply);
-                    }
                     if (failure != null) {
                         failure.accept(cause);
                     }

@@ -36,7 +36,7 @@ non-Redis provider — must satisfy; if the code disagrees, the code is fixed.
 §8~§9 are the implementation contract that fixes the Redis key layout and
 data type the official Redis provider itself uses. Within §8~§9, the part
 that Redis providers in different languages must be able to read from each
-other — the counter-issuance key, and the opaque storage format for the six
+other — the counter-issuance key, and the opaque storage format for the §9
 records — is a **MUST-level public contract**, and if the code disagrees, the
 code is fixed; a non-Redis provider doesn't need to follow this part. The
 rest — implementation detail the Redis provider chooses internally, such as
@@ -141,8 +141,8 @@ framework pre-stores immutable inventory chunks bounded to at most 1,024
 entries per relocation-target-list page and 1 MiB encoded — this page bound
 is a separate figure from the CAS batch's unique-key-total bound above, and
 applies to a different target. The final batch only puts in small records
-that must change together at publish time — aggregate authority, inventory
-root/count/digest, and capacity counter.
+that must change together at publish time — the aggregate carrying the
+inventory root/count/digest, and capacity counter.
 
 So the total number of Actors that can belong to one User Spot isn't set by
 the batch's 2,048-key limit. The provider doesn't interpret the meaning of
@@ -271,9 +271,10 @@ sends or receives messages — publishes a
 [MeshNode descriptor](../00-foundation/02-glossary.en.md#meshnode-descriptor)
 for automatic discovery so other nodes can find its identity and connection
 information. That descriptor, an owner lease, a ClientServer server descriptor,
-a fanout publisher descriptor, an authority record, and a creation terminal
+a fanout publisher descriptor, an authority record, a creation request, a creation terminal, and the
+[progress records of a SpotWide relocation](01-location-runtime.en.md#35-progress-records-of-a-spotwide-relocation)
 must use the same opaque record representation regardless of language —
-otherwise a record one language writes can't be read by another. These six
+otherwise a record one language writes can't be read by another. These
 records **must** follow
 this storage scheme.
 
@@ -283,7 +284,7 @@ and `preimage` is the per-record logical key preimage defined by
 [Location Runtime §3.4](01-location-runtime.en.md#34-how-different-languages-read-and-write-the-same-redis-record)
 (note — this `sha256hex(preimage)` uses different input than §8's
 `sha256hex(logicalKey)`: the counter hashes the short literal logical key
-as-is, while these six records hash a preimage string built per record).
+as-is, while these records hash a preimage string built per record).
 
 The braces around `{zlink-location-v3}` are a Redis Cluster hashtag —
 because `Put` changes the record, sequence counter, and index together in
@@ -331,7 +332,7 @@ different key namespaces on the same Redis deployment, or be physically
 separated. Correctness doesn't
 depend on connection sharing or a cross-store Redis transaction.
 
-**This is the end of the MUST-level public contract.** Outside these six
+**This is the end of the MUST-level public contract.** Outside these
 records and their opaque record representation, the following items are
 implementation details the Redis provider chooses freely, and aren't part
 of the public contract — if the document disagrees with the code, the
@@ -377,10 +378,10 @@ record golden fixture. Each item maps to one test.
 
 **Official Redis Provider's Key/Byte Format**
 
-- The six records of §9 are verified by a conformance test that consumes
+- The records of §9 are verified by a conformance test that consumes
   the store record golden fixture's
   (`framework/runtime/protocol/golden/store-record-v1.json`) key-derivation
-  vectors (preimage → SHA-256 → full key string) as-is; the five records
+  vectors (preimage → SHA-256 → full key string) as-is; the records
   with a canonical JSON value also consume its value byte vectors (including
   tombstone and expired variants). The service-wire schema owns the creation
   terminal's value byte format.

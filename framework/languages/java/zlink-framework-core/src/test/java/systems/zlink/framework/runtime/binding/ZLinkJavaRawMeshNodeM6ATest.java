@@ -86,6 +86,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                             instanceof systems.zlink.framework.errors.ZLinkFrameworkException);
             var framework =
                     (systems.zlink.framework.errors.ZLinkFrameworkException) failure.getCause();
+            // 01-execution/01-submit-and-completion.ko.md:193: typed NOT_ADMITTED maps to Rejected.
             assertEquals(
                     rejected == systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED
                             ? systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE
@@ -100,6 +101,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
 
     @Test
     void oneWayAdapterPreservesTypedRejectionAcrossErrnos() {
+        // 01-execution/01-submit-and-completion.ko.md:193: NOT_ADMITTED maps to Rejected; errno is
+        // binding-owned.
         var routeLoss =
                 assertThrows(
                         ExecutionException.class,

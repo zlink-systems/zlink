@@ -69,33 +69,8 @@ final class ZLinkActorSessionCoordinator {
         return actors == null ? List.of() : actors.actorIdsInSpot(spotId);
     }
 
-    Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealActorRelocation(String actorId) {
-        return requireActors().trySealActorRelocation(actorId);
-    }
-
-    ZLinkSerialExecutionQueue actorRelocationLane(String actorId) {
-        return requireActors().actorRelocationLane(actorId);
-    }
-
     CompletionStage<ZLinkSerialExecutionQueue> actorRelocationLaneAsync(String actorId) {
         return requireActors().actorRelocationLaneAsync(actorId);
-    }
-
-    boolean abortActorRelocation(String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return requireActors().abortActorRelocation(actorId, seal);
-    }
-
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitActorRelocation(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return requireActors().commitActorRelocation(actorId, seal);
-    }
-
-    Optional<
-                    systems.zlink.framework.runtime.internal.relocation
-                            .ZLinkRetainedSerialQueueCommit.Commit>
-            retainActorRelocationCommit(
-                    String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return requireActors().retainActorRelocationCommit(actorId, seal);
     }
 
     CompletionStage<
@@ -112,13 +87,14 @@ final class ZLinkActorSessionCoordinator {
         return requireActors().abortActorRelocationAsync(actorId, seal);
     }
 
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeActorRelocationIngress(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return requireActors().freezeActorRelocationIngress(actorId, seal);
-    }
-
     Optional<ZLinkActor> localActor(String actorId) {
         return actors == null ? Optional.empty() : actors.localActor(actorId);
+    }
+
+    CompletionStage<Optional<ZLinkActor>> localActorAsync(String actorId) {
+        return actors == null
+                ? CompletableFuture.completedFuture(Optional.empty())
+                : actors.localActorAsync(actorId);
     }
 
     void stageRelocationMessageFollow(

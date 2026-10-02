@@ -55,7 +55,7 @@ final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCal
             waiter.whenComplete(
                     (message, error) -> {
                         if (message != null) {
-                            message.payload().payload().close();
+                            ZLinkStreamCleanup.closeMessage(message);
                             //  Spec 32 10.1: every failure of an observation
                             //  surface is ValidationFailed.
                             result.completeExceptionally(
@@ -82,7 +82,7 @@ final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCal
                 connector.on(
                         name,
                         message -> {
-                            message.payload().payload().close();
+                            ZLinkStreamCleanup.closeMessage(message);
                             result.completeExceptionally(
                                     ZLinkStreamException.validationFailed(
                                             "Expected no '"
@@ -92,16 +92,9 @@ final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCal
                                                     + "."));
                             return CompletableFuture.completedFuture(null);
                         });
-        result.whenComplete((ignored, error) -> closeQuietly(subscription));
+        result.whenComplete((ignored, error) -> ZLinkStreamCleanup.close(subscription));
         CompletableFuture.delayedExecutor(window.toMillis(), TimeUnit.MILLISECONDS)
                 .execute(() -> result.complete(null));
         return result;
-    }
-
-    private static void closeQuietly(AutoCloseable closeable) {
-        try {
-            closeable.close();
-        } catch (Exception ignored) {
-        }
     }
 }

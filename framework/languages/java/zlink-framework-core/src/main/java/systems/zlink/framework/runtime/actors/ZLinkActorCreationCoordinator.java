@@ -151,22 +151,6 @@ public final class ZLinkActorCreationCoordinator
             ZLinkMeshNodeDescriptor target,
             EntrySpot entry,
             Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
-        if (!isExactReadyTarget(target, node.status(), node.peers())) {
-            if (System.currentTimeMillis() >= deadline) {
-                return admissionUnavailable("Actor placement target is no longer ready");
-            }
-            return awaitConflict()
-                    .thenCompose(
-                            ignored ->
-                                    resumeOrCreate(
-                                            operation,
-                                            actorId,
-                                            actorType,
-                                            requestEnvelope,
-                                            getOrCreate,
-                                            deadline,
-                                            excludedTargets));
-        }
         String key = ZLinkAuthorityKeyCodec.actor(actorId);
         byte[] creating =
                 authorities.encode(

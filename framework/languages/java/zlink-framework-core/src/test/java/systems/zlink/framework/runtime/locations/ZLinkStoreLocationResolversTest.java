@@ -7,6 +7,16 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
+import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
+import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreValue;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -29,6 +39,363 @@ import java.util.function.BiFunction;
 final class ZLinkStoreLocationResolversTest {
     private static final Instant NOW = Instant.parse("2026-07-27T00:00:00Z");
     private static final RoutingId NODE = RoutingId.from("node-a");
+
+    @Test
+    void serviceSummaryCountsExactLiveOwnersAndKeepsErrorCountZero() {
+        var live = meshNodeDescriptor("mesh", RoutingId.from("live"), "live-owner");
+        var stale = meshNodeDescriptor("mesh", RoutingId.from("stale"), "stale-owner");
+        var missing = meshNodeDescriptor("mesh", RoutingId.from("missing"), "missing-owner");
+        var expired = meshNodeDescriptor("mesh", RoutingId.from("expired"), "expired-owner");
+        var store =
+                repository(
+                        (method, arguments) ->
+                                switch (method) {
+                                    case "listMeshNodes" ->
+                                            CompletableFuture.completedFuture(
+                                                    new ZLinkLocationPage<>(
+                                                            List.of(live, stale, missing, expired),
+                                                            null));
+                                    case "readOwnerLease" ->
+                                            CompletableFuture.completedFuture(
+                                                    "missing-owner".equals(arguments[0])
+                                                            ? new ZLinkOwnerLeaseMissing()
+                                                            : new ZLinkOwnerLeaseFound(
+                                                                    new ZLinkLocationOwnerToken(
+                                                                            (String) arguments[0],
+                                                                            "stale-owner"
+                                                                                            .equals(
+                                                                                                    arguments[
+                                                                                                            0])
+                                                                                    ? 2
+                                                                                    : 1),
+                                                                    "expired-owner"
+                                                                                    .equals(
+                                                                                            arguments[
+                                                                                                    0])
+                                                                            ? NOW
+                                                                            : NOW.plusSeconds(30),
+                                                                    NOW));
+                                    default -> throw new UnsupportedOperationException(method);
+                                });
+        var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+        try (var runtime =
+                new ZLinkLocationRuntime(stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query =
+                    new ZLinkLocationRuntimeQueryService(
+                            stores, runtime, new ZLinkLocationOptions());
+            var summary =
+                    query.listServiceSummaries(new ZLinkLocationServiceSummaryFilter("mesh"), null)
+                            .toCompletableFuture()
+                            .join()
+                            .items()
+                            .get(0);
+            assertEquals(4, summary.totalCount());
+            assertEquals(1, summary.readyCount());
+            assertEquals(3, summary.stoppedCount());
+            assertEquals(0, summary.errorCount());
+        }
+    }
+
+    @Test
+    void serviceSummaryRejectsOwnerLeaseFoundForAnotherOwner() {
+        var live = meshNodeDescriptor("mesh", RoutingId.from("live"), "live-owner");
+        var wrong = meshNodeDescriptor("mesh", RoutingId.from("wrong"), "requested-owner");
+        var store =
+                repository(
+                        (method, arguments) ->
+                                switch (method) {
+                                    case "listMeshNodes" ->
+                                            CompletableFuture.completedFuture(
+                                                    new ZLinkLocationPage<>(
+                                                            List.of(live, wrong), null));
+                                    case "readOwnerLease" ->
+                                            CompletableFuture.completedFuture(
+                                                    new ZLinkOwnerLeaseFound(
+                                                            new ZLinkLocationOwnerToken(
+                                                                    "live-owner"
+                                                                                    .equals(
+                                                                                            arguments[
+                                                                                                    0])
+                                                                            ? "live-owner"
+                                                                            : "actual-owner",
+                                                                    1),
+                                                            NOW.plusSeconds(30),
+                                                            NOW));
+                                    default -> throw new UnsupportedOperationException(method);
+                                });
+        var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+        try (var runtime =
+                new ZLinkLocationRuntime(stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query =
+                    new ZLinkLocationRuntimeQueryService(
+                            stores, runtime, new ZLinkLocationOptions());
+            var summary =
+                    query.listServiceSummaries(new ZLinkLocationServiceSummaryFilter("mesh"), null)
+                            .toCompletableFuture()
+                            .join()
+                            .items()
+                            .get(0);
+            assertEquals(2, summary.totalCount());
+            assertEquals(1, summary.readyCount());
+            assertEquals(1, summary.stoppedCount());
+            assertEquals(0, summary.errorCount());
+        }
+    }
+
+    @Test
+    void serviceSummaryLeaseFailureFailsTheWholeQuery() {
+        assertServiceSummaryLeaseError(
+                false,
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                new IllegalStateException("lease store unavailable"));
+    }
+
+    @Test
+    void serviceSummaryLeaseWithoutExpirationFailsWithInternalFailure() {
+        assertServiceSummaryLeaseError(true, ZLinkFrameworkErrorKind.INTERNAL_FAILURE, null);
+    }
+
+    @Test
+    void serviceSummaryProviderArgumentFailureIsUnavailable() {
+        assertServiceSummaryLeaseError(
+                false,
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                new IllegalArgumentException("provider rejected lease read"));
+    }
+
+    @Test
+    void serviceSummaryPublicProviderNotFoundFailureIsUnavailable() {
+        assertPublicProviderServiceSummary(
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.NOT_FOUND, "provider read failed"),
+                false,
+                false,
+                false);
+        assertPublicProviderServiceSummary(
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.NOT_FOUND, "provider read failed"),
+                false,
+                true,
+                false);
+    }
+
+    @Test
+    void serviceSummaryPublicProviderInvalidOperationFailureIsUnavailable() {
+        assertPublicProviderServiceSummary(
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION, "provider read failed"),
+                false,
+                false,
+                false);
+        assertPublicProviderServiceSummary(
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION, "provider read failed"),
+                false,
+                true,
+                false);
+    }
+
+    @Test
+    void serviceSummaryPublicProviderLeaseWithoutExpirationIsInternalFailure() {
+        assertPublicProviderServiceSummary(null, true, false, false);
+    }
+
+    @Test
+    void serviceSummaryPublicProviderValidLeaseIsReady() {
+        assertPublicProviderServiceSummary(null, false, false, false);
+    }
+
+    @Test
+    void serviceSummaryPublicProviderWrongOwnerLeaseIsStopped() {
+        assertPublicProviderServiceSummary(null, false, false, true);
+    }
+
+    private static void assertPublicProviderServiceSummary(
+            RuntimeException providerFailure,
+            boolean corrupt,
+            boolean synchronous,
+            boolean wrongOwner) {
+        String ownerId = "owner-a";
+        var backing =
+                new ZLinkInMemoryProviderLocationStore(
+                        java.time.Clock.fixed(NOW, java.time.ZoneOffset.UTC));
+        var seeded = new ZLinkProviderLocationRepository(backing);
+        var claimed =
+                assertInstanceOf(
+                        ZLinkOwnerLeaseClaimed.class,
+                        seeded.claimOwnerLease(ownerId, Duration.ofSeconds(30))
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(1, claimed.token().leaseGeneration());
+        seeded.updateMeshNode(
+                        meshNodeDescriptor("mesh", NODE, ownerId),
+                        ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .join();
+        ZLinkLocationStore provider =
+                new ZLinkLocationStore() {
+                    @Override
+                    public java.util.concurrent.CompletionStage<ZLinkStoreReadResult> read(
+                            ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+                        if (providerFailure != null) {
+                            if (synchronous) throw providerFailure;
+                            return CompletableFuture.failedFuture(providerFailure);
+                        }
+                        return backing.read(key, cancellation)
+                                .thenApply(
+                                        result -> {
+                                            if ((!corrupt && !wrongOwner)
+                                                    || !(result
+                                                            instanceof ZLinkStoreReadFound found))
+                                                return result;
+                                            var value = found.value();
+                                            byte[] leaseBytes = value.bytes();
+                                            if (wrongOwner) {
+                                                String mutated =
+                                                        new String(
+                                                                        leaseBytes,
+                                                                        java.nio.charset
+                                                                                .StandardCharsets
+                                                                                .UTF_8)
+                                                                .replace(
+                                                                        "\"" + ownerId + "\"",
+                                                                        "\"other-owner\"");
+                                                byte[] changed =
+                                                        mutated.getBytes(
+                                                                java.nio.charset.StandardCharsets
+                                                                        .UTF_8);
+                                                assertFalse(
+                                                        java.util.Arrays.equals(
+                                                                leaseBytes, changed));
+                                                assertTrue(mutated.contains("\"other-owner\""));
+                                                leaseBytes = changed;
+                                            }
+                                            return new ZLinkStoreReadFound(
+                                                    new ZLinkStoreValue(
+                                                            leaseBytes,
+                                                            value.version(),
+                                                            corrupt ? null : value.expiresAt(),
+                                                            value.storeNow()));
+                                        });
+                    }
+
+                    @Override
+                    public java.util.concurrent.CompletionStage<ZLinkStoreWriteResult> write(
+                            ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+                        return backing.write(request, cancellation);
+                    }
+
+                    @Override
+                    public java.util.concurrent.CompletionStage<ZLinkStoreScanResult> scan(
+                            ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
+                        return backing.scan(request, cancellation);
+                    }
+                };
+        var stores =
+                ZLinkRegisteredLocationStores.fromUnified(
+                        new ZLinkProviderLocationRepository(provider));
+        try (var runtime =
+                new ZLinkLocationRuntime(stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query =
+                    new ZLinkLocationRuntimeQueryService(
+                            stores, runtime, new ZLinkLocationOptions());
+            var operation =
+                    query.listServiceSummaries(new ZLinkLocationServiceSummaryFilter("mesh"), null);
+            if (providerFailure == null && !corrupt) {
+                var summary = operation.toCompletableFuture().join().items().get(0);
+                assertEquals(1, summary.totalCount());
+                assertEquals(wrongOwner ? 0 : 1, summary.readyCount());
+                assertEquals(wrongOwner ? 1 : 0, summary.stoppedCount());
+                assertEquals(0, summary.errorCount());
+            } else {
+                var failure =
+                        assertThrows(
+                                CompletionException.class,
+                                () -> operation.toCompletableFuture().join());
+                var actual = assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+                assertEquals(
+                        corrupt
+                                ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE
+                                : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        actual.kind());
+                if (providerFailure != null) assertSame(providerFailure, actual.getCause());
+            }
+        }
+    }
+
+    @Test
+    void serviceSummaryPageValidationRemainsSynchronous() {
+        var store =
+                repository(
+                        (method, arguments) -> {
+                            throw new AssertionError("no provider read expected");
+                        });
+        var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+        try (var runtime =
+                new ZLinkLocationRuntime(stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query =
+                    new ZLinkLocationRuntimeQueryService(
+                            stores, runtime, new ZLinkLocationOptions());
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            query.listServiceSummaries(
+                                    new ZLinkLocationServiceSummaryFilter("mesh"),
+                                    new ZLinkPageRequest(1001, null)));
+        }
+    }
+
+    private static void assertServiceSummaryLeaseError(
+            boolean corrupt, ZLinkFrameworkErrorKind expected, RuntimeException storeFailure) {
+        var live = meshNodeDescriptor("mesh", RoutingId.from("live"), "live-owner");
+        var failed = meshNodeDescriptor("mesh", RoutingId.from("failed"), "failed-owner");
+        var store =
+                repository(
+                        (method, arguments) ->
+                                switch (method) {
+                                    case "listMeshNodes" ->
+                                            CompletableFuture.completedFuture(
+                                                    new ZLinkLocationPage<>(
+                                                            List.of(live, failed), null));
+                                    case "readOwnerLease" -> {
+                                        if ("live-owner".equals(arguments[0]))
+                                            yield CompletableFuture.completedFuture(
+                                                    new ZLinkOwnerLeaseFound(
+                                                            new ZLinkLocationOwnerToken(
+                                                                    "live-owner", 1),
+                                                            NOW.plusSeconds(30),
+                                                            NOW));
+                                        if (corrupt)
+                                            yield CompletableFuture.completedFuture(
+                                                    new ZLinkOwnerLeaseFound(
+                                                            new ZLinkLocationOwnerToken(
+                                                                    "failed-owner", 1),
+                                                            null,
+                                                            NOW));
+                                        yield CompletableFuture.failedFuture(storeFailure);
+                                    }
+                                    default -> throw new UnsupportedOperationException(method);
+                                });
+        var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+        try (var runtime =
+                new ZLinkLocationRuntime(stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query =
+                    new ZLinkLocationRuntimeQueryService(
+                            stores, runtime, new ZLinkLocationOptions());
+            var failure =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    query.listServiceSummaries(
+                                                    new ZLinkLocationServiceSummaryFilter("mesh"),
+                                                    null)
+                                            .toCompletableFuture()
+                                            .join());
+            assertEquals(
+                    expected,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        }
+    }
 
     @Test
     void firstPageUsesTheQueryDefaultSize() {

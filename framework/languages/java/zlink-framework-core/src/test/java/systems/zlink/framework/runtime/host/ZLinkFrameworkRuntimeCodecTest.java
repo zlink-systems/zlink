@@ -114,5 +114,10 @@ final class ZLinkFrameworkRuntimeCodecTest {
         public Object create(Class<?> handlerType) {
             return delegate.create(handlerType);
         }
+
+        @Override
+        public Object findService(Class<?> serviceType) {
+            return delegate.findService(serviceType);
+        }
     }
 }

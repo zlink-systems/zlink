@@ -1798,33 +1798,42 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     systems.zlink.framework.runtime.internal.backend
                                             .ZLinkBackendActorReceived>>
                     firstDispatch = new CompletableFuture<>();
+            CompletableFuture<Void> firstHandling = new CompletableFuture<>();
             entry.onDispatchEvent(
-                    info -> {
-                        if (info.event() != ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
-                            return;
-                        }
-                        List<
+                    new ZLinkInternalAsyncSpotDispatchHandler() {
+                        @Override
+                        public CompletionStage<Void> handleAsync(
+                                ZLinkBackendSpotDispatchInfo info) {
+                            if (info.event() != ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            List<
+                                            systems.zlink.framework.runtime.internal.backend
+                                                    .ZLinkBackendActorReceived>
+                                    received = info.actorMessages();
+                            if (firstDispatch.complete(received)) {
+                                // Spec 01-execution/02-handler-turn-and-execution-gate.ko.md:94 and
+                                // 01-execution/08-messaging-hot-path.ko.md:216 keep the dispatch
+                                // terminal after its reply operation.
+                                return firstHandling;
+                            }
+                            var first = received.getFirst();
+                            try (Message reply = Message.from("remote-actor-reply")) {
+                                left.spotNode()
+                                        .replyActorNoBind(
+                                                first.actor(),
+                                                first.sourceNodeRid(),
+                                                first.sourceSessionRid(),
+                                                first.requestId(),
+                                                first.flags(),
+                                                List.of(reply));
+                            } finally {
+                                received.forEach(
                                         systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkBackendActorReceived>
-                                received = info.actorMessages();
-                        if (firstDispatch.complete(received)) {
-                            return;
-                        }
-                        var first = received.getFirst();
-                        try (Message reply = Message.from("remote-actor-reply")) {
-                            left.spotNode()
-                                    .replyActorNoBind(
-                                            first.actor(),
-                                            first.sourceNodeRid(),
-                                            first.sourceSessionRid(),
-                                            first.requestId(),
-                                            first.flags(),
-                                            List.of(reply));
-                        } finally {
-                            received.forEach(
-                                    systems.zlink.framework.runtime.internal.backend
-                                                    .ZLinkBackendActorReceived
-                                            ::close);
+                                                        .ZLinkBackendActorReceived
+                                                ::close);
+                            }
+                            return CompletableFuture.completedFuture(null);
                         }
                     });
             ZLinkBackendActorRef actor;
@@ -1846,22 +1855,26 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         SendFlags.DONT_WAIT,
                                         Duration.ofSeconds(2));
             }
-            List<systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived>
-                    retained = firstDispatch.get(2, TimeUnit.SECONDS);
-            assertEquals(1, retained.size());
-            var first = retained.getFirst();
-            awaitOutstandingApplicationLease(context, 0L);
-            first.close();
-            awaitOutstandingApplicationLease(context, 0L);
-            try (Message response = Message.from("remote-actor-reply")) {
-                left.spotNode()
-                        .replyActorNoBind(
-                                first.actor(),
-                                first.sourceNodeRid(),
-                                first.sourceSessionRid(),
-                                first.requestId(),
-                                first.flags(),
-                                List.of(response));
+            try {
+                List<systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived>
+                        retained = firstDispatch.get(2, TimeUnit.SECONDS);
+                assertEquals(1, retained.size());
+                var first = retained.getFirst();
+                awaitOutstandingApplicationLease(context, 0L);
+                first.close();
+                awaitOutstandingApplicationLease(context, 0L);
+                try (Message response = Message.from("remote-actor-reply")) {
+                    left.spotNode()
+                            .replyActorNoBind(
+                                    first.actor(),
+                                    first.sourceNodeRid(),
+                                    first.sourceSessionRid(),
+                                    first.requestId(),
+                                    first.flags(),
+                                    List.of(response));
+                }
+            } finally {
+                firstHandling.complete(null);
             }
             List<Message> reply = firstRequest.toCompletableFuture().get(2, TimeUnit.SECONDS);
             try {
@@ -2585,7 +2598,6 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             sessionRid,
                             null,
                             new ZLinkStringMessageSerializer(),
-                            ignored -> true,
                             null,
                             true,
                             ZLinkStreamCodec.RAW);

@@ -716,20 +716,22 @@ test('managed stream delegates each call timeout to binding-owned admission', as
   assert.deepEqual(observed, [25, 4]);
 });
 
-test('managed stream classifies a disconnected STREAM peer as an unusable route, not a deadline', async () => {
+test('managed stream projects STREAM submit failures by admission phase', async () => {
   const { requireOneWayCompletion } = require('../../packages/framework/dist/runtime/messaging/submission-result');
   const { ZLinkFrameworkException, ZLinkFrameworkErrorKind } = require('../../packages/framework/dist/contracts');
-  const failures = new Map([
-    [SubmitResult.NotConnected, ZLinkSubmitStatus.RouteNotConnected],
-    [SubmitResult.Backpressured, ZLinkSubmitStatus.Backpressured]
-  ]);
-  for (const [result, status] of failures) {
+  const failures = [
+    [SubmitResult.NotConnected, 'completion', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable],
+    [SubmitResult.NotConnected, 'submit', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable],
+    [SubmitResult.Backpressured, 'completion', ZLinkSubmitStatus.TimedOut, ZLinkFrameworkErrorKind.DeadlineExceeded],
+    [SubmitResult.Backpressured, 'submit', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable]
+  ];
+  for (const [result, phase, status, kind] of failures) {
     const socket = {
       sendTimeoutMs: 10,
       sendHighWaterMark: 16,
       onSendReady() {},
       send() { return true; },
-      async submit() { throw new ZLinkBackendResultError('submit', result); },
+      async submit() { throw new ZLinkBackendResultError('submit', result, undefined, { phase }); },
       disconnectPeer() {},
       recv() { return undefined; }
     };
@@ -738,14 +740,10 @@ test('managed stream classifies a disconnected STREAM peer as an unusable route,
     try {
       const submitted = await stream.submitRaw(message);
       assert.deepEqual(submitted, { status });
-      if (result === SubmitResult.NotConnected) {
-        assert.throws(
-          () => requireOneWayCompletion(submitted, 'STREAM session reply'),
-          (error) =>
-            error instanceof ZLinkFrameworkException &&
-            error.kind === ZLinkFrameworkErrorKind.Unavailable
-        );
-      }
+      assert.throws(
+        () => requireOneWayCompletion(submitted, 'STREAM session reply'),
+        (error) => error instanceof ZLinkFrameworkException && error.kind === kind
+      );
     } finally {
       message.close();
     }

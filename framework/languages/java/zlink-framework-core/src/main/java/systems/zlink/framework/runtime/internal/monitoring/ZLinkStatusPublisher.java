@@ -4,6 +4,7 @@ import systems.zlink.framework.monitoring.ZLinkObservationLoss;
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -20,6 +21,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Delivers changed snapshots through bounded, per-subscriber queues.
@@ -31,6 +34,7 @@ import java.util.function.Supplier;
  * cannot grow terminal retention without a limit.
  */
 public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObservedStatus<T>> {
+    private static final Logger LOGGER = Logger.getLogger(ZLinkStatusPublisher.class.getName());
     public static final int MINIMUM_CAPACITY = 1;
     private static final Object SINGLE_SOURCE = new Object();
     private final Supplier<T> snapshot;
@@ -164,6 +168,21 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
         schedule();
     }
 
+    /** Fails current observers without changing the source's next-subscription policy. */
+    public void fail(Throwable cause) {
+        Objects.requireNonNull(cause, "cause");
+        var detached = new ArrayList<SnapshotSubscription>();
+        for (SnapshotSubscription subscription : subscriptions) {
+            if (subscription.detach()) detached.add(subscription);
+        }
+        Consumer<Boolean> listener;
+        synchronized (retentionGate) {
+            listener = !detached.isEmpty() && activeSubscriptions > 0 ? retention : null;
+        }
+        if (listener != null) listener.accept(true);
+        detached.forEach(subscription -> subscription.notifyFailure(cause));
+    }
+
     /** Signals only when the existing subscriber list has an observer. */
     public void signalIfSubscribed() {
         if (!subscriptions.isEmpty()) {
@@ -248,7 +267,7 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
                 dispatcher.execute(this::drain);
             } catch (RuntimeException failure) {
                 drainScheduled.set(false);
-                subscriptions.forEach(subscription -> subscription.fail(failure));
+                fail(failure);
                 throw failure;
             }
         }
@@ -269,7 +288,7 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
                 }
             }
         } catch (Throwable failure) {
-            subscriptions.forEach(subscription -> subscription.fail(failure));
+            fail(failure);
         } finally {
             drainScheduled.set(false);
             if (workPending.get() && drainScheduled.compareAndSet(false, true)) {
@@ -302,9 +321,7 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
         @Override
         public void request(long count) {
             if (count <= 0) {
-                cancel();
-                subscriber.onError(
-                        new IllegalArgumentException("subscription demand must be positive"));
+                fail(new IllegalArgumentException("subscription demand must be positive"));
                 return;
             }
             demand.getAndUpdate(
@@ -317,9 +334,13 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
 
         @Override
         public void cancel() {
-            if (cancelled.compareAndSet(false, true) && subscriptions.remove(this)) {
-                releaseForSubscription();
-            }
+            detach();
+        }
+
+        private boolean detach() {
+            if (!cancelled.compareAndSet(false, true)) return false;
+            if (subscriptions.remove(this)) releaseForSubscription();
+            return true;
         }
 
         private void observe(T value, Object currentFingerprint) {
@@ -402,11 +423,17 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
         }
 
         private void fail(Throwable failure) {
-            if (cancelled.compareAndSet(false, true)) {
-                if (subscriptions.remove(this)) {
-                    releaseForSubscription();
-                }
+            if (detach()) notifyFailure(failure);
+        }
+
+        private void notifyFailure(Throwable failure) {
+            try {
                 subscriber.onError(failure);
+            } catch (Throwable notificationFailure) {
+                LOGGER.log(
+                        Level.WARNING,
+                        "Status subscriber error callback failed",
+                        notificationFailure);
             }
         }
 

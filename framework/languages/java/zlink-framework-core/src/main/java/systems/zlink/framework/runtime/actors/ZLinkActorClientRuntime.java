@@ -3,9 +3,7 @@ package systems.zlink.framework.runtime.actors;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorRequestCall;
@@ -54,7 +52,6 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 public final class ZLinkActorClientRuntime implements ZLinkActorClient {
-    private static final Duration FALLBACK_ROUTE_RETRY_TIMEOUT = Duration.ofSeconds(5);
 
     private final Supplier<ZLinkInternalSpotNode> spotNode;
     private final ZLinkStoreLocationResolvers locations;
@@ -167,7 +164,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                         ZLinkFlowContext.call(
                                                 operationFlow,
                                                 () ->
-                                                        submitRequestWithRouteRetry(
+                                                        submitRequest(
                                                                 rememberAuthority(row, actorId),
                                                                 packetName,
                                                                 request,
@@ -190,23 +187,6 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                         : ZLinkRequestMetrics.elapsed(started, System.nanoTime()),
                                 error));
         return result;
-    }
-
-    private <TReply> CompletionStage<TReply> submitRequestWithRouteRetry(
-            ZLinkBackendActorRef actor,
-            String packetName,
-            Object request,
-            Map<String, String> metadata,
-            Duration timeout,
-            Class<TReply> replyType) {
-        Duration effectiveTimeout = timeout == null ? defaultTimeout : timeout;
-        return ZLinkActorRetryScheduler.retryRouteUntil(
-                        routeRetryTimeout(effectiveTimeout),
-                        () ->
-                                submitRequest(
-                                        actor, packetName, request, metadata, timeout, replyType),
-                        ZLinkActorClientRuntime::isRouteNotConnected)
-                .exceptionallyCompose(error -> failed(unwrap(error)));
     }
 
     private CompletionStage<ActorRoute> resolveActorAddress(
@@ -491,28 +471,6 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         return unwrapped instanceof ZLinkFrameworkException frameworkError
                 && (frameworkError.kind() == ZLinkFrameworkErrorKind.NOT_FOUND
                         || frameworkError.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE);
-    }
-
-    private static boolean isRouteNotConnected(Throwable error) {
-        Throwable unwrapped = unwrap(error);
-        if (!(unwrapped instanceof ZLinkFrameworkException frameworkError)
-                || frameworkError.kind() != ZLinkFrameworkErrorKind.UNAVAILABLE) {
-            return false;
-        }
-        Throwable cause = frameworkError.getCause();
-        if (cause instanceof ZlinkRequestException request) {
-            return request.getResult() == RequestResult.NOT_CONNECTED;
-        }
-        if (cause instanceof ZlinkSubmitException submit) {
-            return submit.getResult() == SubmitResult.NOT_CONNECTED;
-        }
-        return false;
-    }
-
-    private static Duration routeRetryTimeout(Duration timeout) {
-        return timeout == null || timeout.isZero() || timeout.isNegative()
-                ? FALLBACK_ROUTE_RETRY_TIMEOUT
-                : timeout;
     }
 
     private static Throwable unwrap(Throwable error) {

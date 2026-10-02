@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.actors;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -40,6 +41,61 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 final class ZLinkActorTransferHandoffTest {
+    @Test
+    void closePreservesSourceRemovalFailuresAndRetiresEveryOwnedSource() {
+        ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        IllegalStateException first = new IllegalStateException("first removal failed");
+        IllegalStateException second = new IllegalStateException("second removal failed");
+        List<String> removed = new ArrayList<>();
+        handoff.retain(
+                "first",
+                ref("source", 1),
+                ref("target", 2),
+                Duration.ofMinutes(1),
+                source -> {
+                    removed.add("first");
+                    throw first;
+                });
+        handoff.retain(
+                "second",
+                ref("source", 3),
+                ref("target", 4),
+                Duration.ofMinutes(1),
+                source -> {
+                    removed.add("second");
+                    throw second;
+                });
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, handoff::close);
+
+        assertTrue(failure == first || failure == second);
+        assertArrayEquals(
+                new Throwable[] {failure == first ? second : first}, failure.getSuppressed());
+        assertEquals(java.util.Set.of("first", "second"), java.util.Set.copyOf(removed));
+        assertEquals(0, handoff.messageFollowSourceCount());
+    }
+
+    @Test
+    void sourceRemovalFailureDoesNotLeaveOwnedPacketsPending() {
+        ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        IllegalStateException removalFailure = new IllegalStateException("source removal failed");
+        handoff.retain(
+                "source",
+                ref("source", 1),
+                ref("target", 2),
+                Duration.ofMinutes(1),
+                source -> {
+                    throw removalFailure;
+                });
+        handoff.begin("actor");
+        List<ZLinkActorHandoffPacket> packets =
+                List.of(capture(handoff, "P1", Map.of()), capture(handoff, "P2", Map.of()));
+        assertSame(removalFailure, assertThrows(IllegalStateException.class, handoff::close));
+        for (ZLinkActorHandoffPacket packet : packets) {
+            assertTrue(packet.reply().toCompletableFuture().isCompletedExceptionally());
+        }
+    }
+
     @Test
     void inFlightHandoffKeepsArrivalOrder() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
@@ -579,10 +635,10 @@ final class ZLinkActorTransferHandoffTest {
                         route, new ZLinkBackendActorRef(targetNode, "actor", 8), targetAddress));
     }
 
-    private static void capture(
+    private static ZLinkActorHandoffPacket capture(
             ZLinkActorTransferHandoff handoff, String packetName, Map<String, String> metadata) {
         try (Message payload = Message.from(packetName.getBytes(StandardCharsets.UTF_8))) {
-            handoff.capture(
+            return handoff.capture(
                     "actor",
                     new ZLinkStreamHeader(packetName, metadata, Optional.empty()),
                     payload,

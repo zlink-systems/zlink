@@ -68,6 +68,37 @@ import java.util.function.Consumer;
 
 final class ZLinkActorClientRuntimeTest {
     @Test
+    void disconnectedApplicationRequestPreservesTerminalWithoutResubmission() {
+        RequestFailingSpotNode node = new RequestFailingSpotNode(RequestResult.NOT_CONNECTED);
+        ZLinkActorClientRuntime client =
+                new ZLinkActorClientRuntime(
+                        () -> node,
+                        new ZLinkStoreLocationResolvers(
+                                ZLinkRegisteredLocationStores.fromUnified(
+                                        storeWithActor("actor-1")),
+                                new ZLinkLocationOptions()),
+                        new ZLinkJsonMessageSerializer(),
+                        Duration.ofMillis(80),
+                        ZLinkTestAdmissionFactory.create());
+
+        CompletionException failure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                client.requestToActor("actor-1", new Ping("hello"))
+                                        .submit(Pong.class)
+                                        .toCompletableFuture()
+                                        .join());
+
+        ZLinkFrameworkException terminal = (ZLinkFrameworkException) failure.getCause();
+        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, terminal.kind());
+        assertEquals(
+                RequestResult.NOT_CONNECTED,
+                ((ZlinkRequestException) terminal.getCause()).getResult());
+        assertEquals(1, node.requestAttempts);
+    }
+
+    @Test
     void actorSendUsesDeclaredTypeForPayloadAndStreamCodec() {
         ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
         codecs.addSerializer(

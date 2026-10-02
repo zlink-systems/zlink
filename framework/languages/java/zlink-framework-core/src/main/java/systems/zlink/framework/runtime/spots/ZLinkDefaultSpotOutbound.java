@@ -167,13 +167,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
     }
 
     private SpotTransportAddressResolver resolver() {
-        SpotTransportAddressResolver resolver;
-        try {
-            resolver = spotAddressResolver == null ? null : spotAddressResolver.get();
-        } catch (RuntimeException ignored) {
-            resolver = null;
-        }
-        return resolver;
+        return spotAddressResolver == null ? null : spotAddressResolver.get();
     }
 
     private CompletionStage<SpotTransportAddress> resolve(

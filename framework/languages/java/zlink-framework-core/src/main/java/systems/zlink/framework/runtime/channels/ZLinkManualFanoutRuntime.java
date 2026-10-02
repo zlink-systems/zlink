@@ -340,12 +340,14 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         if (monitor != null) {
             try {
                 monitor.close();
-            } catch (RuntimeException ignored) {
+            } catch (RuntimeException failure) {
+                LOGGER.log(Level.WARNING, "unregistered fanout monitor cleanup failed", failure);
             }
         }
         try {
             subscriber.close();
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            LOGGER.log(Level.WARNING, "unregistered fanout subscriber cleanup failed", failure);
         }
     }
 
@@ -603,13 +605,15 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         RuntimeException failure = null;
         try {
             connection.subscriber.disconnect(connection.endpoint);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException disconnectFailure) {
+            failure = disconnectFailure;
         }
         if (connection.monitor != null) {
             try {
                 connection.monitor.close();
             } catch (RuntimeException closeFailure) {
-                failure = closeFailure;
+                if (failure == null) failure = closeFailure;
+                else if (failure != closeFailure) failure.addSuppressed(closeFailure);
             }
         }
         try {
@@ -617,7 +621,7 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         } catch (RuntimeException closeFailure) {
             if (failure == null) {
                 failure = closeFailure;
-            } else {
+            } else if (failure != closeFailure) {
                 failure.addSuppressed(closeFailure);
             }
         }
@@ -635,7 +639,7 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         } catch (RuntimeException stateFailure) {
             if (closeFailure == null) {
                 closeFailure = stateFailure;
-            } else {
+            } else if (closeFailure != stateFailure) {
                 closeFailure.addSuppressed(stateFailure);
             }
         }

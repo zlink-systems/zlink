@@ -74,10 +74,16 @@ test('RouteMesh admission follows the observed Core selected route (FW01)', asyn
   try {
     runtime.connectPeerByRoutingId(peer.advertisedEndpoint, 'peer');
     await runtime.pumpBatch(false, true);
+    for (let round = 0; round < 3; round++) await runtime.pumpBatch(false, true);
+    assert.equal(sent.filter(([target, command]) =>
+      target === 'peer' && command === wire.M6aServiceWireCommand.hello).length, 1);
 
     // Core delivers the handshake of the selected route.
     assert.equal(await hello(11n), 'infrastructure');
     assert.equal(runtime.topology.peer('peer')?.connectionId, 'route:11');
+    for (let round = 0; round < 3; round++) await runtime.pumpBatch(false, true);
+    assert.equal(sent.filter(([target, command]) =>
+      target === 'peer' && command === wire.M6aServiceWireCommand.hello).length, 1);
 
     // Core replaces the route: the admission ends and the new route handshakes.
     routes.set('peer', 12n);
@@ -88,6 +94,9 @@ test('RouteMesh admission follows the observed Core selected route (FW01)', asyn
       target === 'peer' && command === wire.M6aServiceWireCommand.hello));
     assert.equal(await hello(12n), 'infrastructure');
     assert.equal(runtime.topology.peer('peer')?.connectionId, 'route:12');
+    for (let round = 0; round < 3; round++) await runtime.pumpBatch(false, true);
+    assert.equal(sent.filter(([target, command]) =>
+      target === 'peer' && command === wire.M6aServiceWireCommand.hello).length, 1);
 
     // The route disappears: nothing stays admitted on it.
     routes.delete('peer');

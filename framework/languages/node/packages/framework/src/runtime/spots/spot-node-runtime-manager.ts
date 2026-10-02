@@ -116,6 +116,7 @@ const ZLINK_SEND_DONT_WAIT = 1;
 const EMPTY_SPOT_METADATA: ReadonlyMap<string, string> = new Map();
 
 export interface ZLinkSpotNodeRuntimeManagerOptions {
+  readonly errorSink: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
   readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
   readonly primaryMeshName?: string;
@@ -223,7 +224,8 @@ export class ZLinkSpotNodeRuntimeManager {
           peerResolver: location.resolver,
           executor: capability.executor,
           events: location.events,
-          options: location.options
+          options: location.options,
+          errorSink: this.options.errorSink
         });
         const loop = new ZLinkAutoConnectLoop({
           reconciler,

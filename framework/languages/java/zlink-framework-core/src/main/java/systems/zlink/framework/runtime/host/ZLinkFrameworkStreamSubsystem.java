@@ -44,7 +44,6 @@ final class ZLinkFrameworkStreamSubsystem {
                                 serializer,
                                 actors,
                                 runtimeHandlers,
-                                spots == null ? ignored -> true : spots::isSessionRelayRouteReady,
                                 spots,
                                 eventDispatcher,
                                 backendContext,

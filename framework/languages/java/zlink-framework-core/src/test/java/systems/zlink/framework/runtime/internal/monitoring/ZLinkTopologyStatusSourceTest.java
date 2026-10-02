@@ -114,6 +114,45 @@ final class ZLinkTopologyStatusSourceTest {
         }
     }
 
+    @Test
+    void registrationFailureAfterFirstSubscriptionReportsCauseAndAllowsNextSubscriber()
+            throws Exception {
+        var source = source(new AtomicReference<>(ZLinkTopologyState.READY));
+        var publisher = source.observe("first", 1);
+        var failure = new IllegalStateException("registration failed");
+        var registrations = new java.util.concurrent.atomic.AtomicInteger();
+        source.onActiveSubscriptions(
+                "first",
+                active -> {
+                    if (active && registrations.incrementAndGet() == 1)
+                        source.fail("first", failure);
+                });
+        assertEquals(0, registrations.get());
+        var errors = new LinkedBlockingQueue<Throwable>();
+        var deliveries = new java.util.concurrent.atomic.AtomicInteger();
+        publisher.subscribe(
+                new Flow.Subscriber<>() {
+                    public void onSubscribe(Flow.Subscription subscription) {
+                        subscription.request(1);
+                    }
+
+                    public void onNext(ZLinkObservedStatus<Status> status) {
+                        deliveries.incrementAndGet();
+                    }
+
+                    public void onError(Throwable cause) {
+                        errors.add(cause);
+                    }
+
+                    public void onComplete() {}
+                });
+        org.junit.jupiter.api.Assertions.assertSame(failure, errors.poll(1, TimeUnit.SECONDS));
+        assertEquals(0, deliveries.get());
+        assertEquals(0, errors.size());
+        assertNotNull(first(publisher));
+        assertEquals(2, registrations.get());
+    }
+
     private static ZLinkTopologyStatusSource<Status> source(
             AtomicReference<ZLinkTopologyState> state) {
         return new ZLinkTopologyStatusSource<>(
