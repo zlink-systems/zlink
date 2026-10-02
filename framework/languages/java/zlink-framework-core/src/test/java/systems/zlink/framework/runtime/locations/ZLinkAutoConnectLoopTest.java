@@ -37,7 +37,11 @@ final class ZLinkAutoConnectLoopTest {
                                 "inproc://client"),
                         resolver,
                         new RecordingExecutor(),
-                        options);
+                        options,
+                        System::nanoTime,
+                        failure -> {
+                            throw failure;
+                        });
         ZLinkAutoConnectLoop loop = new ZLinkAutoConnectLoop(reconciler, options);
         try {
             loop.start();
@@ -68,7 +72,11 @@ final class ZLinkAutoConnectLoopTest {
                                 "inproc://client"),
                         resolver,
                         executor,
-                        options);
+                        options,
+                        System::nanoTime,
+                        failure -> {
+                            throw failure;
+                        });
         ZLinkAutoConnectLoop loop = new ZLinkAutoConnectLoop(reconciler, options);
 
         CompletionStage<Void> tick = loop.start();

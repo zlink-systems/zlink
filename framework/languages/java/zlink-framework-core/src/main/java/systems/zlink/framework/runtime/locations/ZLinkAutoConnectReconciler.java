@@ -37,31 +37,6 @@ final class ZLinkAutoConnectReconciler {
             ZLinkAutoConnectPlanner.Local local,
             ZLinkAutoConnectPeerResolver peers,
             ZLinkAutoConnectExecutor executor,
-            ZLinkLocationOptions options) {
-        this(local, peers, executor, options, System::nanoTime);
-    }
-
-    ZLinkAutoConnectReconciler(
-            ZLinkAutoConnectPlanner.Local local,
-            ZLinkAutoConnectPeerResolver peers,
-            ZLinkAutoConnectExecutor executor,
-            ZLinkLocationOptions options,
-            LongSupplier nanoTime) {
-        this(
-                local,
-                peers,
-                executor,
-                options,
-                nanoTime,
-                failure -> {
-                    throw failure;
-                });
-    }
-
-    ZLinkAutoConnectReconciler(
-            ZLinkAutoConnectPlanner.Local local,
-            ZLinkAutoConnectPeerResolver peers,
-            ZLinkAutoConnectExecutor executor,
             ZLinkLocationOptions options,
             LongSupplier nanoTime,
             Consumer<? super ZlinkConnectException> runtimeErrorSink) {

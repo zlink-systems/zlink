@@ -148,7 +148,11 @@ final class ZLinkAutoConnectReconcilerTest {
                                 "inproc://client"),
                         resolver,
                         executor,
-                        new ZLinkLocationOptions());
+                        new ZLinkLocationOptions(),
+                        System::nanoTime,
+                        failure -> {
+                            throw failure;
+                        });
         reconciler.tick().toCompletableFuture().join();
         reconciler.tick().toCompletableFuture().join();
         assertEquals(List.of("connect"), connectionOperations);
@@ -269,7 +273,10 @@ final class ZLinkAutoConnectReconcilerTest {
                         resolver,
                         executor,
                         new ZLinkLocationOptions(),
-                        now::get);
+                        now::get,
+                        failure -> {
+                            throw failure;
+                        });
         resolver.rows =
                 List.of(
                         new ZLinkAutoConnectPeer(
@@ -315,7 +322,10 @@ final class ZLinkAutoConnectReconcilerTest {
                 resolver,
                 executor,
                 options,
-                now::get);
+                now::get,
+                failure -> {
+                    throw failure;
+                });
     }
 
     private static ZLinkAutoConnectPeer peer() {

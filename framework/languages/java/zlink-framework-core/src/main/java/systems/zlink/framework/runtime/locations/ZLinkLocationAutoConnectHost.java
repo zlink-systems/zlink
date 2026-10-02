@@ -48,30 +48,6 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     public ZLinkLocationAutoConnectHost(
             ZLinkLocationRuntime runtime,
             ZLinkAutoConnectPeerResolver peers,
-            ZLinkLocationOptions options) {
-        this(runtime, peers, options, null, null);
-    }
-
-    public ZLinkLocationAutoConnectHost(
-            ZLinkLocationRuntime runtime,
-            ZLinkAutoConnectPeerResolver peers,
-            ZLinkLocationOptions options,
-            ZLinkClientServerRuntimeConfiguration clientServers) {
-        this(runtime, peers, options, clientServers, null);
-    }
-
-    public ZLinkLocationAutoConnectHost(
-            ZLinkLocationRuntime runtime,
-            ZLinkAutoConnectPeerResolver peers,
-            ZLinkLocationOptions options,
-            ZLinkClientServerRuntimeConfiguration clientServers,
-            ZLinkFanoutRuntimeConfiguration fanout) {
-        this(runtime, peers, options, clientServers, fanout, new ZLinkRuntimeEventDispatcher());
-    }
-
-    public ZLinkLocationAutoConnectHost(
-            ZLinkLocationRuntime runtime,
-            ZLinkAutoConnectPeerResolver peers,
             ZLinkLocationOptions options,
             ZLinkClientServerRuntimeConfiguration clientServers,
             ZLinkFanoutRuntimeConfiguration fanout,
