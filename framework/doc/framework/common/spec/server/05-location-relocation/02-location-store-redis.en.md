@@ -381,7 +381,7 @@ record golden fixture. Each item maps to one test.
 - The records of §9 are verified by a conformance test that consumes
   the store record golden fixture's
   (`framework/runtime/protocol/golden/store-record-v1.json`) key-derivation
-  vectors (preimage → SHA-256 → full key string) as-is; the five records
+  vectors (preimage → SHA-256 → full key string) as-is; the records
   with a canonical JSON value also consume its value byte vectors (including
   tombstone and expired variants). The service-wire schema owns the creation
   terminal's value byte format.
