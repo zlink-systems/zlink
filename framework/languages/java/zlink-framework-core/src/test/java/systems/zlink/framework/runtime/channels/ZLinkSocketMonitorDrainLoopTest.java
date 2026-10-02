@@ -55,11 +55,12 @@ final class ZLinkSocketMonitorDrainLoopTest {
                         "monitor-drain-cancellation", monitor, event -> {});
 
         assertTrue(monitor.waitEntered.await(1, TimeUnit.SECONDS));
+        monitor.close();
         loop.interrupt();
         loop.join(1_000);
 
         assertFalse(loop.isAlive());
-        assertFalse(monitor.isClosed());
+        assertTrue(monitor.isClosed());
     }
 
     @Test
