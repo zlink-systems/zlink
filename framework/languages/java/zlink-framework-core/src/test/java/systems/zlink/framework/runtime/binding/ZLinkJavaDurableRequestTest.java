@@ -206,16 +206,42 @@ final class ZLinkJavaDurableRequestTest {
     @Test
     void synchronousSubmitFailureRetainsItsTypedCause() {
         var failure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
+        var attempts = new AtomicInteger();
         var completion =
                 ZLinkJavaDurableRequest.request(
                         () -> List.of(new byte[] {1}),
                         (frames, remaining) -> {
+                            attempts.incrementAndGet();
                             throw failure;
                         },
                         () -> false,
                         Duration.ofMillis(30));
         assertFailure(
                 completion.toCompletableFuture(), ZLinkFrameworkErrorKind.UNAVAILABLE, failure);
+        assertEquals(1, attempts.get(), "tokenless capacity rejection must not replay");
+    }
+
+    @Test
+    void writableWaitTimeoutEndsAsDeadlineExceededWithoutReplay() {
+        var failure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
+        var attempts = new AtomicInteger();
+        var pending = new CompletableFuture<List<byte[]>>();
+        var completion =
+                ZLinkJavaDurableRequest.request(
+                        () -> List.of(new byte[] {1}),
+                        (frames, remaining) -> {
+                            attempts.incrementAndGet();
+                            return pending;
+                        },
+                        () -> false,
+                        Duration.ofSeconds(5));
+        pending.completeExceptionally(failure);
+        assertTrue(completion.toCompletableFuture().isDone());
+        assertFailure(
+                completion.toCompletableFuture(),
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                failure);
+        assertEquals(1, attempts.get(), "binding writable timeout is already terminal");
     }
 
     @Test

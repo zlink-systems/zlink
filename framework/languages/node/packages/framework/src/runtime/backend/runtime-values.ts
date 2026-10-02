@@ -46,11 +46,14 @@ export class ZLinkBackendResultError extends Error {
     readonly operation: 'request' | 'submit',
     readonly result: number,
     readonly nativeErrno?: number,
-    options?: ErrorOptions
+    options?: ErrorOptions & { readonly phase?: 'submit' | 'completion' }
   ) {
     super(`Backend ${operation} failed with result ${result}.`, options);
     this.name = 'ZLinkBackendResultError';
+    this.phase = options?.phase ?? 'completion';
   }
+
+  readonly phase: 'submit' | 'completion';
 }
 
 export function isZLinkBackendResultError(error: unknown): error is ZLinkBackendResultError {
