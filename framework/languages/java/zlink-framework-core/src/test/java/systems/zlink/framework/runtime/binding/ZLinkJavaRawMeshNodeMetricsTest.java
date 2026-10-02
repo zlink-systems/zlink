@@ -16,7 +16,11 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
+import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -31,8 +35,78 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class ZLinkJavaRawMeshNodeMetricsTest {
+    @Test
+    void instanceActivationUsesCanonicalDispatchReasonsOnce() throws Exception {
+        LinkedBlockingQueue<String> diagnostics = new LinkedBlockingQueue<>();
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Handler listener =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        if (record.getMessage().contains("event_id=zlink.dispatch_error")) {
+                            diagnostics.add(record.getMessage());
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(listener);
+        try (Pair pair = new Pair()) {
+            var reporter =
+                    new ZLinkDispatchErrorReporter(
+                            new ZLinkDispatchOptionsRegistration(),
+                            ZLinkHandlerActivator.reflection(),
+                            Runnable::run);
+            pair.target.setDispatchErrorReporter(reporter);
+            var spots = (ZLinkJavaRawSpotNode) pair.target.spotNode();
+            long diagnosticCount = 0;
+            for (var expected :
+                    List.of(
+                            Map.entry(ZLinkFrameworkErrorKind.NOT_FOUND, "no_handler"),
+                            Map.entry(ZLinkFrameworkErrorKind.TYPE_MISMATCH, "handler_exception"),
+                            Map.entry(ZLinkFrameworkErrorKind.UNAVAILABLE, "stale_target"),
+                            Map.entry(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "invalid_frame"),
+                            Map.entry(ZLinkFrameworkErrorKind.SHUTTING_DOWN, "shutdown"))) {
+                var kind = expected.getKey();
+                String type = kind.name();
+                spots.registerInstanceSpotType(
+                        type,
+                        (ignored, route, spot) ->
+                                CompletableFuture.failedFuture(
+                                        new ZLinkFrameworkException(kind, "activation failed")));
+                var route = pair.instanceRoute(type);
+                spots.registerInstanceSpotAuthority(type, route);
+                try (Message packet = Message.from("Packet");
+                        Message body = Message.from("body")) {
+                    pair.source
+                            .sendInstanceSpot(route, type, null, new byte[0], List.of(packet, body))
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS);
+                }
+                String diagnostic = diagnostics.poll(2, TimeUnit.SECONDS);
+                assertNotNull(diagnostic);
+                assertTrue(diagnostic.contains("surface=instance_spot"), diagnostic);
+                assertTrue(diagnostic.contains("kind=send"), diagnostic);
+                assertTrue(diagnostic.contains("action=drop"), diagnostic);
+                assertTrue(diagnostic.contains("reason=" + expected.getValue()), diagnostic);
+                assertEquals(++diagnosticCount, reporter.reportedCount());
+            }
+            assertEquals(5, reporter.reportedCount());
+            assertTrue(diagnostics.isEmpty());
+        } finally {
+            logger.removeHandler(listener);
+        }
+    }
+
     @Test
     void malformedOneWayWireRecordsDecodeDropsAtDefaultLogging() throws Exception {
         RecordingSink sink = new RecordingSink();

@@ -2322,21 +2322,79 @@ final class ZLinkJavaRawMeshNode
         }
         if (relayFailure instanceof ZLinkFrameworkException framework) {
             return switch (framework.kind()) {
-                case NOT_FOUND -> new int[] {102, 14};
-                case REJECTED -> new int[] {106, 15};
-                case UNAVAILABLE -> new int[] {105, 13};
-                case SHUTTING_DOWN -> new int[] {103, 0};
-                default -> new int[] {105, 17};
+                case NOT_FOUND ->
+                        new int[] {
+                            RequestResult.NOT_FOUND.value(),
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_TARGET_NOT_FOUND
+                        };
+                case ALREADY_EXISTS ->
+                        new int[] {
+                            RequestResult.CONFLICT.value(),
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_ALREADY_EXISTS
+                        };
+                case TYPE_MISMATCH ->
+                        new int[] {
+                            RequestResult.CONFLICT.value(),
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_TYPE_MISMATCH
+                        };
+                case REJECTED ->
+                        new int[] {
+                            RequestResult.REJECTED.value(),
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_REJECTED
+                        };
+                case UNAVAILABLE ->
+                        new int[] {
+                            RequestResult.INTERNAL_ERROR.value(),
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED
+                        };
+                case DEADLINE_EXCEEDED ->
+                        new int[] {
+                            RequestResult.INTERNAL_ERROR.value(),
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_TIMED_OUT
+                        };
+                case SHUTTING_DOWN ->
+                        new int[] {
+                            RequestResult.TERMINATED.value(),
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_NONE
+                        };
+                case PROTOCOL_ERROR ->
+                        new int[] {
+                            RequestResult.PROTOCOL_ERROR.value(),
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR
+                        };
+                case INVALID_OPERATION ->
+                        new int[] {
+                            RequestResult.INVALID_STATE.value(),
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_NONE
+                        };
+                case DATA_LOST ->
+                        new int[] {
+                            RequestResult.INTERNAL_ERROR.value(),
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST
+                        };
+                default ->
+                        new int[] {
+                            RequestResult.INTERNAL_ERROR.value(),
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED
+                        };
             };
         }
         if (relayFailure instanceof ZlinkRequestException transport
                 && ServiceWireConstants.validTerminalFailure(transport.getResult().value(), 0)) {
-            return new int[] {transport.getResult().value(), 0};
+            return new int[] {
+                transport.getResult().value(), (int) ServiceWireConstants.FRAMEWORK_ERROR_NONE
+            };
         }
         if (relayFailure instanceof IllegalArgumentException) {
-            return new int[] {104, 16};
+            return new int[] {
+                RequestResult.PROTOCOL_ERROR.value(),
+                (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR
+            };
         }
-        return new int[] {105, 17};
+        return new int[] {
+            RequestResult.INTERNAL_ERROR.value(),
+            (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED
+        };
     }
 
     private void forwardRelocationReply(
@@ -4751,26 +4809,22 @@ final class ZLinkJavaRawMeshNode
     private void recordInstanceActivationDrop(
             String spotId, RoutingId sourceRid, Throwable failure) {
         Throwable cause = unwrap(failure);
-        if (ZLinkRuntimeMetrics.enabled()) {
-            int[] pair = relayedFailurePair(cause);
+        ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
+        boolean captureEnabled = reporter != null && reporter.captureEnabled();
+        boolean metricsEnabled = ZLinkRuntimeMetrics.enabled();
+        if (!metricsEnabled && !captureEnabled) {
+            return;
+        }
+        int[] pair = relayedFailurePair(cause);
+        if (metricsEnabled) {
             recordOneWayFailure(
                     ZLinkDispatchErrorSurface.INSTANCE_SPOT.traceName(), pair[0], pair[1]);
         }
-        ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
-        if (reporter != null && reporter.captureEnabled()) {
-            ZLinkDispatchErrorReason reason = ZLinkDispatchErrorReason.HANDLER_EXCEPTION;
-            if (cause instanceof ZLinkFrameworkException framework) {
-                reason =
-                        switch (framework.kind()) {
-                            case NOT_FOUND, TYPE_MISMATCH, UNAVAILABLE ->
-                                    ZLinkDispatchErrorReason.STALE_TARGET;
-                            default -> ZLinkDispatchErrorReporter.reasonFrom(framework.kind());
-                        };
-            }
+        if (captureEnabled) {
             reporter.report(
                     ZLinkDispatchErrorSurface.INSTANCE_SPOT,
                     ZLinkDispatchMessageKind.SEND,
-                    reason,
+                    ZLinkDispatchErrorReporter.reasonFrom(cause, pair[1]),
                     ZLinkDispatchErrorAction.DROP,
                     null,
                     null,
@@ -6044,16 +6098,17 @@ final class ZLinkJavaRawMeshNode
     static int[] canonicalActorJoinFailurePair(Throwable failure) {
         if (failure instanceof ZLinkFrameworkException framework) {
             if (isSupersededCanonicalActorJoin(framework)) {
-                return new int[] {107, 21};
+                return new int[] {
+                    RequestResult.CONFLICT.value(),
+                    (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_LOCATION_STALE
+                };
             }
-            return switch (framework.kind()) {
-                case NOT_FOUND -> new int[] {102, 14};
-                case PROTOCOL_ERROR -> new int[] {104, 16};
-                case TYPE_MISMATCH -> new int[] {107, 4};
-                case REJECTED -> new int[] {106, 15};
-                case UNAVAILABLE -> new int[] {105, 13};
-                default -> new int[] {105, 17};
-            };
+            if (framework.kind() == ZLinkFrameworkErrorKind.TYPE_MISMATCH) {
+                return new int[] {
+                    RequestResult.CONFLICT.value(),
+                    (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_TYPE_MISMATCH
+                };
+            }
         }
         return relayedFailurePair(failure);
     }

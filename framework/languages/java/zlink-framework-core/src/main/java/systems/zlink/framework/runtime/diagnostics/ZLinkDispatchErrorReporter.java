@@ -163,6 +163,17 @@ public final class ZLinkDispatchErrorReporter {
                         errorDetails.message()));
     }
 
+    public static ZLinkDispatchErrorReason reasonFrom(Throwable error, int failureCode) {
+        if (failureCode
+                == systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                        .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED) {
+            return ZLinkDispatchErrorReason.STALE_TARGET;
+        }
+        return error instanceof systems.zlink.framework.errors.ZLinkFrameworkException framework
+                ? reasonFrom(framework.kind())
+                : ZLinkDispatchErrorReason.HANDLER_EXCEPTION;
+    }
+
     public static ZLinkDispatchErrorReason reasonFrom(
             systems.zlink.framework.errors.ZLinkFrameworkErrorKind kind) {
         return switch (kind) {
