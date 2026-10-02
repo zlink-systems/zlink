@@ -44,20 +44,10 @@ internal sealed partial class ZLinkActorSessionManager
         BindActorContext(actor, state);
 
         return await state
-            .ExecuteLockedAsync(
-                async ct =>
-                {
-                    var previousActivation = state.Activation;
-                    if (ReferenceEquals(previousActivation, activation))
-                        return previousActivation;
-
-                    // The durable Actor authority is the publication boundary.
-                    // Target membership remains absent until that CAS succeeds.
-                    await commitAuthority(ct).ConfigureAwait(false);
-                    state.JoinSpot(activation);
-                    publishTargetMembership();
-                    return previousActivation;
-                },
+            .CommitSpotMembershipAsync(
+                activation,
+                commitAuthority,
+                publishTargetMembership,
                 cancellationToken
             )
             .ConfigureAwait(false);

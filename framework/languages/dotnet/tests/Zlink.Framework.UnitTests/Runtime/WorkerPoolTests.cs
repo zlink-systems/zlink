@@ -5,6 +5,28 @@ namespace Zlink.Framework.UnitTests;
 public sealed class WorkerPoolTests
 {
     [Fact]
+    public async Task UnexpectedWrapperFailure_ReachesRuntimeReporterAndKeepsPoolAlive()
+    {
+        using var sink = new ZLinkRuntimeErrorSink();
+        var observed = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        sink.UnhandledCallbackException += failure => observed.TrySetResult(failure);
+        await using var pool = new ZLinkWorkerPool(0, 1, TimeSpan.FromSeconds(30), sink);
+        var failure = new InvalidOperationException("worker wrapper failed");
+        Assert.Equal(ZLinkWorkerSubmitResult.Accepted, pool.TrySubmit(_ => throw failure));
+        Assert.Same(failure, await observed.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        var following = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        Assert.Equal(
+            ZLinkWorkerSubmitResult.Accepted,
+            pool.TrySubmit(_ => following.TrySetResult())
+        );
+        await following.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task RunCpuWorker_Async_Holds_Serial_Turn_Until_Work_Completes()
     {
         using var pool = CreatePool(1);
@@ -249,7 +271,12 @@ public sealed class WorkerPoolTests
     [Fact]
     public async Task RunCpuWorker_Idle_Threads_Shrink_After_Idle_Timeout()
     {
-        using var pool = new ZLinkWorkerPool(0, 2, TimeSpan.FromMilliseconds(150));
+        using var pool = new ZLinkWorkerPool(
+            0,
+            2,
+            TimeSpan.FromMilliseconds(150),
+            new ZLinkRuntimeErrorSink()
+        );
         await using var queue = CreateQueue();
 
         await CreateCall(pool, _ => 1, queue).Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
@@ -341,7 +368,12 @@ public sealed class WorkerPoolTests
 
     private static ZLinkWorkerPool CreatePool(int maxThreads)
     {
-        return new ZLinkWorkerPool(0, maxThreads, TimeSpan.FromSeconds(30));
+        return new ZLinkWorkerPool(
+            0,
+            maxThreads,
+            TimeSpan.FromSeconds(30),
+            new ZLinkRuntimeErrorSink()
+        );
     }
 
     private static ZLinkWorkerCall<TResult> CreateCall<TResult>(

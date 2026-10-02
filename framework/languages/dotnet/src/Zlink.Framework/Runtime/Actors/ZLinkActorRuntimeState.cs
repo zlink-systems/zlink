@@ -1707,16 +1707,30 @@ internal sealed class ZLinkActorRuntimeState(
         }
     }
 
-    public async ValueTask<T> ExecuteLockedAsync<T>(
-        Func<CancellationToken, ValueTask<T>> operation,
+    internal async ValueTask<ZLinkSpotActivation?> CommitSpotMembershipAsync(
+        ZLinkSpotActivation activation,
+        Func<CancellationToken, ValueTask> commitAuthority,
+        Action publishTargetMembership,
         CancellationToken cancellationToken
     )
     {
-        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(commitAuthority);
+        ArgumentNullException.ThrowIfNull(publishTargetMembership);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await operation(cancellationToken).ConfigureAwait(false);
+            var previousActivation = await _lane.RunAsync(() => Activation).ConfigureAwait(false);
+            if (ReferenceEquals(previousActivation, activation))
+                return previousActivation;
+            await commitAuthority(cancellationToken).ConfigureAwait(false);
+            await _lane
+                .RunAsync(() =>
+                {
+                    JoinSpot(activation);
+                    publishTargetMembership();
+                })
+                .ConfigureAwait(false);
+            return previousActivation;
         }
         finally
         {

@@ -261,7 +261,7 @@ internal sealed class ZLinkChannelReceiveLoop(
         }
     }
 
-    private static async ValueTask<bool> SendOwnedAsync(
+    private static async ValueTask SendOwnedAsync(
         IRouterSocket router,
         RoutingId sourceRid,
         Message message,
@@ -276,11 +276,6 @@ internal sealed class ZLinkChannelReceiveLoop(
                 .Async(cancellationToken)
                 .EnsureAcceptedAsync()
                 .ConfigureAwait(false);
-            return true;
-        }
-        catch
-        {
-            return false;
         }
         finally
         {
@@ -393,19 +388,11 @@ internal sealed class ZLinkChannelReceiveLoop(
         Action onActivity,
         Action onProtocolError,
         ZLinkApplicationJobQueue applicationJobQueue,
-        IZLinkRuntimeFailureReporter errorSink,
+        ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork> applicationDispatch,
         CancellationToken cancellationToken
     )
     {
         using var receivePoller = ZLinkBackendSocketPoller.Create(subscriber);
-        await using var applicationDispatch =
-            new ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork>(
-                $"fanout-automatic-application:{channelName}",
-                errorSink,
-                cancellationToken,
-                DispatchFanoutAsync,
-                RejectFanoutDispatch
-            );
         var topicMessagePool = new ZLinkTopicMessageStoragePool();
         TopicMessage? topicMessage = topicMessagePool.Rent();
         try
@@ -549,7 +536,20 @@ internal sealed class ZLinkChannelReceiveLoop(
         ZLinkApplicationJobQueueLease Admission
     );
 
-    private readonly record struct FanoutDispatchWork(
+    internal ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork> CreateFanoutDispatchQueue(
+        string channelName,
+        IZLinkRuntimeFailureReporter errorSink,
+        CancellationToken cancellationToken
+    ) =>
+        new(
+            $"fanout-application:{channelName}",
+            errorSink,
+            cancellationToken,
+            DispatchFanoutAsync,
+            RejectFanoutDispatch
+        );
+
+    internal readonly record struct FanoutDispatchWork(
         string ChannelName,
         TopicMessage TopicMessage,
         ZLinkTopicMessageStoragePool TopicMessagePool,

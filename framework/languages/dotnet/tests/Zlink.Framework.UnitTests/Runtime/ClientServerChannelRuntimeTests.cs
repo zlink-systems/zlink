@@ -192,6 +192,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             TimeSpan.FromSeconds(sendTimeoutSeconds),
             CancellationToken.None,
             null!,
+            new ZLinkRuntimeErrorSink(),
             timeProvider: time
         );
 

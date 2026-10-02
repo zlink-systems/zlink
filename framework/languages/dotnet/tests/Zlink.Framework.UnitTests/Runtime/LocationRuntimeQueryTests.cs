@@ -17,17 +17,18 @@ public sealed class LocationRuntimeQueryTests
     private static readonly string[] RegisteredMeshes = ["play"];
 
     [Fact]
-    public async Task Readiness_Returns_False_When_Query_Fails()
+    public async Task Readiness_Preserves_Query_Failure()
     {
         var readiness = new ZLinkLocationReadiness(new FailingRuntimeQuery());
 
-        var ready = await readiness.IsPeerReadyAsync(
-            "play",
-            ZLinkLocationRole.Router,
-            RoutingId.From("node-1")
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await readiness.IsPeerReadyAsync(
+                "play",
+                ZLinkLocationRole.Router,
+                RoutingId.From("node-1")
+            )
         );
-
-        Assert.False(ready);
+        Assert.Equal("store unavailable", error.Message);
     }
 
     [Fact]

@@ -1064,7 +1064,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                         throw new InvalidOperationException(
                             "ZLink framework runtime is not running."
                         );
-                    return _workerPool ??= Registration.WorkerOptions.CreatePool();
+                    return _workerPool ??= Registration.WorkerOptions.CreatePool(ErrorSink);
                 })
             );
         }
@@ -1086,7 +1086,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                         throw new InvalidOperationException(
                             "ZLink framework runtime is not running."
                         );
-                    return _logicalMulticastWorkerPool ??= Registration.WorkerOptions.CreatePool();
+                    return _logicalMulticastWorkerPool ??= Registration.WorkerOptions.CreatePool(
+                        ErrorSink
+                    );
                 })
             );
         }

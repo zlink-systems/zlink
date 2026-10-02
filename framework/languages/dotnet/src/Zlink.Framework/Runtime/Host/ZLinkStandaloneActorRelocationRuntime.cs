@@ -3516,29 +3516,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             Volatile.Write(ref _abort, null);
         }
 
-        internal ValueTask RunAsync(Func<ValueTask> work)
-        {
-            _lane.ThrowIfReentrant();
-            var completion = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            );
-            if (
-                !_lane.TryPost(async () =>
-                {
-                    try
-                    {
-                        await work().ConfigureAwait(false);
-                        completion.TrySetResult();
-                    }
-                    catch (Exception exception)
-                    {
-                        completion.TrySetException(exception);
-                    }
-                })
-            )
-                completion.TrySetException(new ObjectDisposedException(nameof(AttemptSlot)));
-            return new ValueTask(completion.Task);
-        }
+        internal ValueTask RunAsync(Func<ValueTask> work) => _lane.RunAsync(work);
 
         internal async ValueTask<T> RunAsync<T>(Func<T> work) =>
             await _lane.RunAsync(work).ConfigureAwait(false);

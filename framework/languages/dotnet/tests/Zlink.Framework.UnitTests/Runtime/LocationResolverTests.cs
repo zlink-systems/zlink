@@ -721,7 +721,8 @@ public sealed class LocationResolverTests
             null,
             fixture.Resolvers,
             handles,
-            options
+            options,
+            new ZLinkRuntimeErrorSink()
         );
 
         await host.ApplyAsync(
@@ -756,7 +757,8 @@ public sealed class LocationResolverTests
             null,
             fixture.Resolvers,
             handles,
-            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMinutes(1) }
+            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMinutes(1) },
+            new ZLinkRuntimeErrorSink()
         );
 
         await host.ApplyAsync(
@@ -983,7 +985,8 @@ public sealed class LocationResolverTests
             null,
             fixture.Resolvers,
             handles,
-            locationOptions
+            locationOptions,
+            new ZLinkRuntimeErrorSink()
         );
         await host.StartAsync(CancellationToken.None);
 
@@ -1013,7 +1016,8 @@ public sealed class LocationResolverTests
             null,
             fixture.Resolvers,
             new ZLinkSpotHandleRegistry(),
-            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(10) }
+            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(10) },
+            new ZLinkRuntimeErrorSink()
         );
         await host.StartAsync(CancellationToken.None);
         await Task.WhenAll(

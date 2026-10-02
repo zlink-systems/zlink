@@ -8,6 +8,7 @@ using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Messaging;
 
 internal sealed class ZLinkSessionActorCoordinator(
     ZLinkFrameworkRuntime runtime,
@@ -73,7 +74,7 @@ internal sealed class ZLinkSessionActorCoordinator(
     {
         if (!_actorOperationGates.TryGetValue(actorId, out var operation))
         {
-            operation = new ActorOperationGate();
+            operation = new ActorOperationGate(runtime.ErrorSink);
             _actorOperationGates.Add(actorId, operation);
         }
         operation.Users++;
@@ -91,7 +92,7 @@ internal sealed class ZLinkSessionActorCoordinator(
             operation.Dispose();
     }
 
-    private sealed class ActorOperationGate
+    private sealed class ActorOperationGate(IZLinkRuntimeFailureReporter errorSink)
     {
         private readonly ZLinkStateLane _lane = new();
         private readonly LinkedList<Waiter> _waiters = new();
@@ -133,17 +134,20 @@ internal sealed class ZLinkSessionActorCoordinator(
 
         private void Cancel(Waiter waiter)
         {
-            _lane.TryPost(() =>
-            {
-                if (waiter.Node is { } node)
+            ZLinkUnawaitedSubmit.Observe(
+                _lane.RunAsync(() =>
                 {
-                    _waiters.Remove(node);
-                    waiter.Node = null;
-                }
-                waiter.Cancel();
-
-                return ValueTask.CompletedTask;
-            });
+                    if (waiter.Node is { } node)
+                    {
+                        _waiters.Remove(node);
+                        waiter.Node = null;
+                    }
+                    waiter.Cancel();
+                    return ValueTask.CompletedTask;
+                }),
+                nameof(Cancel),
+                errorSink
+            );
         }
 
         private void Release()

@@ -21,6 +21,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
     private readonly IZLinkSocketConfig _socketConfig;
     private readonly IReadOnlySet<string> _applicationTopics;
     private readonly ZLinkChannelReceiveLoop _receiveLoop;
+    private readonly ZLinkChannelApplicationDispatchQueue<ZLinkChannelReceiveLoop.FanoutDispatchWork> _applicationDispatch;
     private readonly ZLinkFanoutRuntimeService _monitoring;
     private readonly ZLinkApplicationJobQueue _applicationJobQueue;
     private readonly bool _ownsApplicationJobQueue;
@@ -76,6 +77,11 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         _errorSink = errorSink;
         _runtimeStopToken = runtimeStopToken;
         _time = timeProvider ?? TimeProvider.System;
+        _applicationDispatch = receiveLoop.CreateFanoutDispatchQueue(
+            channelName,
+            errorSink,
+            runtimeStopToken
+        );
     }
 
     internal async ValueTask ReplaceAsync(
@@ -182,10 +188,13 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
                 return connections;
             })
             .ConfigureAwait(false);
+        var failures = new ZLinkFailureCollector();
         foreach (var connection in connections)
-            await connection.DisposeAsync().ConfigureAwait(false);
+            await failures.CaptureAsync(connection.DisposeAsync).ConfigureAwait(false);
+        await failures.CaptureAsync(_applicationDispatch.DisposeAsync).ConfigureAwait(false);
         if (_ownsApplicationJobQueue)
-            _applicationJobQueue.Dispose();
+            failures.Capture(_applicationJobQueue.Dispose);
+        failures.ThrowIfAny();
     }
 
     private void ConnectionChanged()
@@ -358,7 +367,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
                     OnActivity,
                     () => SetFailure("invalid fanout liveness beacon"),
                     owner._applicationJobQueue,
-                    owner._errorSink,
+                    owner._applicationDispatch,
                     attempt.Token
                 );
                 var watchdog = WatchInboundAsync(attempt);

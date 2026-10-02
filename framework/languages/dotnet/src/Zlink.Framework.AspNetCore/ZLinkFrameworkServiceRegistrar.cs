@@ -452,7 +452,8 @@ internal static class ZLinkFrameworkServiceRegistrar
             provider.GetService<IZLinkLocationWatchStore>(),
             provider.GetRequiredService<ZLinkStoreLocationResolvers>(),
             handles: null,
-            options: provider.GetRequiredService<ZLinkLocationOptions>()
+            options: provider.GetRequiredService<ZLinkLocationOptions>(),
+            errorSink: provider.GetRequiredService<ZLinkFrameworkRuntime>().ErrorSink
         ));
         services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<ZLinkSpotHandleWatchHost>()

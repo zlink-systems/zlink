@@ -80,7 +80,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             runtime.DrainAdmission,
             transport,
             _timeProvider,
-            actorDispatchEnabled
+            actorDispatchEnabled,
+            _errorSink
         );
     }
 

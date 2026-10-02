@@ -13,8 +13,8 @@ internal sealed class ZLinkWorkerOptionsModel : IZLinkWorkerOptions
 
     public TimeSpan IdleTimeout { get; set; } = DefaultIdleTimeout;
 
-    public ZLinkWorkerPool CreatePool()
+    public ZLinkWorkerPool CreatePool(IZLinkRuntimeFailureReporter errorSink)
     {
-        return new ZLinkWorkerPool(MinThreads, MaxThreads, IdleTimeout);
+        return new ZLinkWorkerPool(MinThreads, MaxThreads, IdleTimeout, errorSink);
     }
 }

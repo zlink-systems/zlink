@@ -1500,7 +1500,8 @@ public sealed class StreamSessionForcedCleanupTests
             runtime.DrainAdmission,
             "test",
             TimeProvider.System,
-            actorDispatchEnabled: false
+            actorDispatchEnabled: false,
+            errorSink: runtime.ErrorSink
         );
         var session = Assert.IsType<ZLinkStreamSessionRuntime>(
             await table.GetOrCreateAsync(
@@ -1544,7 +1545,8 @@ public sealed class StreamSessionForcedCleanupTests
             runtime.DrainAdmission,
             "test",
             TimeProvider.System,
-            actorDispatchEnabled: false
+            actorDispatchEnabled: false,
+            errorSink: runtime.ErrorSink
         );
         using var shutdown = new CancellationTokenSource();
         await table.SealAdmissionAsync(shutdown.Token);

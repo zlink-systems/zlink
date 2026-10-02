@@ -209,6 +209,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                         .Value,
                     state.StopTokenSource.Token,
                     state.ApplicationJobQueue,
+                    state.ErrorSink,
                     outboundFlow?.Invoke(),
                     registration.TimeProvider
                 );

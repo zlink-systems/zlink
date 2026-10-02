@@ -731,7 +731,13 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 "Could not submit the protocol-error session-closing control packet."
             );
         }
-        catch { }
+        catch (Exception failure)
+        {
+            _runtime.ErrorSink.ReportRuntimeTaskException(
+                nameof(CloseForProtocolErrorCoreAsync),
+                failure
+            );
+        }
         _ = await TryCloseTransportAsync().ConfigureAwait(false);
         await CompleteSessionAsync(
                 new ZLinkStreamError(ZLinkStreamSessionError.Internal, error.Message),
@@ -751,7 +757,13 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 "Could not submit the liveness session-closing control packet."
             );
         }
-        catch { }
+        catch (Exception failure)
+        {
+            _runtime.ErrorSink.ReportRuntimeTaskException(
+                nameof(CloseForLivenessTimeoutAsync),
+                failure
+            );
+        }
         _ = await TryCloseTransportAsync().ConfigureAwait(false);
         await CompleteSessionAsync(null, notifyDisconnected: true).ConfigureAwait(false);
     }
