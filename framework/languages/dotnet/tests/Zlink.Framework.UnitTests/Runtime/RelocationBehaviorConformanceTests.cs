@@ -786,7 +786,8 @@ public sealed class RelocationBehaviorConformanceTests
             var duplicate = cutover
                 .RetryPrepareAsync(CancellationToken.None, TimeSpan.FromMilliseconds(500))
                 .AsTask();
-            await cutover.TargetReadyFailureInjected.Task;
+            var signal = cutover.TargetReadyFailureInjected.Task;
+            Assert.Same(signal, await Task.WhenAny(signal, duplicate));
 
             targetTime.AdvanceMonotonic(TimeSpan.FromMilliseconds(900));
             Assert.False(trace.HasTargetAuthorityMutation);

@@ -1318,7 +1318,9 @@ int main ()
     ok &= require_exists (root / "connector/core/src/runtime/protocol/framing.cpp");
     ok &= require_exists (root / "connector/core/src/runtime/protocol/header_codec.cpp");
     ok &= require_exists (root / "connector/core/src/runtime/protocol/metadata_codec.cpp");
-    ok &= require_exists (root / "connector/core/src/runtime/protocol/packet_name_resolver.cpp");
+    ok &= require_exists (root / "common/include/zlink/detail/stream_packet_name.hpp");
+    ok &= require_exists (
+      root / "connector/core/include/zlink/stream_connector/contracts/stream_payload.hpp");
     ok &= require_exists (root / "connector/core/src/runtime/transport/stream_connection.cpp");
     ok &=
       require_exists (root / "connector/core/src/runtime/transport/stream_transport_factory.cpp");

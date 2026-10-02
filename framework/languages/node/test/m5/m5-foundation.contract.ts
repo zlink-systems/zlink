@@ -8,10 +8,7 @@ import {
   ServiceWireCommand
 } from '../../../../runtime/protocol/generated/node/service_wire_constants';
 import { ZLinkNodeRawBindingPort } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
-import {
-  EventLoopResourceStack,
-  EventLoopWorkQueues
-} from '../../packages/framework/src/runtime/foundation/event-loop-resources';
+import { EventLoopResourceStack } from '../../packages/framework/src/runtime/foundation/event-loop-resources';
 import {
   OperationCancelledError,
   OperationRegistry,
@@ -77,18 +74,13 @@ test('codec consumes canonical and malformed shared fixtures', async () => {
 });
 
 class ManualClock implements OperationClock {
-  readonly callbacks = new Map<object, () => void>();
-  setTimeout(callback: () => void): object {
-    const handle = {};
-    this.callbacks.set(handle, callback);
-    return handle;
+  private timeMs = 0;
+  now(): number {
+    return this.timeMs;
   }
-  clearTimeout(handle: unknown): void {
-    this.callbacks.delete(handle as object);
-  }
-  fire(): void {
-    const callbacks = [...this.callbacks.values()];
-    for (const callback of callbacks) callback();
+  advance(delayMs: number): number {
+    this.timeMs += delayMs;
+    return this.timeMs;
   }
 }
 
@@ -97,12 +89,12 @@ test('Promise completion is terminal once across reply, timeout, and shutdown', 
   const operations = new OperationRegistry<string>(clock);
   const completed = operations.register(100);
   assert.equal(operations.complete(completed.id, 'reply'), true);
-  clock.fire();
+  operations.expire(clock.advance(100), clock.now() + 1);
   assert.equal(operations.complete(completed.id, 'late'), false);
   assert.equal(await completed.promise, 'reply');
 
   const timedOut = operations.register(100);
-  clock.fire();
+  operations.expire(clock.advance(100), clock.now() + 1);
   await assert.rejects(timedOut.promise, OperationTimeoutError);
   assert.equal(operations.cancel(timedOut.id), false);
 
@@ -125,7 +117,7 @@ test('operation registry registers more than the former completion cap before tr
   assert.equal(operations.size, 0);
 });
 
-test('event-loop resources close in reverse once and infrastructure remains independent', async () => {
+test('event-loop resources close in reverse once', async () => {
   const order: string[] = [];
   const resources = new EventLoopResourceStack();
   resources.own({ close: () => void order.push('first') });
@@ -133,29 +125,6 @@ test('event-loop resources close in reverse once and infrastructure remains inde
   await Promise.all([resources.close(), resources.close()]);
   assert.deepEqual(order, ['second', 'first']);
   assert.throws(() => resources.own({ close() {} }), /closing/);
-
-  const queues = new EventLoopWorkQueues();
-  let release!: () => void;
-  const blocked = new Promise<void>((resolve) => (release = resolve));
-  assert.equal(
-    queues.submitApplication(() => blocked),
-    true
-  );
-  assert.equal(
-    queues.submitApplication(() => undefined),
-    true
-  );
-  const infrastructureDone = new Promise<void>((resolve) => {
-    assert.equal(queues.submitInfrastructure(resolve), true);
-  });
-  await infrastructureDone;
-  release();
-  await new Promise((resolve) => setImmediate(resolve));
-  queues.stopAdmission();
-  assert.equal(
-    queues.submitInfrastructure(() => undefined),
-    false
-  );
 });
 
 async function pollReceive<T>(receive: () => T | undefined): Promise<T> {

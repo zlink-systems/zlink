@@ -18,7 +18,8 @@ public sealed class test_writable_token_delivery
             ZlinkSubmitException.ErrorCode.Backpressured, 0);
         object wouldBlock = CompletionOwnerTestAccess.Create(
             typeof(ZlinkSubmitException),
-            ZlinkSubmitException.ErrorCode.Backpressured, 11);
+            ZlinkSubmitException.ErrorCode.Backpressured,
+            CompletionOwnerTestAccess.Errno("EAgain"));
 
         object missingErrnoAttempt = CompletionOwnerTestAccess.Create(
             attemptType, 73UL, missingErrno);
@@ -29,7 +30,8 @@ public sealed class test_writable_token_delivery
 
         object notFound = CompletionOwnerTestAccess.Create(
             typeof(ZlinkSubmitException),
-            ZlinkSubmitException.ErrorCode.NotFound, 11);
+            ZlinkSubmitException.ErrorCode.NotFound,
+            CompletionOwnerTestAccess.Errno("EAgain"));
         object notFoundAttempt = CompletionOwnerTestAccess.Create(
             attemptType, 73UL, notFound);
         Assert.False((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
@@ -73,8 +75,8 @@ public sealed class test_writable_token_delivery
             CompletionOwnerTestAccess.Property(attempt, "Failure"));
         Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured,
             failure.Result);
-        Assert.True(failure.NativeErrno is 11 or 35,
-            $"Expected EAGAIN, got {failure.NativeErrno}.");
+        Assert.Equal(CompletionOwnerTestAccess.Errno("EAgain"),
+            failure.NativeErrno);
     }
 
     [Fact]
@@ -103,24 +105,24 @@ public sealed class test_writable_token_delivery
             CompletionOwnerTestAccess.Property(attempt, "Failure"));
         Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured,
             failure.Result);
-        Assert.True(failure.NativeErrno is 11 or 35,
-            $"Expected EAGAIN, got {failure.NativeErrno}.");
+        Assert.Equal(CompletionOwnerTestAccess.Errno("EAgain"),
+            failure.NativeErrno);
     }
 
     [Theory]
-    [InlineData(false, false, 801, 2, (int)ZlinkSubmitException.ErrorCode.NotFound, 2)]
-    [InlineData(false, true, 801, 2, (int)ZlinkSubmitException.ErrorCode.NotFound, 2)]
-    [InlineData(true, false, 801, 2, (int)ZlinkSubmitException.ErrorCode.NotFound, 2)]
-    [InlineData(true, true, 801, 2, (int)ZlinkSubmitException.ErrorCode.NotFound, 2)]
-    [InlineData(false, false, 802, 107, (int)ZlinkSubmitException.ErrorCode.NotConnected, 107)]
-    [InlineData(true, false, 802, 107, (int)ZlinkSubmitException.ErrorCode.NotConnected, 107)]
-    [InlineData(false, false, 803, 11, (int)ZlinkSubmitException.ErrorCode.Backpressured, 11)]
-    [InlineData(true, false, 803, 11, (int)ZlinkSubmitException.ErrorCode.Backpressured, 11)]
-    [InlineData(false, false, 999, 2, (int)ZlinkSubmitException.ErrorCode.InternalError, 71)]
-    [InlineData(true, false, 999, 2, (int)ZlinkSubmitException.ErrorCode.InternalError, 71)]
+    [InlineData(false, false, 801, "ENoent", (int)ZlinkSubmitException.ErrorCode.NotFound, "ENoent")]
+    [InlineData(false, true, 801, "ENoent", (int)ZlinkSubmitException.ErrorCode.NotFound, "ENoent")]
+    [InlineData(true, false, 801, "ENoent", (int)ZlinkSubmitException.ErrorCode.NotFound, "ENoent")]
+    [InlineData(true, true, 801, "ENoent", (int)ZlinkSubmitException.ErrorCode.NotFound, "ENoent")]
+    [InlineData(false, false, 802, "ENotConn", (int)ZlinkSubmitException.ErrorCode.NotConnected, "ENotConn")]
+    [InlineData(true, false, 802, "ENotConn", (int)ZlinkSubmitException.ErrorCode.NotConnected, "ENotConn")]
+    [InlineData(false, false, 803, "EAgain", (int)ZlinkSubmitException.ErrorCode.Backpressured, "EAgain")]
+    [InlineData(true, false, 803, "EAgain", (int)ZlinkSubmitException.ErrorCode.Backpressured, "EAgain")]
+    [InlineData(false, false, 999, "ENoent", (int)ZlinkSubmitException.ErrorCode.InternalError, "EProto")]
+    [InlineData(true, false, 999, "ENoent", (int)ZlinkSubmitException.ErrorCode.InternalError, "EProto")]
     public async Task writable_delivers_core_result_to_matching_token(
-        bool request, bool differentEcho, int sendResult, int nativeErrno,
-        int expectedResult, int expectedErrno)
+        bool request, bool differentEcho, int sendResult, string nativeErrno,
+        int expectedResult, string expectedErrno)
     {
         Assert.True(CoreTestSupport.IsNativeAvailable());
         Type ownerType = CompletionOwnerTestAccess.RuntimeType(
@@ -158,7 +160,8 @@ public sealed class test_writable_token_delivery
         CompletionOwnerTestAccess.SetField(completion, "PeerRoutingId",
             CompletionOwnerTestAccess.Invoke(echo, "ToNative")!);
         CompletionOwnerTestAccess.SetField(completion, "SendResult", sendResult);
-        CompletionOwnerTestAccess.SetField(completion, "SendTerminalErrno", nativeErrno);
+        CompletionOwnerTestAccess.SetField(completion, "SendTerminalErrno",
+            CompletionOwnerTestAccess.Errno(nativeErrno));
 
         // A nonconforming RID is deliberately injected to prove the binding
         // does not replace the Core terminal result after token/context lookup.
@@ -167,7 +170,8 @@ public sealed class test_writable_token_delivery
         ZlinkSubmitException error = await Assert.ThrowsAsync<ZlinkSubmitException>(
             () => pending);
         Assert.Equal((ZlinkSubmitException.ErrorCode)expectedResult, error.Result);
-        Assert.Equal(expectedErrno, error.NativeErrno);
+        Assert.Equal(CompletionOwnerTestAccess.Errno(expectedErrno),
+            error.NativeErrno);
         Assert.Empty(CompletionOwnerTestAccess.Entries(owner));
     }
 }

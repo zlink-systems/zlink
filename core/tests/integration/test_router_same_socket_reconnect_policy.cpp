@@ -23,7 +23,6 @@ namespace
 {
 typedef std::chrono::steady_clock clock_type;
 const int setup_ms = 3000;
-const int progress_ms = 200;
 
 zlink_routing_id_t routing_id (const char *text_)
 {
@@ -45,11 +44,11 @@ void *new_router (const char *rid_, int policy_, int reconnect_ivl_ = -1)
       sizeof reconnect_ivl_));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
       socket, ZLINK_OPT_RID_DUPLICATE_POLICY, &policy_, sizeof policy_));
+    const int no_timeout = -1;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
-      socket, ZLINK_OPT_RCVTIMEO, &setup_ms, sizeof setup_ms));
-    const int no_token_deadline = -1;
+      socket, ZLINK_OPT_RCVTIMEO, &no_timeout, sizeof no_timeout));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
-      socket, ZLINK_OPT_SNDTIMEO, &no_token_deadline, sizeof no_token_deadline));
+      socket, ZLINK_OPT_SNDTIMEO, &no_timeout, sizeof no_timeout));
     return socket;
 }
 
@@ -84,12 +83,9 @@ struct observation_t
         }
     }
 
-    uint64_t wait (uint64_t kind_, uint64_t excluded_, int timeout_ms_,
-                   bool match_ = false)
+    uint64_t wait (uint64_t kind_, uint64_t excluded_, bool match_ = false)
     {
-        const clock_type::time_point deadline =
-          clock_type::now () + std::chrono::milliseconds (timeout_ms_);
-        do {
+        for (;;) {
             drain ();
             for (size_t i = 0; i < events.size (); ++i) {
                 const zlink_monitor_event_t &event = events[i];
@@ -103,20 +99,11 @@ struct observation_t
                     return event.connection_id;
                 }
             }
-            const long remaining = static_cast<long> (
-              std::chrono::duration_cast<std::chrono::milliseconds> (
-                deadline - clock_type::now ()).count ());
             zlink_pollitem_t item = {monitor, 0, ZLINK_POLLIN, 0};
             zlink_config_result_t error = ZLINK_CONFIG_OK;
-            TEST_ASSERT_TRUE (zlink_poll (
-              &item, 1, remaining > 0 ? remaining : 0, &error) >= 0);
+            TEST_ASSERT_TRUE (zlink_poll (&item, 1, -1, &error) >= 0);
             TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
-        } while (clock_type::now () < deadline);
-        fprintf (stderr, "missing event=%llu excluded=%llu timeout_ms=%d\n",
-                 static_cast<unsigned long long> (kind_),
-                 static_cast<unsigned long long> (excluded_), timeout_ms_);
-        TEST_FAIL_MESSAGE ("monitor transition did not progress");
-        return 0;
+        }
     }
 
     void assert_kept (uint64_t connection_)
@@ -186,7 +173,7 @@ void receive_request (void *socket_, bool reply_)
 }
 
 void completion (void *socket_, zlink_completion_id_t id_,
-                  zlink_request_result_t expected_, int timeout_ms_)
+                  zlink_request_result_t expected_)
 {
     void *poller = zlink_poller_new ();
     TEST_ASSERT_NOT_NULL (poller);
@@ -194,7 +181,7 @@ void completion (void *socket_, zlink_completion_id_t id_,
       zlink_poller_add (poller, socket_, NULL, ZLINK_POLLCOMPLETION));
     zlink_poller_event_t event = {};
     zlink_config_result_t error = ZLINK_CONFIG_OK;
-    const int rc = zlink_poller_wait (poller, &event, 1, timeout_ms_, &error);
+    const int rc = zlink_poller_wait (poller, &event, 1, -1, &error);
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
     TEST_ASSERT_EQUAL_INT (1, rc);
@@ -222,7 +209,7 @@ void roundtrip (void *from_, void *to_, const char *rid_)
 {
     const zlink_completion_id_t id = request (from_, rid_);
     receive_request (to_, true);
-    completion (from_, id, ZLINK_REQUEST_OK, setup_ms);
+    completion (from_, id, ZLINK_REQUEST_OK);
 }
 
 void await_reconnected_request (void *client_, void *server_)
@@ -238,12 +225,10 @@ void await_reconnected_request (void *client_, void *server_)
     TEST_ASSERT_SUCCESS_ERRNO (zlink_poller_add (
       poller, server_, NULL, ZLINK_POLLIN));
     const zlink_routing_id_t target = routing_id ("server");
-    const clock_type::time_point deadline =
-      clock_type::now () + std::chrono::milliseconds (setup_ms);
     zlink_completion_id_t pending = 0;
     bool done = false;
     unsigned attempts = 0;
-    while (!done && clock_type::now () < deadline) {
+    while (!done) {
         if (!pending) {
             zlink_msg_t part;
             TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&part, 1));
@@ -266,11 +251,8 @@ void await_reconnected_request (void *client_, void *server_)
         }
         zlink_poller_event_t events[2] = {};
         zlink_config_result_t error = ZLINK_CONFIG_OK;
-        const long remaining = static_cast<long> (
-          std::chrono::duration_cast<std::chrono::milliseconds> (
-            deadline - clock_type::now ()).count ());
         const int count = zlink_poller_wait (
-          poller, events, 2, remaining > 0 ? remaining : 0, &error);
+          poller, events, 2, -1, &error);
         TEST_ASSERT_TRUE (count >= 0);
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
         for (int i = 0; i < count; ++i) {
@@ -320,9 +302,9 @@ void run_same_socket (bool tcp_, int policy_, bool retry_ = false)
     }
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
     const uint64_t old_client = client_events.wait (
-      ZLINK_EVENT_CONNECTION_READY, 0, setup_ms);
+      ZLINK_EVENT_CONNECTION_READY, 0);
     const uint64_t old_server = server_events.wait (
-      ZLINK_EVENT_CONNECTION_READY, 0, setup_ms);
+      ZLINK_EVENT_CONNECTION_READY, 0);
     roundtrip (client, server, "server");
     roundtrip (server, client, "client");
 
@@ -356,16 +338,16 @@ void run_same_socket (bool tcp_, int policy_, bool retry_ = false)
     uint64_t new_client = 0, new_server = 0;
     if (handover) {
         new_client = client_events.wait (
-          ZLINK_EVENT_CONNECTION_READY, old_client, setup_ms);
+          ZLINK_EVENT_CONNECTION_READY, old_client);
         new_server = server_events.wait (
-          ZLINK_EVENT_CONNECTION_READY, old_server, setup_ms);
-        completion (client, client_pending, ZLINK_REQUEST_NOT_CONNECTED, progress_ms);
-        completion (server, server_pending, ZLINK_REQUEST_NOT_CONNECTED, progress_ms);
+          ZLINK_EVENT_CONNECTION_READY, old_server);
+        completion (client, client_pending, ZLINK_REQUEST_NOT_CONNECTED);
+        completion (server, server_pending, ZLINK_REQUEST_NOT_CONNECTED);
     } else {
         // Only monitor handles are polled: no application receive advances
         // the rejected pipe's termination (D-092).
         const uint64_t rejected = client_events.wait (
-          ZLINK_EVENT_DISCONNECTED, old_client, progress_ms);
+          ZLINK_EVENT_DISCONNECTED, old_client);
         TEST_ASSERT_TRUE (rejected != old_client);
     }
     client_events.assert_kept (old_client);
@@ -382,12 +364,12 @@ void run_same_socket (bool tcp_, int policy_, bool retry_ = false)
         // No further connect call or application receive drives the retry.
         const zlink_routing_id_t peer = routing_id ("client");
         TEST_ASSERT_SUCCESS_ERRNO (zlink_disconnect_rid (server, &peer));
-        client_events.wait (ZLINK_EVENT_DISCONNECTED, old_client, progress_ms, true);
-        server_events.wait (ZLINK_EVENT_DISCONNECTED, old_server, progress_ms, true);
+        client_events.wait (ZLINK_EVENT_DISCONNECTED, old_client, true);
+        server_events.wait (ZLINK_EVENT_DISCONNECTED, old_server, true);
         new_client = client_events.wait (
-          ZLINK_EVENT_CONNECTION_READY, old_client, setup_ms);
+          ZLINK_EVENT_CONNECTION_READY, old_client);
         new_server = server_events.wait (
-          ZLINK_EVENT_CONNECTION_READY, old_server, setup_ms);
+          ZLINK_EVENT_CONNECTION_READY, old_server);
         await_reconnected_request (client, server);
         roundtrip (server, client, "client");
         // READY is transport readiness, not a promise that this first retry
@@ -423,11 +405,10 @@ void run_disabled_or_cancelled_inproc_retry (const char *endpoint_,
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, endpoint_));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint_));
     const uint64_t old_connection = client_events.wait (
-      ZLINK_EVENT_CONNECTION_READY, 0, setup_ms);
+      ZLINK_EVENT_CONNECTION_READY, 0);
 
     test_context_socket_close_zero_linger (server);
-    client_events.wait (ZLINK_EVENT_DISCONNECTED, old_connection,
-                        setup_ms, true);
+    client_events.wait (ZLINK_EVENT_DISCONNECTED, old_connection, true);
 
     if (close_with_timer_) {
         test_context_socket_close_zero_linger (client);

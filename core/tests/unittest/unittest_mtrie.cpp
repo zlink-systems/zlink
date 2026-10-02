@@ -7,6 +7,8 @@
 #endif
 
 #include <utils/generic_mtrie_impl.hpp>
+#include <utils/trie.hpp>
+#include <vector>
 
 #include <string>
 
@@ -446,11 +448,87 @@ void test_destroy_deep_single_chain ()
     }
 }
 
+namespace
+{
+const size_t long_subscription_size = 70000;
+
+unsigned char *subscription_bytes (std::string &value_)
+{
+    return reinterpret_cast<unsigned char *> (&value_[0]);
+}
+
+void collect_subscription (unsigned char *data_, size_t size_, void *arg_)
+{
+    std::vector<std::string> *out = static_cast<std::vector<std::string> *> (arg_);
+    out->push_back (size_ ? std::string (reinterpret_cast<char *> (data_), size_) : std::string ());
+}
+}
+
+void test_trie_long_subscription_destroy ()
+{
+    zlink::trie_t trie;
+    std::string topic (long_subscription_size, 't');
+    TEST_ASSERT_TRUE (trie.add (subscription_bytes (topic), topic.size ()));
+    TEST_ASSERT_TRUE (trie.check (subscription_bytes (topic), topic.size ()));
+    std::string low = topic + 'a';
+    std::string high = topic + 'z';
+    TEST_ASSERT_TRUE (trie.add (subscription_bytes (low), low.size ()));
+    TEST_ASSERT_TRUE (trie.add (subscription_bytes (high), high.size ()));
+}
+
+void test_trie_long_subscription_remove ()
+{
+    zlink::trie_t trie;
+    std::string topic (long_subscription_size, 't');
+    TEST_ASSERT_TRUE (trie.add (subscription_bytes (topic), topic.size ()));
+    TEST_ASSERT_FALSE (trie.add (subscription_bytes (topic), topic.size ()));
+    TEST_ASSERT_FALSE (trie.rm (subscription_bytes (topic), topic.size ()));
+    TEST_ASSERT_TRUE (trie.check (subscription_bytes (topic), topic.size ()));
+    TEST_ASSERT_TRUE (trie.rm (subscription_bytes (topic), topic.size ()));
+    TEST_ASSERT_FALSE (trie.check (subscription_bytes (topic), topic.size ()));
+    TEST_ASSERT_FALSE (trie.rm (subscription_bytes (topic), topic.size ()));
+}
+
+void test_trie_long_subscription_snapshot_and_pruning ()
+{
+    zlink::trie_t trie;
+    std::string stem (long_subscription_size, 't');
+    std::string low = stem + 'a';
+    std::string middle = stem + 'm';
+    std::string high = stem + 'z';
+    TEST_ASSERT_TRUE (trie.add (NULL, 0));
+    TEST_ASSERT_TRUE (trie.add (subscription_bytes (stem), stem.size ()));
+    TEST_ASSERT_TRUE (trie.add (subscription_bytes (high), high.size ()));
+    TEST_ASSERT_TRUE (trie.add (subscription_bytes (low), low.size ()));
+    TEST_ASSERT_TRUE (trie.add (subscription_bytes (middle), middle.size ()));
+    std::vector<std::string> snapshot;
+    trie.apply (collect_subscription, &snapshot);
+    TEST_ASSERT_EQUAL_UINT (5, snapshot.size ());
+    TEST_ASSERT_TRUE (snapshot[0].empty ());
+    TEST_ASSERT_TRUE (snapshot[1] == stem);
+    TEST_ASSERT_TRUE (snapshot[2] == low);
+    TEST_ASSERT_TRUE (snapshot[3] == middle);
+    TEST_ASSERT_TRUE (snapshot[4] == high);
+    TEST_ASSERT_TRUE (trie.rm (subscription_bytes (middle), middle.size ()));
+    TEST_ASSERT_FALSE (trie.rm (subscription_bytes (middle), middle.size ()));
+    TEST_ASSERT_TRUE (trie.rm (subscription_bytes (low), low.size ()));
+    TEST_ASSERT_TRUE (trie.rm (subscription_bytes (high), high.size ()));
+    TEST_ASSERT_TRUE (trie.rm (subscription_bytes (stem), stem.size ()));
+    TEST_ASSERT_TRUE (trie.rm (NULL, 0));
+    snapshot.clear ();
+    trie.apply (collect_subscription, &snapshot);
+    TEST_ASSERT_TRUE (snapshot.empty ());
+    TEST_ASSERT_TRUE (trie.add (subscription_bytes (middle), middle.size ()));
+}
+
 int main (void)
 {
     setup_test_environment ();
 
     UNITY_BEGIN ();
+    RUN_TEST (test_trie_long_subscription_destroy);
+    RUN_TEST (test_trie_long_subscription_remove);
+    RUN_TEST (test_trie_long_subscription_snapshot_and_pruning);
     RUN_TEST (test_create);
     RUN_TEST (test_check_empty_match_nonempty_data);
     RUN_TEST (test_check_empty_match_empty_data);

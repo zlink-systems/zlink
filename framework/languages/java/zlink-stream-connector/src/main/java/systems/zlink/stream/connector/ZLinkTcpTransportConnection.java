@@ -2,6 +2,7 @@ package systems.zlink.stream.connector;
 
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousSocketChannel;
 import java.nio.channels.CompletionHandler;
@@ -67,7 +68,8 @@ final class ZLinkTcpTransportConnection implements ZLinkStreamTransportConnectio
     public void close() {
         try {
             channel.close();
-        } catch (IOException ignored) {
+        } catch (IOException failure) {
+            throw new UncheckedIOException(failure);
         }
     }
 

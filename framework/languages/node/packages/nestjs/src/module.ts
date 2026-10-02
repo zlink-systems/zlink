@@ -27,8 +27,7 @@ import { createZLinkNestFrameworkOptionsBuilder } from './options-builder';
 import {
   assertBuiltModuleOptions,
   createDiscoveredOptions,
-  createRegistrationOptions,
-  hasNestHandlerDiscovery
+  createRegistrationOptions
 } from './registration-composer';
 import {
   alwaysAvailableClientProviders,
@@ -142,12 +141,7 @@ export class ZLinkModule {
     options: ZLinkModuleOptions = createZLinkNestFrameworkOptionsBuilder().build()
   ): DynamicModule {
     const resolvedOptions = assertBuiltModuleOptions(options);
-    if (hasNestHandlerDiscovery(resolvedOptions)) {
-      return createDiscoveringZLinkDynamicModule(resolvedOptions);
-    }
-    return createZLinkDynamicModule(
-      framework.createFrameworkRegistration(createRegistrationOptions(resolvedOptions))
-    );
+    return createDiscoveringZLinkDynamicModule(resolvedOptions);
   }
 
   static forRootFactory<TArgs extends unknown[]>(
@@ -217,6 +211,9 @@ export function createZLinkDynamicModule(registration: ZLinkFrameworkRegistratio
 function createDiscoveringZLinkDynamicModule(
   options: ZLinkNestModuleRegistrationOptions
 ): DynamicModule {
+  const conditionalProviders = conditionalClientProvidersForFactory(
+    framework.normalizeFrameworkRegistration(createRegistrationOptions(options))
+  );
   const registrationProvider: Provider = {
     provide: ZLINK_FRAMEWORK_REGISTRATION,
     inject: [DiscoveryService, ModuleRef],
@@ -239,12 +236,12 @@ function createDiscoveringZLinkDynamicModule(
         ) => createRuntimeHost(registration, moduleRef, discovery)
       },
       ...alwaysAvailableClientProviders(),
-      ...conditionalClientProvidersForFactory()
+      ...conditionalProviders
     ],
     exports: [
       ZLINK_FRAMEWORK_RUNTIME,
       ...alwaysAvailableClientTokens(),
-      ...conditionalClientTokens()
+      ...conditionalProviders.map(providerToken)
     ]
   };
 }

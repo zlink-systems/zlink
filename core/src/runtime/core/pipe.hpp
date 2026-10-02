@@ -540,9 +540,9 @@ class pipe_t ZLINK_FINAL : public object_t,
     void set_transport_connection_id (uint64_t connection_id_);
     uint64_t get_transport_connection_id () const;
     // Claims the one physical DISCONNECTED monitor edge owned by this socket
-    // endpoint. The transport error path and explicit local termination can
-    // race; only the winner publishes the event.
-    bool try_claim_transport_disconnected_event ();
+    // endpoint. Engines supply their live connection ID before READY;
+    // inproc termination uses the pipe's connection ID.
+    bool try_claim_transport_disconnected_event (uint64_t connection_id_ = 0);
     uint64_t get_route_incarnation_id () const;
     void set_transport_pair (transport_lane_t lane_,
                              uint64_t pair_id_,

@@ -99,6 +99,7 @@ export type RawServiceIngressHandler = (
 ) => RawServicePumpResult | undefined | Promise<RawServicePumpResult | undefined>;
 
 export interface RawServiceMeshRuntimeOptions {
+  readonly onPendingOperationsChanged?: () => void;
   readonly descriptor: ServiceNodeDescriptor;
   readonly resolveAdvertisedEndpoint?: (boundEndpoint: string) => string;
   readonly probeIntervalMs?: number;
@@ -126,7 +127,7 @@ export interface RawServiceMeshRuntimeOptions {
 // RequestResult.NotFound reply. Boundary transport results keep failureCode 0.
 const RAW_MESH_RECEIVE_RECORD_BUDGET = 64;
 const RAW_MESH_RECEIVE_BYTE_BUDGET = 4 * 1024 * 1024;
-const RAW_MESH_RECEIVE_TIME_BUDGET_MS = 2;
+export const RAW_MESH_RECEIVE_TIME_BUDGET_MS = 2;
 
 const REQUEST_TARGET_NOT_FOUND_FAILURE_CODE = ServiceWireFrameworkErrorCode.requestTargetNotFound;
 
@@ -145,7 +146,7 @@ export class RawServiceMeshRuntime {
   readonly mailbox: ServiceMailbox;
   readonly liveness: ServiceLivenessRegistry;
 
-  private readonly operations = new OperationRegistry<RawServiceRequestResult>();
+  private readonly operations: OperationRegistry<RawServiceRequestResult>;
   private readonly expectedPeers = new Map<
     string,
     {
@@ -181,6 +182,7 @@ export class RawServiceMeshRuntime {
   private closed = false;
 
   constructor(options: RawServiceMeshRuntimeOptions) {
+    this.operations = new OperationRegistry(undefined, options.onPendingOperationsChanged);
     this.descriptor = options.descriptor;
     this.topology = new ServiceTopologyRegistry(options.descriptor);
     this.mailbox = new ServiceMailbox(options.onMailboxReady);
@@ -961,6 +963,14 @@ export class RawServiceMeshRuntime {
       if (error instanceof ServiceWireProtocolError) return 'protocolError';
       throw error;
     }
+  }
+
+  expireOperations(nowMs: number, turnDeadlineMs: number): number {
+    return this.operations.expire(nowMs, turnDeadlineMs);
+  }
+
+  get pendingOperationCount(): number {
+    return this.operations.size;
   }
 
   async tickLiveness(nowMs = performance.now()): Promise<ServiceLivenessTick> {

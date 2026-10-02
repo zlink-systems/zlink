@@ -4,6 +4,7 @@ export const ZLINK_PROVIDER_MAX_VALUE_BYTES = 1024 * 1024;
 export const ZLINK_PROVIDER_MAX_VERSION_BYTES = 4096;
 export const ZLINK_PROVIDER_MAX_WRITE_KEYS = 2048;
 export const ZLINK_PROVIDER_MAX_WRITE_BYTES = 4 * 1024 * 1024;
+export const ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES = 4 * 1024 * 1024;
 export const ZLINK_PROVIDER_MAX_SCAN_CURSOR_BYTES = 4096;
 
 declare const zlinkStoreKeyBrand: unique symbol;

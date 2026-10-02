@@ -40,7 +40,12 @@ final class ResponseBodyReader {
                     (buffer, length) -> {
                         byte[] chunk = new byte[length];
                         System.arraycopy(buffer, 0, chunk, 0, length);
-                        sink.accept(chunk);
+                        try {
+                            sink.accept(chunk);
+                        } catch (RuntimeException failure) {
+                            throw HttpClientErrors.fromExecutionFailure(
+                                    failure, HttpClientErrors.FailureStage.APPLICATION);
+                        }
                     });
         } catch (IOException cause) {
             // Surface as an unchecked IOException so RetryPolicy can classify a body-read transport

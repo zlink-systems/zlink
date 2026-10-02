@@ -1,3 +1,4 @@
+import { ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES } from './framework-internal';
 const REDIS_MILLISECONDS_PER_SECOND = 1000;
 const REDIS_MICROSECONDS_PER_MILLISECOND = 1000;
 const REDIS_CLEANUP_RETRY_DELAY_MS = 1000;
@@ -9,7 +10,6 @@ const REDIS_SCAN_WORK_BUDGET_MULTIPLIER = 4;
 const REDIS_CLEANUP_BATCH_SIZE = 32;
 const REDIS_RECORD_RETENTION_MS = 60000;
 const REDIS_SCAN_SNAPSHOT_RETENTION_MS = 60000;
-const REDIS_MAX_ENCODED_PAGE_BYTES = 4194304;
 const REDIS_MAX_SCAN_SNAPSHOTS = 4096;
 
 export const REDIS_STORE_TOKEN = Object.freeze({
@@ -89,17 +89,7 @@ return {1, nowMs, record[1], record[2], record[3], tostring(tonumber(record[4]))
 //           | ['delete', keyIndex, originalKey]
 // ARGV[3..] = raw expected bytes for 'value' conditions, then raw bytes for
 //             'put' mutations, each in request order.
-export const OPAQUE_WRITE_SCRIPT =
-  PROLOGUE +
-  DECODE_HELPERS +
-  `
-local indexKey = KEYS[1]
-local mapKey = KEYS[2]
-local cleanupKey = KEYS[3]
-local sequenceKey = KEYS[4]
-local snapshotExpiryKey = KEYS[5]
-local snapshotBoundaryKey = KEYS[6]
-
+const CLEANUP_AND_BOUNDARY = `
 local expiredSnapshots = redis.call('ZRANGEBYSCORE', snapshotExpiryKey, '-inf', nowMs, 'LIMIT', 0, ${REDIS_EXPIRED_SNAPSHOT_BATCH_SIZE})
 for _, snapshotId in ipairs(expiredSnapshots) do
     redis.call('ZREM', snapshotExpiryKey, snapshotId)
@@ -145,6 +135,22 @@ for _, original in ipairs(due) do
     end
 end
 
+`;
+
+export const OPAQUE_WRITE_SCRIPT =
+  PROLOGUE +
+  DECODE_HELPERS +
+  `
+local indexKey = KEYS[1]
+local mapKey = KEYS[2]
+local cleanupKey = KEYS[3]
+local sequenceKey = KEYS[4]
+local snapshotExpiryKey = KEYS[5]
+local snapshotBoundaryKey = KEYS[6]
+
+` +
+  CLEANUP_AND_BOUNDARY +
+  `
 local conditions = cjson.decode(ARGV[1])
 local mutations = cjson.decode(ARGV[2])
 
@@ -212,51 +218,13 @@ return result
 const SCAN_CLEANUP_AND_BOUNDARY =
   DECODE_HELPERS +
   `
-local expiredSnapshots = redis.call('ZRANGEBYSCORE', KEYS[6], '-inf', nowMs, 'LIMIT', 0, ${REDIS_EXPIRED_SNAPSHOT_BATCH_SIZE})
-for _, expiredId in ipairs(expiredSnapshots) do
-    redis.call('ZREM', KEYS[6], expiredId)
-    redis.call('ZREM', KEYS[7], expiredId)
-end
-local minimumBoundary = nil
-local boundaryEntry = redis.call('ZRANGE', KEYS[7], 0, 0, 'WITHSCORES')
-if #boundaryEntry == 2 then minimumBoundary = tonumber(boundaryEntry[2]) end
-
-local due = redis.call('ZRANGEBYSCORE', KEYS[4], '-inf', nowMs, 'LIMIT', 0, ${REDIS_CLEANUP_BATCH_SIZE})
-for _, original in ipairs(due) do
-    local rowKey = redis.call('HGET', KEYS[2], original)
-    local members = {}
-    if rowKey then
-        members = redis.call('ZREVRANGE', rowKey, 0, 0, 'WITHSCORES')
-    end
-    if #members == 0 then
-        redis.call('ZREM', KEYS[1], original)
-        redis.call('HDEL', KEYS[2], original)
-        redis.call('ZREM', KEYS[4], original)
-    elseif minimumBoundary then
-        local anchor = redis.call('ZREVRANGEBYSCORE', rowKey, minimumBoundary, '-inf', 'WITHSCORES', 'LIMIT', 0, 1)
-        if #anchor == 2 then
-            redis.call('ZREMRANGEBYSCORE', rowKey, '-inf', '(' .. anchor[2])
-        end
-        redis.call('ZADD', KEYS[4], nowMs + ${REDIS_CLEANUP_RETRY_DELAY_MS}, original)
-    else
-        local record = decodeMember(members[1])
-        local expiresAtMs = tonumber(record[4])
-        if record[5] == true or (expiresAtMs > 0 and expiresAtMs + ${REDIS_RECORD_RETENTION_MS} <= nowMs) then
-            redis.call('DEL', rowKey)
-            redis.call('ZREM', KEYS[1], original)
-            redis.call('HDEL', KEYS[2], original)
-            redis.call('ZREM', KEYS[4], original)
-        else
-            redis.call('ZREMRANGEBYRANK', rowKey, 0, -2)
-            if expiresAtMs > 0 then
-                redis.call('ZADD', KEYS[4], math.max(nowMs + ${REDIS_CLEANUP_RETRY_DELAY_MS}, expiresAtMs + ${REDIS_RECORD_RETENTION_MS}), original)
-            else
-                redis.call('ZREM', KEYS[4], original)
-            end
-        end
-    end
-end
-`;
+local indexKey = KEYS[1]
+local mapKey = KEYS[2]
+local cleanupKey = KEYS[4]
+local snapshotExpiryKey = KEYS[6]
+local snapshotBoundaryKey = KEYS[7]
+` +
+  CLEANUP_AND_BOUNDARY;
 
 const SCAN_PAGE_READ = `
 local metadata = redis.call('HMGET', KEYS[3], 'now', 'boundary', 'prefix')
@@ -288,7 +256,7 @@ while examined < #originals and examined < workLimit and emitted < limit do
                 if record[1] == original and record[5] ~= true
                     and (expiresAtMs == 0 or expiresAtMs > snapshotNow) then
                     local itemBytes = string.len(original) + string.len(record[2]) + string.len(record[3]) + ${REDIS_ENCODED_ITEM_OVERHEAD_BYTES}
-                    if emitted > 0 and encodedBytes + itemBytes > ${REDIS_MAX_ENCODED_PAGE_BYTES} then
+                    if emitted > 0 and encodedBytes + itemBytes > ${ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES} then
                         examined = examined - 1
                         break
                     end

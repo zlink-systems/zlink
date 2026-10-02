@@ -128,6 +128,9 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
       );
     }
     const cursor = parseCursor(request.cursor);
+    if (cursor === undefined) {
+      return { kind: 'expired' };
+    }
     return await this.readScanPage(
       cursor.snapshotId,
       await this.connection.eval(
@@ -359,11 +362,13 @@ function requireValue(bytes: Uint8Array, retentionMs: number | undefined): numbe
   return retentionMs === undefined ? undefined : Math.ceil(retentionMs);
 }
 
-function parseCursor(cursor: ZLinkStoreScanCursor): {
-  readonly snapshotId: string;
-  readonly lastKey: string;
-} {
-  const value = requireCursor(cursor);
+function parseCursor(cursor: ZLinkStoreScanCursor):
+  | {
+      readonly snapshotId: string;
+      readonly lastKey: string;
+    }
+  | undefined {
+  const value = cursor.value;
   const separator = value.lastIndexOf(':');
   const snapshotId = separator < 0 ? '' : value.slice(0, separator);
   const lastKeyHex = separator < 0 ? '' : value.slice(separator + 1);
@@ -372,7 +377,7 @@ function parseCursor(cursor: ZLinkStoreScanCursor): {
     !/^[0-9a-f]*$/.test(lastKeyHex) ||
     lastKeyHex.length % 2 !== 0
   ) {
-    throw new RangeError('Location Store scan cursor is invalid.');
+    return undefined;
   }
   return { snapshotId, lastKey: Buffer.from(lastKeyHex, 'hex').toString('utf8') };
 }

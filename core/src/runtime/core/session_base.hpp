@@ -69,9 +69,9 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     transport_lane_t transport_lane () const { return _transport_lane; }
     uint64_t transport_pair_id () const { return _transport_pair_id; }
     uint64_t transport_pair_generation () const { return _transport_pair_generation; }
-    // Serializes paired transport DISCONNECTED publication with the socket
-    // endpoint's explicit-termination fallback.
-    bool try_claim_transport_disconnected_event ();
+    // Claims a physical engine connection through the socket endpoint's
+    // existing atomic publication claim, including before READY.
+    bool try_claim_transport_disconnected_event (uint64_t connection_id_);
     int set_peer_transport_pair (transport_lane_t lane_,
                                  uint64_t pair_id_,
                                  uint64_t generation_);

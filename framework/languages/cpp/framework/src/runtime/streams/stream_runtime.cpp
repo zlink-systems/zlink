@@ -3,6 +3,7 @@
 #include "stream_runtime.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
+#include <zlink/detail/stream_packet_name.hpp>
 
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
@@ -1065,13 +1066,10 @@ bool known_codec (stream_codec_t codec)
 
 result_t<void> validate_name (std::string_view name, bool allow_reserved)
 {
-    if (name.empty () || name.size () > 255) {
+    if (zlink::detail::stream_wire::validate_packet_name (name, allow_reserved)
+        != zlink::detail::stream_wire::packet_name_error_t::none) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "STREAM packet name is invalid");
-    }
-    if (!allow_reserved && name.rfind ("__zlink.", 0) == 0) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "STREAM packet name uses a reserved prefix");
     }
     return result_t<void>::success ();
 }

@@ -12,6 +12,7 @@
 #include "runtime/transport/stream_connection.hpp"
 
 #include <nlohmann/json.hpp>
+#include <zlink/detail/stream_packet_name.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -393,7 +394,7 @@ bool wait_name_matches (const pending_wait_t &wait, const packet_t &packet)
 
 bool is_control_packet (const packet_t &packet)
 {
-    return packet.name.rfind (reserved_control_prefix, 0) == 0;
+    return packet.name.starts_with (zlink::detail::stream_wire::reserved_packet_name_prefix);
 }
 
 void cancel_timer (const std::shared_ptr<boost::asio::steady_timer> &timer)
@@ -670,8 +671,18 @@ void complete_pending_request (std::shared_ptr<connector_state_t> state,
         callback = std::move (found->second.callback);
         reply_hook_ids = found->second.reply_hook_ids;
         deliver_direct = found->second.deliver_direct;
+        const auto write_id = found->second.write_id;
         cancel_timer (found->second.timeout_timer);
         state->pending_requests.erase (found);
+        if (!succeeded) {
+            std::erase_if (state->write_queue, [write_id] (const pending_write_t &write) {
+                return write.write_id == write_id;
+            });
+            state->state_changed.notify_all ();
+        }
+    }
+    if (!succeeded) {
+        kick_async_write (state, "request-terminal");
     }
     trace_request ("pending-complete", request_seq, packet_name, [&] {
         return std::string (succeeded ? "result=success"
@@ -809,7 +820,6 @@ void run_heartbeat_maintenance (std::shared_ptr<connector_state_t> state, std::u
     }
     if (timed_out_connection) {
         if (connection_ended (state, *timeout_error, timed_out_connection)) {
-            timed_out_connection->shutdown_and_close_async ();
             schedule_reconnect (state);
         }
         return;
@@ -996,7 +1006,6 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
         // cancellation completion can otherwise overwrite the original
         // protocol or transport error with Operation canceled.
         if (connection_ended (state, *transport_error, observed_connection)) {
-            observed_connection->shutdown_and_close_async ();
             schedule_reconnect (state);
         }
     } else if (reschedule) {
@@ -1159,7 +1168,6 @@ void finish_async_write (std::shared_ptr<connector_state_t> state,
    * next fails every other operation as Disconnected (spec 32 §9). */
     if (write_failure && expected_connection
         && connection_ended (state, *write_failure, expected_connection)) {
-        expected_connection->shutdown_and_close_async ();
         schedule_reconnect (state);
     }
     kick_async_write (std::move (state), "completion");
@@ -1377,6 +1385,9 @@ bool connection_ended (const std::shared_ptr<connector_state_t> &state,
     }
     cancel_timer (heartbeat_timer);
     fail_connection_operations (state, std::move (operations), error.message);
+    observed_connection->shutdown_and_close_async ([state] (boost::system::error_code close_error) {
+        publish_close_error (*state, close_error);
+    });
     return true;
 }
 
@@ -1579,8 +1590,8 @@ void submit_request_async (std::shared_ptr<void> state_handle,
                                                         "stream connector request timed out"));
               });
             state->pending_requests.emplace (
-              seq, pending_request_t{seq, packet, std::move (callback), timeout_timer,
-                                     deliver_direct, reply_hook_ids});
+              seq, pending_request_t{state->next_write_id, packet, std::move (callback),
+                                     timeout_timer, deliver_direct, reply_hook_ids});
             write_id = reserve_write_locked (*state, [state, seq, request_packet_name] (
                                                        result_t<void> written) mutable {
                 trace_request ("request-write-completion", seq, request_packet_name, [&] {
@@ -1712,8 +1723,12 @@ void start_wait (const std::shared_ptr<connector_state_t> &state,
         std::unique_lock<std::mutex> lock (state->transport_mutex);
         /* The predicate is the caller's own code and runs with transport_mutex
      * released; it may call back into the connector surface. */
-        if (auto matched =
-              take_matching_queued_packet (*state, lock, wait.packet_name, wait.predicate)) {
+        if (zlink::detail::stream_wire::validate_packet_name (wait.packet_name)
+            != zlink::detail::stream_wire::packet_name_error_t::none) {
+            immediate_result = result_t<packet_t>::failure (error_code_t::validation_failed,
+                                                            "Packet name is invalid.");
+        } else if (auto matched =
+                     take_matching_queued_packet (*state, lock, wait.packet_name, wait.predicate)) {
             immediate_result = result_t<packet_t>::success (std::move (*matched));
         } else if (state->close_requested.load ()) {
             immediate_result = result_t<packet_t>::failure (error_code_t::disconnected,

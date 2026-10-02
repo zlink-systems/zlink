@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.handlers;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
@@ -36,5 +38,35 @@ public final class ZLinkHandlerStages {
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
+    }
+
+    /** Completes every operation in order and propagates their failures as one terminal. */
+    public static CompletionStage<Void> completeAll(
+            List<? extends Supplier<? extends CompletionStage<Void>>> operations) {
+        CompletionStage<Throwable> failures = CompletableFuture.completedFuture(null);
+        for (Supplier<? extends CompletionStage<Void>> operation : operations) {
+            failures =
+                    failures.thenCompose(
+                            first ->
+                                    fromStageSupplier(operation)
+                                            .handle(
+                                                    (ignored, failure) -> {
+                                                        if (failure == null) return first;
+                                                        Throwable cause = failure;
+                                                        while (cause instanceof CompletionException
+                                                                && cause.getCause() != null) {
+                                                            cause = cause.getCause();
+                                                        }
+                                                        if (first == null) return cause;
+                                                        if (first != cause)
+                                                            first.addSuppressed(cause);
+                                                        return first;
+                                                    }));
+        }
+        return failures.thenCompose(
+                failure ->
+                        failure == null
+                                ? CompletableFuture.completedFuture(null)
+                                : CompletableFuture.failedFuture(failure));
     }
 }

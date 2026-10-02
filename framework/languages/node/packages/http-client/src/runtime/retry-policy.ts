@@ -30,7 +30,7 @@ export class RetryPolicy {
 
   async execute(
     spec: HttpRequestSpec,
-    perform: (spec: HttpRequestSpec, signal: AbortSignal) => Promise<RawResult>
+    perform: (spec: HttpRequestSpec, controller: AbortController) => Promise<RawResult>
   ): Promise<RawResult> {
     const maxRetries =
       spec.sink !== undefined || spec.bodyProvider !== undefined ? 0 : this.options.retryAttempts;
@@ -42,9 +42,9 @@ export class RetryPolicy {
         controller.abort();
       }, timeoutMs);
       try {
-        return await perform(spec, controller.signal);
+        return await perform(spec, controller);
       } catch (error) {
-        const failure = mapFailure(error, controller.signal.aborted);
+        const failure = mapFailure(error, controller.signal.aborted, HttpFailureStage.Application);
         if (isRetriableHttpFailure(failure) && attempt < maxRetries) {
           await delay(delayMsFor(attempt));
           continue;
@@ -57,20 +57,35 @@ export class RetryPolicy {
   }
 }
 
-function mapFailure(error: unknown, aborted: boolean): ZLinkFrameworkException {
+export enum HttpFailureStage {
+  Transport,
+  Application
+}
+
+export function mapFailure(
+  error: unknown,
+  aborted: boolean,
+  stage: HttpFailureStage
+): ZLinkFrameworkException {
   if (error instanceof ZLinkFrameworkException) {
     return error;
   }
-  if (aborted || (error instanceof Error && error.name === 'AbortError')) {
+  if (stage === HttpFailureStage.Transport && aborted) {
+    const cause = new DOMException('HTTP request exceeded timeout', 'TimeoutError');
     return new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.DeadlineExceeded,
-      'HTTP request exceeded timeout',
-      error
+      cause.message,
+      cause
     );
   }
-  // Transport failures (connection refused/reset, undici errors) are retriable.
-  const message = error instanceof Error ? error.message : 'HTTP transport failure';
-  return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, message, error);
+  const message = error instanceof Error ? error.message : 'HTTP execution failure';
+  return new ZLinkFrameworkException(
+    stage === HttpFailureStage.Transport
+      ? ZLinkFrameworkErrorKind.Unavailable
+      : ZLinkFrameworkErrorKind.InternalFailure,
+    message,
+    error
+  );
 }
 
 function isRetriableHttpFailure(error: ZLinkFrameworkException): boolean {

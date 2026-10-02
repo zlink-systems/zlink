@@ -2191,7 +2191,106 @@ test('ActorJoin source profile reaches the existing Message Follow terminal afte
   }
 });
 
+test('post-commit route cleanup failure preserves Accepted and is diagnosed once', async (t) => {
+  const failure = new Error('route cleanup failed after target commit');
+  const diagnostics: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  let attempts = 0;
+  const harness = createActorJoinHostHarness({
+    reconcileStatefulAuthorityRoutes: async () => {
+      attempts++;
+      throw failure;
+    }
+  });
+  try {
+    const result = await harness.relocate();
+    assert.equal(String(result.actorRef.nodeRid), 'target');
+    await harness.sourceLeaveIdle();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(diagnostics.length, 1);
+    assert.strictEqual(diagnostics[0]![1], failure);
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(attempts, 1);
+    const authority = await harness.location.readAuthority();
+    assert.equal(authority.kind, 'snapshot');
+    if (authority.kind === 'snapshot') assert.equal(authority.ownerId, 'target-owner');
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('source retirement completes registry removal and reports all failed stages once', async (t) => {
+  const leaveFailure = new Error('source leave failed');
+  const retireFailure = new Error('source registry cleanup failed');
+  const diagnostics: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  const harness = createActorJoinHostHarness({
+    sourceLeaveFailure: leaveFailure,
+    sourceRetirementFailure: retireFailure
+  });
+  try {
+    await harness.relocate();
+    await harness.sourceLeaveIdle();
+    // The retirement diagnostic follows the asynchronous manager completion.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(diagnostics.length, 1);
+    assert.ok(diagnostics[0]![1] instanceof AggregateError);
+    assert.deepEqual((diagnostics[0]![1] as AggregateError).errors, [leaveFailure, retireFailure]);
+    assert.equal(await harness.deliverSourceLeaveAgain(), true);
+    harness.completeSourceCleanup();
+    await Promise.resolve();
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(diagnostics.length, 1);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('post-commit source cleanup failure preserves Accepted and reports all failures once', async (t) => {
+  const failure = new Error('source cleanup failed after target commit');
+  const leaveFailure = new Error('source leave failed after target commit');
+  const retirementFailure = new Error('source disposal failed after target commit');
+  const diagnostics: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  let attempts = 0;
+  let routeAttempts = 0;
+  const harness = createActorJoinHostHarness({
+    sourceLeaveFailure: leaveFailure,
+    sourceRetirementFailure: retirementFailure,
+    commitSource: async () => {
+      attempts++;
+      throw failure;
+    },
+    reconcileStatefulAuthorityRoutes: async () => {
+      routeAttempts++;
+    }
+  });
+  try {
+    const result = await harness.relocate();
+    assert.equal(String(result.actorRef.nodeRid), 'target');
+    assert.equal(attempts, 1);
+    assert.equal(routeAttempts, 0);
+    await harness.sourceLeaveIdle();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(diagnostics.length, 1);
+    assert.ok(diagnostics[0]![1] instanceof AggregateError);
+    assert.deepEqual((diagnostics[0]![1] as AggregateError).errors, [
+      failure,
+      leaveFailure,
+      retirementFailure
+    ]);
+  } finally {
+    await harness.dispose();
+  }
+});
+
 interface ActorJoinHarnessOptions {
+  readonly sourceLeaveFailure?: Error;
+  readonly sourceRetirementFailure?: Error;
+  readonly commitSource?: () => Promise<void>;
+  readonly reconcileStatefulAuthorityRoutes?: () => Promise<void>;
   readonly holdAccepted?: boolean;
   readonly holdSourceLeave?: boolean;
   readonly readyResult?: number;
@@ -2303,6 +2402,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       sourceCleanupRefs.push(sourceRef);
       events.push('source:removed');
       sourceLeaveDone();
+      if (options.sourceRetirementFailure !== undefined) throw options.sourceRetirementFailure;
     }
   };
   const sourceActorTransfer = {
@@ -2321,6 +2421,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         setReplayResults() {},
         async commit() {
           events.push('source:committed');
+          await options.commitSource?.();
         },
         async rollback() {
           events.push('source:rolled-back');
@@ -2334,6 +2435,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       sourceLeaveSpotIds.push(sourceSpotId);
       events.push('source:onLeave:started');
       await sourceLeaveGate;
+      if (options.sourceLeaveFailure !== undefined) throw options.sourceLeaveFailure;
       events.push('source:onLeave:completed');
     }
   };
@@ -2357,16 +2459,22 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       _actorType: string,
       objectGeneration: bigint,
       authorityOwnerGeneration: bigint,
-      spotId: string,
+      spotId: string | undefined,
       spotGeneration: bigint,
       membershipEpoch: bigint
     ) {
+      assert.equal(
+        spotId,
+        undefined,
+        'Entry relocation preserves logical membership at the native boundary'
+      );
       events.push('restore:hidden');
       targetNativeAuthority = {
         actor: { actorId: restoredActorId, generation: objectGeneration, nodeRid: 'target' },
         authorityOwnerGeneration,
-        spotId,
-        spotGeneration,
+        spotId: spotId ?? String(targetDescriptor.rid),
+        spotGeneration:
+          spotId === undefined ? targetDescriptor.lifecycleGeneration : spotGeneration,
         membershipEpoch
       };
       targetState = {
@@ -2769,6 +2877,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   };
   sourceRuntime = new ZLinkHostServiceRelocationRuntime({
     ...common,
+    reconcileStatefulAuthorityRoutes: options.reconcileStatefulAuthorityRoutes,
     currentOwner: () => ({ ownerId: 'source-owner', leaseGeneration: 3n }),
     localDescriptor: () => ({ rid: 'source', lifecycleGeneration: 2n }),
     meshNode: () => sourceNode,

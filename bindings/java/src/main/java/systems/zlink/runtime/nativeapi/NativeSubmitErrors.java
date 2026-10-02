@@ -10,8 +10,7 @@ public final class NativeSubmitErrors {
     }
 
     public static boolean isBackpressured(int errno) {
-        return errno == NativeErrno.EAGAIN
-            || errno == NativeErrno.EWOULDBLOCK_WIN;
+        return errno == NativeErrno.EAGAIN;
     }
 
     public static ZlinkSubmitException submitException(int result, int errno) {

@@ -4,9 +4,10 @@ use std::ptr;
 use super::{SocketInner, recv_whole_message};
 use crate::core_context::Context;
 use crate::domain::Received;
-use crate::error::{ConfigError, ConfigResult, RecvError};
+use crate::error::{ConfigError, RecvError};
 use crate::ffi;
 use crate::message::RoutingId;
+use crate::native_errors::check_config_rc;
 use crate::routed_socket_contracts::RouterRoute;
 use crate::socket_contracts::RouterSocket;
 
@@ -88,21 +89,6 @@ pub(crate) fn recv_router_once(
     }
 }
 
-fn config_result_from_rc(rc: i32) -> ConfigResult {
-    match rc {
-        0 => ConfigResult::Ok,
-        701 => ConfigResult::InvalidHandle,
-        702 => ConfigResult::InvalidArgument,
-        703 => ConfigResult::NotSupported,
-        705 => ConfigResult::InvalidState,
-        706 => ConfigResult::NotFound,
-        707 => ConfigResult::Conflict,
-        708 => ConfigResult::BufferTooSmall,
-        709 => ConfigResult::Busy,
-        _ => ConfigResult::InternalError,
-    }
-}
-
 /// Reads the ROUTER selected-route snapshot. Core ROUTER §10.1:
 /// BUFFER_TOO_SMALL reports the required row count and keeps POLLROUTE
 /// readiness, so retry with that capacity.
@@ -128,11 +114,7 @@ pub(crate) fn router_routes_snapshot(handle: *mut c_void) -> Result<Vec<RouterRo
             capacity = count;
             continue;
         }
-        if rc != 0 {
-            return Err(ConfigError::new(config_result_from_rc(rc), unsafe {
-                ffi::zlink_errno()
-            }));
-        }
+        check_config_rc(rc)?;
         return Ok(native[..count]
             .iter()
             .map(|route| RouterRoute {
