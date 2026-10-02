@@ -53,6 +53,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
         );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, prepareError);
         prepare = wirePrepare;
+        await using var otherSource = runtime.Context.CreateDealerSocket();
+        using var otherCompletionOwner = new TestCompletionPollerDriver(otherSource);
+        otherSource.SetRoutingId(RoutingId.From($"other-source-{Guid.NewGuid():N}"));
+        otherSource.Connect(runtime.Target.Status().LocalEndpoint);
+        await SendHelloAsync(otherSource, $"inproc://other-source-{Guid.NewGuid():N}");
+        using var otherAdmission = await ReceiveAsync(otherSource);
+        await WaitUntilAsync(() => runtime.Target.Status().AdmittedPeerCount == 2);
         Task<IReadOnlyList<Message>> Request(ZLinkServiceWireCodec.RelocationPrepareRecord record)
         {
             using var message = Message.From(ZLinkServiceWireCodec.EncodeRelocationPrepare(record));
@@ -65,6 +72,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
         }
         var first = Request(prepare);
         var duplicate = Request(prepare);
+        using var otherMessage = Message.From(ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare));
+        var otherConnectionReply = otherSource
+            .Request()
+            .Message(otherMessage)
+            .Timeout(TimeSpan.FromSeconds(2))
+            .Async(CancellationToken.None)
+            .Reply;
         var differentIdentityReplies = new[]
         {
             prepare with { SourceNodeRid = RoutingId.From("other-source") },
@@ -168,6 +182,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => ignored);
             Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timeout.Result);
         }
+        var otherTimeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => otherConnectionReply);
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, otherTimeout.Result);
     }
 
     private sealed class CountingRelocationTarget : ICanonicalRelocationTarget

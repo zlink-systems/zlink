@@ -6713,6 +6713,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             );
             var lease = new ZLinkCanonicalRelocationPreparationLease();
             var candidate = new InboundRelocationPreparation(
+                sourceNodeRid,
                 prepare,
                 assembler,
                 lease,
@@ -6720,9 +6721,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     PrepareRelocationTargetAsync(target, sourceNodeRid, prepare, assembler, lease)
                 )
             );
+            if (
+                !candidate.MatchesIdentity(
+                    sourceNodeRid,
+                    prepare.SourceNodeRid,
+                    prepare.SourceNodeGeneration,
+                    prepare.Coordinator,
+                    prepare.Target,
+                    prepare.Object
+                )
+            )
+                return;
             preparation = _inboundRelocationAssemblies.GetOrAdd(assemblyKey, candidate);
             if (
                 !preparation.MatchesIdentity(
+                    sourceNodeRid,
                     prepare.SourceNodeRid,
                     prepare.SourceNodeGeneration,
                     prepare.Coordinator,
@@ -7152,6 +7165,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (
             !_inboundRelocationAssemblies.TryGetValue(key, out var preparation)
             || !preparation.MatchesIdentity(
+                sourceNodeRid,
                 sourceNodeRid,
                 peer.LifecycleGeneration,
                 state.Coordinator,
@@ -12793,6 +12807,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     private sealed record InboundRelocationPreparation(
+        RoutingId AuthenticatedSourceNodeRid,
         ZLinkServiceWireCodec.RelocationPrepareRecord Prepare,
         ZLinkRelocationChunkAssembler Assembler,
         ZLinkCanonicalRelocationPreparationLease Lease,
@@ -12800,13 +12815,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         internal bool MatchesIdentity(
+            RoutingId authenticatedSourceNodeRid,
             RoutingId sourceNodeRid,
             ulong sourceNodeGeneration,
             ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator,
             ZLinkServiceWireCodec.RelocationTargetRecord target,
             ZLinkServiceWireCodec.RelocationObjectRecord @object
         ) =>
-            Prepare.SourceNodeRid == sourceNodeRid
+            AuthenticatedSourceNodeRid == authenticatedSourceNodeRid
+            && sourceNodeRid == authenticatedSourceNodeRid
+            && Prepare.SourceNodeRid == sourceNodeRid
             && Prepare.SourceNodeGeneration == sourceNodeGeneration
             && Prepare.Coordinator == coordinator
             && Prepare.Target == target
