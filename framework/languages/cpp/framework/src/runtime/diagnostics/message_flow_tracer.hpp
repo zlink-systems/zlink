@@ -426,6 +426,11 @@ class message_flow_tracer_t
                 if (event.detail_result)
                     add (dispatch_event_field::result, *event.detail_result);
             }
+            if (event.exception) {
+                auto error = diagnostic_event_sink_t::exception_summary (event.exception);
+                add (dispatch_event_field::error_type, std::move (error.type));
+                add (dispatch_event_field::error_message, std::move (error.message));
+            }
             // Emit structured fields only through an explicitly configured
             // framework logger; observer-only and no-sink paths stay silent.
             diagnostic_event_sink_t::log_if_configured (
