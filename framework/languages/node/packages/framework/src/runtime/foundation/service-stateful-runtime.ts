@@ -1333,9 +1333,7 @@ export class ServiceStatefulRuntime {
     if (target === undefined) {
       this.operations.reply(
         pending.id,
-        internalFrameworkWireReply(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale
-        )
+        internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale)
       );
       return pending;
     }
@@ -1393,9 +1391,7 @@ export class ServiceStatefulRuntime {
     if (route === undefined) {
       this.operations.reply(
         pending.id,
-        internalFrameworkWireReply(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale
-        )
+        internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale)
       );
       return pending;
     }
@@ -1911,9 +1907,7 @@ export class ServiceStatefulRuntime {
     ) {
       this.operations.reply(
         pending.id,
-        internalFrameworkWireReply(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale
-        )
+        internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale)
       );
       return pending;
     }
@@ -4495,9 +4489,7 @@ export class ServiceStatefulRuntime {
     if (target === undefined || actorRoute === undefined) {
       this.operations.reply(
         pending.id,
-        internalFrameworkWireReply(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale
-        )
+        internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale)
       );
       return;
     }
@@ -5538,9 +5530,7 @@ function actorLocation(actor: ServiceActorState): ActorLocation {
 
 function failure(error: unknown): ServiceStatefulResult {
   if (error instanceof ServiceStaleGenerationError) {
-    return internalFrameworkWireReply(
-      ZLinkFrameworkInternalErrorKind.ActorLocationStale
-    );
+    return internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
   }
   if (error instanceof ZLinkFrameworkException) {
     return internalFrameworkWireReply(error);

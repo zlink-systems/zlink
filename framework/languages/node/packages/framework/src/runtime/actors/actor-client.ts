@@ -880,8 +880,7 @@ function actorTerminalKind(result: number): ZLinkFrameworkInternalErrorKind {
 // the remote owner/queue terminal supplies the classification.
 function mapRequestResult(result: number, failureErrno: number, operationName: string): Error {
   const kind =
-    internalFrameworkErrorKindFromWireFailureCode(failureErrno) ??
-    actorTerminalKind(result);
+    internalFrameworkErrorKindFromWireFailureCode(failureErrno) ?? actorTerminalKind(result);
   return createInternalFrameworkException(
     kind,
     `${operationName} failed with request result ${result}` +
