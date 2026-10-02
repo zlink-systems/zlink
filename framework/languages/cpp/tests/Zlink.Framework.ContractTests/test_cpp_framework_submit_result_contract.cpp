@@ -9,12 +9,23 @@
 #include <chrono>
 #include <iostream>
 #include <utility>
+#include <type_traits>
 
 namespace backend = zlink::framework::detail::backend;
 namespace messaging = zlink::framework::runtime::messaging;
 
+static_assert (
+  std::is_same_v<decltype (backend::raw_request_completion_t::terminal), zlink::request_result_t>);
+
 int main ()
 {
+    if (messaging::map_submit_request_result (zlink::submit_result_t::backpressured, false)
+          != zlink::request_result_t::not_connected
+        || messaging::map_submit_request_result (zlink::submit_result_t::backpressured, true)
+             != zlink::request_result_t::timed_out) {
+        std::cerr << "capacity refusal lost its phase-specific terminal\n";
+        return 1;
+    }
     using namespace std::chrono_literals;
     using zlink::framework::framework_error_kind_t;
     constexpr auto request_timeout = 25ms;
@@ -35,7 +46,7 @@ int main ()
         return 1;
     }
     const auto &completion = settled.value ();
-    if (completion.result != backend::raw_request_result_t::terminated || !completion.failure
+    if (completion.terminal != zlink::request_result_t::terminated || !completion.failure
         || completion.failure->phase != backend::raw_request_failure_phase_t::initial_admission
         || completion.failure->submit_result != zlink::submit_result_t::terminated
         || messaging::map_submit_result_exception (*completion.failure->submit_result,
@@ -58,11 +69,11 @@ int main ()
         std::cerr << "closed DEALER did not retain its typed caller failure\n";
         return 1;
     }
-    const auto &invalid_failure = *invalid_request.result ().value ().failure;
+    const auto &invalid_completion = invalid_request.result ().value ();
     const auto user_spot_kind =
       zlink::framework::runtime::user_spot_terminal::map_user_spot_operation_failure (
         zlink::framework::runtime::foundation::operation_terminal_t::completed,
-        {1, static_cast<std::uint32_t> (invalid_failure.terminal_result ()),
+        {1, static_cast<std::uint32_t> (invalid_completion.terminal),
          static_cast<std::uint32_t> (
            zlink::framework::runtime::protocol::framework_error_code::none)},
         true);
@@ -105,6 +116,10 @@ int main ()
           std::pair{zlink::request_result_t::invalid_argument,
                     protocol::framework_error_code::none}}) {
         const auto code = request_mapper.reply_failure_code (static_cast<std::uint32_t> (terminal));
+        if (request_mapper.transport_terminal (terminal)) {
+            std::cerr << "typed failure was collapsed into a transport terminal\n";
+            return 1;
+        }
         if (expected_code != protocol::framework_error_code::none
             && protocol::valid_terminal_failure (static_cast<std::uint32_t> (terminal),
                                                  protocol::framework_error_code::none)) {
@@ -120,13 +135,10 @@ int main ()
     }
     for (const auto terminal : {zlink::request_result_t::conflict, zlink::request_result_t::busy,
                                 zlink::request_result_t::backpressured}) {
-        const backend::raw_request_completion_t legacy{
-          backend::raw_request_result_t::failed,
-          {},
-          backend::raw_request_failure_t{backend::raw_request_failure_phase_t::completion_terminal,
-                                         std::nullopt, terminal, 0}};
-        if (legacy.has_unrepresented_typed_result ()) {
-            std::cerr << "legacy Unavailable was changed into a synthetic application reply\n";
+        const backend::raw_request_completion_t completion{terminal, {}};
+        if (request_mapper.transport_terminal (completion.terminal)
+            != zlink::framework::runtime::foundation::operation_terminal_t::transport_failed) {
+            std::cerr << "Unavailable terminal lost its transport meaning\n";
             return 1;
         }
     }

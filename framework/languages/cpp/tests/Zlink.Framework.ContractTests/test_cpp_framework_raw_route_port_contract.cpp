@@ -101,19 +101,17 @@ void verify_capacity_refusal_phase_controls_public_terminal ()
     using zlink::framework::framework_error_kind_t;
     namespace foundation = zlink::framework::runtime::foundation;
     namespace client_server = zlink::framework::runtime::client_server;
-    const auto initial = backend::map_binding_request_submit_result (
-      zlink::submit_result_t::backpressured,
-      backend::raw_request_failure_phase_t::initial_admission);
-    assert (initial == backend::raw_request_result_t::failed);
+    const auto initial = zlink::framework::runtime::messaging::map_submit_request_result (
+      zlink::submit_result_t::backpressured, false);
+    assert (initial == zlink::request_result_t::not_connected);
     const auto refused = client_server::client_server_operation_exception (
       foundation::operation_terminal_t::transport_failed, "tokenless capacity");
     assert (refused.kind () == framework_error_kind_t::unavailable);
     assert (zlink::framework::detail::boundary_state (refused)
             != zlink::framework::detail::boundary_error_t::timed_out);
-    const auto completion = backend::map_binding_request_submit_result (
-      zlink::submit_result_t::backpressured,
-      backend::raw_request_failure_phase_t::completion_terminal);
-    assert (completion == backend::raw_request_result_t::timed_out);
+    const auto completion = zlink::framework::runtime::messaging::map_submit_request_result (
+      zlink::submit_result_t::backpressured, true);
+    assert (completion == zlink::request_result_t::timed_out);
     const auto expired = client_server::client_server_operation_exception (
       foundation::operation_terminal_t::timed_out, "expired WRITABLE token");
     assert (expired.kind () == framework_error_kind_t::deadline_exceeded);
@@ -173,14 +171,10 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
               << (completion.failure->submit_result
                     ? static_cast<int> (*completion.failure->submit_result)
                     : -1)
-              << " request="
-              << (completion.failure->request_result
-                    ? static_cast<int> (*completion.failure->request_result)
-                    : -1)
-              << " raw_result=" << static_cast<int> (completion.result) << std::endl;
+              << " terminal=" << static_cast<int> (completion.terminal) << std::endl;
     assert (completion.failure->phase == backend::raw_request_failure_phase_t::completion_terminal);
     assert (completion.failure->submit_result == zlink::submit_result_t::backpressured);
-    assert (completion.result == backend::raw_request_result_t::timed_out);
+    assert (completion.terminal == zlink::request_result_t::timed_out);
     port.close ();
     target_port.close ();
     ready.close ();
@@ -323,7 +317,7 @@ void verify_binding_completion_bypasses_handler_executor ()
     auto pending = source_port.request (target_rid.to_bytes (), request_parts (), 2s);
     std::atomic_bool observed{false};
     zlink::framework::detail::observe_task_completion (pending, [&] (const auto &settled) {
-        assert (settled && settled.value ().result == backend::raw_request_result_t::ok);
+        assert (settled && settled.value ().terminal == zlink::request_result_t::ok);
         observed.store (true, std::memory_order_release);
     });
     std::optional<backend::raw_received_t> received;
@@ -522,12 +516,11 @@ void verify_missing_rid_is_initial_not_connected_without_wait_token ()
     assert (request.await_ready ());
     const auto &settled = request.result ();
     assert (settled);
-    assert (settled.value ().result == backend::raw_request_result_t::route_unavailable);
+    assert (settled.value ().terminal == zlink::request_result_t::not_connected);
     assert (settled.value ().failure);
     assert (settled.value ().failure->phase
             == backend::raw_request_failure_phase_t::initial_admission);
     assert (settled.value ().failure->submit_result == zlink::submit_result_t::not_connected);
-    assert (!settled.value ().failure->request_result);
     assert (settled.value ().failure->internal_errno == EHOSTUNREACH);
     // A token-bearing rejection would remain pending until a WRITABLE record.
     // Synchronous completion here pins the D-B85 ID/token-zero path.
@@ -572,11 +565,10 @@ void verify_handover_request_completion_is_replayable ()
     assert (pending.await_ready ());
     const auto elapsed = std::chrono::steady_clock::now () - handover_started;
     const auto &completion = pending.result ().value ();
-    assert (completion.result == backend::raw_request_result_t::route_unavailable);
+    assert (completion.terminal == zlink::request_result_t::not_connected);
     assert (completion.failure);
     assert (completion.failure->phase == backend::raw_request_failure_phase_t::completion_terminal);
     assert (!completion.failure->submit_result);
-    assert (completion.failure->request_result == zlink::request_result_t::not_connected);
     // The binding completion owner normalizes typed NOT_CONNECTED to ENOTCONN.
     assert (completion.failure->internal_errno == ENOTCONN);
     assert (elapsed < 20ms);
@@ -622,12 +614,11 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
     assert (request.await_ready ());
     const auto &settled = request.result ();
     assert (settled);
-    assert (settled.value ().result == backend::raw_request_result_t::failed);
+    assert (settled.value ().terminal == zlink::request_result_t::not_found);
     assert (settled.value ().failure);
     assert (settled.value ().failure->phase
             == backend::raw_request_failure_phase_t::completion_terminal);
     assert (settled.value ().failure->submit_result == zlink::submit_result_t::not_found);
-    assert (!settled.value ().failure->request_result);
     assert (settled.value ().failure->internal_errno == ENOENT);
     port.close ();
     client_monitor.close ();

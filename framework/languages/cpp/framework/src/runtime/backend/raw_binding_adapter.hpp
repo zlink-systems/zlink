@@ -1,14 +1,10 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
-#include "runtime/messaging/submit_result_mapper.hpp"
-
 #include "runtime/backend/raw_route_port.hpp"
 
 #include <zlink/Contracts/Messaging/message.hpp>
-#include <zlink/Contracts/Messaging/request_result.hpp>
 
-#include <cerrno>
 #include <utility>
 #include <vector>
 
@@ -78,33 +74,6 @@ inline std::vector<zlink::message_t> materialize_binding_parts (raw_message_t pa
         result.push_back (std::move (message));
     }
     return result;
-}
-
-inline raw_request_result_t map_binding_request_result (zlink::request_result_t result) noexcept
-{
-    switch (result) {
-        case zlink::request_result_t::ok:
-            return raw_request_result_t::ok;
-        case zlink::request_result_t::timed_out:
-            return raw_request_result_t::timed_out;
-        case zlink::request_result_t::not_connected:
-            // Core completes requests pinned to a superseded handover pair
-            // immediately; the durable operation owner may replay them.
-            return raw_request_result_t::route_unavailable;
-        case zlink::request_result_t::terminated:
-            return raw_request_result_t::terminated;
-        default:
-            return raw_request_result_t::failed;
-    }
-}
-
-// Raw transport projection consumes the single submit owner and retains the
-// original typed failure separately for the public request result consumer.
-inline raw_request_result_t map_binding_request_submit_result (zlink::submit_result_t result,
-                                                               raw_request_failure_phase_t phase)
-{
-    return map_binding_request_result (runtime::messaging::map_submit_request_result (
-      result, phase == raw_request_failure_phase_t::completion_terminal));
 }
 
 } // namespace zlink::framework::detail::backend

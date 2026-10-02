@@ -6,6 +6,24 @@
 namespace zlink::framework::runtime::messaging
 {
 
+std::optional<foundation::operation_terminal_t>
+request_failure_mapper_t::transport_terminal (zlink::request_result_t terminal) const noexcept
+{
+    switch (terminal) {
+        case zlink::request_result_t::timed_out:
+            return foundation::operation_terminal_t::timed_out;
+        case zlink::request_result_t::terminated:
+            return foundation::operation_terminal_t::shutdown;
+        case zlink::request_result_t::not_connected:
+        case zlink::request_result_t::conflict:
+        case zlink::request_result_t::busy:
+        case zlink::request_result_t::backpressured:
+            return foundation::operation_terminal_t::transport_failed;
+        default:
+            return std::nullopt;
+    }
+}
+
 std::uint32_t
 request_failure_mapper_t::reply_failure_code (std::uint32_t terminal_result) const noexcept
 {

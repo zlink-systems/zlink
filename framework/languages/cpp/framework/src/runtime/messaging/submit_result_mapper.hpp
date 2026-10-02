@@ -23,7 +23,7 @@ inline zlink::request_result_t map_submit_request_result (zlink::submit_result_t
             return zlink::request_result_t::ok;
         case zlink::submit_result_t::backpressured:
             return completion_failure ? zlink::request_result_t::timed_out
-                                      : zlink::request_result_t::backpressured;
+                                      : zlink::request_result_t::not_connected;
         case zlink::submit_result_t::not_connected:
             return zlink::request_result_t::not_connected;
         case zlink::submit_result_t::not_found:

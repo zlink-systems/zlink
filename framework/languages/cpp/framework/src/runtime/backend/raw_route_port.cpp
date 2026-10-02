@@ -136,23 +136,22 @@ binding_completion_observer_t observe_request_completion (
     try {
         auto reply = co_await std::move (pending);
         source->complete (result_t<raw_request_completion_t>::success (
-          raw_request_completion_t{raw_request_result_t::ok, copy_binding_parts (reply)}));
+          raw_request_completion_t{zlink::request_result_t::ok, copy_binding_parts (reply)}));
     }
     catch (const zlink::request_error_t &error) {
         source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
-          map_binding_request_result (error.result ()),
+          error.result (),
           {},
           raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, std::nullopt,
-                                error.result (), error.internal_errno ()}}));
+                                error.internal_errno ()}}));
     }
     catch (const zlink::submit_error_t &error) {
-        const auto result = map_binding_request_submit_result (
-          error.result (), raw_request_failure_phase_t::completion_terminal);
+        const auto result = runtime::messaging::map_submit_request_result (error.result (), true);
         source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
           result,
           {},
           raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, error.result (),
-                                std::nullopt, error.internal_errno ()}}));
+                                error.internal_errno ()}}));
     }
     catch (const std::exception &error) {
         source->complete (result_t<raw_request_completion_t>::failure (
@@ -368,7 +367,7 @@ task_t<raw_request_completion_t> raw_route_port_t::request (const raw_bytes_t &t
             std::lock_guard lock (*_socket_mutex);
             if (_socket == nullptr) {
                 source->complete (result_t<raw_request_completion_t>::success (
-                  raw_request_completion_t{raw_request_result_t::terminated, {}}));
+                  raw_request_completion_t{zlink::request_result_t::terminated, {}}));
                 return result;
             }
             auto operation =
@@ -383,11 +382,9 @@ task_t<raw_request_completion_t> raw_route_port_t::request (const raw_bytes_t &t
     }
     catch (const zlink::submit_error_t &error) {
         const auto phase = raw_request_failure_phase_t::initial_admission;
-        const auto result = map_binding_request_submit_result (error.result (), phase);
+        const auto result = runtime::messaging::map_submit_request_result (error.result (), false);
         source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
-          result,
-          {},
-          raw_request_failure_t{phase, error.result (), std::nullopt, error.internal_errno ()}}));
+          result, {}, raw_request_failure_t{phase, error.result (), error.internal_errno ()}}));
     }
     catch (const std::exception &error) {
         source->complete (result_t<raw_request_completion_t>::failure (

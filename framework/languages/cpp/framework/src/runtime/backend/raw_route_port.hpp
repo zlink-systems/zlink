@@ -42,16 +42,6 @@ struct raw_received_t
     std::uint64_t route_generation = 0;
 };
 
-enum class raw_request_result_t
-{
-    ok,
-    timed_out,
-    not_connected,
-    route_unavailable,
-    terminated,
-    failed
-};
-
 enum class raw_request_failure_phase_t
 {
     initial_admission,
@@ -62,36 +52,14 @@ struct raw_request_failure_t
 {
     raw_request_failure_phase_t phase;
     std::optional<zlink::submit_result_t> submit_result;
-    std::optional<zlink::request_result_t> request_result;
     int internal_errno = 0;
-
-    zlink::request_result_t terminal_result () const noexcept
-    {
-        if (request_result)
-            return *request_result;
-        return runtime::messaging::map_submit_request_result (
-          *submit_result, phase == raw_request_failure_phase_t::completion_terminal);
-    }
 };
 
 struct raw_request_completion_t
 {
-    raw_request_result_t result = raw_request_result_t::failed;
+    zlink::request_result_t terminal = zlink::request_result_t::internal_error;
     raw_message_t parts;
     std::optional<raw_request_failure_t> failure;
-
-    bool has_unrepresented_typed_result () const
-    {
-        if (result != raw_request_result_t::failed || !failure)
-            return false;
-        const auto terminal = static_cast<std::uint32_t> (failure->terminal_result ());
-        const runtime::messaging::request_failure_mapper_t mapper;
-        // Compare public meanings before encoding. Legacy Unavailable is kept
-        // as a transport terminal, including Core Conflict with no wire fine code.
-        return mapper.reply_header_exception (terminal, mapper.reply_failure_code (terminal), {})
-                 .kind ()
-               != framework_error_kind_t::unavailable;
-    }
 };
 
 // A send that the binding accepts immediately has its terminal admission
