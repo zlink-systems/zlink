@@ -15,6 +15,8 @@ procedure and the part the application owns.
 
 Nothing the calling side was using changes.
 
+<p><a href="/common/diagrams/zlink-tour-en.html#relocate" target="_blank">▶ Try it in the interactive tour — Host Relocation</a></p>
+
 | What survives | Meaning |
 | --- | --- |
 | Spot id, actor id, and [generation](22-actor.en.md#33-generation-in-a-reference) | The logical id the caller was using is unchanged. No address has to be announced again |

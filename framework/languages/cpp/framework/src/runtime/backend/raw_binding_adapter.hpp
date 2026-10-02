@@ -7,6 +7,7 @@
 #include <zlink/Contracts/Messaging/request_result.hpp>
 
 #include <cerrno>
+#include <utility>
 #include <vector>
 
 namespace zlink::framework::detail::backend
@@ -95,19 +96,19 @@ inline raw_request_result_t map_binding_request_result (zlink::request_result_t 
     }
 }
 
-// Core socket README "submit retry" owns this table. Only an initial local
-// submit failure can be a transient route absence. Request completions use the
-// typed mapping above. A submit completion with ENOENT means disconnect_rid
-// retired an already-issued WRITABLE token and must not be replayed.
-inline bool transient_route_failure (zlink::submit_result_t result,
-                                     int error,
-                                     raw_request_failure_phase_t phase) noexcept
+// The submit phase preserves Core's distinction between a tokenless capacity
+// refusal and the timeout of an issued WRITABLE token (submit-and-completion §5).
+// Other submit results retain the owning port's existing classification.
+template <typename TFallback>
+inline raw_request_result_t map_binding_request_submit_result (zlink::submit_result_t result,
+                                                               raw_request_failure_phase_t phase,
+                                                               TFallback &&fallback)
 {
-    if (phase != raw_request_failure_phase_t::initial_admission)
-        return false;
-    if (result == zlink::submit_result_t::not_connected)
-        return error == ENOTCONN || error == EHOSTUNREACH;
-    return result == zlink::submit_result_t::not_admitted && error == ECONNREFUSED;
+    if (result == zlink::submit_result_t::backpressured)
+        return phase == raw_request_failure_phase_t::initial_admission
+                 ? raw_request_result_t::failed
+                 : raw_request_result_t::timed_out;
+    return std::forward<TFallback> (fallback) ();
 }
 
 } // namespace zlink::framework::detail::backend

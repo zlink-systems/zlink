@@ -1,15 +1,13 @@
 import {
   type ActorRef,
   type RoutingId,
-  type SpotId,
   type ZLinkSessionActor,
   ZLinkSpotKind
 } from '../../contracts';
 
-import { ZLINK_MAX_SPOT_ID_BYTES } from '../../contracts/Common/CoreTypes';
 import type { DefaultZLinkActorManager, ZLinkRemoteActorPacketTarget } from '../actors';
 import { decodeRemoteActorPacketTarget } from '../actors/actor-packet-relay-wire';
-import { normalizeRoutingId as normalizeRuntimeRoutingId, routingIdsEqual } from '../routing-id';
+import { routingIdsEqual } from '../routing-id';
 import type { ZLinkStreamActorLookupPort } from '../streams/stream-binding-runtime-ports';
 import type { MeshRouterResolver } from './mesh-router-resolver';
 
@@ -106,10 +104,7 @@ export class ZLinkRemoteActorPacketTargetStore {
     );
   }
 
-  targetForState(
-    actorId: string,
-    routerChannelIdHint?: string
-  ): ZLinkRemoteActorPacketTarget | undefined {
+  targetForState(actorId: string): ZLinkRemoteActorPacketTarget | undefined {
     const state = this.options.actorManager()?.getState(actorId);
     if (
       state?.remoteActorPacketTarget !== undefined &&
@@ -118,45 +113,7 @@ export class ZLinkRemoteActorPacketTargetStore {
     ) {
       return state.remoteActorPacketTarget;
     }
-    const spotId = state?.spotId;
-    if (spotId !== undefined && state?.remoteActorPacketTarget !== undefined) {
-      //  The cached packet target refers to a different Spot than the
-      //  actor's current membership (the actor just moved Entry -> User).
-      //  Combining the stale target's node with the new Spot id fabricates
-      //  a route with no complete Ready authority fence, and the next
-      //  direct request then fails the fence check instead of resolving
-      //  the current owner route (spec 12 §direct payload uses the
-      //  Location Store's current owner route; spec 32:87 — an unavailable
-      //  route is Unavailable, not a fabricated hit). Publish no hint so
-      //  the source clears its cache and re-resolves completely.
-      return undefined;
-    }
-    const actorRef = state?.nativeActorRef as ActorRef | undefined;
-    const targetNodeRid =
-      (actorRef?.nodeRid as RoutingId | undefined) ?? this.options.primaryNodeRid();
-    const routerChannelId =
-      routerChannelIdHint ??
-      this.options.meshRouters.defaultSpotRouterChannelId() ??
-      this.options.meshRouters.defaultRouterChannelId();
-    const localNodeRid = this.options.primaryNodeRid();
-    if (
-      spotId === undefined &&
-      targetNodeRid !== undefined &&
-      localNodeRid !== undefined &&
-      routingIdsEqual(targetNodeRid, localNodeRid)
-    ) {
-      return undefined;
-    }
-    if (spotId === undefined || targetNodeRid === undefined || routerChannelId === undefined) {
-      return undefined;
-    }
-    return {
-      routerChannelId,
-      targetNodeRid: normalizeRuntimeRoutingId(targetNodeRid),
-      spotId: validateSpotId(spotId),
-      spotKind: ZLinkSpotKind.User,
-      ...(state?.spotGeneration === undefined ? {} : { targetSpotGeneration: state.spotGeneration })
-    };
+    return undefined;
   }
 
   targetForActorRef(actorRef: ActorRef): ZLinkRemoteActorPacketTarget | undefined {
@@ -245,14 +202,4 @@ function sessionActorPacketTargetTenureKeyForRef(actorId: string, actorRef: Acto
     ref.ownershipGeneration?.toString() ?? '',
     ref.ownerLeaseGeneration?.toString() ?? ''
   ].join(':');
-}
-
-function validateSpotId(value: string): SpotId {
-  const byteLength = Buffer.byteLength(value, 'utf8');
-  if (byteLength < 1 || byteLength > ZLINK_MAX_SPOT_ID_BYTES) {
-    throw new TypeError(
-      `SpotId must contain between 1 and ${ZLINK_MAX_SPOT_ID_BYTES} UTF-8 bytes.`
-    );
-  }
-  return value;
 }

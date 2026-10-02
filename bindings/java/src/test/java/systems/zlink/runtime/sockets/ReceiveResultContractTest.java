@@ -32,9 +32,6 @@ import systems.zlink.runtime.nativeapi.NativeErrno;
  * (core/doc/spec/core/03-errors.ko.md "Result와 errno 대응" §4).
  */
 class ReceiveResultContractTest {
-    private static final int EINTR = 4;
-    private static final int ETIMEDOUT = 110;
-
     /** Scripted Core: every receive path reports the result Core returns. */
     @Test
     void receivePathsReportCoreResult() throws Exception {
@@ -63,8 +60,12 @@ class ReceiveResultContractTest {
                 try (Message ready = Message.from("ready")) {
                     sender.send().message(ready).submit_sync();
                 }
-                core.receiveFault("zlink_recv", RecvResult.INTERNAL_ERROR, EINTR);
-                assertInternalEintr(() -> receiver.recv(received, RecvFlags.NONE));
+                core.receiveFault("zlink_recv", RecvResult.INTERNAL_ERROR, NativeErrno.EINTR);
+                assertResult(RecvResult.INTERNAL_ERROR, NativeErrno.EINTR,
+                    () -> receiver.recv(received, RecvFlags.NONE));
+                core.receiveFault("zlink_recv", RecvResult.BUSY, NativeErrno.EBUSY);
+                assertResult(RecvResult.BUSY, NativeErrno.EBUSY,
+                    () -> receiver.recv(received, RecvFlags.NONE));
                 assertTrue(receiver.recv(received, RecvFlags.NONE));
             }
         }
@@ -79,8 +80,12 @@ class ReceiveResultContractTest {
                 try (Message ready = Message.from("ready")) {
                     dealer.send().message(ready).submit_sync();
                 }
-                core.receiveFault("zlink_router_recv", RecvResult.INTERNAL_ERROR, EINTR);
-                assertInternalEintr(() -> router.recv(received, RecvFlags.NONE));
+                core.receiveFault("zlink_router_recv", RecvResult.INTERNAL_ERROR, NativeErrno.EINTR);
+                assertResult(RecvResult.INTERNAL_ERROR, NativeErrno.EINTR,
+                    () -> router.recv(received, RecvFlags.NONE));
+                core.receiveFault("zlink_router_recv", RecvResult.BUSY, NativeErrno.EBUSY);
+                assertResult(RecvResult.BUSY, NativeErrno.EBUSY,
+                    () -> router.recv(received, RecvFlags.NONE));
                 assertTrue(router.recv(received, RecvFlags.NONE));
             }
         }
@@ -97,27 +102,30 @@ class ReceiveResultContractTest {
                 TestSupport.awaitMonitorEvent(subMonitor, MonitorEventType.CONNECTION_READY);
 
                 SubscriptionEvent event = new SubscriptionEvent();
-                core.receiveFault("zlink_xpub_recv", RecvResult.NO_DATA, ETIMEDOUT);
+                core.receiveFault("zlink_xpub_recv", RecvResult.NO_DATA, NativeErrno.ETIMEDOUT);
                 assertFalse(pub.receiveSubscriptionEvent(event, RecvFlags.DONT_WAIT));
-                core.receiveFault("zlink_xpub_recv", RecvResult.INTERNAL_ERROR, EINTR);
-                assertInternalEintr(() -> pub.receiveSubscriptionEvent(event, RecvFlags.NONE));
+                core.receiveFault("zlink_xpub_recv", RecvResult.INTERNAL_ERROR, NativeErrno.EINTR);
+                assertResult(RecvResult.INTERNAL_ERROR, NativeErrno.EINTR,
+                    () -> pub.receiveSubscriptionEvent(event, RecvFlags.NONE));
                 assertTrue(pub.receiveSubscriptionEvent(event, RecvFlags.NONE));
 
                 try (Message part = Message.from("payload")) {
                     pub.publish("topic").message(part).submit();
                 }
                 try (TopicMessage received = new TopicMessage()) {
-                    core.receiveFault("zlink_subscribe", RecvResult.INTERNAL_ERROR, EINTR);
-                    assertInternalEintr(() -> sub.subscribe(received, RecvFlags.NONE));
+                    core.receiveFault("zlink_subscribe", RecvResult.INTERNAL_ERROR, NativeErrno.EINTR);
+                    assertResult(RecvResult.INTERNAL_ERROR, NativeErrno.EINTR,
+                        () -> sub.subscribe(received, RecvFlags.NONE));
                     assertTrue(sub.subscribe(received, RecvFlags.NONE));
                 }
             }
         }
 
-        private static void assertInternalEintr(Executable call) {
+        private static void assertResult(RecvResult result, int errno,
+                                         Executable call) {
             ZlinkRecvException error = assertThrows(ZlinkRecvException.class, call);
-            assertEquals(RecvResult.INTERNAL_ERROR, error.getResult());
-            assertEquals(NativeErrno.EINTR, error.getNativeErrno());
+            assertEquals(result, error.getResult());
+            assertEquals(errno, error.getNativeErrno());
         }
     }
 }

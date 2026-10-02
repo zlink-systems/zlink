@@ -13,7 +13,6 @@ internal sealed class ZLinkMeshConnectionIntent(
     internal RoutingId? ExpectedRid { get; } = expectedRid;
     internal string ExpectedSecurityIdentity { get; } = expectedSecurityIdentity;
     internal RoutingId ResolvedRid { get; set; }
-    internal long NextAdmissionTimestamp { get; set; }
     internal ulong LastChangedMs { get; set; } = checked((ulong)Environment.TickCount64);
 
     internal bool IsBoundTo(ZLinkMeshPeer? peer) =>

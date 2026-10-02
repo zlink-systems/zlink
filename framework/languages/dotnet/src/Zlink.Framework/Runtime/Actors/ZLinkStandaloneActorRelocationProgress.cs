@@ -1,3 +1,4 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -12,11 +13,11 @@ internal sealed record ZLinkStandaloneActorRelocationTargetFence(
 
 internal enum ZLinkStandaloneActorCanonicalPhase : byte
 {
-    Committed = 4,
-    Activating = 5,
-    Activated = 6,
-    Cleaning = 7,
-    Completed = 8,
+    Committed = (byte)ServiceWireCodec.RelocationPhase.Committed,
+    Activating = (byte)ServiceWireCodec.RelocationPhase.Activating,
+    Activated = (byte)ServiceWireCodec.RelocationPhase.Activated,
+    Cleaning = (byte)ServiceWireCodec.RelocationPhase.Cleaning,
+    Completed = (byte)ServiceWireCodec.RelocationPhase.Completed,
 }
 
 internal sealed record ZLinkStandaloneActorRelocationProgress(
@@ -394,9 +395,14 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
     private static ZLinkActorRelocationAuthorityPhase CanonicalActorPhase(byte phase) =>
         phase switch
         {
-            4 or 5 or 6 => ZLinkActorRelocationAuthorityPhase.Activated,
-            7 => ZLinkActorRelocationAuthorityPhase.Cleaning,
-            8 => ZLinkActorRelocationAuthorityPhase.Completed,
+            (byte)ServiceWireCodec.RelocationPhase.Committed
+            or (byte)ServiceWireCodec.RelocationPhase.Activating
+            or (byte)ServiceWireCodec.RelocationPhase.Activated =>
+                ZLinkActorRelocationAuthorityPhase.Activated,
+            (byte)ServiceWireCodec.RelocationPhase.Cleaning =>
+                ZLinkActorRelocationAuthorityPhase.Cleaning,
+            (byte)ServiceWireCodec.RelocationPhase.Completed =>
+                ZLinkActorRelocationAuthorityPhase.Completed,
             _ => throw new ZLinkRelocationDataLostException(
                 $"Canonical standalone Actor phase '{phase}' is not target-recoverable."
             ),

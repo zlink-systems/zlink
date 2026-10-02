@@ -9,11 +9,14 @@ namespace Zlink.HttpClient.Runtime;
 /// </summary>
 internal static class HttpClientVersion
 {
+    private const string ProductPrefix = "zlink-http-client/";
+    private const string UnknownVersion = "0.0";
+
     public static readonly string UserAgent =
-        "zlink-http-client/"
+        ProductPrefix
         + (
             typeof(HttpClientVersion).Assembly.GetName().Version is { } version
                 ? $"{version.Major}.{version.Minor}"
-                : "0.0"
+                : UnknownVersion
         );
 }

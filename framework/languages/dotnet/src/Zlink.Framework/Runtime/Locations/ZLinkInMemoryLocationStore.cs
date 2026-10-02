@@ -1,4 +1,5 @@
 using System.Globalization;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -535,14 +536,17 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
             || descriptor.LeaseGeneration <= 0
             || !Enum.IsDefined(descriptor.State)
             || !Enum.IsDefined(descriptor.ObjectRole)
-            || descriptor.PlacementWeight is < 0 or > ZLinkSocketConfig.MaximumPeerWeight
+            || descriptor.PlacementWeight
+                is < 0
+                    or > ZLinkSpotNodeRegistration.MaximumPlacementWeight
             || !IsValidCapacity(descriptor.Capacity.Actors)
             || !IsValidCapacity(descriptor.Capacity.Spots)
             || descriptor.Capacity.SpotTypes is null
             || descriptor.ActivationConcurrency is not { Active: >= 0, Limit: > 0 }
             || descriptor.ActivationConcurrency.Active > descriptor.ActivationConcurrency.Limit
             || descriptor.ObjectCapabilities is null
-            || descriptor.ObjectCapabilities.Count > 1024
+            || descriptor.ObjectCapabilities.Count
+                > ServiceWireConstants.StatefulCapabilityVectorMaximumItems
             || descriptor.ObjectRole != ZLinkMeshNodeObjectRole.Server
                 && descriptor.ObjectCapabilities.Count != 0
         )
@@ -553,7 +557,7 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
             if (weight is < 0 or > ZLinkSocketConfig.MaximumPeerWeight)
                 throw new ArgumentOutOfRangeException(
                     nameof(descriptor),
-                    "Channel weight must be between 0 and 10000."
+                    $"Channel weight must be non-negative and at most {ZLinkSocketConfig.MaximumPeerWeight}."
                 );
         }
         if (descriptor.MaintenanceWave is { } wave)
@@ -706,8 +710,11 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
     private static void ValidateUtf8Value(string value, string name)
     {
         var size = System.Text.Encoding.UTF8.GetByteCount(value);
-        if (size is < 1 or > 255 || value.Contains('\0'))
-            throw new ArgumentException($"{name} must be 1 to 255 UTF-8 bytes without NUL.", name);
+        if (size is < 1 or > byte.MaxValue || value.Contains('\0'))
+            throw new ArgumentException(
+                $"{name} must be non-empty UTF-8 text of at most {byte.MaxValue} bytes without NUL.",
+                name
+            );
     }
 
     private sealed class Utf8StringComparer : IComparer<string>

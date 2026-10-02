@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.jdi.Bootstrap;
+import com.sun.jdi.event.ClassPrepareEvent;
 import com.sun.jdi.event.EventSet;
 import com.sun.jdi.event.MethodEntryEvent;
 import com.sun.jdi.request.EventRequest;
@@ -69,8 +70,10 @@ final class ZLinkStreamLifecycleRaceTest {
             var entries = vm.eventRequestManager().createMethodEntryRequest();
             entries.addClassFilter(ZLinkStreamConnectionLifecycle.class.getName());
             entries.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
-            entries.enable();
-            vm.resume();
+            var preparation = vm.eventRequestManager().createClassPrepareRequest();
+            preparation.addClassFilter(ZLinkStreamConnectionLifecycle.class.getName());
+            preparation.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+            preparation.enable();
             EventSet paused = null;
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
             while (paused == null && System.nanoTime() < deadline) {
@@ -91,7 +94,10 @@ final class ZLinkStreamLifecycleRaceTest {
                     continue;
                 }
                 for (var event : events) {
-                    if (event instanceof MethodEntryEvent entry
+                    if (event instanceof ClassPrepareEvent) {
+                        entries.enable();
+                        preparation.disable();
+                    } else if (event instanceof MethodEntryEvent entry
                             && (scenario.equals("connect")
                                     ? entry.method().name().equals("startConnectionAttempt")
                                             && entry.thread().name().equals("late-connect")

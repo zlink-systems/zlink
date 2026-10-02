@@ -2,7 +2,7 @@ namespace Zlink.Framework.Contracts.Messaging;
 
 public sealed partial class ZLinkMessage
 {
-    private const string DefaultContentType = "application/json";
+    internal const string DefaultContentType = "application/json";
 
     public string? ContentType { get; }
 

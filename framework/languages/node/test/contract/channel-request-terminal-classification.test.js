@@ -130,3 +130,99 @@ test('request failures retain the Core terminal and classify submit results by m
     failureCode: 17
   });
 });
+
+test('tokenless submit refusal is Unavailable while writable completion timeout keeps its deadline', () => {
+  const zlink = require('@zlink-systems/zlink');
+  const {
+    constants: {
+      errno: { EAGAIN }
+    }
+  } = require('node:os');
+  const {
+    translateBindingResultError
+  } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+  const {
+    requestFailureResult
+  } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+  const {
+    requestResultToPublicErrorKind
+  } = require('../../packages/framework/dist/runtime/framework-errors-internal');
+  const failure = new zlink.SubmitError(zlink.SubmitResult.Backpressured, EAGAIN);
+  const immediate = requestFailureResult(translateBindingResultError(failure, 'submit'));
+  const expired = requestFailureResult(translateBindingResultError(failure, 'completion'));
+
+  assert.equal(
+    requestResultToPublicErrorKind(immediate.terminalResult),
+    framework.ZLinkFrameworkErrorKind.Unavailable
+  );
+  assert.notEqual(immediate.terminalResult, RequestResult.Backpressured);
+  assert.equal(
+    requestResultToPublicErrorKind(expired.terminalResult),
+    framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+  );
+});
+
+test('raw router and dealer requests preserve the binding failure phase', async (t) => {
+  const zlink = require('@zlink-systems/zlink');
+  const {
+    constants: {
+      errno: { EAGAIN }
+    }
+  } = require('node:os');
+  const {
+    ZLinkNodeRawBindingPort
+  } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
+  const {
+    requestFailureResult
+  } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+  const originalCreateRouter = zlink.createRouterSocket;
+  const originalCreateDealer = zlink.createDealerSocket;
+  let phase = 'submit';
+  const withControlledRequest = (socket) => {
+    t.mock.method(socket, 'request', () => ({
+      message() {
+        return this;
+      },
+      timeout() {
+        return this;
+      },
+      submit() {
+        const failure = new zlink.SubmitError(zlink.SubmitResult.Backpressured, EAGAIN);
+        if (phase === 'submit') throw failure;
+        return { reply: Promise.reject(failure) };
+      }
+    }));
+    return socket;
+  };
+  t.mock.method(zlink, 'createRouterSocket', (context) =>
+    withControlledRequest(originalCreateRouter(context))
+  );
+  t.mock.method(zlink, 'createDealerSocket', (context) =>
+    withControlledRequest(originalCreateDealer(context))
+  );
+
+  const context = zlink.createContext();
+  const host = new ZLinkNodeRawBindingPort(context).createHost();
+  const router = host.createRouter();
+  const dealer = host.createDealer();
+  t.after(() => {
+    host.close();
+    context.close();
+  });
+  for (const request of [
+    () => router.request('target', [Buffer.from('request')], 1000),
+    () => dealer.request([Buffer.from('request')], 1000)
+  ]) {
+    for (const [nextPhase, expected] of [
+      ['submit', RequestResult.NotConnected],
+      ['completion', RequestResult.Backpressured]
+    ]) {
+      phase = nextPhase;
+      const error = await request().then(
+        () => null,
+        (failure) => failure
+      );
+      assert.equal(requestFailureResult(error).terminalResult, expected);
+    }
+  }
+});

@@ -19,6 +19,8 @@ connection is made to point at its entity**, and packets after that are received
 <iframe class="zlink-diagram" src="/common/diagrams/24-actor-session-binding-en.html" title="Binding one connection to one entity" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/24-actor-session-binding-en.html" target="_blank">↗ View larger</a></p>
 
+<p><a href="/common/diagrams/zlink-tour-en.html#lobby" target="_blank">▶ Try it in the interactive tour — Lobby and dungeon</a></p>
+
 The session does not disappear once bound. Packets the session knows are handled by the session
 first, and **only the ones it does not know** go to the Actor.
 

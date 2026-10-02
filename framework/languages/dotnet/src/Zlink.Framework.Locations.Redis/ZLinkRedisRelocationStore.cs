@@ -11,45 +11,58 @@ namespace Zlink.Framework.Locations.Redis;
 /// </summary>
 public sealed class ZLinkRedisRelocationStore : IZLinkRelocationStore, IAsyncDisposable
 {
+    private const int MaximumReferenceBytes = 4096;
+    private const int ResultOutcomeIndex = 0;
+    private const int ResultStoreNowIndex = 1;
+    private const int ReadPayloadIndex = 2;
+    private const int ReadTtlIndex = 3;
+    private const string BlobNamespace = "{zlink-relocation-v1}:blob:";
+    private const string CollisionToken = "collision";
+    private const string AlreadyToken = "already";
+    private const string StoredToken = "stored";
+    private const string MissingToken = "missing";
+    private const string FoundToken = "found";
+    private const string RenewedToken = "renewed";
+
     // A 64 MiB relocation data chunk is stored with the Framework's 23-byte
     // immutable chunk envelope. The application adapter limit remains 64 MiB.
     private const int MaximumEncodedBlobSize = 64 * 1024 * 1024 + 23;
 
-    private const string PutScript = """
+    private static readonly string PutScript = $$"""
         if redis.replicate_commands then redis.replicate_commands() end
         local time = redis.call('TIME')
         local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
         local current = redis.call('GET', KEYS[1])
         if current then
             if current ~= ARGV[1] then
-                return { 'collision', nowMs }
+                return { '{{CollisionToken}}', nowMs }
             end
             redis.call('PEXPIRE', KEYS[1], ARGV[2])
-            return { 'already', nowMs }
+            return { '{{AlreadyToken}}', nowMs }
         end
         redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
-        return { 'stored', nowMs }
+        return { '{{StoredToken}}', nowMs }
         """;
 
-    private const string ReadScript = """
+    private static readonly string ReadScript = $$"""
         if redis.replicate_commands then redis.replicate_commands() end
         local time = redis.call('TIME')
         local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
         local current = redis.call('GET', KEYS[1])
         if not current then
-            return { 'missing', nowMs }
+            return { '{{MissingToken}}', nowMs }
         end
-        return { 'found', nowMs, current, redis.call('PTTL', KEYS[1]) }
+        return { '{{FoundToken}}', nowMs, current, redis.call('PTTL', KEYS[1]) }
         """;
 
-    private const string RenewScript = """
+    private static readonly string RenewScript = $$"""
         if redis.replicate_commands then redis.replicate_commands() end
         local time = redis.call('TIME')
         local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
         if redis.call('PEXPIRE', KEYS[1], ARGV[1]) == 0 then
-            return { 'missing', nowMs }
+            return { '{{MissingToken}}', nowMs }
         end
-        return { 'renewed', nowMs }
+        return { '{{RenewedToken}}', nowMs }
         """;
 
     private readonly ConfigurationOptions _configuration;
@@ -120,18 +133,18 @@ public sealed class ZLinkRedisRelocationStore : IZLinkRelocationStore, IAsyncDis
                 cancellationToken
             )
             .ConfigureAwait(false);
-        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[1]);
-        return (string)result[0]! switch
+        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[ResultStoreNowIndex]);
+        return (string)result[ResultOutcomeIndex]! switch
         {
-            "stored" => new ZLinkBlobPutResult.Stored(
+            StoredToken => new ZLinkBlobPutResult.Stored(
                 storeNow + TimeSpan.FromMilliseconds(retentionMs),
                 storeNow
             ),
-            "already" => new ZLinkBlobPutResult.AlreadyStored(
+            AlreadyToken => new ZLinkBlobPutResult.AlreadyStored(
                 storeNow + TimeSpan.FromMilliseconds(retentionMs),
                 storeNow
             ),
-            "collision" => new ZLinkBlobPutResult.Conflict(storeNow),
+            CollisionToken => new ZLinkBlobPutResult.Conflict(storeNow),
             _ => throw new InvalidDataException("Redis returned an unknown relocation put result."),
         };
     }
@@ -153,14 +166,14 @@ public sealed class ZLinkRedisRelocationStore : IZLinkRelocationStore, IAsyncDis
                 cancellationToken
             )
             .ConfigureAwait(false);
-        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[1]);
-        if ((string)result[0]! == "missing")
+        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[ResultStoreNowIndex]);
+        if ((string)result[ResultOutcomeIndex]! == MissingToken)
             return new ZLinkBlobReadResult.Missing(storeNow);
-        var ttl = (long)result[3];
+        var ttl = (long)result[ReadTtlIndex];
         if (ttl < 0)
             throw new InvalidDataException("A relocation payload must have a positive retention.");
         return new ZLinkBlobReadResult.Found(
-            (byte[])result[2]!,
+            (byte[])result[ReadPayloadIndex]!,
             storeNow + TimeSpan.FromMilliseconds(ttl),
             storeNow
         );
@@ -189,14 +202,14 @@ public sealed class ZLinkRedisRelocationStore : IZLinkRelocationStore, IAsyncDis
                 cancellationToken
             )
             .ConfigureAwait(false);
-        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[1]);
-        return (string)result[0]! switch
+        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[ResultStoreNowIndex]);
+        return (string)result[ResultOutcomeIndex]! switch
         {
-            "renewed" => new ZLinkBlobRenewResult.Renewed(
+            RenewedToken => new ZLinkBlobRenewResult.Renewed(
                 storeNow + TimeSpan.FromMilliseconds(retentionMs),
                 storeNow
             ),
-            "missing" => new ZLinkBlobRenewResult.Missing(storeNow),
+            MissingToken => new ZLinkBlobRenewResult.Missing(storeNow),
             _ => throw new InvalidDataException(
                 "Redis returned an unknown relocation renew result."
             ),
@@ -276,8 +289,7 @@ public sealed class ZLinkRedisRelocationStore : IZLinkRelocationStore, IAsyncDis
     // Relocation Store request stays same-slot; the domain tag keeps this
     // key space from overlapping the Location Store's opaque record
     // namespace even when both share one Redis deployment.
-    private RedisKey PayloadKey(string reference) =>
-        $"{_keyPrefix}:{{zlink-relocation-v1}}:blob:{reference}";
+    private RedisKey PayloadKey(string reference) => $"{_keyPrefix}:{BlobNamespace}{reference}";
 
     private async ValueTask<TResult> ExecuteAsync<TResult>(
         Func<IDatabase, ValueTask<TResult>> operation,
@@ -363,9 +375,9 @@ public sealed class ZLinkRedisRelocationStore : IZLinkRelocationStore, IAsyncDis
     private static void ValidateReference(string reference)
     {
         var bytes = Encoding.UTF8.GetByteCount(reference ?? string.Empty);
-        if (bytes is < 1 or > 4096)
+        if (bytes is < 1 or > MaximumReferenceBytes)
             throw new ArgumentException(
-                "Relocation references must contain 1..4096 UTF-8 bytes.",
+                $"Relocation references must be non-empty UTF-8 values of at most {MaximumReferenceBytes} bytes.",
                 nameof(reference)
             );
     }

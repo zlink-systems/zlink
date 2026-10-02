@@ -277,7 +277,18 @@ final class ZLinkClientServerReadyWaitTest {
     private static final class Fixture implements AutoCloseable {
         private final ManualTime time = new ManualTime();
         private final CountDownLatch admissionListening = new CountDownLatch(1);
-        private final CompletableFuture<ZLinkBackendReceived> admission = new CompletableFuture<>();
+        private final CompletableFuture<ZLinkBackendReceived> admission =
+                new CompletableFuture<>() {
+                    @Override
+                    public CompletableFuture<ZLinkBackendReceived> whenComplete(
+                            java.util.function.BiConsumer<
+                                            ? super ZLinkBackendReceived, ? super Throwable>
+                                    action) {
+                        var result = super.whenComplete(action);
+                        admissionListening.countDown();
+                        return result;
+                    }
+                };
         private final CompletableFuture<ZLinkBackendReceived> secondAdmission =
                 new CompletableFuture<>() {
                     @Override
@@ -433,7 +444,6 @@ final class ZLinkClientServerReadyWaitTest {
                                 @Override
                                 public ZLinkBackendSocketMonitorEvent recvDontWait() {
                                     if (emitted) {
-                                        if (socket == dealer) admissionListening.countDown();
                                         return null;
                                     }
                                     emitted = true;
@@ -495,7 +505,7 @@ final class ZLinkClientServerReadyWaitTest {
                             time::nanoTime,
                             time::advanceBy,
                             time);
-            // The next monitor receive follows registration of the admission callback.
+            // The first admission callback is installed before the fixture exposes its runtime.
             assertTrue(admissionListening.await(1, TimeUnit.SECONDS));
         }
 
@@ -504,7 +514,7 @@ final class ZLinkClientServerReadyWaitTest {
         }
 
         private void admitWithEligibility(int weight, ZLinkFrameworkRuntimeState state) {
-            (helloRequests.get() == 1 ? admission : secondAdmission)
+            (admission.isCompletedExceptionally() ? secondAdmission : admission)
                     .complete(
                             received(
                                     Message.from(

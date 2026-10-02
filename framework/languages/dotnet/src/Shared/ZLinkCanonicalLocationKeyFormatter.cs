@@ -123,11 +123,11 @@ internal static class ZLinkCanonicalLocationKeyFormatter
             );
         }
 
-        if (size is < 1 or > 255 || value.Contains('\0'))
+        if (size is < 1 or > byte.MaxValue || value.Contains('\0'))
         {
             throw new ArgumentOutOfRangeException(
                 parameterName,
-                "The logical ID must be 1 to 255 UTF-8 bytes without NUL."
+                $"The logical ID must be non-empty UTF-8 text of at most {byte.MaxValue} bytes without NUL."
             );
         }
     }

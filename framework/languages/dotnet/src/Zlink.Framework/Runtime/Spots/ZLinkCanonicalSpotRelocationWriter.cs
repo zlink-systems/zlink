@@ -224,8 +224,16 @@ internal static class ZLinkCanonicalSpotRelocationWriter
             ZLinkMessageParts.DisposeAll(parts);
         }
         var request = journal.ReplyRouteId != 0;
-        stream.WriteByte(request ? (byte)6 : (byte)5);
-        stream.WriteByte(journal.SpotId is null ? (byte)1 : (byte)2);
+        stream.WriteByte(
+            request
+                ? (byte)ServiceWireCodec.MeshRecordKind.SpotRequest
+                : (byte)ServiceWireCodec.MeshRecordKind.SpotSend
+        );
+        stream.WriteByte(
+            journal.SpotId is null
+                ? (byte)ServiceWireCodec.FrozenSourceKind.Node
+                : (byte)ServiceWireCodec.FrozenSourceKind.Spot
+        );
         using (var sourceBody = new MemoryStream())
         {
             Text8(sourceBody, source.NodeRid);
@@ -241,7 +249,12 @@ internal static class ZLinkCanonicalSpotRelocationWriter
         WriteMetadata(stream, journal.Metadata);
         U64(stream, journal.OperationId.High);
         U64(stream, journal.OperationId.Low);
-        U32(stream, request ? 3U : 0U);
+        U32(
+            stream,
+            request
+                ? (uint)ServiceWireCodec.MeshOperationKind.SpotRequest
+                : (uint)ServiceWireCodec.MeshOperationKind.None
+        );
         U16(stream, request ? (ushort)sizeof(ulong) : (ushort)0);
         if (request)
             U64(stream, journal.ReplyRouteId);

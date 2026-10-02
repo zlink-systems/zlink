@@ -6,11 +6,12 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Transport;
 internal sealed class WebSocketConnection(ClientWebSocket webSocket, int maxReceivePayloadSize)
     : IZlinkStreamConnection
 {
+    private const int ReceiveBufferSize = 8192;
     private readonly long _maxReceiveFrameSize = ZlinkStreamFrameCodec.GetMaxReceiveFrameSize(
         maxReceivePayloadSize
     );
 
-    private readonly byte[] _receiveBuffer = new byte[8192];
+    private readonly byte[] _receiveBuffer = new byte[ReceiveBufferSize];
     private int _pendingLength;
     private byte[]? _pendingMessage;
     private int _pendingOffset;

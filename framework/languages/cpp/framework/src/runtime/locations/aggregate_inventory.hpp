@@ -15,10 +15,56 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace zlink::framework::runtime
+{
+
+template <typename Entry, typename RawFieldSizes, typename Fits>
+std::optional<std::size_t> bounded_page_prefix (std::span<const Entry> entries,
+                                                std::size_t item_limit,
+                                                std::size_t byte_limit,
+                                                RawFieldSizes raw_field_sizes,
+                                                Fits fits)
+{
+    const auto limit = std::min (item_limit, entries.size ());
+    std::size_t count = 0;
+    std::size_t raw_bytes = 0;
+    while (count < limit) {
+        const auto fields = raw_field_sizes (entries[count]);
+        auto remaining = byte_limit - raw_bytes;
+        auto field = fields.begin ();
+        for (; field != fields.end (); ++field) {
+            if (*field > remaining)
+                break;
+            remaining -= *field;
+        }
+        if (field != fields.end ())
+            break;
+        raw_bytes = byte_limit - remaining;
+        ++count;
+    }
+    if (count == 0)
+        return std::nullopt;
+    if (fits (count))
+        return count;
+    std::size_t lower = 0;
+    auto upper = count - 1;
+    while (lower < upper) {
+        const auto candidate = lower + (upper - lower + 1) / 2;
+        if (fits (candidate))
+            lower = candidate;
+        else
+            upper = candidate - 1;
+    }
+    return lower == 0 ? std::nullopt : std::optional{lower};
+}
+
+} // namespace zlink::framework::runtime
 
 namespace zlink::framework::runtime::aggregate_inventory
 {

@@ -516,7 +516,7 @@ internal sealed class ZLinkLocationAutoConnectHost
         long applicationVersion = 0,
         string? maintenanceWave = null,
         string? entrySpotId = null,
-        int placementWeight = 100,
+        int placementWeight = ZLinkSpotNodeRegistration.DefaultPlacementWeight,
         ZLinkPlacementCapacity? capacity = null,
         ZLinkActivationConcurrency? activationConcurrency = null,
         IReadOnlyDictionary<string, int>? channelWeights = null,
@@ -577,7 +577,11 @@ internal sealed class ZLinkLocationAutoConnectHost
                                 Array.Empty<ZLinkSpotTypeCapacity>()
                             ),
                         ActivationConcurrency =
-                            activationConcurrency ?? new ZLinkActivationConcurrency(0, 128),
+                            activationConcurrency
+                            ?? new ZLinkActivationConcurrency(
+                                0,
+                                ZLinkSpotNodeRegistration.DefaultActivationConcurrencyLimit
+                            ),
                     }
                     : null
             );

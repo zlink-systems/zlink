@@ -1,65 +1,104 @@
 using System.Globalization;
 using System.Text;
 using StackExchange.Redis;
+using static Zlink.Framework.Internal.ZLinkLocationStoreLimits;
 
 namespace Zlink.Framework.Locations.Redis;
 
 public sealed partial class ZLinkRedisLocationStore
 {
-    private const int MaximumKeyBytes = 1024;
-    private const int MaximumVersionBytes = 4096;
+    private const int OpaqueFormatTag = 1;
+    private const int OpaqueDataOffset = 2;
+    private const int CleanupRetryMilliseconds = 1000;
+    private const int ExpiredRecordGraceMilliseconds = 60000;
+    private const int SnapshotLifetimeMilliseconds = 60000;
+    private const int SnapshotCleanupBatch = 128;
+    private const int RecordCleanupBatch = 32;
+    private const int MaximumVersionBacklog = 128;
+    private const int MaximumSnapshots = 4096;
+    private const int ScanWorkMultiplier = 4;
+    private const int MinimumScanWork = 128;
+    private const int ScanItemOverheadBytes = 128;
+    private const int RecordKeyPosition = 1;
+    private const int RecordValuePosition = 2;
+    private const int RecordVersionPosition = 3;
+    private const int RecordExpiryPosition = 4;
+    private const int RecordTombstonePosition = 5;
+    private const int WriteConditionStride = 2;
+    private const int WriteMutationStride = 6;
+    private const int ResultOutcomeIndex = 0;
+    private const int ResultStoreNowIndex = 1;
+    private const int ReadKeyIndex = 2;
+    private const int ReadValueIndex = 3;
+    private const int ReadVersionIndex = 4;
+    private const int ReadExpiryIndex = 5;
+    private const int WriteVersionsIndex = 2;
+    private const int WriteVersionStride = 2;
+    private const int ScanItemsIndex = 3;
+    private const int ScanItemStride = 4;
+    private const int ScanNextKeyIndex = 2;
+    private const int ScanValueOffset = 1;
+    private const int ScanVersionOffset = 2;
+    private const int ScanExpiryOffset = 3;
+    private const int WriteVersionOffset = 1;
+    private const int CursorIdLength = 32;
+    private const string MissingToken = "missing";
+    private const string FoundToken = "found";
+    private const string FormatErrorToken = "format-error";
+    private const string VersionToken = "version";
+    private const string ValueToken = "value";
+    private const string PutToken = "put";
+    private const string DeleteToken = "delete";
+    private const string ConflictToken = "conflict";
+    private const string BacklogToken = "backlog";
+    private const string AppliedToken = "applied";
+    private const string ExpiredToken = "expired";
+    private const string CapacityToken = "capacity";
+    private const string PageToken = "page";
+    private const string SnapshotNowField = "now";
+    private const string SnapshotBoundaryField = "boundary";
+    private const string SnapshotPrefixField = "prefix";
+    private const string UuidFormat = "N";
 
-    // Checklist C-2b: the authority record collapsed to one opaque row
-    // (21-location-runtime.md#2.4) now embeds its payload as base64 inside
-    // the same JSON value instead of a separate 1 MiB payload key. Spec §6
-    // caps the underlying creation/authority payload at 1 MiB; base64
-    // inflates that by ~4/3 plus JSON envelope overhead, so the per-key
-    // value bound must be raised above the old 1 MiB to keep admitting a
-    // maximum-size payload. This stays well under §8's 4 MiB whole-batch
-    // bound.
-    private const int MaximumValueBytes = 2 * 1024 * 1024;
-    private const int MaximumBatchKeys = 2048;
-    private const int MaximumEncodedBatchBytes = 4 * 1024 * 1024;
-
-    private const string OpaqueReadScript = """
+    private static readonly string OpaqueReadScript = $$"""
         if redis.replicate_commands then redis.replicate_commands() end
         local function unpackTagged(raw)
-            if string.byte(raw, 1) ~= 1 then
+            if string.byte(raw, 1) ~= {{OpaqueFormatTag}} then
                 return nil
             end
-            return cmsgpack.unpack(string.sub(raw, 2))
+            return cmsgpack.unpack(string.sub(raw, {{OpaqueDataOffset}}))
         end
         local time = redis.call('TIME')
         local nowMs = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
         local members = redis.call('ZREVRANGE', KEYS[1], 0, 0)
         if #members == 0 then
-            return { 'missing', nowMs }
+            return { '{{MissingToken}}', nowMs }
         end
         local record = unpackTagged(members[1])
         if not record then
-            return { 'format-error', nowMs }
+            return { '{{FormatErrorToken}}', nowMs }
         end
-        local expiresAt = tonumber(record[4])
-        if record[5] == true or (expiresAt > 0 and expiresAt <= nowMs) then
-            return { 'missing', nowMs }
+        local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
+        if record[{{RecordTombstonePosition}}] == true or (expiresAt > 0 and expiresAt <= nowMs) then
+            return { '{{MissingToken}}', nowMs }
         end
         return {
-            'found',
+            '{{FoundToken}}',
             nowMs,
-            record[1],
-            record[2],
-            record[3],
+            record[{{RecordKeyPosition}}],
+            record[{{RecordValuePosition}}],
+            record[{{RecordVersionPosition}}],
             expiresAt
         }
         """;
 
-    private const string OpaqueWriteScript = """
+    private static readonly string OpaqueWriteScript = $$"""
         if redis.replicate_commands then redis.replicate_commands() end
         local function unpackTagged(raw)
-            if string.byte(raw, 1) ~= 1 then
+            if string.byte(raw, 1) ~= {{OpaqueFormatTag}} then
                 return nil
             end
-            return cmsgpack.unpack(string.sub(raw, 2))
+            return cmsgpack.unpack(string.sub(raw, {{OpaqueDataOffset}}))
         end
         local conditionCount = tonumber(ARGV[1])
         local mutationCount = tonumber(ARGV[2])
@@ -80,7 +119,7 @@ public sealed partial class ZLinkRedisLocationStore
             nowMs,
             'LIMIT',
             0,
-            128)
+            {{SnapshotCleanupBatch}})
         for _, snapshotId in ipairs(expiredSnapshots) do
             redis.call('ZREM', snapshotExpiryKey, snapshotId)
             redis.call('ZREM', snapshotBoundaryKey, snapshotId)
@@ -93,7 +132,7 @@ public sealed partial class ZLinkRedisLocationStore
         end
 
         local due = redis.call(
-            'ZRANGEBYSCORE', cleanupKey, '-inf', nowMs, 'LIMIT', 0, 32)
+            'ZRANGEBYSCORE', cleanupKey, '-inf', nowMs, 'LIMIT', 0, {{RecordCleanupBatch}})
         for _, original in ipairs(due) do
             local recordKey = redis.call('HGET', mapKey, original)
             local members = {}
@@ -123,15 +162,15 @@ public sealed partial class ZLinkRedisLocationStore
                         '(' .. anchor[2])
                 end
                 redis.call(
-                    'ZADD', cleanupKey, nowMs + 1000, original)
+                    'ZADD', cleanupKey, nowMs + {{CleanupRetryMilliseconds}}, original)
             else
                 local record = unpackTagged(members[1])
                 if not record then
-                    return { 'format-error', nowMs }
+                    return { '{{FormatErrorToken}}', nowMs }
                 end
-                local expiresAt = tonumber(record[4])
-                if record[5] == true
-                    or (expiresAt > 0 and expiresAt + 60000 <= nowMs) then
+                local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
+                if record[{{RecordTombstonePosition}}] == true
+                    or (expiresAt > 0 and expiresAt + {{ExpiredRecordGraceMilliseconds}} <= nowMs) then
                     redis.call('DEL', recordKey)
                     redis.call('ZREM', indexKey, original)
                     redis.call('HDEL', mapKey, original)
@@ -142,7 +181,7 @@ public sealed partial class ZLinkRedisLocationStore
                         redis.call(
                             'ZADD',
                             cleanupKey,
-                            math.max(nowMs + 1000, expiresAt + 60000),
+                            math.max(nowMs + {{CleanupRetryMilliseconds}}, expiresAt + {{ExpiredRecordGraceMilliseconds}}),
                             original)
                     else
                         redis.call('ZREM', cleanupKey, original)
@@ -161,21 +200,21 @@ public sealed partial class ZLinkRedisLocationStore
             if #members > 0 then
                 local record = unpackTagged(members[1])
                 if not record then
-                    return { 'format-error', nowMs }
+                    return { '{{FormatErrorToken}}', nowMs }
                 end
-                local expiresAt = tonumber(record[4])
-                if record[5] ~= true
+                local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
+                if record[{{RecordTombstonePosition}}] ~= true
                     and (expiresAt == 0 or expiresAt > nowMs) then
-                    current = record[3]
-                    currentValue = record[2]
+                    current = record[{{RecordVersionPosition}}]
+                    currentValue = record[{{RecordValuePosition}}]
                 end
             end
-            if (kind == 'missing' and current ~= nil)
-                or (kind == 'version' and current ~= expected)
-                or (kind == 'value' and (current == nil or currentValue ~= expected)) then
-                return { 'conflict', nowMs }
+            if (kind == '{{MissingToken}}' and current ~= nil)
+                or (kind == '{{VersionToken}}' and current ~= expected)
+                or (kind == '{{ValueToken}}' and (current == nil or currentValue ~= expected)) then
+                return { '{{ConflictToken}}', nowMs }
             end
-            arg = arg + 2
+            arg = arg + {{WriteConditionStride}}
         end
         local checkArg = arg
         for i = 1, mutationCount do
@@ -183,10 +222,10 @@ public sealed partial class ZLinkRedisLocationStore
             if not minimumBoundary then
                 redis.call('ZREMRANGEBYRANK', KEYS[keyIndex], 0, -2)
             end
-            if redis.call('ZCARD', KEYS[keyIndex]) >= 128 then
-                return { 'backlog', nowMs }
+            if redis.call('ZCARD', KEYS[keyIndex]) >= {{MaximumVersionBacklog}} then
+                return { '{{BacklogToken}}', nowMs }
             end
-            checkArg = checkArg + 6
+            checkArg = checkArg + {{WriteMutationStride}}
         end
         local sequence = redis.call('INCR', sequenceKey)
         local putVersions = {}
@@ -198,14 +237,14 @@ public sealed partial class ZLinkRedisLocationStore
             local version = ARGV[arg + 4]
             local retention = tonumber(ARGV[arg + 5])
             local redisKey = KEYS[keyIndex]
-            if kind == 'put' then
+            if kind == '{{PutToken}}' then
                 local expiresAt = 0
                 if retention >= 0 then expiresAt = nowMs + retention end
                 redis.call(
                     'ZADD',
                     redisKey,
                     sequence,
-                    '\1' .. cmsgpack.pack({
+                    '\{{OpaqueFormatTag}}' .. cmsgpack.pack({
                         originalKey,
                         value,
                         version,
@@ -221,7 +260,7 @@ public sealed partial class ZLinkRedisLocationStore
                     'ZADD',
                     redisKey,
                     sequence,
-                    '\1' .. cmsgpack.pack({
+                    '\{{OpaqueFormatTag}}' .. cmsgpack.pack({
                         originalKey,
                         '',
                         version,
@@ -231,27 +270,27 @@ public sealed partial class ZLinkRedisLocationStore
                 redis.call('ZADD', indexKey, 0, originalKey)
                 redis.call('HSET', mapKey, originalKey, redisKey)
             end
-            local dueAt = nowMs + 1000
+            local dueAt = nowMs + {{CleanupRetryMilliseconds}}
             local scheduled = redis.call(
                 'ZSCORE', cleanupKey, originalKey)
             if not scheduled or tonumber(scheduled) > dueAt then
                 redis.call('ZADD', cleanupKey, dueAt, originalKey)
             end
-            arg = arg + 6
+            arg = arg + {{WriteMutationStride}}
         end
 
-        local result = { 'applied', nowMs }
+        local result = { '{{AppliedToken}}', nowMs }
         for _, item in ipairs(putVersions) do table.insert(result, item) end
         return result
         """;
 
-    private const string OpaqueScanScript = """
+    private static readonly string OpaqueScanScript = $$"""
         if redis.replicate_commands then redis.replicate_commands() end
         local function unpackTagged(raw)
-            if string.byte(raw, 1) ~= 1 then
+            if string.byte(raw, 1) ~= {{OpaqueFormatTag}} then
                 return nil
             end
-            return cmsgpack.unpack(string.sub(raw, 2))
+            return cmsgpack.unpack(string.sub(raw, {{OpaqueDataOffset}}))
         end
         local prefix = ARGV[1]
         local lastKey = ARGV[2]
@@ -274,7 +313,7 @@ public sealed partial class ZLinkRedisLocationStore
             nowMs,
             'LIMIT',
             0,
-            128)
+            {{SnapshotCleanupBatch}})
         for _, expiredId in ipairs(expiredSnapshots) do
             redis.call('ZREM', snapshotExpiryKey, expiredId)
             redis.call('ZREM', snapshotBoundaryKey, expiredId)
@@ -287,7 +326,7 @@ public sealed partial class ZLinkRedisLocationStore
         end
 
         local due = redis.call(
-            'ZRANGEBYSCORE', cleanupKey, '-inf', nowMs, 'LIMIT', 0, 32)
+            'ZRANGEBYSCORE', cleanupKey, '-inf', nowMs, 'LIMIT', 0, {{RecordCleanupBatch}})
         for _, original in ipairs(due) do
             local recordKey = redis.call('HGET', KEYS[2], original)
             local members = {}
@@ -317,15 +356,15 @@ public sealed partial class ZLinkRedisLocationStore
                         '(' .. anchor[2])
                 end
                 redis.call(
-                    'ZADD', cleanupKey, nowMs + 1000, original)
+                    'ZADD', cleanupKey, nowMs + {{CleanupRetryMilliseconds}}, original)
             else
                 local record = unpackTagged(members[1])
                 if not record then
-                    return { 'format-error' }
+                    return { '{{FormatErrorToken}}' }
                 end
-                local expiresAt = tonumber(record[4])
-                if record[5] == true
-                    or (expiresAt > 0 and expiresAt + 60000 <= nowMs) then
+                local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
+                if record[{{RecordTombstonePosition}}] == true
+                    or (expiresAt > 0 and expiresAt + {{ExpiredRecordGraceMilliseconds}} <= nowMs) then
                     redis.call('DEL', recordKey)
                     redis.call('ZREM', KEYS[1], original)
                     redis.call('HDEL', KEYS[2], original)
@@ -336,7 +375,7 @@ public sealed partial class ZLinkRedisLocationStore
                         redis.call(
                             'ZADD',
                             cleanupKey,
-                            math.max(nowMs + 1000, expiresAt + 60000),
+                            math.max(nowMs + {{CleanupRetryMilliseconds}}, expiresAt + {{ExpiredRecordGraceMilliseconds}}),
                             original)
                     else
                         redis.call('ZREM', cleanupKey, original)
@@ -346,49 +385,49 @@ public sealed partial class ZLinkRedisLocationStore
         end
 
         if create then
-            if redis.call('ZCARD', snapshotExpiryKey) >= 4096 then
-                return { 'capacity' }
+            if redis.call('ZCARD', snapshotExpiryKey) >= {{MaximumSnapshots}} then
+                return { '{{CapacityToken}}' }
             end
             redis.call('DEL', snapshot)
             local boundary = tonumber(redis.call('GET', sequenceKey) or '0')
             redis.call(
                 'HSET',
                 snapshot,
-                'now',
+                '{{SnapshotNowField}}',
                 tostring(nowMs),
-                'boundary',
+                '{{SnapshotBoundaryField}}',
                 tostring(boundary),
-                'prefix',
+                '{{SnapshotPrefixField}}',
                 prefix)
-            redis.call('PEXPIRE', snapshot, 60000)
+            redis.call('PEXPIRE', snapshot, {{SnapshotLifetimeMilliseconds}})
             redis.call(
-                'ZADD', snapshotExpiryKey, nowMs + 60000, snapshotId)
+                'ZADD', snapshotExpiryKey, nowMs + {{SnapshotLifetimeMilliseconds}}, snapshotId)
             redis.call(
                 'ZADD', snapshotBoundaryKey, boundary, snapshotId)
         elseif redis.call('EXISTS', snapshot) == 0 then
             redis.call('ZREM', snapshotExpiryKey, snapshotId)
             redis.call('ZREM', snapshotBoundaryKey, snapshotId)
-            return { 'expired' }
+            return { '{{ExpiredToken}}' }
         end
 
         local metadata = redis.call(
-            'HMGET', snapshot, 'now', 'boundary', 'prefix')
+            'HMGET', snapshot, '{{SnapshotNowField}}', '{{SnapshotBoundaryField}}', '{{SnapshotPrefixField}}')
         if not metadata[1] or metadata[3] ~= prefix then
             redis.call('ZREM', snapshotExpiryKey, snapshotId)
             redis.call('ZREM', snapshotBoundaryKey, snapshotId)
-            return { 'expired' }
+            return { '{{ExpiredToken}}' }
         end
         local snapshotNow = tonumber(metadata[1])
         local boundary = tonumber(metadata[2])
         local lower = '-'
         if string.len(lastKey) > 0 then lower = '(' .. lastKey end
-        local workLimit = math.max(limit * 4, 128)
+        local workLimit = math.max(limit * {{ScanWorkMultiplier}}, {{MinimumScanWork}})
         local originals = redis.call(
             'ZRANGEBYLEX', KEYS[1], lower, '+', 'LIMIT', 0, workLimit + 1)
         local emitted = 0
         local encodedBytes = 0
         local examined = 0
-        local result = { 'page', tostring(snapshotNow), '' }
+        local result = { '{{PageToken}}', tostring(snapshotNow), '' }
         while examined < #originals
             and examined < workLimit
             and emitted < limit do
@@ -408,24 +447,24 @@ public sealed partial class ZLinkRedisLocationStore
                     if #members > 0 then
                         local record = unpackTagged(members[1])
                         if not record then
-                            return { 'format-error' }
+                            return { '{{FormatErrorToken}}' }
                         end
-                        local expiresAt = tonumber(record[4])
-                        if record[1] == original
-                            and record[5] ~= true
+                        local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
+                        if record[{{RecordKeyPosition}}] == original
+                            and record[{{RecordTombstonePosition}}] ~= true
                             and (expiresAt == 0 or expiresAt > snapshotNow) then
                             local itemBytes = string.len(original)
-                                + string.len(record[2])
-                                + string.len(record[3])
-                                + 128
+                                + string.len(record[{{RecordValuePosition}}])
+                                + string.len(record[{{RecordVersionPosition}}])
+                                + {{ScanItemOverheadBytes}}
                             if emitted > 0
-                                and encodedBytes + itemBytes > 4194304 then
+                                and encodedBytes + itemBytes > {{MaximumEncodedPageBytes}} then
                                 examined = examined - 1
                                 break
                             end
                             table.insert(result, original)
-                            table.insert(result, record[2])
-                            table.insert(result, record[3])
+                            table.insert(result, record[{{RecordValuePosition}}])
+                            table.insert(result, record[{{RecordVersionPosition}}])
                             table.insert(result, tostring(expiresAt))
                             encodedBytes = encodedBytes + itemBytes
                             emitted = emitted + 1
@@ -469,12 +508,12 @@ public sealed partial class ZLinkRedisLocationStore
                 cancellationToken
             )
             .ConfigureAwait(false);
-        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[1]);
-        if ((string)result[0]! == "format-error")
+        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[ResultStoreNowIndex]);
+        if ((string)result[ResultOutcomeIndex]! == FormatErrorToken)
             throw new InvalidDataException("The Redis opaque record format tag is unrecognized.");
-        if ((string)result[0]! == "missing")
+        if ((string)result[ResultOutcomeIndex]! == MissingToken)
             return new ZLinkStoreReadResult.Missing(storeNow);
-        if (!string.Equals((string)result[2]!, key.Value, StringComparison.Ordinal))
+        if (!string.Equals((string)result[ReadKeyIndex]!, key.Value, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 "The Redis opaque key digest resolved to a different key."
@@ -484,11 +523,11 @@ public sealed partial class ZLinkRedisLocationStore
         // / store-record-v1.json expiresAtMs), not -1 -- expiresAtMs is an
         // unsigned MessagePack field and a real epoch-ms value is always
         // positive.
-        var expiresAtMs = (long)result[5];
+        var expiresAtMs = (long)result[ReadExpiryIndex];
         return new ZLinkStoreReadResult.Found(
             new ZLinkStoreValue(
-                (byte[])result[3]!,
-                new ZLinkStoreVersion((string)result[4]!),
+                (byte[])result[ReadValueIndex]!,
+                new ZLinkStoreVersion((string)result[ReadVersionIndex]!),
                 expiresAtMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(expiresAtMs) : null,
                 storeNow
             )
@@ -548,15 +587,15 @@ public sealed partial class ZLinkRedisLocationStore
             switch (condition)
             {
                 case ZLinkStoreCondition.Missing:
-                    args.Add("missing");
+                    args.Add(MissingToken);
                     args.Add(string.Empty);
                     break;
                 case ZLinkStoreCondition.Version version:
-                    args.Add("version");
+                    args.Add(VersionToken);
                     args.Add(version.Expected.Value);
                     break;
                 case ZLinkStoreCondition.Value value:
-                    args.Add("value");
+                    args.Add(ValueToken);
                     args.Add(value.Expected.ToArray());
                     break;
             }
@@ -567,10 +606,10 @@ public sealed partial class ZLinkRedisLocationStore
             {
                 case ZLinkStoreMutation.Put put:
                     args.Add(keyIndex[put.Key]);
-                    args.Add("put");
+                    args.Add(PutToken);
                     args.Add(put.Key.Value);
                     args.Add(put.Bytes.ToArray());
-                    args.Add(Guid.NewGuid().ToString("N"));
+                    args.Add(Guid.NewGuid().ToString(UuidFormat));
                     args.Add(
                         put.Retention is { } retention
                             ? Zlink.Framework.Internal.ZLinkStoreRetention.ToMilliseconds(retention)
@@ -579,7 +618,7 @@ public sealed partial class ZLinkRedisLocationStore
                     break;
                 case ZLinkStoreMutation.Delete delete:
                     args.Add(keyIndex[delete.Key]);
-                    args.Add("delete");
+                    args.Add(DeleteToken);
                     args.Add(delete.Key.Value);
                     args.Add(Array.Empty<byte>());
                     // A tombstone still carries a real, freshly issued
@@ -589,7 +628,7 @@ public sealed partial class ZLinkRedisLocationStore
                     // (a tombstoned key reads as Missing), but the ZSET
                     // append-log entry's shape is the public opaque-record
                     // contract, so it must match cross-language.
-                    args.Add(Guid.NewGuid().ToString("N"));
+                    args.Add(Guid.NewGuid().ToString(UuidFormat));
                     args.Add(-1);
                     break;
             }
@@ -606,25 +645,25 @@ public sealed partial class ZLinkRedisLocationStore
                 cancellationToken
             )
             .ConfigureAwait(false);
-        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[1]);
-        var outcome = (string)result[0]!;
-        if (outcome == "conflict")
+        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[ResultStoreNowIndex]);
+        var outcome = (string)result[ResultOutcomeIndex]!;
+        if (outcome == ConflictToken)
             return new ZLinkStoreWriteResult.Conflict(storeNow);
-        if (outcome == "backlog")
+        if (outcome == BacklogToken)
         {
             throw new IOException("The Redis Location Store version backlog is full.");
         }
-        if (outcome != "applied")
+        if (outcome != AppliedToken)
         {
             throw new InvalidDataException(
                 "Redis returned an unknown Location Store write result."
             );
         }
         var versions = new Dictionary<ZLinkStoreKey, ZLinkStoreVersion>();
-        for (var index = 2; index < result.Length; index += 2)
+        for (var index = WriteVersionsIndex; index < result.Length; index += WriteVersionStride)
         {
             versions[new ZLinkStoreKey((string)result[index]!)] = new ZLinkStoreVersion(
-                (string)result[index + 1]!
+                (string)result[index + WriteVersionOffset]!
             );
         }
         return new ZLinkStoreWriteResult.Applied(versions, storeNow);
@@ -636,7 +675,7 @@ public sealed partial class ZLinkRedisLocationStore
     )
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (request.Limit is < 1 or > 1000)
+        if (request.Limit is < 1 or > MaximumPageItems)
             throw new ArgumentOutOfRangeException(nameof(request));
         var prefix =
             request.Prefix
@@ -644,7 +683,7 @@ public sealed partial class ZLinkRedisLocationStore
         _ = Encoding.UTF8.GetByteCount(prefix) is <= MaximumKeyBytes
             ? 0
             : throw new ArgumentException(
-                "The scan prefix exceeds 1024 UTF-8 bytes.",
+                $"The scan prefix exceeds {MaximumKeyBytes} UTF-8 bytes.",
                 nameof(request)
             );
         string scanId;
@@ -654,15 +693,15 @@ public sealed partial class ZLinkRedisLocationStore
         {
             var cursorValue = cursor.Value ?? string.Empty;
             var cursorBytes = Encoding.UTF8.GetByteCount(cursorValue);
-            if (cursorBytes is < 1 or > MaximumVersionBytes)
+            if (cursorBytes is < 1 or > MaximumCursorBytes)
                 throw new ArgumentException(
-                    "Store scan cursors must contain 1..4096 UTF-8 bytes.",
+                    $"Store scan cursors must be non-empty UTF-8 values of at most {MaximumCursorBytes} bytes.",
                     nameof(request)
                 );
             var separator = cursorValue.LastIndexOf(':');
             if (
-                separator != 32
-                || !Guid.TryParseExact(cursorValue[..separator], "N", out _)
+                separator != CursorIdLength
+                || !Guid.TryParseExact(cursorValue[..separator], UuidFormat, out _)
                 || !TryDecodeCursorKey(cursorValue[(separator + 1)..], out lastKey)
             )
             {
@@ -672,7 +711,7 @@ public sealed partial class ZLinkRedisLocationStore
         }
         else
         {
-            scanId = Guid.NewGuid().ToString("N");
+            scanId = Guid.NewGuid().ToString(UuidFormat);
         }
         var result = await ExecuteAsync(
                 async database =>
@@ -697,27 +736,31 @@ public sealed partial class ZLinkRedisLocationStore
                 cancellationToken
             )
             .ConfigureAwait(false);
-        var outcome = (string)result[0]!;
-        if (outcome == "expired")
+        var outcome = (string)result[ResultOutcomeIndex]!;
+        if (outcome == ExpiredToken)
             return new ZLinkStoreScanResult.Expired();
-        if (outcome == "capacity")
+        if (outcome == CapacityToken)
         {
             throw new IOException("The Redis Location Store snapshot capacity is full.");
         }
-        if (outcome != "page")
+        if (outcome != PageToken)
         {
             throw new InvalidDataException("Redis returned an unknown Location Store scan result.");
         }
 
         var storeNow = DateTimeOffset.FromUnixTimeMilliseconds(
-            long.Parse((string)result[1]!, NumberStyles.None, CultureInfo.InvariantCulture)
+            long.Parse(
+                (string)result[ResultStoreNowIndex]!,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture
+            )
         );
-        var nextKey = (string)result[2]!;
+        var nextKey = (string)result[ScanNextKeyIndex]!;
         var items = new List<KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>>();
-        for (var index = 3; index < result.Length; index += 4)
+        for (var index = ScanItemsIndex; index < result.Length; index += ScanItemStride)
         {
             var expiresAtMs = long.Parse(
-                (string)result[index + 3]!,
+                (string)result[index + ScanExpiryOffset]!,
                 NumberStyles.AllowLeadingSign,
                 CultureInfo.InvariantCulture
             );
@@ -725,8 +768,8 @@ public sealed partial class ZLinkRedisLocationStore
                 new KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>(
                     new ZLinkStoreKey((string)result[index]!),
                     new ZLinkStoreValue(
-                        (byte[])result[index + 1]!,
-                        new ZLinkStoreVersion((string)result[index + 2]!),
+                        (byte[])result[index + ScanValueOffset]!,
+                        new ZLinkStoreVersion((string)result[index + ScanVersionOffset]!),
                         expiresAtMs > 0
                             ? DateTimeOffset.FromUnixTimeMilliseconds(expiresAtMs)
                             : null,
@@ -777,7 +820,7 @@ public sealed partial class ZLinkRedisLocationStore
         var length = Encoding.UTF8.GetByteCount(key.Value ?? string.Empty);
         if (length is < 1 or > MaximumKeyBytes)
             throw new ArgumentException(
-                "Location Store keys must contain 1..1024 UTF-8 bytes.",
+                $"Location Store keys must be non-empty UTF-8 values of at most {MaximumKeyBytes} bytes.",
                 parameterName
             );
     }
@@ -816,10 +859,10 @@ public sealed partial class ZLinkRedisLocationStore
                 nameof(request)
             );
         }
-        if (conditionKeys.Concat(mutationKeys).Distinct().Count() > MaximumBatchKeys)
+        if (conditionKeys.Concat(mutationKeys).Distinct().Count() > MaximumUniqueKeys)
         {
             throw new ArgumentException(
-                "A conditional batch can reference at most 2048 keys.",
+                $"A conditional batch can reference at most {MaximumUniqueKeys} keys.",
                 nameof(request)
             );
         }
@@ -837,7 +880,7 @@ public sealed partial class ZLinkRedisLocationStore
                     var length = Encoding.UTF8.GetByteCount(version.Expected.Value ?? string.Empty);
                     if (length is < 1 or > MaximumVersionBytes)
                         throw new ArgumentException(
-                            "Store versions must contain 1..4096 UTF-8 bytes.",
+                            $"Store versions must be non-empty UTF-8 values of at most {MaximumVersionBytes} bytes.",
                             nameof(request)
                         );
                     encodedBytes += length;
@@ -863,7 +906,7 @@ public sealed partial class ZLinkRedisLocationStore
                     encodedBytes += Encoding.UTF8.GetByteCount(put.Key.Value);
                     if (put.Bytes.Length > MaximumValueBytes)
                         throw new ArgumentException(
-                            "A Location Store value can contain at most 1 MiB.",
+                            $"A Location Store value can contain at most {MaximumValueBytes} bytes.",
                             nameof(request)
                         );
                     if (put.Retention is { } retention && retention <= TimeSpan.Zero)
@@ -877,6 +920,9 @@ public sealed partial class ZLinkRedisLocationStore
             }
         }
         if (encodedBytes > MaximumEncodedBatchBytes)
-            throw new ArgumentException("The encoded Store batch exceeds 4 MiB.", nameof(request));
+            throw new ArgumentException(
+                $"The encoded Store batch exceeds {MaximumEncodedBatchBytes} bytes.",
+                nameof(request)
+            );
     }
 }

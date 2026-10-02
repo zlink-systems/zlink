@@ -36,13 +36,18 @@ final class TcpStreamConnectorTestServer implements Closeable {
         server = new ServerSocket(port);
         executor.execute(
                 () -> {
-                    while (!server.isClosed()) {
+                    while (true) {
                         try {
-                            accepted.add(server.accept());
-                        } catch (IOException ex) {
-                            if (!server.isClosed()) {
-                                throw new RuntimeException(ex);
+                            Socket socket = server.accept();
+                            accepted.add(socket);
+                            if (server.isClosed()) {
+                                socket.close();
                             }
+                        } catch (IOException ex) {
+                            if (server.isClosed()) {
+                                return;
+                            }
+                            throw new RuntimeException(ex);
                         }
                     }
                 });
@@ -190,6 +195,7 @@ final class TcpStreamConnectorTestServer implements Closeable {
     @Override
     public void close() throws IOException {
         try {
+            server.close();
             closeCurrentSocket();
             for (Socket socket : accepted) {
                 try {
@@ -197,7 +203,6 @@ final class TcpStreamConnectorTestServer implements Closeable {
                 } catch (IOException ignored) {
                 }
             }
-            server.close();
         } finally {
             executor.shutdownNow();
         }
