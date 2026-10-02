@@ -588,8 +588,11 @@ The close procedure proceeds in the following order.
    changes the authority to a new `ObjectGeneration` on the same node. After initialization and
    restoring the stored state, the new incarnation runs only those Instance-intent messages, in
    arrival order. If initialization or restoration fails, that generation is `Delete`d and the
-   waiting messages end with a typed failure. Otherwise the authority is released with the same
-   fence, and remaining Instance-intent messages are placed again from `Missing`.
+   waiting messages end with a typed failure. Otherwise (this host is draining or relocating) the
+   authority is released with the same fence; a waiting Instance-intent request ends with
+   `ShuttingDown` when draining or `Unavailable` when sealed for a move, and a send is recorded in
+   diagnostics. An already accepted message is not placed again
+   ([Submit and Completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)).
 
 A message placed after the Close work item that has no Instance intent ends with the result of
 [§9](#9-failure-and-observability). If that incarnation no longer exists, idempotent `false`; if a
