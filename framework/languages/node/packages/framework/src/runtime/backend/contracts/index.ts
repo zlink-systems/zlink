@@ -444,6 +444,7 @@ export interface ZLinkBackendSpotDispatchInfo {
 
 export interface ZLinkBackendSocketMonitorEvent {
   readonly nativeEvent: MonitorEventType;
+  readonly readyEdge: boolean;
   readonly routingId?: unknown;
   readonly localAddr: string;
   readonly remoteAddr: string;

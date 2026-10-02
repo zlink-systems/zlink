@@ -2044,6 +2044,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       OpenSSL::SSL OpenSSL::Crypto)
   endif()
   add_zlink_framework_test(
+    test_cpp_framework_stream_liveness
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_liveness.cpp
+    "framework-unit;framework-contract;stream;liveness")
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_stream_liveness)
+  add_zlink_framework_test(
     test_cpp_framework_poll_interval_wait
     tests/Zlink.Framework.UnitTests/test_cpp_framework_poll_interval_wait.cpp
     "framework-unit;framework-regression")
@@ -2165,6 +2170,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 120
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_package)
+  add_zlink_connector_test(
+    test_cpp_stream_heartbeat_disabled
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_heartbeat_disabled.cpp
+    "connector-unit;connector-contract;stream;liveness"
+    contract)
   add_zlink_connector_test(
     test_cpp_stream_connector
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector.cpp
