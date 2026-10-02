@@ -1873,10 +1873,7 @@ export class DefaultZLinkSpotManager {
         record.reply(
           this.encodeMeshActorReply(record.parts[0], ZLinkStreamMessageKind.Error, {
             message: error instanceof Error ? error.message : String(error),
-            kind:
-              error instanceof ZLinkFrameworkException
-                ? error.kind
-                : ZLinkFrameworkErrorKind.InternalFailure
+            kind: spotActorFailureKind(error)
           })
         )
       );
@@ -2531,10 +2528,7 @@ export class DefaultZLinkSpotManager {
                   {
                     ...completion,
                     status: 'failed',
-                    kind:
-                      error instanceof ZLinkFrameworkException
-                        ? error.kind
-                        : ZLinkFrameworkErrorKind.InternalFailure
+                    kind: spotActorFailureKind(error)
                   },
                   entryActor,
                   completion.actor,
@@ -2881,16 +2875,29 @@ export class DefaultZLinkSpotManager {
     const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
     const targetsEntry =
       entrySpotId !== undefined && String(admission.admission.spotId) === String(entrySpotId);
-    if (targetsEntry) {
-      await this.options.dispatchEntryActorJoin?.(meshName, actor, []);
-    } else {
-      const activation = this.activations.resolve(meshName, admission.admission.spotId);
-      if (activation === undefined) {
-        throw new Error(`Actor Join relocation '${relocationId}' target Spot is not active.`);
+    const activation = targetsEntry
+      ? undefined
+      : this.activations.resolve(meshName, admission.admission.spotId);
+    let lifecycleFailure: { readonly error: unknown } | undefined;
+    try {
+      if (targetsEntry) {
+        await this.options.dispatchEntryActorJoin?.(meshName, actor, []);
+      } else {
+        if (activation === undefined) {
+          throw new Error(`Actor Join relocation '${relocationId}' target Spot is not active.`);
+        }
+        await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
       }
-      await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
+    } catch (error) {
+      lifecycleFailure = { error };
     }
-    await submitSourceLeave(admission.admission.actorRef.nodeRid);
+    if (lifecycleFailure === undefined) {
+      const sourceLeave = submitSourceLeave(admission.admission.actorRef.nodeRid);
+      this.options.detachedTaskRunner.runDetached(
+        `actor Join source leave ${actor.context.actorId}`,
+        () => sourceLeave
+      );
+    }
     if (
       outcome.deferredJoinCompletion !== undefined &&
       this.options.actorTransferRuntime !== undefined
@@ -2898,20 +2905,26 @@ export class DefaultZLinkSpotManager {
       const submitMailbox = targetsEntry
         ? <T>(operation: () => Promise<T>): Promise<T> => operation()
         : <T>(operation: () => Promise<T>): Promise<T> => {
-            const activation = this.activations.resolve(meshName, admission.admission.spotId);
             if (activation === undefined) {
               throw new Error(`Actor Join relocation '${relocationId}' target mailbox is missing.`);
             }
             return activation.executeActor(actor.context.actorId, operation);
           };
       await this.options.actorTransferRuntime.deliverDeferredJoinCompletion(
-        outcome.deferredJoinCompletion,
+        lifecycleFailure === undefined
+          ? outcome.deferredJoinCompletion
+          : {
+              ...outcome.deferredJoinCompletion,
+              status: 'failed',
+              kind: spotActorFailureKind(lifecycleFailure.error)
+            },
         actor,
         actorRef,
         submitMailbox,
         signal
       );
     }
+    if (lifecycleFailure !== undefined) throw lifecycleFailure.error;
     this.formalRemoteActorAdmissions.markCommitted(relocationId, actor);
     return true;
   }
@@ -3145,6 +3158,12 @@ export class DefaultZLinkSpotManager {
       messageFollowOrigin
     );
   }
+}
+
+function spotActorFailureKind(error: unknown): ZLinkFrameworkErrorKind {
+  return error instanceof ZLinkFrameworkException
+    ? error.kind
+    : ZLinkFrameworkErrorKind.InternalFailure;
 }
 
 function instanceDispatchErrorReason(error: unknown): ZLinkDispatchErrorReason {
