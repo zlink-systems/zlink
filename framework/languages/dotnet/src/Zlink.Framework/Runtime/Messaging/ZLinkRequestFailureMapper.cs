@@ -4,6 +4,63 @@ namespace Zlink.Framework.Runtime.Messaging;
 
 internal static class ZLinkRequestFailureMapper
 {
+    public static (
+        RequestResult Result,
+        ServiceWireConstants.FrameworkErrorCode FailureCode
+    ) TargetFailureReply(Exception error, byte objectKind = 2)
+    {
+        var failureCode = TargetFailureCode(error, objectKind);
+        var result =
+            failureCode == ServiceWireConstants.FrameworkErrorCode.None
+                ? error is ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown }
+                    ? RequestResult.Terminated
+                    : RequestResult.InvalidState
+                : Enum.GetValues<RequestResult>()
+                    .Single(terminal =>
+                        ServiceWireConstants.ValidTerminalFailure((uint)terminal, (uint)failureCode)
+                    );
+        return (result, failureCode);
+    }
+
+    public static ServiceWireConstants.FrameworkErrorCode TargetFailureCode(
+        Exception error,
+        byte objectKind
+    )
+    {
+        if (error is not ZLinkFrameworkException framework)
+            return ServiceWireConstants.FrameworkErrorCode.RequestFailed;
+        return framework.Kind switch
+        {
+            ZLinkFrameworkErrorKind.NotFound => ServiceWireConstants
+                .FrameworkErrorCode
+                .RequestTargetNotFound,
+            ZLinkFrameworkErrorKind.AlreadyExists => ServiceWireConstants
+                .FrameworkErrorCode
+                .ActorAlreadyExists,
+            ZLinkFrameworkErrorKind.TypeMismatch => objectKind == 1
+                ? ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
+                : ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch,
+            ZLinkFrameworkErrorKind.Rejected => ServiceWireConstants
+                .FrameworkErrorCode
+                .RequestRejected,
+            ZLinkFrameworkErrorKind.Unavailable => ServiceWireConstants
+                .FrameworkErrorCode
+                .RouteNotConnected,
+            ZLinkFrameworkErrorKind.DeadlineExceeded => ServiceWireConstants
+                .FrameworkErrorCode
+                .WorkerTimedOut,
+            ZLinkFrameworkErrorKind.ShuttingDown or ZLinkFrameworkErrorKind.InvalidOperation =>
+                ServiceWireConstants.FrameworkErrorCode.None,
+            ZLinkFrameworkErrorKind.ProtocolError => ServiceWireConstants
+                .FrameworkErrorCode
+                .RequestProtocolError,
+            ZLinkFrameworkErrorKind.DataLost => ServiceWireConstants
+                .FrameworkErrorCode
+                .RelocationDataLost,
+            _ => ServiceWireConstants.FrameworkErrorCode.RequestFailed,
+        };
+    }
+
     public static Exception CreateChannelCompletionException(
         RequestResult result,
         string operationName

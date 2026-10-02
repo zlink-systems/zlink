@@ -568,13 +568,7 @@ internal sealed class ZLinkSpotActivationDispatcher
                         received.CanReply
                             ? ZLinkDispatchMessageKind.Request
                             : ZLinkDispatchMessageKind.Send,
-                        error
-                            is ZLinkFrameworkException
-                            {
-                                Kind: ZLinkFrameworkErrorKind.ShuttingDown,
-                            }
-                            ? ZLinkDispatchErrorReason.Shutdown
-                            : ZLinkDispatchErrorReason.StaleTarget,
+                        ZLinkDispatchErrorReporter.ReasonFrom(error),
                         received.CanReply
                             ? ZLinkDispatchErrorAction.ReplyError
                             : ZLinkDispatchErrorAction.Drop,

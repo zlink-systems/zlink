@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Service;
@@ -2499,11 +2501,16 @@ internal sealed class ZLinkSpotNodeCatalog(
             null,
             null,
             pendingIntent
-                ? new ZLinkFrameworkException(
+                ? ZLinkDispatchErrorReporter.WithBoundary(
+                    new ZLinkFrameworkException(
+                        drainOwner == ZLinkDrainOwner.Shutdown
+                            ? ZLinkFrameworkErrorKind.ShuttingDown
+                            : ZLinkFrameworkErrorKind.Unavailable,
+                        "The Instance Spot Close released authority without Reincarnate."
+                    ),
                     drainOwner == ZLinkDrainOwner.Shutdown
-                        ? ZLinkFrameworkErrorKind.ShuttingDown
-                        : ZLinkFrameworkErrorKind.Unavailable,
-                    "The Instance Spot Close released authority without Reincarnate."
+                        ? ServiceWireConstants.FrameworkErrorCode.None
+                        : ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
                 )
                 : null
         );

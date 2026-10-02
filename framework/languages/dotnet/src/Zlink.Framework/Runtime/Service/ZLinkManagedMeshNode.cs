@@ -6849,58 +6849,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         if (exception is ZLinkRelocationDataLostException)
             return ServiceWireConstants.FrameworkErrorCode.RelocationDataLost;
-        if (exception is not ZLinkFrameworkException framework)
-            return ServiceWireConstants.FrameworkErrorCode.RequestFailed;
-        return framework.Kind switch
-        {
-            ZLinkFrameworkErrorKind.DataLost => ServiceWireConstants
-                .FrameworkErrorCode
-                .RelocationDataLost,
-            ZLinkFrameworkErrorKind.Rejected => ServiceWireConstants
-                .FrameworkErrorCode
-                .RequestRejected,
-            ZLinkFrameworkErrorKind.ProtocolError => ServiceWireConstants
-                .FrameworkErrorCode
-                .RequestProtocolError,
-            //  No dedicated "deadline exceeded" wire code exists; a worker
-            //  timeout is the closest timeout-shaped signal.
-            ZLinkFrameworkErrorKind.DeadlineExceeded => ServiceWireConstants
-                .FrameworkErrorCode
-                .WorkerTimedOut,
-            //  A stale generation/fence is the concrete cause of
-            //  InvalidOperation along this path (spec 15 failure table);
-            //  pick the object-kind-specific stale code.
-            ZLinkFrameworkErrorKind.InvalidOperation => objectKind == 1
-                ? ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-                : ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale,
-            //  No dedicated generic "unavailable" wire code exists; a
-            //  disconnected route is the closest "cannot reach/use the
-            //  target" signal.
-            ZLinkFrameworkErrorKind.Unavailable => ServiceWireConstants
-                .FrameworkErrorCode
-                .RouteNotConnected,
-            ZLinkFrameworkErrorKind.NotFound => ServiceWireConstants
-                .FrameworkErrorCode
-                .RequestTargetNotFound,
-            //  The only "already exists" wire code is Actor-specific; not
-            //  expected along this target-failure path, mapped for
-            //  completeness.
-            ZLinkFrameworkErrorKind.AlreadyExists => ServiceWireConstants
-                .FrameworkErrorCode
-                .ActorAlreadyExists,
-            ZLinkFrameworkErrorKind.TypeMismatch => objectKind == 1
-                ? ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
-                : ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch,
-            //  No dedicated "not configured" wire code exists; a missing
-            //  configured handler is the closest analog.
-            ZLinkFrameworkErrorKind.NotConfigured => ServiceWireConstants
-                .FrameworkErrorCode
-                .HandlerNotFound,
-            //  No dedicated generic "internal failure" or "shutting down"
-            //  wire code exists; the generic opaque request-failure code
-            //  is the closest fit for both.
-            _ => ServiceWireConstants.FrameworkErrorCode.RequestFailed,
-        };
+        return exception is ZLinkFrameworkException framework
+            ? framework.Kind switch
+            {
+                ZLinkFrameworkErrorKind.InvalidOperation => objectKind == 1
+                    ? ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
+                    : ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale,
+                ZLinkFrameworkErrorKind.NotConfigured => ServiceWireConstants
+                    .FrameworkErrorCode
+                    .HandlerNotFound,
+                ZLinkFrameworkErrorKind.ShuttingDown => ServiceWireConstants
+                    .FrameworkErrorCode
+                    .RequestFailed,
+                _ => ZLinkRequestFailureMapper.TargetFailureCode(exception, objectKind),
+            }
+            : ZLinkRequestFailureMapper.TargetFailureCode(exception, objectKind);
     }
 
     private async Task<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareRelocationTargetAsync(
@@ -7618,13 +7581,33 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     Array.Empty<ReadOnlyMemory<byte>>()
                 );
             }
-            catch
+            catch (Exception error)
             {
+                var failure = ZLinkRequestFailureMapper.TargetFailureReply(error);
                 terminal = new InstanceSpotActivationTerminal(
-                    RequestResult.InternalError,
-                    ServiceWireConstants.FrameworkErrorCode.RequestFailed,
+                    failure.Result,
+                    failure.FailureCode,
                     Array.Empty<ReadOnlyMemory<byte>>()
                 );
+                if (_logicalMulticastDispatchErrors is { Enabled: true } reporter)
+                {
+                    reporter.Report(
+                        new ZLinkDispatchFailure(
+                            ZLinkDispatchErrorSurface.InstanceSpot,
+                            operation.IsRequest
+                                ? ZLinkDispatchMessageKind.Request
+                                : ZLinkDispatchMessageKind.Send,
+                            ZLinkDispatchErrorReporter.ReasonFrom(error, failure.FailureCode),
+                            operation.IsRequest
+                                ? ZLinkDispatchErrorAction.ReplyError
+                                : ZLinkDispatchErrorAction.Drop,
+                            null,
+                            SpotId: operation.Target.TargetSpotId,
+                            Exception: error,
+                            MeshName: operation.Target.MeshName
+                        )
+                    );
+                }
             }
         }
 

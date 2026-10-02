@@ -856,10 +856,20 @@ internal abstract partial class ZLinkSpotActivation
 
         internal void ReleaseForRelocation() =>
             Fail(
-                new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    "The Instance Spot activation queue released its accepted record.",
-                    ZLinkRetryAdvice.RetryAfterBackoff
+                ZLinkDispatchErrorReporter.WithBoundary(
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        "The Instance Spot activation queue released its accepted record.",
+                        ZLinkRetryAdvice.RetryAfterBackoff
+                    ),
+                    Systems
+                        .Zlink
+                        .Framework
+                        .Runtime
+                        .Protocol
+                        .ServiceWireConstants
+                        .FrameworkErrorCode
+                        .RouteNotConnected
                 )
             );
     }

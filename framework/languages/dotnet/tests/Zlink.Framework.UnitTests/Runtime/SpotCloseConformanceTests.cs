@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Dispatch;
@@ -9,6 +11,7 @@ using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Channels;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
@@ -27,6 +30,146 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+
+    [Theory]
+    [InlineData(
+        ZLinkFrameworkErrorKind.NotFound,
+        RequestResult.NotFound,
+        (int)ServiceWireConstants.FrameworkErrorCode.RequestTargetNotFound
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.AlreadyExists,
+        RequestResult.Conflict,
+        (int)ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.TypeMismatch,
+        RequestResult.Conflict,
+        (int)ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.NotConfigured,
+        RequestResult.InternalError,
+        (int)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.Rejected,
+        RequestResult.Rejected,
+        (int)ServiceWireConstants.FrameworkErrorCode.RequestRejected
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.Unavailable,
+        RequestResult.InternalError,
+        (int)ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.DeadlineExceeded,
+        RequestResult.InternalError,
+        (int)ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.ShuttingDown,
+        RequestResult.Terminated,
+        (int)ServiceWireConstants.FrameworkErrorCode.None
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.ProtocolError,
+        RequestResult.ProtocolError,
+        (int)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.InvalidOperation,
+        RequestResult.InvalidState,
+        (int)ServiceWireConstants.FrameworkErrorCode.None
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.DataLost,
+        RequestResult.InternalError,
+        (int)ServiceWireConstants.FrameworkErrorCode.RelocationDataLost
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.InternalFailure,
+        RequestResult.InternalError,
+        (int)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+    )]
+    public void Instance_factory_failure_reply_uses_canonical_terminal_pair(
+        ZLinkFrameworkErrorKind kind,
+        RequestResult result,
+        int failureCode
+    )
+    {
+        var actual = ZLinkRequestFailureMapper.TargetFailureReply(
+            new ZLinkFrameworkException(kind, "Instance factory failed.")
+        );
+        Assert.Equal(result, actual.Result);
+        Assert.Equal(failureCode, (int)actual.FailureCode);
+        Assert.True(
+            ServiceWireConstants.ValidTerminalFailure((uint)actual.Result, (uint)actual.FailureCode)
+        );
+    }
+
+    [Theory]
+    [InlineData(ZLinkFrameworkErrorKind.NotFound, "no_handler", true)]
+    [InlineData(ZLinkFrameworkErrorKind.ProtocolError, "invalid_frame", true)]
+    [InlineData(ZLinkFrameworkErrorKind.Unavailable, "stale_target", true)]
+    [InlineData(ZLinkFrameworkErrorKind.NotFound, "no_handler", false)]
+    [InlineData(ZLinkFrameworkErrorKind.ProtocolError, "invalid_frame", false)]
+    [InlineData(ZLinkFrameworkErrorKind.Unavailable, "stale_target", false)]
+    public async Task Missing_Instance_factory_failure_keeps_kind_and_records_one_terminal(
+        ZLinkFrameworkErrorKind kind,
+        string reason,
+        bool request
+    )
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        await host.RequestInstanceAsync($"factory-warm-{Guid.NewGuid():N}");
+        await using var source = await StartPeerAsync(host, registerInstanceFactory: false);
+        var spotId = $"factory-failed-{Guid.NewGuid():N}";
+        var activities = new ConcurrentBag<Activity>();
+        var diagnostic = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = activitySource =>
+                activitySource.Name == ZLinkTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity =>
+            {
+                if (
+                    activity.OperationName == "zlink.dispatch_error"
+                    && Equals(activity.GetTagItem("spot_id"), spotId)
+                )
+                {
+                    activities.Add(activity);
+                    diagnostic.TrySetResult();
+                }
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+        host.State.OnReinitialize = _ =>
+            throw new ZLinkFrameworkException(kind, "Instance factory failed.");
+        if (request)
+        {
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                source.RequestInstanceAsync(spotId)
+            );
+            Assert.Equal(kind, failure.Kind);
+        }
+        else
+        {
+            await source.SendInstanceAsync(spotId, "factory-failed");
+        }
+        await diagnostic.Task.WaitAsync(Wait);
+        var record = Assert.Single(activities);
+        Assert.Equal("instance_spot", record.GetTagItem("surface"));
+        Assert.Equal(reason, record.GetTagItem("reason"));
+        Assert.Equal(request ? "reply_error" : "drop", record.GetTagItem("action"));
+        Assert.Equal(request ? "request" : "send", record.GetTagItem("message_kind"));
+        Assert.Equal(nameof(ZLinkFrameworkException), record.GetTagItem("error_type"));
+        Assert.Equal("Instance factory failed.", record.GetTagItem("error_message"));
+    }
 
     [Theory]
     [InlineData(false)]
@@ -843,17 +986,12 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
     }
 
-    private static async Task RunReadyRouteCaseAsync(JsonElement routeCase, bool instanceIntent)
+    private static async Task<SpotCloseHost> StartPeerAsync(
+        SpotCloseHost host,
+        bool registerInstanceFactory = true
+    )
     {
-        var given = routeCase.GetProperty("given");
-        var expected = routeCase.GetProperty("expect");
-        Assert.Equal("mismatch", given.GetProperty("ownerFence").GetString());
-        await using var host = await SpotCloseHost.StartAsync();
-        var spotId = $"stale-ready-{Guid.NewGuid():N}";
-        var flowPath = Path.Combine(Path.GetTempPath(), "zlink-close-dotnet", $"{spotId}.flow");
-        using var flow = new TestHostMessageFlowListener(flowPath);
-        await host.RequestInstanceAsync(spotId);
-        await using var source = await SpotCloseHost.StartAsync(host.Store);
+        var source = await SpotCloseHost.StartAsync(host.Store, registerInstanceFactory);
         using (var peerDeadline = new CancellationTokenSource(Wait))
         {
             while (true)
@@ -864,12 +1002,12 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                     source.Runtime.EnsureKnownRouteMeshPeer(
                         SpotCloseHost.MeshName,
                         host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node.RoutingId,
-                        $"SPOT '{spotId}'"
+                        "Instance Spot test peer"
                     );
                     host.Runtime.EnsureKnownRouteMeshPeer(
                         SpotCloseHost.MeshName,
                         source.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node.RoutingId,
-                        $"SPOT '{spotId}'"
+                        "Instance Spot test peer"
                     );
                     break;
                 }
@@ -880,6 +1018,20 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                 }
             }
         }
+        return source;
+    }
+
+    private static async Task RunReadyRouteCaseAsync(JsonElement routeCase, bool instanceIntent)
+    {
+        var given = routeCase.GetProperty("given");
+        var expected = routeCase.GetProperty("expect");
+        Assert.Equal("mismatch", given.GetProperty("ownerFence").GetString());
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"stale-ready-{Guid.NewGuid():N}";
+        var flowPath = Path.Combine(Path.GetTempPath(), "zlink-close-dotnet", $"{spotId}.flow");
+        using var flow = new TestHostMessageFlowListener(flowPath);
+        await host.RequestInstanceAsync(spotId);
+        await using var source = await StartPeerAsync(host);
         var resolved = Assert.IsType<ZLinkResolvedSpotHandle>(
             await source.Runtime.ResolveSpotHandleAsync(spotId, CancellationToken.None)
         );
@@ -1517,7 +1669,10 @@ internal sealed class SpotCloseHost : IAsyncDisposable
     internal SpotCloseFaultStore Store { get; }
     internal SpotCloseProbeState State { get; }
 
-    internal static async Task<SpotCloseHost> StartAsync(SpotCloseFaultStore? sharedStore = null)
+    internal static async Task<SpotCloseHost> StartAsync(
+        SpotCloseFaultStore? sharedStore = null,
+        bool registerInstanceFactory = true
+    )
     {
         var store =
             sharedStore ?? new SpotCloseFaultStore(new ZLinkInMemoryProviderLocationStore());
@@ -1534,7 +1689,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
             options.AddLocationStore(store);
             options.AddRelocationStore(new InMemoryRelocationStore());
             options.ConfigureLocations().PollingInterval = TimeSpan.FromMilliseconds(10);
-            options
+            var server = options
                 .AddRouteMesh(MeshName)
                 .Listen("tcp://127.0.0.1:0")
                 .SetRoutingIdPrefix("spot-close")
@@ -1550,8 +1705,9 @@ internal sealed class SpotCloseHost : IAsyncDisposable
                 .AddSpotFactory<SpotCloseProbeSpot>(
                     SpotType,
                     static factory => factory.DisableRelocation()
-                )
-                .AddInstanceSpotFactory<SpotCloseInstance>(
+                );
+            if (registerInstanceFactory)
+                server.AddInstanceSpotFactory<SpotCloseInstance>(
                     InstanceType,
                     static factory => factory.DisableRelocation()
                 );
