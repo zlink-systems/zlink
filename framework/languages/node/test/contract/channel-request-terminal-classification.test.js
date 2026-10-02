@@ -176,15 +176,24 @@ test('one-way typed rejection and caller faults match request classification', a
       sendTimeoutMs: 10,
       sendHighWaterMark: 16,
       onSendReady() {},
-      send() { return true; },
-      async submit() { throw new ZLinkBackendResultError('submit', result); },
+      send() {
+        return true;
+      },
+      async submit() {
+        throw new ZLinkBackendResultError('submit', result);
+      },
       disconnectPeer() {},
-      recv() { return undefined; }
+      recv() {
+        return undefined;
+      }
     };
     const stream = new framework.ZLinkManagedStream(socket, 'typed-submit-session');
     const message = zlink.Message.from('payload');
     try {
-      await assert.rejects(() => stream.submitRaw(message), (error) => error.kind === kind);
+      await assert.rejects(
+        () => stream.submitRaw(message),
+        (error) => error.kind === kind
+      );
     } finally {
       message.close();
     }
@@ -256,19 +265,27 @@ test('raw router and dealer requests preserve the binding failure phase', async 
   }
 });
 
-
 test('Logical Multicast preserves source refusal and zero-recipient statuses', () => {
   const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
-  const { ZLinkSubmitStatus } = require('../../packages/framework/dist/runtime/messaging/submission-result');
-  const { ZLinkSpotNodeRuntimeManager } = require('../../packages/framework/dist/runtime/spots/spot-node-runtime-manager');
+  const {
+    ZLinkSubmitStatus
+  } = require('../../packages/framework/dist/runtime/messaging/submission-result');
+  const {
+    ZLinkSpotNodeRuntimeManager
+  } = require('../../packages/framework/dist/runtime/spots/spot-node-runtime-manager');
   const manager = new ZLinkSpotNodeRuntimeManager({ detachedTaskRunner: {} });
   for (const [result, expected] of [
     [SubmitResult.NotAdmitted, ZLinkSubmitStatus.Backpressured],
     [SubmitResult.NotFound, ZLinkSubmitStatus.Submitted]
   ]) {
     manager.publishers.set('test.mesh', {
-      publish() { throw new ZLinkBackendResultError('submit', result); }
+      publish() {
+        throw new ZLinkBackendResultError('submit', result);
+      }
     });
-    assert.equal(manager.tryPublish('test.mesh', 'events', 'topic', 'PublicationEvent', { value: 1 }).status, expected);
+    assert.equal(
+      manager.tryPublish('test.mesh', 'events', 'topic', 'PublicationEvent', { value: 1 }).status,
+      expected
+    );
   }
 });
