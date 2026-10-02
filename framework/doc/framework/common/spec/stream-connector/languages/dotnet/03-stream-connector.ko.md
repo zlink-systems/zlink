@@ -269,14 +269,12 @@ public interface IZlinkStreamCodecRegistration
 
 ## 7. Dispatch
 
-**`.NET` 고유 계약이다.**
+Dispatch mode의 동작은 [공통 §7](../../32-stream-connector.ko.md#7-dispatch-모드)이 정한다. 아래는 `.NET` 표면이다.
 
 | 항목 | 계약 |
 |---|---|
-| `Manual`(기본) | 수신 callback·request callback·lifecycle event가 **`Dispatch.Async(...)`를 호출한 실행 문맥**에서 처리된다 |
-| `Immediate` | **receive 경로에서 인라인 실행한다**(별도 dispatch 작업 없음). 느린 handler는 receive loop를 막으므로 후속 receive 처리가 지연된다 |
-| `MaxPendingDispatchCallbacks` | **`Manual`에서만 적용된다.** 수신 handler가 기다리는 자리를 제한하며, 자리가 없으면 날 때까지 기다린다. **이미 수락한 request의 완료 callback은 이 제한에 들지 않는다** — 수락한 호출의 완료는 자리를 이유로 미루거나 거절하지 않는다. `Immediate`는 큐를 거치지 않으므로 이 제한을 지나지 않는다 |
-| outbound 전송 queue | dispatch 제한과 **별개인 순서 보존 queue**. 가득 찼을 때의 결과는 위 frame write queue 항목이 정한다 |
+| `Manual`(기본)의 pump | `Dispatch.Async(...)`다. 큐에 쌓인 callback은 이 호출의 실행 문맥에서 처리된다 |
+| outbound 전송 queue | dispatch 큐와 **별개인 순서 보존 queue**. 가득 찼을 때의 결과는 위 frame write queue 항목이 정한다 |
 
 - **먼저 수락한 send는 뒤에 시작한 request보다 먼저 전송된다.** request는 **자기 frame의 실제 write가
   끝난 뒤** response를 기다린다.
@@ -393,12 +391,6 @@ nullable `int`의 `null`로 표현한다.**
 ```csharp
 public int? MaxAttempts { get; init; } = 3; // null은 무제한
 ```
-
-**`.NET`에만 있는 option:**
-
-| option | 기본값 | 의미 |
-|---|---|---|
-| `MaxPendingDispatchCallbacks` | 1024 | dispatch 대기 callback 한도(§7) |
 
 **검증 계약:**
 
