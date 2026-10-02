@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -535,7 +536,7 @@ internal sealed class ZLinkSpotActivationDispatcher
         }
     }
 
-    internal static void RejectApplicationRouteForFailure(
+    internal void RejectApplicationRouteForFailure(
         ZLinkBackendRouteReceived received,
         string channelName,
         Exception error,
@@ -544,11 +545,43 @@ internal sealed class ZLinkSpotActivationDispatcher
     {
         using (received)
         {
-            if (!received.CanReply || received.Parts.Count == 0)
+            if (received.Parts.Count == 0)
+                return;
+            if (!received.CanReply && !_dispatchErrors.Enabled)
                 return;
             var header = DecodeRejectionHeader(received, channelName, validateFlow);
             if (header is null)
                 return;
+            if (!received.CanReply)
+            {
+                var captured = ZLinkEnvelopeCodec.ValidFlow(header);
+                using var flow = ZLinkFlowContext.Enter(
+                    captured.FlowId,
+                    captured.FlowOrigin,
+                    _dispatchErrors.Flow.CaptureEnabled,
+                    ZLinkFlowOrigin.Inbound,
+                    createIfAbsent: false
+                );
+                _dispatchErrors.Report(
+                    new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.SpotRoute,
+                        ZLinkDispatchMessageKind.Send,
+                        error
+                            is ZLinkFrameworkException
+                            {
+                                Kind: ZLinkFrameworkErrorKind.ShuttingDown,
+                            }
+                            ? ZLinkDispatchErrorReason.Shutdown
+                            : ZLinkDispatchErrorReason.StaleTarget,
+                        ZLinkDispatchErrorAction.Drop,
+                        header.MessageName,
+                        channelName,
+                        SpotId: received.SpotId,
+                        Exception: error
+                    )
+                );
+                return;
+            }
             ZLinkSpotReplySubmitter.SubmitAndDispose(
                 received,
                 ZLinkSpotReplyEnvelope.EncodeErrorParts(

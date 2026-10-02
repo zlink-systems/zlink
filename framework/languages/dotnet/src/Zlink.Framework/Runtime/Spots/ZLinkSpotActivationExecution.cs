@@ -898,6 +898,7 @@ internal abstract partial class ZLinkSpotActivation
     internal void SetSuccessor(
         ZLinkSpotActivation? successor,
         ZLinkAuthoritySnapshot? authority,
+        ZLinkFrameworkException? intentFailure,
         Action publish
     )
     {
@@ -918,7 +919,13 @@ internal abstract partial class ZLinkSpotActivation
             () =>
             {
                 publish();
-                _successor!.TrySetResult(successor);
+                if (intentFailure is null)
+                    _successor!.TrySetResult(successor);
+                else
+                {
+                    _successor!.TrySetException(intentFailure);
+                    _ = _successor.Task.Exception;
+                }
             }
         );
         _serial.SchedulePendingApplications();
@@ -1405,7 +1412,7 @@ internal abstract partial class ZLinkSpotActivation
                 new(TaskCreationOptions.RunContinuationsAsynchronously),
                 null,
                 error =>
-                    ZLinkSpotActivationDispatcher.RejectApplicationRouteForFailure(
+                    _dispatcher.RejectApplicationRouteForFailure(
                         received,
                         ChannelName,
                         error,
@@ -1491,29 +1498,16 @@ internal abstract partial class ZLinkSpotActivation
             return;
         if (HasClosingSeal)
         {
-            if (originalOperation is null)
-            {
-                ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
-                    received,
-                    ChannelName,
-                    _runtime.Flow.CaptureEnabled
+            if (originalOperation is not null || received.InstanceIntent)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "The accepted Instance Spot message has no successor after Close."
                 );
-                return;
-            }
-            var turn =
-                ZLinkSerialTurn.Current
-                ?? throw new InvalidOperationException(
-                    "Accepted message re-placement requires its original turn."
-                );
-            await turn.YieldFrameworkCallAsync(
-                    async ct =>
-                    {
-                        await DispatchMissingIntentAsync(received, originalOperation!.Value, ct)
-                            .ConfigureAwait(false);
-                    },
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
+            ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
+                received,
+                ChannelName,
+                _runtime.Flow.CaptureEnabled
+            );
             return;
         }
         // A route can enter the serial queue immediately before relocation
@@ -1559,42 +1553,6 @@ internal abstract partial class ZLinkSpotActivation
             _runtime.Flow.CaptureEnabled
         );
         return true;
-    }
-
-    private async ValueTask DispatchMissingIntentAsync(
-        ZLinkBackendRouteReceived received,
-        InstanceSpotActivationOperation operation,
-        CancellationToken cancellationToken
-    )
-    {
-        using (received)
-        {
-            var reply = await _runtime
-                .ActivateInstanceSpotAsync(
-                    new InstanceSpotIntentAddress(
-                        operation.Target.MeshName,
-                        operation.Target.StableType,
-                        operation.Target.TargetSpotId
-                    ),
-                    received.Parts,
-                    operation.IsRequest,
-                    DateTimeOffset.FromUnixTimeMilliseconds(checked((long)operation.DeadlineUnixMs))
-                        - DateTimeOffset.UtcNow,
-                    ZLinkMeshMetadataCodec.Encode(received.Metadata),
-                    cancellationToken,
-                    operation
-                )
-                .ConfigureAwait(false);
-            try
-            {
-                if (received.CanReply)
-                    received.Reply(reply);
-            }
-            finally
-            {
-                ZLinkMessageParts.DisposeAll(reply);
-            }
-        }
     }
 
     private bool QueueActorFrames(ZLinkSpotActorFrameBatch frames)

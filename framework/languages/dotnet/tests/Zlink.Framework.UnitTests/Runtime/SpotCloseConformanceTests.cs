@@ -39,6 +39,154 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         );
     }
 
+    [Theory]
+    [InlineData("Draining", ZLinkFrameworkErrorKind.ShuttingDown)]
+    [InlineData("Relocating", ZLinkFrameworkErrorKind.Unavailable)]
+    public async Task Accepted_intent_ends_when_Close_releases_authority_during_host_drain(
+        string hostMode,
+        ZLinkFrameworkErrorKind expectedKind
+    )
+    {
+        var observed = await RunCloseBranchAsync(
+            "release-during-host-drain-or-relocation",
+            hostMode
+        );
+        Assert.Equal("Missing", observed.Authority);
+        Assert.Equal(0, observed.OldHandlerCalls);
+        Assert.Equal(0, observed.NewHandlerCalls);
+        Assert.Equal(0, observed.FactoryCalls);
+        Assert.Equal(expectedKind.ToString(), observed.Terminal);
+        Assert.Equal(1, observed.TerminalCount);
+    }
+
+    [Theory]
+    [InlineData("Draining", false, "shutdown")]
+    [InlineData("Relocating", false, "stale_target")]
+    [InlineData("Relocating", true, "stale_target")]
+    public async Task Accepted_Ready_send_ends_in_diagnostics_without_replacement(
+        string hostMode,
+        bool sealedAdmission,
+        string expectedReason
+    )
+    {
+        var flowPath = Path.Combine(
+            Path.GetTempPath(),
+            "zlink-close-dotnet",
+            $"release-ready-send-{hostMode}-{sealedAdmission}-{Guid.NewGuid():N}.flow"
+        );
+        using var listener = new TestHostMessageFlowListener(flowPath);
+        output.WriteLine($"Message flow file: {flowPath}");
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"release-ready-send-{Guid.NewGuid():N}";
+        await host.RequestInstanceAsync(spotId);
+        host.State.HoldOnClosing = true;
+        host.State.HandlerMode = "closeAndReturn";
+        await host.RequestInstanceAsync(spotId);
+        await host.State.OnClosingEntered.Task.WaitAsync(Wait);
+        host.State.HandlerMode = null;
+        var authority = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await host
+                    .Runtime.Registration.Locations.ResolveStore()!
+                    .ReadAuthorityAsync(ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId))
+            )
+            .Snapshot;
+        var closing = await host
+            .Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName)
+            .Catalog.TryGetInstanceActivationAsync(
+                spotId,
+                SpotCloseHost.InstanceType,
+                authority.ObjectGeneration
+            );
+        Assert.NotNull(closing);
+
+        try
+        {
+            await host.SendInstanceAsync(spotId, "ready-send-released");
+            await ObserveOwnerAcceptanceAsync(closing).WaitAsync(Wait);
+            host.Runtime.DrainAdmission.BeginDrain(
+                hostMode == "Draining" ? ZLinkDrainOwner.Shutdown : ZLinkDrainOwner.Relocation
+            );
+            if (sealedAdmission)
+                host.Runtime.DrainAdmission.Seal();
+            host.State.ReleaseOnClosing.TrySetResult();
+            Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
+            await closing.PendingApplicationCompletion.WaitAsync(Wait);
+            Assert.Equal("Missing", await host.AuthorityAsync(spotId));
+            Assert.DoesNotContain("ready-send-released", host.State.InstanceHandlerMarkers);
+            Assert.Contains(
+                File.ReadAllLines(flowPath),
+                line =>
+                    line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
+                    && line.Contains("\"action\":\"drop\"", StringComparison.Ordinal)
+                    && line.Contains($"\"reason\":\"{expectedReason}\"", StringComparison.Ordinal)
+            );
+        }
+        finally
+        {
+            host.State.ReleaseOnClosing.TrySetResult();
+        }
+    }
+
+    [Theory]
+    [InlineData("Draining", false, ZLinkFrameworkErrorKind.ShuttingDown)]
+    [InlineData("Relocating", false, ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData("Relocating", true, ZLinkFrameworkErrorKind.Unavailable)]
+    public async Task Accepted_Ready_request_ends_without_replacement(
+        string hostMode,
+        bool sealedAdmission,
+        ZLinkFrameworkErrorKind expectedKind
+    )
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"release-ready-request-{Guid.NewGuid():N}";
+        await host.RequestInstanceAsync(spotId);
+        host.State.HoldOnClosing = true;
+        host.State.HandlerMode = "closeAndReturn";
+        await host.RequestInstanceAsync(spotId);
+        await host.State.OnClosingEntered.Task.WaitAsync(Wait);
+        host.State.HandlerMode = null;
+        var authority = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await host
+                    .Runtime.Registration.Locations.ResolveStore()!
+                    .ReadAuthorityAsync(ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId))
+            )
+            .Snapshot;
+        var closing = await host
+            .Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName)
+            .Catalog.TryGetInstanceActivationAsync(
+                spotId,
+                SpotCloseHost.InstanceType,
+                authority.ObjectGeneration
+            );
+        Assert.NotNull(closing);
+
+        var pending = host.RequestInstanceAsync(spotId, "ready-request-released");
+        try
+        {
+            await ObserveOwnerAcceptanceAsync(closing).WaitAsync(Wait);
+            host.Runtime.DrainAdmission.BeginDrain(
+                hostMode == "Draining" ? ZLinkDrainOwner.Shutdown : ZLinkDrainOwner.Relocation
+            );
+            if (sealedAdmission)
+                host.Runtime.DrainAdmission.Seal();
+            host.State.ReleaseOnClosing.TrySetResult();
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                pending.WaitAsync(Wait)
+            );
+            Assert.Equal(expectedKind, failure.Kind);
+            Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
+            await closing.PendingApplicationCompletion.WaitAsync(Wait);
+            Assert.Equal("Missing", await host.AuthorityAsync(spotId));
+            Assert.DoesNotContain("ready-request-released", host.State.InstanceHandlerMarkers);
+        }
+        finally
+        {
+            host.State.ReleaseOnClosing.TrySetResult();
+        }
+    }
+
     [Fact]
     public async Task Retained_intents_precede_native_request_held_before_instance_publication()
     {
@@ -462,11 +610,17 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
                 pending!.WaitAsync(Wait)
             );
-            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+            Assert.Equal(
+                hostMode == "Draining"
+                    ? ZLinkFrameworkErrorKind.ShuttingDown
+                    : ZLinkFrameworkErrorKind.Unavailable,
+                failure.Kind
+            );
             Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
             Assert.Equal("Missing", await host.AuthorityAsync(spotId));
             order.Enqueue("authorityReleased");
-            order.Enqueue("missingPlacement");
+            order.Enqueue("pendingMessagesTerminated");
+            terminalKind = failure.Kind.ToString();
             terminalCount = 1;
         }
         else if (hasIntent)
