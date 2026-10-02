@@ -3359,7 +3359,9 @@ class stream_host_service_t::listener_t
                         break;
                     }
                     auto received_frame = std::move (*frame);
-                    liveness->record_inbound ();
+                    liveness->record_inbound (session_liveness_t::clock_t::now (),
+                                              received_frame.header.kind ()
+                                                != stream_message_kind_t::control);
                     batch.account (received_frame.payload.size ());
                     if (received_frame.header.kind () == stream_message_kind_t::control) {
                         _runtime.dispatch_control_frame (stream, received_frame.header);
@@ -3417,17 +3419,11 @@ class stream_host_service_t::listener_t
                           (void) connection_state;
                           (void) liveness;
                       },
-                      [liveness, weak = std::weak_ptr<tcp_connection_t> (owner),
-                       permit = std::move (application_permit)] () mutable {
+                      [permit = std::move (application_permit)] () mutable {
                           if (permit) {
                               permit->release_for_handler_entry ();
                               permit.reset ();
                           }
-                          const auto entered = session_liveness_t::clock_t::now ();
-                          if (const auto owner = weak.lock ())
-                              asio::post (owner->io, [liveness, entered] {
-                                  liveness->record_application_inbound (entered);
-                              });
                       },
                       [this] { return _stop->load (std::memory_order_acquire); });
                     if (!dispatched) {

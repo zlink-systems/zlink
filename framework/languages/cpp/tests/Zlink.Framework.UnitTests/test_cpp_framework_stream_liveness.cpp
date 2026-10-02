@@ -25,13 +25,13 @@ int main ()
             session_liveness_t active (established);
             for (int cycle = 1; cycle <= 5; ++cycle) {
                 const auto received = established + cycle * 4999ms;
-                active.record_inbound (received, core_transport && application_data);
+                active.record_inbound (received, application_data);
                 if (active.evaluate (received + 1ms) == decision::heartbeat_timeout) {
                     std::cerr << "FAIL b: inbound must refresh heartbeat\n";
                     return 1;
                 }
-                if (!core_transport && application_data)
-                    active.record_application_inbound (received + 1ms);
+                if (application_data && active.last_application_inbound != received)
+                    return 1;
             }
             std::cout << "PASS b: " << (core_transport ? "Core " : "raw ")
                       << (application_data ? "data" : "pong") << " inbound refreshes heartbeat\n";
@@ -46,11 +46,9 @@ int main ()
     if (core_data_idle.evaluate (established + 30s) == decision::idle_timeout)
         return 1;
     session_liveness_t raw_data_idle (established);
-    raw_data_idle.record_inbound (established + 30s);
-    if (raw_data_idle.evaluate (established + 30s) != decision::idle_timeout)
-        return 1;
-    raw_data_idle.record_application_inbound (established + 31s);
-    if (raw_data_idle.evaluate (established + 31s) == decision::idle_timeout)
+    raw_data_idle.record_inbound (established + 30s, true);
+    if (raw_data_idle.evaluate (established + 30s) == decision::idle_timeout
+        || raw_data_idle.last_application_inbound != established + 30s)
         return 1;
     session_liveness_t periodic (established);
     for (int tick = 1; tick < 5; ++tick) {
