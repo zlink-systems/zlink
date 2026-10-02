@@ -1464,8 +1464,11 @@ void verify_client_server_independent_raw_path ()
     }
     assert (server.mailbox ().release (*send_claim));
 
-    auto request_task =
-      client.request ({"ClientServerRequest", "application/json", bytes ("request")}, 2s);
+    /* request() reads its borrowed payload after the first suspension, so the
+     * payload must outlive the returned task. */
+    const protocol::application_payload_t request_payload{"ClientServerRequest", "application/json",
+                                                          bytes ("request")};
+    auto request_task = client.request (request_payload, 2s);
     client_server::client_server_pump_result_t request_pump =
       client_server::client_server_pump_result_t::no_data;
     while (request_pump != client_server::client_server_pump_result_t::application
@@ -1495,8 +1498,9 @@ void verify_client_server_independent_raw_path ()
     assert (result.content_type == "application/json");
     assert (result.payload == bytes ("reply"));
 
-    auto rejected_task =
-      client.request ({"RejectedRequest", "application/json", bytes ("request")}, 2s);
+    const protocol::application_payload_t rejected_payload{"RejectedRequest", "application/json",
+                                                           bytes ("request")};
+    auto rejected_task = client.request (rejected_payload, 2s);
     request_pump = client_server::client_server_pump_result_t::no_data;
     while (request_pump != client_server::client_server_pump_result_t::application
            && std::chrono::steady_clock::now () < deadline) {
@@ -1528,8 +1532,9 @@ void verify_client_server_independent_raw_path ()
     // is larger than the core automatic HWM default.
     const auto large_payload =
       std::vector<std::uint8_t> (1024u * 1024u, static_cast<std::uint8_t> ('p'));
-    auto large_task =
-      client.request ({"LargePayloadRequest", "application/json", large_payload}, 3s);
+    const protocol::application_payload_t large_request{"LargePayloadRequest", "application/json",
+                                                        large_payload};
+    auto large_task = client.request (large_request, 3s);
     const auto large_deadline = std::chrono::steady_clock::now () + 5s;
     auto large_claim = server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
                                                     2u * 1024u * 1024u);
