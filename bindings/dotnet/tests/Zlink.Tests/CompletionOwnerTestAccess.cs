@@ -16,6 +16,12 @@ internal static class CompletionOwnerTestAccess
     internal static Type RuntimeType(string name) =>
         typeof(Message).Assembly.GetType(name, throwOnError: true)!;
 
+    // Errno values come from the platform table the binding loads, never from
+    // literals, so a test reads the same value on every OS.
+    internal static int Errno(string field) =>
+        (int)RuntimeType("Systems.Zlink.ErrorCode").GetField(field, Static)!
+            .GetValue(null)!;
+
     internal static object Create(Type type, params object?[] arguments) =>
         Activator.CreateInstance(type, Instance, null, arguments, null)!;
 
