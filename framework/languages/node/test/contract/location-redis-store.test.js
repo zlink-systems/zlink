@@ -1645,3 +1645,200 @@ function cursor(value) {
 function reference(value) {
   return { value };
 }
+
+test('aggregate capacity contention rebuilds final commit beyond 64 conflicts', async () => {
+  const conflictsBeforeSuccess = 65;
+  const inner = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
+  let commitAttempts = 0;
+  const provider = {
+    read: (key, signal) => inner.read(key, signal),
+    scan: (request, signal) => inner.scan(request, signal),
+    async write(request, signal) {
+      const mutation = request.mutations.find(
+        (value) => value.kind === 'put' && value.key.value.startsWith('zlink:v11:aggregate:')
+      );
+      const state =
+        mutation === undefined
+          ? undefined
+          : JSON.parse(Buffer.from(mutation.bytes).toString()).state;
+      if (state === 'committed' && ++commitAttempts <= conflictsBeforeSuccess) {
+        return { kind: 'conflict', storeNow: new Date() };
+      }
+      return inner.write(request, signal);
+    }
+  };
+  const repository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const sourceOwner = await repository.claimOwnerLease('1304-source', 60_000);
+  const targetOwner = await repository.claimOwnerLease('1304-target', 60_000);
+  assert.equal(sourceOwner.kind, 'claimed');
+  assert.equal(targetOwner.kind, 'claimed');
+  const source = {
+    meshName: '1304-play',
+    nodeRid: '1304-source-node',
+    nodeLifecycleGeneration: 1n,
+    owner: sourceOwner.token
+  };
+  const target = {
+    meshName: '1304-play',
+    nodeRid: '1304-target-node',
+    nodeLifecycleGeneration: 1n,
+    owner: targetOwner.token
+  };
+  for (const descriptor of [source, target]) {
+    assert.equal(
+      (
+        await repository.updateMeshNode(
+          aggregateDescriptor(descriptor, 4),
+          frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+        )
+      ).status,
+      frameworkInternal.ZLinkLocationWriteStatus.Stored
+    );
+  }
+  const authority = await createReadyUserSpot(repository, '1304-room', source);
+  const request = aggregateRequest(
+    { value: '13041304-1304-4304-8304-130413041304' },
+    1n,
+    [authority],
+    target,
+    ['1304-room']
+  );
+  const signal = AbortSignal.timeout(5000);
+  const prepared = await repository.prepareAggregate(request, signal);
+  assert.equal(prepared.kind, 'prepared');
+  assert.equal((await repository.commitAggregate(prepared.fence, signal)).kind, 'committed');
+  assert.equal(commitAttempts, conflictsBeforeSuccess + 1);
+  const moved = await repository.readAuthority(request.participants[0].authorityKey);
+  assert.equal(moved.ownerId, targetOwner.token.ownerId);
+});
+
+test('immediately resolved capacity Conflict terminates at the original operation deadline', async () => {
+  const inner = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
+  let armed = false;
+  let attempts = 0;
+  const provider = {
+    read: (...a) => inner.read(...a),
+    scan: (...a) => inner.scan(...a),
+    async write(...a) {
+      if (armed) {
+        attempts++;
+        return { kind: 'conflict', storeNow: new Date() };
+      }
+      return inner.write(...a);
+    }
+  };
+  const repository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const owner = await repository.claimOwnerLease('1304-deadline-negative', 1000);
+  const target = {
+    meshName: '1304-deadline',
+    nodeRid: '1304-negative-node',
+    nodeLifecycleGeneration: 1n,
+    owner: owner.token
+  };
+  await repository.updateMeshNode(
+    aggregateDescriptor(target, 4),
+    frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+  );
+  const key = { kind: 'user_spot', globalId: '1304-negative' };
+  const reserved = await repository.reserve({
+    key,
+    intent: {
+      stableType: 'lobby',
+      requestContentReference: 'request:1304-negative',
+      requestSha256: Buffer.alloc(32, 1),
+      requestEncodedSize: 16n
+    },
+    target,
+    creatingPayload: Buffer.from('creating'),
+    capacity: {
+      actors: 0,
+      spots: 1,
+      spotType: { objectKind: 'user_spot', stableType: 'lobby', count: 1 }
+    }
+  });
+  assert.equal(reserved.kind, 'reserved');
+  const deadlineMs = 50;
+  const deadlineUnixMs = BigInt(Date.now() + deadlineMs);
+  const signal = AbortSignal.timeout(deadlineMs);
+  armed = true;
+  await assert.rejects(
+    repository.commit(
+      {
+        key,
+        reservationId: reserved.reservationId,
+        expectedStoreVersion: reserved.creating.storeVersion.value,
+        target,
+        readyPayload: Buffer.from('ready')
+      },
+      signal,
+      deadlineUnixMs
+    ),
+    { name: 'TimeoutError' }
+  );
+  assert.ok(attempts > 0);
+});
+
+test('immediately resolved reservation Abort Conflict terminates at the original operation deadline', async () => {
+  const inner = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
+  let armed = false;
+  let attempts = 0;
+  const provider = {
+    read: (...a) => inner.read(...a),
+    scan: (...a) => inner.scan(...a),
+    async write(...a) {
+      if (armed) {
+        attempts++;
+        return { kind: 'conflict', storeNow: new Date() };
+      }
+      return inner.write(...a);
+    }
+  };
+  const repository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const owner = await repository.claimOwnerLease('1304-deadline-negative', 1000);
+  const target = {
+    meshName: '1304-deadline',
+    nodeRid: '1304-negative-node',
+    nodeLifecycleGeneration: 1n,
+    owner: owner.token
+  };
+  await repository.updateMeshNode(
+    aggregateDescriptor(target, 4),
+    frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+  );
+  const key = { kind: 'user_spot', globalId: '1304-negative' };
+  const reserved = await repository.reserve({
+    key,
+    intent: {
+      stableType: 'lobby',
+      requestContentReference: 'request:1304-negative',
+      requestSha256: Buffer.alloc(32, 1),
+      requestEncodedSize: 16n
+    },
+    target,
+    creatingPayload: Buffer.from('creating'),
+    capacity: {
+      actors: 0,
+      spots: 1,
+      spotType: { objectKind: 'user_spot', stableType: 'lobby', count: 1 }
+    }
+  });
+  assert.equal(reserved.kind, 'reserved');
+  const deadlineMs = 50;
+  const deadlineUnixMs = BigInt(Date.now() + deadlineMs);
+  const signal = AbortSignal.timeout(deadlineMs);
+  armed = true;
+  await assert.rejects(
+    repository.abort(
+      {
+        key,
+        reservationId: reserved.reservationId,
+        expectedStoreVersion: reserved.creating.storeVersion.value,
+        target
+      },
+      signal,
+      deadlineUnixMs
+    ),
+    { name: 'TimeoutError' }
+  );
+  assert.ok(attempts > 0);
+});

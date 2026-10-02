@@ -114,6 +114,13 @@ internal interface IZLinkLocationRepository
         CancellationToken cancellationToken = default
     );
 
+    ValueTask<ZLinkObjectCommitResult> CommitAsync(
+        ZLinkObjectReservation reservation,
+        ReadOnlyMemory<byte> readyPayload,
+        DateTimeOffset operationDeadline,
+        CancellationToken cancellationToken = default
+    ) => CommitAsync(reservation, readyPayload, cancellationToken);
+
     ValueTask<ZLinkObjectCreationCompleteResult> CompleteCreationAsync(
         ZLinkObjectReservation reservation,
         ZLinkObjectCreationCompletion completion,

@@ -315,7 +315,8 @@ export interface ServiceAsyncInstanceActivationAuthority {
   commit(
     target: ServiceInstanceActivationTarget,
     reservation: ServiceInstanceActivationReservation,
-    spot: ServiceSpotState
+    spot: ServiceSpotState,
+    deadlineUnixMs?: bigint
   ): Promise<{ readonly kind: 'committed' | 'lost'; readonly route: ServiceInstanceRouteFence }>;
   complete(
     target: ServiceInstanceActivationTarget,
@@ -3133,7 +3134,12 @@ export class ServiceStatefulRuntime {
     }
     let committed: Awaited<ReturnType<ServiceAsyncInstanceActivationAuthority['commit']>>;
     try {
-      committed = await authority.commit(target, reserved.reservation, activation.spot);
+      committed = await authority.commit(
+        target,
+        reserved.reservation,
+        activation.spot,
+        record.deadlineUnixMs
+      );
     } catch (error) {
       if (activation.created) this.registry.closeSpot(activation.spot.ref);
       await this.instanceApplicationLifecycle?.discard(target);

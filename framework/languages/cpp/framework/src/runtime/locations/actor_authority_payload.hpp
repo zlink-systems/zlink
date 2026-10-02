@@ -133,6 +133,17 @@ inline bool valid_text8 (std::string_view value) noexcept
 }
 
 inline constexpr std::string_view canonical_envelope_magic = "ZLAU";
+inline constexpr std::uint8_t captured_relocation_phase = 2;
+
+struct relocation_capture_identity_t
+{
+    std::uint64_t high = 0;
+    std::uint64_t low = 0;
+    std::string source_owner_id;
+    std::uint64_t source_owner_lease_generation = 0;
+    std::string coordinator_owner_id;
+    std::uint64_t coordinator_lease_generation = 0;
+};
 inline constexpr std::size_t canonical_envelope_header_bytes =
   canonical_envelope_magic.size () + sizeof (std::uint8_t) + sizeof (std::uint16_t)
   + sizeof (std::uint32_t);
@@ -298,7 +309,8 @@ inline bool read_actor_authority_relocation_state (
   std::optional<std::uint64_t> root_aggregate_generation = std::nullopt,
   bool *has_relocation_state = nullptr,
   std::uint8_t *relocation_phase = nullptr,
-  std::string *relocation_expected_store_version = nullptr)
+  std::string *relocation_expected_store_version = nullptr,
+  relocation_capture_identity_t *capture_identity = nullptr)
 {
     const auto has_relocation = body_reader.u8 ();
     if (has_relocation > 1)
@@ -322,8 +334,9 @@ inline bool read_actor_authority_relocation_state (
         return false;
     if (relocation_reader.u64be () == 0)
         return false;
-    (void) relocation_reader.text8 ();
-    if (relocation_reader.u64be () == 0)
+    const auto source_owner_id = relocation_reader.text8 ();
+    const auto source_owner_lease_generation = relocation_reader.u64be ();
+    if (source_owner_lease_generation == 0)
         return false;
     const auto target_node_rid = relocation_reader.take (relocation_reader.u8 ());
     const auto target_node_generation = relocation_reader.u64be ();
@@ -331,8 +344,10 @@ inline bool read_actor_authority_relocation_state (
     if (!read_optional_text8 (relocation_reader, &target_owner_present))
         return false;
     const auto target_owner_lease_generation = relocation_reader.u64be ();
-    (void) relocation_reader.text8 ();
-    if (relocation_reader.u64be () == 0 || relocation_reader.take (relocation_reader.u8 ()).empty ()
+    const auto coordinator_owner_id = relocation_reader.text8 ();
+    const auto coordinator_lease_generation = relocation_reader.u64be ();
+    if (coordinator_lease_generation == 0
+        || relocation_reader.take (relocation_reader.u8 ()).empty ()
         || relocation_reader.u64be () == 0)
         return false;
     std::string expected_version;
@@ -370,6 +385,10 @@ inline bool read_actor_authority_relocation_state (
             *relocation_phase = phase;
         if (relocation_expected_store_version)
             *relocation_expected_store_version = expected_version;
+        if (capture_identity)
+            *capture_identity = {relocation_high,      relocation_low,
+                                 source_owner_id,      source_owner_lease_generation,
+                                 coordinator_owner_id, coordinator_lease_generation};
     }
     return valid;
 }
@@ -796,8 +815,9 @@ inline std::vector<std::byte> encode_actor_authority_payload (const actor_ref_t 
       .node_generation = spot_generation});
 }
 
-inline std::optional<actor_authority_payload_t>
-decode_direct_actor_authority_payload (std::span<const std::byte> encoded)
+inline std::optional<actor_authority_payload_t> decode_direct_actor_authority_payload (
+  std::span<const std::byte> encoded,
+  actor_authority_detail::relocation_capture_identity_t *capture_identity = nullptr)
 {
     try {
         const auto canonical = decode_canonical_authority_payload (encoded);
@@ -836,7 +856,7 @@ decode_direct_actor_authority_payload (std::span<const std::byte> encoded)
         if (owner_lease_generation == 0 || node_generation == 0
             || !actor_authority_detail::read_actor_authority_relocation_state (
               body_reader, std::nullopt, &has_relocation_state, &relocation_phase,
-              &relocation_expected_store_version)
+              &relocation_expected_store_version, capture_identity)
             || body_reader.u8 () != 0 || body_reader.u32be () != 0 || !body_reader.done ())
             return std::nullopt;
         std::string node_rid;

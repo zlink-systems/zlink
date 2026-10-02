@@ -135,7 +135,14 @@ internal sealed class ZLinkUserSpotOperationTarget(
         try
         {
             committed = await authorityStore
-                .CommitAsync(Reservation(operation, key, snapshot), readyPayload, cancellationToken)
+                .CommitAsync(
+                    Reservation(operation, key, snapshot),
+                    readyPayload,
+                    DateTimeOffset.FromUnixTimeMilliseconds(
+                        checked((long)operation.DeadlineUnixMs)
+                    ),
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
         catch
