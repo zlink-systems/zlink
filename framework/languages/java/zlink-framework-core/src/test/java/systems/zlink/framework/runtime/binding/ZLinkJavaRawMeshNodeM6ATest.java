@@ -1782,8 +1782,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         return node;
     }
 
-    private static MeshPeerEntry awaitAdmitted(ZLinkJavaRawMeshNode node)
-            throws InterruptedException {
+    static MeshPeerEntry awaitAdmitted(ZLinkJavaRawMeshNode node) throws InterruptedException {
         return awaitState(node, MeshPeerState.ADMITTED);
     }
 
