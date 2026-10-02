@@ -320,7 +320,7 @@ final class ZLinkJavaRawMeshNode
                                                 () ->
                                                         new IllegalStateException(
                                                                 "local MeshNode authority"
-                                                                        + " descriptor is not live")));
+                                                                    + " descriptor is not live")));
     }
 
     ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence() {
@@ -6357,16 +6357,9 @@ final class ZLinkJavaRawMeshNode
     static int[] canonicalActorJoinFailurePair(Throwable failure) {
         if (failure instanceof ZLinkFrameworkException framework) {
             return ZLinkRequestFailureMapping.outgoing(
-                    framework.kind(),
-                    isSupersededCanonicalActorJoin(framework)
-                            ? (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_LOCATION_STALE
-                            : ZLinkRequestFailureMapping.causeCode(framework));
+                    framework.kind(), ZLinkRequestFailureMapping.causeCode(framework));
         }
         return relayedFailurePair(failure);
-    }
-
-    private static boolean isSupersededCanonicalActorJoin(ZLinkFrameworkException failure) {
-        return "true".equals(failure.metadata().get("zlink.actorJoin.superseded"));
     }
 
     private void replyCanonicalActorJoinFailure(

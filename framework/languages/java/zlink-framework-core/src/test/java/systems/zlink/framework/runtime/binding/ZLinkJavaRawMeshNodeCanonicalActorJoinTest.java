@@ -242,15 +242,14 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
     }
 
     @Test
-    void supersededActorJoinAloneMapsToActorLocationStale() {
+    void supersededActorJoinMapsToInvalidOperation() {
+        // Error model §2.1 sends InvalidOperation without a cause as invalidState/none.
         assertArrayEquals(
-                new int[] {107, 21},
+                new int[] {111, 0},
                 ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                "attempt was superseded",
-                                null,
-                                java.util.Map.of("zlink.actorJoin.superseded", "true"))));
+                                "attempt was superseded")));
         assertArrayEquals(
                 new int[] {105, 13},
                 ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
