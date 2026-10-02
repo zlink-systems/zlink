@@ -395,7 +395,7 @@ generation isn't created for a nonexistent record.
 ### 3.4 How Different Languages Read and Write the Same Redis Record
 
 MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher
-descriptor, authority record (§4, §3.2, §3.3), creation request, and creation terminal (§7) must be written to
+descriptor, authority record (§4, §3.2, §3.3), capacity counter (§3.3), creation request, and creation terminal (§7) must be written to
 Redis through the same storage scheme regardless of language, so a runtime in one language can read a
 record another language wrote. This storage scheme is defined by the
 [Location Store provider's official Redis implementation](02-location-store-redis.en.md#8-official-redis-provider--counter-issuance),
@@ -413,6 +413,7 @@ descriptor's and fanout publisher descriptor's key, is called a
 | Owner lease | `owner-lease\0{OwnerId}` |
 | ClientServer server descriptor | `client-server\0{ChannelName}\0{hex(RoutingId)}` |
 | Fanout publisher descriptor | `fanout-publisher\0{ChannelName}\0{hex(RoutingId)}` |
+| Capacity counter | `capacity\0{MeshName}\0{hex(RoutingId)}` |
 | Authority | `authority\0{actor \| spot}\0{Id}` |
 | Creation request | `creation-request\0{actor \| spot}\0{Id}\0{hex(ReservationId)}` |
 | Creation terminal | `creation-terminal\0{hex(SourceNodeRid)}\0{SourceHostGeneration}\0{hex(OperationId)}` |
@@ -441,7 +442,7 @@ The provider stores and compares each record's value only as bytes, without inte
 its meaning. A creation terminal's value is the `creation-operation-terminal-v1` bytes as
 they are (§7). A creation request's value is the encoded creation request bytes as they are
 (`pendingCreation` below). The records of [§3.5](#35-progress-records-of-a-spotwide-relocation) take their
-values from that section. Every other record's value is a canonical JSON value that includes at
+values from that section, and the capacity counter takes its value from its table below. Every other record's value is a canonical JSON value that includes at
 least the following fields.
 
 | Field | Meaning |
@@ -570,6 +571,20 @@ completing or aborting a reservation another node created is decided from the au
 table above — reservation information placed in a field only one language reads doesn't
 survive another language's update of that record.
 
+The **capacity counter** is the single record that holds one MeshNode's (`MeshName`, `RoutingId`)
+capacity usage (§3.3). When a creation's reserve, completion, or cancellation, an object deletion, or a
+relocation changes the usage, the Store write that
+carries that change also writes the capacity counter of each host whose usage changes. The condition is
+the version that was read; if the record is missing, the condition is its absence and the usage reads
+as 0. The descriptor's `capacity` (§4) is a copy of this record. The value is a canonical JSON that
+carries the fields below in this order.
+
+| Field | Meaning |
+|---|---|
+| `recordVersion` | As above. The current value is `1`. |
+| `actors`, `spots` | Each is `{active, reserved}`. |
+| `spotTypes` | An array of `{objectKind, stableType, active, reserved}`, sorted by the UTF-8 byte order of `objectKind` then `stableType`, with no element whose `active` and `reserved` are both 0. |
+
 Payloads the Relocation Store holds (the cold-activation envelope, completion records)
 don't use this opaque record. A separately versioned key space and raw-bytes storage
 format is defined by the
@@ -664,14 +679,14 @@ is one Store write ([02 §4](02-location-store-redis.en.md#4-conditional-atomic-
 | Claim | An existing aggregate of the same fence settles it: a terminal one returns its result, with the same `requestFingerprint` a `staging` one continues preparation and a `prepared` one is `AlreadyPrepared` (§8.1), and anything else is `Conflict`. Otherwise it checks the value of every authority with its marker, the authority after commit projection and after cleanup, every participant record and page and the aggregate with its `inventory`, and the encoded size and unique key count of each write below, against the limits of [02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch). A `StoreVersion` not yet issued is counted as the provider token's maximum length with every byte written as a `\u00xx` escape. Within the limits it writes `staging` when the aggregate is missing and the `sourceOwner` lease is the current lease. Beyond the limits it writes no aggregate and ends the preparation as a failure. The relocation's failure handling and public result follow [Relocation flow §9](04-relocation-flow.en.md#9-timeout-failure-and-cancellation) and [Host relocation §13](05-host-relocation-flow.en.md#13-relocate-completion-and-failure). |
 | List | Conditioned on the aggregate's `staging` version, writes the participant records and pages, each when missing, and last writes the aggregate's `inventory`. Identical existing bytes count as done; different bytes are `Conflict`. |
 | Marker installation | Starts after the aggregate has its `inventory` and every list record is confirmed. For each participant, conditioned on the aggregate's `staging` version and the participant's physical version, writes the marker and removes `visibleStoreVersion` when the public `StoreVersion` equals the entry's `expectedStoreVersion`. The payload and owner are unchanged. Identical existing canonical marker bytes count as done; any other marker is `Conflict`. Only the write of the first `newOwner` entry in inventory order also carries the `AuthorityOwnerGeneration` counter update and the range recorded on the aggregate ([02 §8](02-location-store-redis.en.md#8-official-redis-provider--counter-issuance)). A range already recorded is not issued again. |
-| Prepare | After every marker is confirmed, writes `staging → prepared` and the increase of the target host capacity counter's reserved count, conditioned on the aggregate version, the target descriptor's `lifecycleGeneration`, the target owner lease, and the capacity records. The reserved increase occupies the ordinary host capacity counter and is not a relocation-specific reservation record. |
-| Commit | Carries `prepared → committed`, the target capacity's reserved → active transfer and the source active decrease, and a Put that writes the committed public values below to the Spot participant's authority without a marker, conditioned on the aggregate version, the physical version of the Spot participant's authority, and the capacity records. The target's lease, liveness, and lifecycle are not checked again ([§9.1](#91-when-restore-data-becomes-the-official-data)). |
+| Prepare | After every marker is confirmed, writes `staging → prepared` and the increase of the target host capacity counter's reserved count, conditioned on the aggregate version, the target descriptor's `lifecycleGeneration`, the target owner lease (the `Value` condition of [§3.1](#31-distinguishing-whether-the-host-process-restarted)), and the target capacity counter. The reserved increase occupies the ordinary host capacity counter and is not a relocation-specific reservation record. |
+| Commit | Carries `prepared → committed`, the target capacity's reserved → active transfer and the source active decrease, and a Put that writes the committed public values below to the Spot participant's authority without a marker, conditioned on the aggregate version, the physical version of the Spot participant's authority, and the source and target capacity counters. The target's lease, liveness, and lifecycle are not checked again ([§9.1](#91-when-restore-data-becomes-the-official-data)). |
 | Source fence | The source `Preserve` of [§6.1](#61-read-and-cas). Carries `staging/prepared → aborted`, the release of the reserved count if the record was `prepared`, and a Put that writes the pre-move values to the Spot participant's authority without a marker, conditioned on the aggregate version and the physical version of the Spot participant's authority. It uses the same two conditions as Commit and both change both, so only one of the two succeeds. |
 | Abort | Writes `staging/prepared → aborted` and, if the record was `prepared`, the release of the reserved count, conditioned on the aggregate version. |
 
 The keys of the Prepare, Commit, Source fence, and Abort writes are the aggregate, the Spot
-authority, the target owner lease (Prepare only), and as many capacity records as `capacity` has items, regardless
-of the number of participants. The Spot authority written by Commit or Source fence carries no
+authority, the target owner lease (Prepare only), and the capacity counter of each host whose usage changes (source and
+target for Commit, the target otherwise), regardless of the number of participants. The Spot authority written by Commit or Source fence carries no
 `visibleStoreVersion`, so its new physical version becomes its public version.
 
 **Public values.** When the repository reads a participant authority it exposes the following.
