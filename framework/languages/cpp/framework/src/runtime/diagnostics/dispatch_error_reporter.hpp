@@ -5,6 +5,7 @@
 #include <zlink/framework/contracts/errors/error.hpp>
 
 #include <zlink/Contracts/Sockets/results.hpp>
+#include <service_wire_constants.hpp>
 
 #include "runtime/diagnostics/diagnostic_event_sink.hpp"
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
@@ -48,7 +49,6 @@ class dispatch_error_reporter_t
             auto error = diagnostic_event_sink_t::exception_summary (event.exception);
             event.error_type = std::move (error.type);
             event.error_message = std::move (error.message);
-            event.exception = {};
         }
         if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
             event.flow_id.reset ();
@@ -238,6 +238,12 @@ inline dispatch_error_reason_t
 dispatch_reason_from_error (const framework_exception_t *error) noexcept
 {
     if (error != nullptr
+        && detail::failure_code (*error)
+             == static_cast<std::uint32_t> (
+               runtime::protocol::framework_error_code::routeNotConnected)) {
+        return dispatch_error_reason_t::stale_target;
+    }
+    if (error != nullptr
         && detail::failure_origin (*error) == detail::failure_origin_t::payload_decode) {
         return dispatch_error_reason_t::payload_decode_failed;
     }
@@ -250,6 +256,7 @@ dispatch_reason_from_error (const framework_exception_t *error) noexcept
             case detail::boundary_error_t::shutdown:
                 return dispatch_error_reason_t::shutdown;
             case detail::boundary_error_t::stale_generation:
+            case detail::boundary_error_t::disconnected:
                 return dispatch_error_reason_t::stale_target;
             default:
                 break;

@@ -42,6 +42,7 @@ internal sealed class ZLinkSerialWorkItem
     internal ZLinkSerialWorkItem? Next { get; set; }
     internal ZLinkSerialWorkItem? LifecycleOwner { get; set; }
     internal ZLinkSerialWorkItem? ReadyContinuation { get; set; }
+    internal object? AcceptedState { get; set; }
 
     public ulong AcceptedSequence { get; }
     public ReadOnlyMemory<byte> AcceptedPayload

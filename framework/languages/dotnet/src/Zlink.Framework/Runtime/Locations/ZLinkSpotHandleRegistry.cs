@@ -41,7 +41,9 @@ internal sealed class ZLinkSpotHandleRegistry
             row.SpotKind,
             row.AuthorityOwnerGeneration,
             row.OwnerNodeGeneration,
-            checked((ulong)row.LeaseGeneration)
+            checked((ulong)row.LeaseGeneration),
+            row.OwnerId,
+            row.StoreVersion
         );
         var handles = await _lane
             .RunAsync(() => Apply(_spots, new ZLinkSpotLocationKey(row.SpotId)))

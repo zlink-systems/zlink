@@ -7,6 +7,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.RequestOperation;
 import systems.zlink.contracts.messaging.RequestSubmission;
@@ -16,6 +17,8 @@ import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.messaging.SendSubmitOperation;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 import java.lang.reflect.Proxy;
@@ -195,6 +198,39 @@ final class ZLinkJavaSubmissionTest {
         }
     }
 
+    @ParameterizedTest
+    @EnumSource(Adapter.class)
+    void typedInitialRequestFailuresAreProjectedWithTheirOriginalCause(Adapter adapter) {
+        for (var result : List.of(SubmitResult.INTERNAL_ERROR, SubmitResult.TERMINATED)) {
+            try (var binding = new BindingProbe();
+                    Message part = Message.from("request")) {
+                var cause = new ZlinkSubmitException(result);
+                binding.requestFailure = cause;
+                var reply = binding.request(adapter, List.of(part)).toCompletableFuture();
+                var failure = assertThrows(CompletionException.class, reply::join).getCause();
+                var framework = assertInstanceOf(ZLinkFrameworkException.class, failure);
+                assertEquals(
+                        result == SubmitResult.TERMINATED
+                                ? ZLinkFrameworkErrorKind.SHUTTING_DOWN
+                                : ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                        framework.kind());
+                assertSame(cause, framework.getCause());
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(Adapter.class)
+    void unknownInitialRequestFailuresKeepTheirOriginalCause(Adapter adapter) {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("request")) {
+            var cause = new IllegalStateException("unknown initial request failure");
+            binding.requestFailure = cause;
+            var reply = binding.request(adapter, List.of(part)).toCompletableFuture();
+            assertSame(cause, assertThrows(CompletionException.class, reply::join).getCause());
+        }
+    }
+
     /** Controls completion delivery at the public binding boundary, without timers. */
     private static final class BindingProbe implements AutoCloseable {
         private final CompletableFuture<Void> admission = new CompletableFuture<>();
@@ -202,6 +238,7 @@ final class ZLinkJavaSubmissionTest {
         private final List<Message> parts = new ArrayList<>();
         private List<byte[]> frames;
         private SubmitResult result = SubmitResult.OK;
+        private RuntimeException requestFailure;
         private int resultReads;
         private int admissionReads;
         private int submissions;
@@ -308,6 +345,9 @@ final class ZLinkJavaSubmissionTest {
                         @Override
                         public RequestSubmission submit() {
                             consume();
+                            if (requestFailure != null) {
+                                throw requestFailure;
+                            }
                             var reply = new CompletableFuture<List<Message>>();
                             replies.add(reply);
                             return new RequestSubmission() {

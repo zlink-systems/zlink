@@ -59,7 +59,9 @@ internal static partial class ZLinkServiceWireCodec
         ulong OwnerLeaseGeneration,
         byte MessageFollowHopCount,
         ulong DeadlineUnixMs,
-        bool HasMetadata
+        bool HasMetadata,
+        bool InstanceIntent = false,
+        ulong SourceNodeGeneration = 0
     );
 
     internal readonly record struct UserSpotOperationRecord(
@@ -1430,6 +1432,148 @@ internal static partial class ZLinkServiceWireCodec
             (flags & ServiceWireConstants.Flag.Metadata) != 0
         );
         error = DecodeError.None;
+        return true;
+    }
+
+    internal static ServiceWireCodec.InstanceRouteV1Case0? CreateInstanceReadyRoute(
+        ZLinkSpotHandleSnapshot snapshot,
+        bool instanceIntent
+    ) =>
+        snapshot.SpotKind != ZLinkSpotKind.Instance
+            ? null
+            : new(
+                ServiceWireCodec.InstanceRouteKind.Ready,
+                new(snapshot.NodeRid.ToBytes().ToArray()),
+                new(snapshot.NodeGeneration),
+                new(snapshot.SpotId),
+                new(
+                    new(snapshot.Generation),
+                    new(snapshot.OwnerId),
+                    new(snapshot.AuthorityOwnerGeneration),
+                    new(snapshot.OwnerLeaseGeneration),
+                    new(snapshot.StoreVersion)
+                ),
+                instanceIntent ? ServiceWireCodec.Bool8.True : ServiceWireCodec.Bool8.False
+            );
+
+    internal static byte[] EncodeInstanceSpotReady(
+        ServiceWireCodec.InstanceRouteV1Case0 route,
+        ulong sourceNodeGeneration,
+        RoutingId sourceNodeRid,
+        string sourceSpotId,
+        MeshOperationId operationId,
+        bool request,
+        bool hasMetadata
+    )
+    {
+        var body = new WireWriter();
+        body.Bytes(
+            ServiceWireCodec.EncodeInstanceRouteV1(route, ServiceWireCodec.DecodeContext.Empty)
+        );
+        body.U64(sourceNodeGeneration);
+        body.Rid(sourceNodeRid);
+        WriteOptionalText8(body, sourceSpotId);
+        body.U8(
+            request
+                ? (byte)ServiceWireCodec.InstanceOperationKind.Request
+                : (byte)ServiceWireCodec.InstanceOperationKind.Send
+        );
+        body.U64(request ? operationId.High : 0);
+        body.U64(request ? operationId.Low : 0);
+        if (request)
+            body.U64(operationId.Low);
+        var result = Prefix(
+            ServiceWireConstants.Command.InstanceSpot,
+            hasMetadata ? ServiceWireConstants.Flag.Metadata : ServiceWireConstants.Flag.None,
+            body.Count
+        );
+        body.CopyTo(result.AsSpan(5));
+        return result;
+    }
+
+    internal static bool TryDecodeInstanceSpotReady(
+        ReadOnlySpan<byte> bytes,
+        out StatefulRecord record,
+        out RoutingId sourceNodeRid
+    )
+    {
+        record = default;
+        sourceNodeRid = default;
+        if (
+            !TryDecodePrefix(bytes, out var command, out var flags, out _)
+            || command != ServiceWireConstants.Command.InstanceSpot
+            || (flags & ~ServiceWireConstants.Flag.Metadata) != 0
+        )
+            return false;
+        var reader = new WireReader(bytes[5..]);
+        if (
+            !reader.TryU8(out var kind)
+            || kind != (byte)ServiceWireCodec.InstanceRouteKind.Ready
+            || !reader.TryU16(out var length)
+            || !reader.TrySlice(length, out var routeBody)
+        )
+            return false;
+        ServiceWireCodec.InstanceRouteV1Case0 route;
+        try
+        {
+            route = (ServiceWireCodec.InstanceRouteV1Case0)
+                ServiceWireCodec.DecodeInstanceRouteV1(
+                    bytes.Slice(5, length + 3).ToArray(),
+                    ServiceWireCodec.DecodeContext.Empty
+                );
+        }
+        catch (Exception error) when (error is InvalidDataException or EndOfStreamException)
+        {
+            return false;
+        }
+        if (
+            !reader.TryU64(out var sourceGeneration)
+            || sourceGeneration == 0
+            || !reader.TryRid(out sourceNodeRid)
+            || !reader.TryOptionalText8(out var sourceSpot)
+            || !reader.TryU8(out var operationKind)
+            || (
+                operationKind != (byte)ServiceWireCodec.InstanceOperationKind.Send
+                && operationKind != (byte)ServiceWireCodec.InstanceOperationKind.Request
+            )
+            || !reader.TryU64(out var operationHigh)
+            || !reader.TryU64(out var operationLow)
+        )
+            return false;
+        var request = operationKind == (byte)ServiceWireCodec.InstanceOperationKind.Request;
+        if (
+            request
+                ? operationHigh == 0 || operationLow == 0
+                : operationHigh != 0 || operationLow != 0
+        )
+            return false;
+        var operation = new MeshOperationId(operationHigh, operationLow);
+        ulong correlation = 0;
+        if (
+            request && (!reader.TryU64(out correlation) || correlation == 0)
+            || reader.Remaining != 0
+        )
+            return false;
+        record = new StatefulRecord(
+            request
+                ? ServiceWireConstants.Command.SpotRequest
+                : ServiceWireConstants.Command.SpotSend,
+            correlation,
+            operation,
+            sourceSpot ?? string.Empty,
+            route.TargetSpotId.Value,
+            route.Authority.ObjectGeneration.Value,
+            default,
+            RoutingId.From(route.TargetNodeRid.Value),
+            route.TargetNodeGeneration.Value,
+            route.Authority.AuthorityOwnerGeneration.Value,
+            route.Authority.LeaseGeneration.Value,
+            0,
+            0,
+            (flags & ServiceWireConstants.Flag.Metadata) != 0,
+            route.InstanceIntent == ServiceWireCodec.Bool8.True,
+            sourceGeneration
+        );
         return true;
     }
 

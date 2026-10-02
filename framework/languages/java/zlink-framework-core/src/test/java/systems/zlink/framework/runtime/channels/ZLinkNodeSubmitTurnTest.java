@@ -2,6 +2,8 @@ package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import static systems.zlink.framework.runtime.channels.ZLinkChannelSubmissionAssertions.assertSubmitFailure;
+
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -93,9 +95,9 @@ final class ZLinkNodeSubmitTurnTest {
 
             ZLinkRequestCall missingRequest = f.runtime.requestToNode("missing", TARGET, "request");
             ZLinkSendCall missingSend = f.runtime.sendToNode("missing", TARGET, "send");
-            assertThrows(
+            assertSubmitFailure(
                     ZLinkConfigurationException.class, () -> missingRequest.submit(String.class));
-            assertThrows(ZLinkConfigurationException.class, missingSend::submit);
+            assertSubmitFailure(ZLinkConfigurationException.class, missingSend::submit);
         }
     }
 
@@ -112,7 +114,7 @@ final class ZLinkNodeSubmitTurnTest {
                 Message sendPayload = (Message) field(send, "payload");
                 Message requestPayload = (Message) field(request, "payload");
                 if (configuredRouter) {
-                    assertThrows(UnsupportedOperationException.class, send::submit);
+                    assertSubmitFailure(UnsupportedOperationException.class, send::submit);
                     assertInstanceOf(
                             UnsupportedOperationException.class,
                             assertThrows(
@@ -123,8 +125,8 @@ final class ZLinkNodeSubmitTurnTest {
                                                             .join())
                                     .getCause());
                 } else {
-                    assertThrows(ZLinkConfigurationException.class, send::submit);
-                    assertThrows(
+                    assertSubmitFailure(ZLinkConfigurationException.class, send::submit);
+                    assertSubmitFailure(
                             ZLinkConfigurationException.class, () -> request.submit(String.class));
                 }
                 assertTrue(
@@ -140,6 +142,23 @@ final class ZLinkNodeSubmitTurnTest {
                         CompletionException.class,
                         () -> request.submit(String.class).toCompletableFuture().join());
             }
+        }
+    }
+
+    @Test
+    void missingChannelReleasesSendAndRequestPayloadBeforeTerminalFailure() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            var send = fixture.runtime.sendToChannel("missing", "send");
+            var request = fixture.runtime.requestToChannel("missing", "request");
+            Message sendPayload = (Message) field(send, "payload");
+            Message requestPayload = (Message) field(request, "payload");
+            // Missing-route validation runs in the Registry submit turn; its stage retains the
+            // original configuration exception and releases the encoded payload.
+            assertSubmitFailure(ZLinkConfigurationException.class, send::submit);
+            assertSubmitFailure(
+                    ZLinkConfigurationException.class, () -> request.submit(String.class));
+            assertTrue(sendPayload.empty());
+            assertTrue(requestPayload.empty());
         }
     }
 
@@ -206,6 +225,8 @@ final class ZLinkNodeSubmitTurnTest {
                     Message requestPart = Message.from("spot-request");
                     Message sendPart = Message.from("spot-send")) {
                 NodeProbe node = new NodeProbe(f.lane);
+                node.onNodeBinding = () -> assertSame(f.lane, ZLinkStateLane.current());
+                node.onSpotBinding = () -> assertSame(f.lane, ZLinkStateLane.current());
                 f.runtime.registerSpotRouterNode(CHANNEL, node.node);
 
                 CompletionStage<String> nodeReply =
@@ -247,6 +268,9 @@ final class ZLinkNodeSubmitTurnTest {
                                         f.runtime.sendToSpotViaRouterChannel(
                                                 CHANNEL, TARGET, "target-spot", List.of(sendPart)));
                 spotAdmission.toCompletableFuture().join();
+                assertEquals(2, node.nodeCalls());
+                assertEquals(1, node.spotRequests.get());
+                assertEquals(1, node.spotSends.get());
             }
         }
     }
@@ -487,10 +511,10 @@ final class ZLinkNodeSubmitTurnTest {
                 alreadyOnLane
                         ? fixture.lane.runAsync(submission).toCompletableFuture().join()
                         : submission.get();
-        assertEquals(
-                before + 1,
-                executor.turns(),
-                operation + (alreadyOnLane ? " inline" : " off-lane"));
+        // 01-execution/06-state-ownership-and-lanes.ko.md:149: selection and binding submit share
+        // the owner gate.
+        // An idle lane claims inline; only the outer runAsync schedules an executor turn.
+        assertEquals(before + (alreadyOnLane ? 1 : 0), executor.turns(), operation);
         return result;
     }
 

@@ -318,7 +318,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     )
     {
         using var operation = EnterOperation();
@@ -337,7 +339,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ownerLeaseGeneration,
                 parts,
                 cancellationToken,
-                metadata
+                metadata,
+                readyRoute
             );
             handedOff = true;
             return await accepted.ConfigureAwait(false);
@@ -395,7 +398,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     )
     {
         try
@@ -419,7 +424,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                         parts,
                         timeout,
                         cancellationToken,
-                        metadata
+                        metadata,
+                        readyRoute
                     )
                     .ConfigureAwait(false);
             }

@@ -8,13 +8,25 @@ import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
 import java.util.Objects;
 
 public final class ZLinkRuntimeEventDispatcher {
+    private static final String RUNTIME_ERROR_EVENT = "zlink.runtime_error";
     private static final Logger LOGGER = LoggerFactory.getLogger("systems.zlink.framework.runtime");
+
+    public void publishRuntimeTaskFailure(String taskName, Throwable failure) {
+        Throwable actual = Objects.requireNonNull(failure, "failure");
+        LOGGER.atError()
+                .setCause(actual)
+                .addKeyValue("event", RUNTIME_ERROR_EVENT)
+                .addKeyValue("kind", "runtime_task_exception")
+                .addKeyValue("task", taskName)
+                .addKeyValue("exception_type", actual.getClass().getName())
+                .log("ZLink runtime task failed");
+    }
 
     public void publishObserverFailure(String sourceName, String callbackName, Throwable failure) {
         Throwable actual = Objects.requireNonNull(failure, "failure");
         LOGGER.atError()
                 .setCause(actual)
-                .addKeyValue("event", "zlink.runtime_error")
+                .addKeyValue("event", RUNTIME_ERROR_EVENT)
                 .addKeyValue("kind", "message_flow_observer_failed")
                 .addKeyValue("source", sourceName)
                 .addKeyValue("callback", callbackName)

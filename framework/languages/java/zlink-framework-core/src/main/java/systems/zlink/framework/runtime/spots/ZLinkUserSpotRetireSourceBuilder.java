@@ -197,7 +197,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
     CompletionStage<PreparedSource> prepare(
             String spotId,
             ZLinkRelocationTargetPolicy targetPolicy,
-            ZLinkStoreCancellation cancellation) {
+            ZLinkStoreCancellation cancellation,
+            CompletionStage<?> cancellationSignal) {
         Objects.requireNonNull(targetPolicy, "targetPolicy");
         Objects.requireNonNull(cancellation, "cancellation");
         return reconcileUnresolvedPreparations()
@@ -215,7 +216,11 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             return admit(spotId, spot, targetPolicy, cancellation)
                                     .thenCompose(
                                             admission ->
-                                                    sealAndCapture(spot, admission, cancellation));
+                                                    sealAndCapture(
+                                                            spot,
+                                                            admission,
+                                                            cancellation,
+                                                            cancellationSignal));
                         });
     }
 
@@ -313,7 +318,10 @@ final class ZLinkUserSpotRetireSourceBuilder {
     }
 
     private CompletionStage<PreparedSource> sealAndCapture(
-            ZLinkSpot<?> spot, Admission admission, ZLinkStoreCancellation cancellation) {
+            ZLinkSpot<?> spot,
+            Admission admission,
+            ZLinkStoreCancellation cancellation,
+            CompletionStage<?> cancellationSignal) {
         ZLinkUserSpotRelocationBarrier barrier =
                 spots.relocationBarrier(admission.inventory().spot().id(), actors);
         return barrier.sealForRelocation(
@@ -322,7 +330,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             .equals(admission.inventory().actorIds())
                                     && !cancellation.isCancellationRequested();
                         },
-                        cancellation::isCancellationRequested)
+                        cancellation::isCancellationRequested,
+                        cancellationSignal)
                 .thenCompose(
                         sealedResult -> {
                             if (sealedResult.isEmpty()) {

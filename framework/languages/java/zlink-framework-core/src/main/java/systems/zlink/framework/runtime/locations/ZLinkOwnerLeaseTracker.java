@@ -40,7 +40,8 @@ final class ZLinkOwnerLeaseTracker {
                 && Duration.ofNanos(now - current.fetchedAtNanos).compareTo(pollingInterval) < 0) {
             Duration remaining = current.remaining(now);
             return CompletableFuture.completedFuture(
-                    current.matches(expectedGeneration) && remaining.compareTo(Duration.ZERO) > 0
+                    current.matches(ownerId, expectedGeneration)
+                                    && remaining.compareTo(Duration.ZERO) > 0
                             ? remaining
                             : null);
         }
@@ -57,7 +58,7 @@ final class ZLinkOwnerLeaseTracker {
                                                 fetchedAt);
                                 observed.put(ownerId, refreshed);
                                 Duration remaining = refreshed.remaining(fetchedAt);
-                                return refreshed.matches(expectedGeneration)
+                                return refreshed.matches(ownerId, expectedGeneration)
                                                 && remaining.compareTo(Duration.ZERO) > 0
                                         ? remaining
                                         : null;
@@ -76,8 +77,9 @@ final class ZLinkOwnerLeaseTracker {
 
     private record ObservedLease(
             ZLinkLocationOwnerToken token, Duration storeRemaining, long fetchedAtNanos) {
-        private boolean matches(long expectedGeneration) {
-            return expectedGeneration == 0L || token.leaseGeneration() == expectedGeneration;
+        private boolean matches(String ownerId, long expectedGeneration) {
+            return token.ownerId().equals(ownerId)
+                    && (expectedGeneration == 0L || token.leaseGeneration() == expectedGeneration);
         }
 
         private Duration remaining(long nowNanos) {

@@ -117,6 +117,7 @@ import {
   ServiceWireProtocolError,
   type ServiceApplicationPayload
 } from '../../foundation/service-wire-m6a-codec';
+import { submitToRequestResult } from '../../messaging/submission-result';
 import { internalFrameworkWireReply } from '../../framework-errors-internal';
 import type {
   ZLinkBackendActorRef,
@@ -1155,13 +1156,15 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     route: ServiceInstanceRouteFence,
     parts: MessageLike | readonly MessageLike[],
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    instanceIntent = false
   ): Promise<SubmitResult> {
     const result = await this.requireStateful().sendToInstanceSpot(
       route,
       encodeMultipart(parts),
       sourceSpotId,
-      metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata)
+      metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
+      instanceIntent
     );
     return result as SubmitResult;
   }
@@ -1171,7 +1174,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     parts: MessageLike | readonly MessageLike[],
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    instanceIntent = false
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.InstanceSpotRequest,
@@ -1180,7 +1184,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         encodeMultipart(parts),
         timeoutMs,
         sourceSpotId,
-        metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata)
+        metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
+        instanceIntent
       )
     );
   }
@@ -2375,6 +2380,9 @@ function decodeStatefulRecord(
           : decodeMultipart(application.payload),
     ...(stateful.isPending === undefined ? {} : { isPending: stateful.isPending }),
     ...(stateful.deadlineUnixMs === undefined ? {} : { deadlineUnixMs: stateful.deadlineUnixMs }),
+    ...(stateful.activationRecord === undefined
+      ? {}
+      : { activationRecord: stateful.activationRecord }),
     ...(stateful.messageFollowOrigin === undefined
       ? {}
       : { messageFollowOrigin: stateful.messageFollowOrigin }),
@@ -2500,7 +2508,7 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
       terminalResult:
         failure.operation === 'request'
           ? failure.result
-          : submitFailureTerminal(failure.result, failure.phase),
+          : submitToRequestResult(failure.result, failure.phase),
       failureCode: 0
     };
   }
@@ -2525,31 +2533,6 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
     terminalResult: RequestResult.InternalError,
     failureCode: ServiceWireFrameworkErrorCode.requestFailed
   };
-}
-
-function submitFailureTerminal(result: number, phase: 'submit' | 'completion'): number {
-  switch (result) {
-    case SubmitResult.Backpressured:
-      return phase === 'submit' ? RequestResult.NotConnected : RequestResult.Backpressured;
-    case SubmitResult.NotConnected:
-      return RequestResult.NotConnected;
-    case SubmitResult.NotFound:
-      return RequestResult.NotFound;
-    case SubmitResult.NotAdmitted:
-      return RequestResult.Rejected;
-    case SubmitResult.InvalidHandle:
-    case SubmitResult.InvalidArgument:
-    case SubmitResult.ThreadViolation:
-      return RequestResult.InvalidArgument;
-    case SubmitResult.InvalidState:
-      return RequestResult.InvalidState;
-    case SubmitResult.NotSupported:
-      return RequestResult.NotSupported;
-    case SubmitResult.Terminated:
-      return RequestResult.Terminated;
-    default:
-      return RequestResult.InternalError;
-  }
 }
 
 function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {

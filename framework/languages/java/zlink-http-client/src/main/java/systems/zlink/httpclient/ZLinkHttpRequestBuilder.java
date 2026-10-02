@@ -18,12 +18,15 @@ import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Fluent builder for a single request. Mirrors the C++ {@code request_builder_t}. Submission
  * returns a {@link CompletionStage}; no thread is parked while the request is in flight.
  */
 public final class ZLinkHttpRequestBuilder {
+    private static final Logger LOGGER = Logger.getLogger(ZLinkHttpRequestBuilder.class.getName());
 
     private static final ObjectMapper MAPPER = JsonMapper.builder().findAndAddModules().build();
 
@@ -261,8 +264,8 @@ public final class ZLinkHttpRequestBuilder {
             }
             try {
                 client.close();
-            } catch (RuntimeException ignored) {
-                // Cleanup must not replace the request result.
+            } catch (RuntimeException failure) {
+                LOGGER.log(Level.WARNING, "HTTP request client cleanup failed", failure);
             } finally {
                 client = null;
             }

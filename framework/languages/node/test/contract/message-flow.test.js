@@ -797,7 +797,8 @@ test('logical multicast target submission failure reports stale target without c
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {},
-    dispatchErrors: reporter
+    dispatchErrors: reporter,
+    errorSink: { reportRuntimeTaskException() { assert.fail('unexpected runtime task error'); } }
   });
   runtime.publishers.set('play', {
     publishAsync(channelName, topic) {

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <cstdint>
 #include <exception>
 #include <string>
 #include <system_error>
@@ -127,12 +128,19 @@ class framework_exception_t : public std::exception
     friend framework_exception_t detail_with_error_origin (framework_exception_t error,
                                                            detail::error_origin_t origin) noexcept;
     friend detail::error_origin_t detail_error_origin (const framework_exception_t &error) noexcept;
+    friend framework_exception_t detail_with_failure_code (framework_exception_t error,
+                                                           std::uint32_t code) noexcept;
+    friend std::uint32_t detail_failure_code (const framework_exception_t &error) noexcept;
+    friend framework_exception_t
+    detail_with_failure_origin (framework_exception_t error,
+                                detail::failure_origin_t origin) noexcept;
 
     framework_error_kind_t _kind;
     std::string _message;
     detail::boundary_error_t _boundary = detail::boundary_error_t::none;
     detail::failure_origin_t _origin = detail::failure_origin_t::none;
     detail::error_origin_t _error_origin = detail::error_origin_t::unspecified;
+    std::uint32_t _failure_code = 0;
 };
 
 inline framework_exception_t detail_make_boundary_exception (detail::boundary_error_t state,
@@ -181,8 +189,44 @@ inline detail::error_origin_t detail_error_origin (const framework_exception_t &
     return error._error_origin;
 }
 
+inline framework_exception_t detail_with_failure_code (framework_exception_t error,
+                                                       std::uint32_t code) noexcept
+{
+    error._failure_code = code;
+    return error;
+}
+
+inline std::uint32_t detail_failure_code (const framework_exception_t &error) noexcept
+{
+    return error._failure_code;
+}
+
+inline framework_exception_t detail_with_failure_origin (framework_exception_t error,
+                                                         detail::failure_origin_t origin) noexcept
+{
+    error._origin = origin;
+    return error;
+}
+
 namespace detail
 {
+
+inline framework_exception_t with_failure_code (framework_exception_t error,
+                                                std::uint32_t code) noexcept
+{
+    return detail_with_failure_code (std::move (error), code);
+}
+
+inline std::uint32_t failure_code (const framework_exception_t &error) noexcept
+{
+    return detail_failure_code (error);
+}
+
+inline framework_exception_t with_failure_origin (framework_exception_t error,
+                                                  failure_origin_t origin) noexcept
+{
+    return detail_with_failure_origin (std::move (error), origin);
+}
 
 inline framework_exception_t make_boundary_exception (boundary_error_t state, std::string message)
 {

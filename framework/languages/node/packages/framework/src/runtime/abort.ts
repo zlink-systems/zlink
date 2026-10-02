@@ -38,6 +38,10 @@ export function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
+export function macrotaskBoundary(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 export function awaitWithAbort<T>(
   operation: Promise<T>,
   signal: AbortSignal | undefined,

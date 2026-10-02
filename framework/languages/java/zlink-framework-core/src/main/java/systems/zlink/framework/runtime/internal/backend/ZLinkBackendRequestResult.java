@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.internal.backend;
 
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 public enum ZLinkBackendRequestResult {
     OK(RequestResult.OK),
@@ -51,15 +50,14 @@ public enum ZLinkBackendRequestResult {
     }
 
     /**
-     * Ownership-aware remote-reply translator. A fine framework failure code (mirroring C++
-     * reply_header_exception's failure-code switch) refines the coarse terminal:
-     * worker/stale/moving/data-loss causes carried on a generic Conflict/Busy terminal are
-     * classified precisely instead of collapsing to the coarse kind. failureCode 0 (absent) falls
-     * back to the coarse terminal. Spec 32-framework-error-model:81-118, 99-103 (resource-owner
-     * rule).
+     * Ownership-aware remote-reply translator. The shared mapping table uses a fine framework
+     * failure code to refine the coarse terminal: worker/stale/moving/data-loss causes carried on a
+     * generic Conflict/Busy terminal are classified precisely instead of collapsing to the coarse
+     * kind. failureCode 0 (absent) falls back to the coarse terminal. Spec
+     * 32-framework-error-model:81-118, 99-103 (resource-owner rule).
      */
     public ZLinkFrameworkErrorKind toFrameworkErrorKind(int failureCode) {
-        ZLinkFrameworkErrorKind fine = failureCodeErrorKind(failureCode);
+        ZLinkFrameworkErrorKind fine = ZLinkRequestFailureMapping.incoming(failureCode);
         return fine != null ? fine : toFrameworkErrorKind();
     }
 
@@ -75,48 +73,5 @@ public enum ZLinkBackendRequestResult {
             }
         }
         return PROTOCOL_ERROR;
-    }
-
-    private static ZLinkFrameworkErrorKind failureCodeErrorKind(int failureCode) {
-        return switch (failureCode) {
-            //  actorAlreadyExists(3)
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_ALREADY_EXISTS ->
-                    ZLinkFrameworkErrorKind.ALREADY_EXISTS;
-            //  actorTypeMismatch(4), spotTypeMismatch(7)
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_TYPE_MISMATCH,
-                    (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_TYPE_MISMATCH ->
-                    ZLinkFrameworkErrorKind.TYPE_MISMATCH;
-            //  actorSessionNotBound(8)
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_SESSION_NOT_BOUND ->
-                    ZLinkFrameworkErrorKind.INVALID_OPERATION;
-            //  routeHandlerNotFound(9), requestTargetNotFound(14)
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_HANDLER_NOT_FOUND,
-                    (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_TARGET_NOT_FOUND ->
-                    ZLinkFrameworkErrorKind.NOT_FOUND;
-            //  payloadDecodeFailed(12), requestProtocolError(16)
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_PAYLOAD_DECODE_FAILED,
-                    (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR ->
-                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
-            //  routeNotConnected(13), actorLocationStale(21), spotMoving(34),
-            //  workerQueueFull(18: remote queue full is Unavailable, spec 32:99)
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED,
-                    (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_QUEUE_FULL,
-                    (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_LOCATION_STALE,
-                    (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_MOVING ->
-                    ZLinkFrameworkErrorKind.UNAVAILABLE;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_REJECTED ->
-                    ZLinkFrameworkErrorKind.REJECTED; // requestRejected
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_TIMED_OUT ->
-                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED; // workerTimedOut
-            //  requestFailed(17), workerFailed(20)
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED,
-                    (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_FAILED ->
-                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_GENERATION_STALE ->
-                    ZLinkFrameworkErrorKind.INVALID_OPERATION; // spotGenerationStale
-            case (int) ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST ->
-                    ZLinkFrameworkErrorKind.DATA_LOST; // relocationDataLost
-            default -> null;
-        };
     }
 }

@@ -5,7 +5,9 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
@@ -22,6 +24,33 @@ import java.util.logging.Logger;
 
 /** Internal Spec 26 message-flow tracer. */
 public final class ZLinkMessageFlowTracer {
+    public void reportFailure(
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind messageKind,
+            ZLinkDispatchErrorReason reason,
+            ZLinkDispatchErrorAction action,
+            String actorId,
+            Throwable failure) {
+        TracePoint point = beginDispatchError();
+        if (point == null) return;
+        point.trace(
+                ZLinkDispatchErrorReporter.failureEvent(
+                        surface,
+                        messageKind,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        actorId,
+                        null,
+                        null,
+                        reason,
+                        action,
+                        ZLinkDispatchErrorReporter.errorDetails(failure)));
+    }
+
     private static final int FNV_OFFSET_BASIS = 0x811c9dc5;
     private static final int FNV_PRIME = 0x01000193;
     private static final double UNSIGNED_HASH_RANGE = (double) (1L << Integer.SIZE);

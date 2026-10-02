@@ -47,7 +47,7 @@ import {
   type ZLinkLocationRuntimeQuery
 } from '../../contracts/Locations';
 import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
-import { createDeadlineExceededError, isDeadlineExceededError } from '../abort';
+import { createDeadlineExceededError, isAbortError, isDeadlineExceededError } from '../abort';
 import { ZLinkActivationAdmission } from '../activation-admission';
 import {
   type DefaultZLinkActorManager,
@@ -246,6 +246,7 @@ export class ZLinkFrameworkRuntimeHost
   private runtimeSequence = 0n;
   private readonly runtimeObservationSource = Symbol('zlink.framework-runtime');
   private runtimeDeadline?: Date;
+  private shutdownDeadline?: AbortController;
   private runtimeRelocationResult?: ZLinkFrameworkRelocationResult;
   private runtimeTerminationResult?: ZLinkFrameworkTerminationResult;
   private relocationOperation?: Promise<ZLinkFrameworkRelocationResult>;
@@ -1128,52 +1129,78 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   private async runShutdown(deadlineMs: number): Promise<ZLinkFrameworkTerminationResult> {
-    const deadlineAtMs = performance.now() + deadlineMs;
-    try {
-      this.admission.close();
-      this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
-      if (
-        this.relocationOperation !== undefined &&
-        this.relocationStopStarting?.signal.aborted === true
-      ) {
-        await this.relocationOperation;
-      }
-      // Seal application admission before the public status reports that the
-      // host no longer accepts work. This prevents status polling from racing
-      // with the coordinator's synchronous seal step.
-      const unscopedStreamDrain = this.streamRuntime?.notifyUnscopedServerDrain();
-      const shutdown = this.routeMeshCoordinator.shutdownHost(
-        this.runtimeDeadline!,
-        undefined,
-        Math.max(0, deadlineAtMs - performance.now())
-      );
-      const drain = await shutdown;
-      await unscopedStreamDrain;
-      await this.stop();
-      if (drain.kind === 'forceStopped') {
+    return await this.runWithShutdownDeadline(deadlineMs, async () => {
+      const deadlineAtMs = performance.now() + deadlineMs;
+      try {
+        this.admission.close();
+        if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
+          this.executionState?.abortController.abort();
+        }
+        this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
+        if (
+          this.relocationOperation !== undefined &&
+          this.relocationStopStarting?.signal.aborted === true
+        ) {
+          await this.relocationOperation;
+        }
+        // Seal application admission before the public status reports that the
+        // host no longer accepts work. This prevents status polling from racing
+        // with the coordinator's synchronous seal step.
+        const unscopedStreamDrain = this.streamRuntime?.notifyUnscopedServerDrain();
+        const shutdown = this.routeMeshCoordinator.shutdownHost(
+          this.runtimeDeadline!,
+          this.shutdownDeadline!.signal
+        );
+        const drain = await shutdown;
+        await unscopedStreamDrain;
+        await this.stop();
+        if (drain.kind === 'forceStopped') {
+          return this.completeTermination({
+            outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
+            reason:
+              drain.reason === 'deadline_exceeded'
+                ? ZLinkFrameworkTerminationReason.DeadlineExceeded
+                : ZLinkFrameworkTerminationReason.TeardownFailed
+          });
+        }
+        if (performance.now() >= deadlineAtMs) {
+          throw createDeadlineExceededError('Shutdown resource cleanup exceeded its deadline.');
+        }
+        return this.completeTermination({
+          outcome: ZLinkFrameworkTerminationOutcome.Stopped,
+          reason: ZLinkFrameworkTerminationReason.None
+        });
+      } catch (error) {
+        await this.stop().catch(() => undefined);
         return this.completeTermination({
           outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
-          reason:
-            drain.reason === 'deadline_exceeded'
-              ? ZLinkFrameworkTerminationReason.DeadlineExceeded
-              : ZLinkFrameworkTerminationReason.TeardownFailed
+          reason: isDeadlineExceededError(error)
+            ? ZLinkFrameworkTerminationReason.DeadlineExceeded
+            : ZLinkFrameworkTerminationReason.TeardownFailed
         });
       }
-      if (performance.now() >= deadlineAtMs) {
-        throw createDeadlineExceededError('Shutdown resource cleanup exceeded its deadline.');
-      }
-      return this.completeTermination({
-        outcome: ZLinkFrameworkTerminationOutcome.Stopped,
-        reason: ZLinkFrameworkTerminationReason.None
-      });
-    } catch (error) {
-      await this.stop().catch(() => undefined);
-      return this.completeTermination({
-        outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
-        reason: isDeadlineExceededError(error)
-          ? ZLinkFrameworkTerminationReason.DeadlineExceeded
-          : ZLinkFrameworkTerminationReason.TeardownFailed
-      });
+    });
+  }
+
+  private async runWithShutdownDeadline<T>(
+    deadlineMs: number,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    if (this.shutdownDeadline !== undefined) return await operation();
+    const deadline = new AbortController();
+    this.shutdownDeadline = deadline;
+    const ownsRuntimeDeadline = this.runtimeDeadline === undefined;
+    this.runtimeDeadline ??= new Date(Date.now() + deadlineMs);
+    const timer = setTimeout(
+      () => deadline.abort(createDeadlineExceededError('Shutdown deadline exceeded.')),
+      Math.max(0, this.runtimeDeadline.getTime() - Date.now())
+    );
+    try {
+      return await operation();
+    } finally {
+      clearTimeout(timer);
+      this.shutdownDeadline = undefined;
+      if (ownsRuntimeDeadline) this.runtimeDeadline = undefined;
     }
   }
 
@@ -1440,7 +1467,9 @@ export class ZLinkFrameworkRuntimeHost
       const locationRuntime = await this.locationOwner.startForRuntime(
         this.meshRouters.primaryMeshName(),
         spotNodeRuntime,
-        channelRuntime
+        channelRuntime,
+        this.executionState.abortController.signal,
+        () => this.shutdownDeadline!.signal
       );
       startedLocationRuntime = locationRuntime;
       if (locationRuntime !== undefined) {
@@ -1492,15 +1521,19 @@ export class ZLinkFrameworkRuntimeHost
       this.setRuntimeState(ZLinkFrameworkRuntimeState.Serving);
       this.lifecycleSink?.push('framework:started');
     } catch (error) {
+      if (this.shutdownDeadline !== undefined && isAbortError(error)) throw error;
       await statefulAuthorityRoutes?.stop();
-      await rollbackRuntimeStart({
-        context,
-        startedLocationRuntime,
-        streamRuntime,
-        spotNodeRuntime,
-        channelRuntime,
-        ownedStores: registeredRuntimeStores(this.options.registration)
-      });
+      await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
+        rollbackRuntimeStart({
+          context,
+          startedLocationRuntime: startedLocationRuntime ?? this.locationOwner.currentRuntime,
+          shutdownSignal: this.shutdownDeadline!.signal,
+          streamRuntime,
+          spotNodeRuntime,
+          channelRuntime,
+          ownedStores: registeredRuntimeStores(this.options.registration)
+        })
+      );
       this.executionState = undefined;
       this.channelRuntime = undefined;
       this.spotNodeRuntime = undefined;
@@ -1514,7 +1547,9 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   async stop(): Promise<void> {
-    await this.runLifecycle(() => this.stopCore());
+    await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
+      this.runLifecycle(() => this.stopCore())
+    );
   }
 
   private runtimeMetricMeshSnapshots(): readonly ZLinkRuntimeMetricMeshSnapshot[] {
@@ -1567,6 +1602,7 @@ export class ZLinkFrameworkRuntimeHost
     if (state === undefined) {
       return;
     }
+    state.abortController.abort();
 
     const channelRuntime = this.channelRuntime;
     const spotNodeRuntime = this.spotNodeRuntime;
@@ -1587,6 +1623,7 @@ export class ZLinkFrameworkRuntimeHost
       state,
       locationSnapshot,
       cleanupDeadline: this.runtimeDeadline,
+      shutdownSignal: this.shutdownDeadline!.signal,
       streamRuntime,
       spotNodeRuntime,
       channelRuntime,
@@ -2105,7 +2142,10 @@ export class ZLinkFrameworkRuntimeHost
         detachedTaskRunner: this.detachedTaskRunner(),
         metrics: this.metrics,
         admission: this.admission,
-        statefulExecutionAllowed: () => this.ownerAdmissionOpen()
+        statefulExecution: {
+          admissionOpen: () => this.ownerAdmissionOpen(),
+          hostState: () => this.runtimeState
+        }
       }).create(this.actorTransferRuntime),
       activationAdmission: this.activationAdmission
     };
@@ -2709,6 +2749,7 @@ export class ZLinkFrameworkRuntimeHost
     }).create();
     return {
       ...options,
+      errorSink: this.runtimeOrPreStartErrorSink,
       peerAdmissionSealed: (meshName: string) => !this.admission.accepts(meshName),
       messageFollowReceiver: (record: ServiceMessageFollowRecord) => {
         if (record.source.kind === 'actor') {
@@ -2763,14 +2804,8 @@ export class ZLinkFrameworkRuntimeHost
         );
       }
       const binding = record.kindData;
-      const replyBindingFailure = (
-        kind: ZLinkFrameworkInternalErrorKind,
-        message: string
-      ): void => {
-        const terminal =
-          kind === ZLinkFrameworkInternalErrorKind.ActorGenerationStale
-            ? { terminalResult: RequestResult.InvalidState, failureCode: 0 }
-            : internalFrameworkWireReply(createInternalFrameworkException(kind, message));
+      const replyBindingFailure = (kind: ZLinkFrameworkInternalErrorKind): void => {
+        const terminal = internalFrameworkWireReply(kind);
         if (
           record.replyFailure?.(terminal.terminalResult, terminal.failureCode) !== SubmitResult.Ok
         ) {
@@ -2794,17 +2829,11 @@ export class ZLinkFrameworkRuntimeHost
         nativeActorRef.actorId !== binding.actor.actorId ||
         !routingIdsEqual(nativeActorRef.nodeRid, binding.actor.nodeRid)
       ) {
-        replyBindingFailure(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          `Actor '${binding.actor.actorId}' binding target is no longer current.`
-        );
+        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
         return;
       }
       if (nativeActorRef.generation !== binding.actor.generation) {
-        replyBindingFailure(
-          ZLinkFrameworkInternalErrorKind.ActorGenerationStale,
-          `Actor '${binding.actor.actorId}' binding object generation is stale.`
-        );
+        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorGenerationStale);
         return;
       }
       const node =
@@ -2819,10 +2848,7 @@ export class ZLinkFrameworkRuntimeHost
         state.locationGeneration !== binding.authorityOwnerGeneration ||
         state.isMoving
       ) {
-        replyBindingFailure(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          `Actor '${binding.actor.actorId}' binding authority fence is stale.`
-        );
+        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
         return;
       }
       const sessionOwnerIsLocal =
@@ -2853,10 +2879,7 @@ export class ZLinkFrameworkRuntimeHost
         binding.sessionRid
       );
       if (target === undefined) {
-        replyBindingFailure(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          `Actor '${binding.actor.actorId}' Session route is unavailable.`
-        );
+        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
         return;
       }
       const installed = state.installBoundSessionBinding({
@@ -2869,10 +2892,7 @@ export class ZLinkFrameworkRuntimeHost
         bindingGeneration: binding.bindingGeneration
       });
       if (!installed) {
-        replyBindingFailure(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          `Actor '${binding.actor.actorId}' Session binding generation is stale.`
-        );
+        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
         return;
       }
       replyBindingSuccess();

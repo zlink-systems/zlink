@@ -222,7 +222,8 @@ final class ZLinkChannelDispatchReporter {
     static ZLinkDispatchErrorReason reasonFrom(Throwable error) {
         return unwrap(error) instanceof PayloadDecodeDispatchException
                 ? ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED
-                : ZLinkDispatchErrorReason.HANDLER_EXCEPTION;
+                : systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter.reasonFrom(
+                        frameworkErrorKind(error));
     }
 
     static ZLinkFrameworkErrorKind frameworkErrorKind(Throwable error) {

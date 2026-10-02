@@ -82,7 +82,7 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
         {
             std::lock_guard lock (*_socket_mutex);
             if (!_socket) {
-                co_return raw_request_completion_t{raw_request_result_t::terminated, {}};
+                co_return raw_request_completion_t{zlink::request_result_t::terminated, {}};
             }
             auto operation = std::move (_socket->request ()).message (messages[0]);
             for (std::size_t index = 1; index < messages.size (); ++index) {
@@ -93,34 +93,28 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
     }
     catch (const zlink::submit_error_t &error) {
         co_return raw_request_completion_t{
-          map_binding_request_submit_result (error.result (),
-                                             raw_request_failure_phase_t::initial_admission,
-                                             [] () -> raw_request_result_t { throw; }),
+          runtime::messaging::map_submit_request_result (error.result (), false),
           {},
           raw_request_failure_t{raw_request_failure_phase_t::initial_admission, error.result (),
-                                std::nullopt, error.internal_errno ()}};
+                                error.internal_errno ()}};
     }
     try {
         auto reply = co_await std::move (*pending);
-        co_return raw_request_completion_t{raw_request_result_t::ok, copy_binding_parts (reply)};
+        co_return raw_request_completion_t{zlink::request_result_t::ok, copy_binding_parts (reply)};
     }
     catch (const zlink::request_error_t &error) {
-        co_return raw_request_completion_t{map_binding_request_result (error.result ()), {}};
+        co_return raw_request_completion_t{
+          error.result (),
+          {},
+          raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, std::nullopt,
+                                error.internal_errno ()}};
     }
     catch (const zlink::submit_error_t &error) {
         co_return raw_request_completion_t{
-          map_binding_request_submit_result (
-            error.result (), raw_request_failure_phase_t::completion_terminal,
-            [&] {
-                return error.result () == zlink::submit_result_t::not_connected
-                         ? raw_request_result_t::not_connected
-                       : error.result () == zlink::submit_result_t::terminated
-                         ? raw_request_result_t::terminated
-                         : raw_request_result_t::failed;
-            }),
+          runtime::messaging::map_submit_request_result (error.result (), true),
           {},
           raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, error.result (),
-                                std::nullopt, error.internal_errno ()}};
+                                error.internal_errno ()}};
     }
 }
 

@@ -1,8 +1,7 @@
 namespace Zlink.Framework.Runtime.Messaging;
 
-// Maps the binding submit result to the framework's typed error surface for
-// the mesh submit paths. Ok/Backpressured are binding admission control flow
-// and never reach this mapper; async send wait/retry stays binding-owned.
+// Owns the binding submit-to-request projection. RequestFailureMapper owns
+// the public error kind; async admission waits remain binding-owned.
 internal static class ZLinkSubmitFailureMapper
 {
     public static ZLinkFrameworkException CreateChannelException(
@@ -37,23 +36,40 @@ internal static class ZLinkSubmitFailureMapper
     public static ZLinkFrameworkException CreateException(
         SubmitResult result,
         string targetDescription
-    )
-    {
-        var kind = result switch
-        {
-            SubmitResult.NotFound => ZLinkFrameworkErrorKind.NotFound,
-            SubmitResult.NotConnected => ZLinkFrameworkErrorKind.Unavailable,
-            SubmitResult.NotAdmitted => ZLinkFrameworkErrorKind.Rejected,
-            SubmitResult.Terminated => ZLinkFrameworkErrorKind.ShuttingDown,
-            _ => ZLinkFrameworkErrorKind.InternalFailure,
-        };
-        return new ZLinkFrameworkException(
-            kind,
-            $"Mesh submit to {targetDescription} failed with result '{result}'.",
-            retryAdvice: result is SubmitResult.NotConnected
-                ? ZLinkRetryAdvice.RetryAfterBackoff
-                : ZLinkRetryAdvice.DoNotRetry,
-            innerException: new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result)
+    ) =>
+        CreateException(
+            new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result),
+            targetDescription,
+            completionFailure: false
         );
-    }
+
+    public static RequestResult ToRequestResult(SubmitResult result, bool completionFailure) =>
+        result switch
+        {
+            SubmitResult.Ok => RequestResult.Ok,
+            SubmitResult.Backpressured => completionFailure
+                ? RequestResult.TimedOut
+                : RequestResult.NotConnected,
+            SubmitResult.NotFound => RequestResult.NotFound,
+            SubmitResult.NotConnected => RequestResult.NotConnected,
+            SubmitResult.NotAdmitted => RequestResult.Rejected,
+            SubmitResult.Terminated => RequestResult.Terminated,
+            SubmitResult.InvalidState => RequestResult.InvalidState,
+            SubmitResult.InvalidArgument
+            or SubmitResult.InvalidHandle
+            or SubmitResult.ThreadViolation => RequestResult.InvalidArgument,
+            SubmitResult.NotSupported => RequestResult.NotSupported,
+            _ => RequestResult.InternalError,
+        };
+
+    public static ZLinkFrameworkException CreateException(
+        ZlinkSubmitException error,
+        string operationName,
+        bool completionFailure = true
+    ) =>
+        ZLinkRequestFailureMapper.CreateCompletionException(
+            ToRequestResult((SubmitResult)(int)error.Result, completionFailure),
+            operationName,
+            error
+        );
 }

@@ -40,9 +40,7 @@ final class ZLinkJavaSocketSupport {
         try {
             return receive.getAsBoolean();
         } catch (ZlinkRecvException ex) {
-            if (ex.getResult() == RecvResult.NO_DATA
-                    || ex.getResult() == RecvResult.BUSY
-                    || ex.getResult() == RecvResult.INTERNAL_ERROR) {
+            if (ex.getResult() == RecvResult.NO_DATA) {
                 return false;
             }
             throw ex;
@@ -108,7 +106,7 @@ final class ZLinkJavaSocketSupport {
                                     RequestResult terminal =
                                             ZLinkJavaRawMeshNode.requestResult(failure, false);
                                     throw new CompletionException(
-                                            terminal == RequestResult.INTERNAL_ERROR
+                                            terminal == null
                                                     ? failure
                                                     : new ZLinkFrameworkException(
                                                             ZLinkJavaRawMeshNode.backendResult(
@@ -131,7 +129,7 @@ final class ZLinkJavaSocketSupport {
         } catch (RuntimeException failure) {
             RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(failure, true);
             return CompletableFuture.failedFuture(
-                    terminal == RequestResult.INTERNAL_ERROR
+                    terminal == null
                             ? failure
                             : new ZLinkFrameworkException(
                                     ZLinkJavaRawMeshNode.backendResult(terminal)

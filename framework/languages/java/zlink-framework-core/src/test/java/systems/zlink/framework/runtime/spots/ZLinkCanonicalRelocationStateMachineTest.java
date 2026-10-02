@@ -138,7 +138,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                         .join();
         var failed = ZLinkCanonicalRelocationProtocol.decodeFailed(reply);
         assertEquals(late.id(), failed.id());
-        assertEquals(ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED, failed.failureCode());
+        assertEquals(
+                ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED, failed.failureCode());
         assertEquals(1, fixture.endpoint.staged.get());
 
         fixture.target
@@ -167,7 +168,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                                         .join());
         ZLinkFrameworkException frameworkFailure =
                 assertInstanceOf(ZLinkFrameworkException.class, sourceFailure.getCause());
-        assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, frameworkFailure.kind());
+        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, frameworkFailure.kind());
         assertEquals(0, rejectedSource.endpoint.staged.get());
     }
 
@@ -424,8 +425,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 ZLinkCanonicalRelocationStateMachine.wireFailureCode(
                         new systems.zlink.framework.errors.ZLinkFrameworkException(
                                 systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DATA_LOST,
-                                "relocation base payload checksum differs from the " + "manifest"),
-                        2));
+                                "relocation base payload checksum differs from the "
+                                        + "manifest")));
     }
 
     @Test
@@ -584,8 +585,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                         new systems.zlink.framework.errors.ZLinkFrameworkException(
                                 systems.zlink.framework.errors.ZLinkFrameworkErrorKind
                                         .INTERNAL_FAILURE,
-                                "Capture/factory/restore/staging failed internally"),
-                        2));
+                                "Capture/factory/restore/staging failed internally")));
     }
 
     @Test
@@ -593,7 +593,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         assertEquals(
                 ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED,
                 ZLinkCanonicalRelocationStateMachine.wireFailureCode(
-                        new IllegalStateException("opaque failure"), 2));
+                        new IllegalStateException("opaque failure")));
     }
 
     @Test

@@ -3501,7 +3501,10 @@ public sealed partial class StatefulServiceRuntimeTests
             ZLinkFrameworkErrorKind.Unavailable,
             "The User Spot is sealed for relocation.",
             ZLinkRetryAdvice.RetryAfterBackoff
-        );
+        )
+        {
+            FrameworkFailureCode = (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving,
+        };
         Assert.Equal(
             SubmitResult.Ok,
             source.CloseUserSpot(

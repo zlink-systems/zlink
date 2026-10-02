@@ -93,6 +93,16 @@ final class ZLinkJavaInstanceSpotRegistry {
         return candidate;
     }
 
+    CompletionStage<Void> admitExisting(
+            String stableType,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceSpotMessage
+                    message,
+            systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived received) {
+        ActivationHook hook = hooks.get(stableType);
+        return hook == null ? null : hook.admitExisting(message, received);
+    }
+
     boolean close(String spotId, long generation) {
         CompletableFuture<Activation> current = activations.get(spotId);
         if (current == null || !current.isDone()) {
@@ -167,5 +177,13 @@ final class ZLinkJavaInstanceSpotRegistry {
     interface ActivationHook {
         CompletionStage<Void> activate(
                 String stableType, String spotId, long generation, ZLinkBackendSpot spot);
+
+        default CompletionStage<Void> admitExisting(
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                                .InstanceSpotMessage
+                        message,
+                systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived received) {
+            return null;
+        }
     }
 }

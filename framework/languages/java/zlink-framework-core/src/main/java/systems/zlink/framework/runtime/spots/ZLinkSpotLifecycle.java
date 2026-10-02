@@ -46,6 +46,12 @@ final class ZLinkSpotLifecycle {
     private final List<EntrySpotActivation> entrySpots;
     private final Map<String, SpotActivation> spots = new ConcurrentHashMap<>();
 
+    private volatile Runnable countChanged = () -> {};
+
+    void setCountChanged(Runnable callback) {
+        countChanged = Objects.requireNonNull(callback, "callback");
+    }
+
     /**
      * @param meshSpotNodes the Spot node of each MeshNode by mesh name; a User Spot is activated on
      *     the MeshNode that admitted it (Location runtime §7)
@@ -104,6 +110,7 @@ final class ZLinkSpotLifecycle {
         if (removed == null) {
             return CompletableFuture.completedFuture(false);
         }
+        countChanged.run();
         return removed.closeAsync()
                 .thenCompose(
                         ignored ->
@@ -206,6 +213,7 @@ final class ZLinkSpotLifecycle {
                     new IllegalStateException("User Spot Ready publication lost local admission"),
                     activation.closeAsync());
         }
+        if (current == null) countChanged.run();
         recordSpotCount(USER_SPOT_METRIC_KIND, 1);
         recordSpotCreated(USER_SPOT_METRIC_KIND);
         return CompletableFuture.completedFuture(null);
@@ -298,6 +306,7 @@ final class ZLinkSpotLifecycle {
         if (!spots.remove(spotId, current)) {
             throw new IllegalStateException("User Spot changed during Close cleanup");
         }
+        countChanged.run();
         recordSpotCount(USER_SPOT_METRIC_KIND, -1);
         recordSpotClosed(USER_SPOT_METRIC_KIND);
     }
@@ -324,6 +333,7 @@ final class ZLinkSpotLifecycle {
                     new IllegalStateException(
                             "User Spot relocation source changed during cleanup"));
         }
+        countChanged.run();
         return current.closeAsync(ZLinkSpotCloseReason.RELOCATION_OUT, deadline)
                 .thenRun(
                         () -> {
@@ -496,6 +506,7 @@ final class ZLinkSpotLifecycle {
             recordSpotCount(USER_SPOT_METRIC_KIND, -spots.size());
         }
         spots.clear();
+        if (!closingSpots.isEmpty()) countChanged.run();
         return CompletableFuture.allOf(closedEntries.toArray(CompletableFuture[]::new))
                 .thenCompose(
                         closed -> {
@@ -583,6 +594,7 @@ final class ZLinkSpotLifecycle {
             SpotActivation activation = spots.remove(spotId);
             if (activation != null) {
                 released.add(activation);
+                countChanged.run();
             }
         }
         AtomicReference<RuntimeException> firstFailure = new AtomicReference<>();

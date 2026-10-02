@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
 using Systems.Zlink.Stream.Connector.Runtime.Transport;
@@ -8,6 +9,78 @@ using Xunit;
 
 public sealed partial class StreamConnectorTests
 {
+    [Theory]
+    [InlineData(true, ZlinkStreamErrorCode.Disconnected)]
+    [InlineData(false, ZlinkStreamErrorCode.Disconnected)]
+    public async Task RawConnectFailurePreservesCause(bool tls, ZlinkStreamErrorCode expected)
+    {
+        Exception cause = tls
+            ? new AuthenticationException("TLS protocol rejected")
+            : new IOException("connection refused");
+        await using var connector = new ZlinkStreamConnector(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri("tcp://127.0.0.1:1"),
+                Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            },
+            _ => ValueTask.FromException<IZlinkStreamConnection>(cause)
+        );
+        var error = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+            await connector.Connect.Async()
+        );
+        Assert.Equal(expected, error.Error.Code);
+        Assert.Same(cause, error.Error.Exception);
+        Assert.Equal(ZlinkStreamConnectionState.Disconnected, connector.State);
+        Assert.Equal(ZlinkStreamCloseReason.TransportError, connector.CloseReason);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConnectCancellationIsNotTimeout(bool close)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var errors = new List<ZlinkStreamError>();
+        using var caller = new CancellationTokenSource();
+        await using var connector = new ZlinkStreamConnector(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri("tcp://127.0.0.1:1"),
+                Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            },
+            async token =>
+            {
+                started.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                throw new InvalidOperationException("canceled connect resumed");
+            }
+        );
+        connector.OnErrorReceived(
+            (error, _) =>
+            {
+                errors.Add(error);
+                return ValueTask.CompletedTask;
+            }
+        );
+        var connect = connector.Connect.Async(caller.Token).AsTask();
+        await started.Task;
+        if (close)
+        {
+            await connector.Close.Async();
+            var failure = await Assert.ThrowsAsync<ZlinkStreamException>(() => connect);
+            Assert.Equal(ZlinkStreamErrorCode.Disconnected, failure.Error.Code);
+        }
+        else
+        {
+            caller.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
+        }
+        await connector.Dispatch.Async();
+        Assert.DoesNotContain(errors, error => error.Code == ZlinkStreamErrorCode.ConnectTimeout);
+    }
+
     [Fact]
     public async Task TaskRunnerPreservesInfrastructureFault()
     {

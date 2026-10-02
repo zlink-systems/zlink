@@ -24,6 +24,9 @@ public final class SpotTerminalProbe
     public int invalidations;
     public int activations;
     public int submissions;
+    public java.util.function.Function<Message, CompletionStage<Void>> readySend;
+    public java.util.function.BiFunction<Message, Duration, CompletionStage<List<Message>>>
+            readyRequest;
     public final java.util.ArrayList<UUID> operationIds = new java.util.ArrayList<>();
 
     public SpotTerminalProbe(RuntimeException terminal, boolean missing) {
@@ -51,6 +54,8 @@ public final class SpotTerminalProbe
             Optional<String> packetName,
             String contentType,
             Map<String, String> metadata) {
+        if (!missing)
+            return java.util.Objects.requireNonNull(readySend, "readySend").apply(payload);
         activations++;
         payload.close();
         return CompletableFuture.failedFuture(terminal);
@@ -66,6 +71,9 @@ public final class SpotTerminalProbe
             String contentType,
             Map<String, String> metadata,
             Duration timeout) {
+        if (!missing)
+            return java.util.Objects.requireNonNull(readyRequest, "readyRequest")
+                    .apply(payload, timeout);
         activations++;
         payload.close();
         return CompletableFuture.failedFuture(terminal);

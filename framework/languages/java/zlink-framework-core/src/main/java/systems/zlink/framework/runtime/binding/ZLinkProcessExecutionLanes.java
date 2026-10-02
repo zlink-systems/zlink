@@ -9,9 +9,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /** Process-wide infrastructure and application lanes shared by all topologies. */
 final class ZLinkProcessExecutionLanes {
+    private static final Logger LOGGER =
+            Logger.getLogger(ZLinkProcessExecutionLanes.class.getName());
     private static final ScheduledExecutorService DEADLINES =
             Executors.newSingleThreadScheduledExecutor(
                     Thread.ofVirtual().name("zlink-jvm-service-deadline").factory());
@@ -75,8 +79,8 @@ final class ZLinkProcessExecutionLanes {
                 while ((command = pending.poll()) != null) {
                     try {
                         command.run();
-                    } catch (RuntimeException ignored) {
-                        // The submitted dispatch owns its terminal failure.
+                    } catch (RuntimeException failure) {
+                        LOGGER.log(Level.SEVERE, "application dispatch failed", failure);
                     }
                 }
             } finally {

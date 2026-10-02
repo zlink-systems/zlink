@@ -17,10 +17,14 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.zip.CRC32C;
 
 /** Owns the canonical target-only Location Store transition for a direct Actor Join relocation. */
 public final class ZLinkDirectJoinRelocationAuthority {
+    private static final Logger LOGGER =
+            Logger.getLogger(ZLinkDirectJoinRelocationAuthority.class.getName());
     private static final ZLinkStoreCancellation NEVER = () -> false;
 
     private final ZLinkLocationRepository authority;
@@ -492,9 +496,17 @@ public final class ZLinkDirectJoinRelocationAuthority {
                                             ? authority.removeAggregateProgress(
                                                     fence, marker.get().storeVersion(), NEVER)
                                             : CompletableFuture.completedFuture(true))
-                    .exceptionally(ignored -> null);
-        } catch (RuntimeException ignored) {
-            // Ready is terminal; cleanup never rolls target authority back.
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null) {
+                                    LOGGER.log(
+                                            Level.WARNING,
+                                            "Ready relocation progress cleanup failed",
+                                            failure);
+                                }
+                            });
+        } catch (RuntimeException failure) {
+            LOGGER.log(Level.WARNING, "Ready relocation progress cleanup failed", failure);
         }
     }
 

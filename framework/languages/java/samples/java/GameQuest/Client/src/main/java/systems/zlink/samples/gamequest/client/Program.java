@@ -23,8 +23,6 @@ public final class Program {
                     new GameQuestClientScenario(options, Program::createClient);
             if ("full".equals(options.scenario())) {
                 scenario.run(apiA, apiB);
-            } else if ("rehydrate".equals(options.scenario())) {
-                scenario.verifyRehydrated(apiA);
             } else if ("owner-unavailable".equals(options.scenario())) {
                 scenario.verifyOwnerUnavailable(apiA);
             } else {

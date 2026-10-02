@@ -79,18 +79,18 @@ final class DefaultZLinkStreamWaitCall implements ZLinkStreamWaitCall {
                             try {
                                 if (predicate.test(message)) {
                                     if (!result.complete(message)) {
-                                        closeMessage(message);
+                                        ZLinkStreamCleanup.closeMessage(message);
                                     }
                                 } else {
-                                    closeMessage(message);
+                                    ZLinkStreamCleanup.closeMessage(message);
                                 }
                             } catch (RuntimeException ex) {
-                                closeMessage(message);
+                                ZLinkStreamCleanup.closeMessage(message);
                                 result.completeExceptionally(ex);
                             }
                             return CompletableFuture.completedFuture(null);
                         });
-        result.whenComplete((ignored, error) -> closeQuietly(subscription[0]));
+        result.whenComplete((ignored, error) -> ZLinkStreamCleanup.close(subscription[0]));
         return ZLinkStreamWaitFailure.asValidationFailure(
                 result.orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS),
                 "No '" + name + "' message arrived within " + timeout + ".");
@@ -117,7 +117,7 @@ final class DefaultZLinkStreamWaitCall implements ZLinkStreamWaitCall {
                     } catch (Throwable failure) {
                         result.completeExceptionally(failure);
                     } finally {
-                        message.payload().payload().close();
+                        ZLinkStreamCleanup.closeMessage(message);
                     }
                 });
         result.whenComplete(
@@ -136,23 +136,5 @@ final class DefaultZLinkStreamWaitCall implements ZLinkStreamWaitCall {
                 codec.decode(message.payload(), payloadType),
                 message.metadata(),
                 message.actorId());
-    }
-
-    private static void closeQuietly(AutoCloseable closeable) {
-        if (closeable == null) {
-            return;
-        }
-        try {
-            closeable.close();
-        } catch (Exception ignored) {
-        }
-    }
-
-    private static void closeMessage(ZLinkStreamMessage<ZLinkStreamEncodedPayload> message) {
-        try {
-            message.payload().payload().close();
-        } catch (RuntimeException ignored) {
-            // The waiter no longer owns a message that it cannot deliver.
-        }
     }
 }

@@ -290,5 +290,6 @@ internal readonly record struct ZLinkBackendSocketMonitorEvent(
     RoutingId? RoutingId,
     string LocalAddr,
     string RemoteAddr,
-    ulong Value
+    ulong Value,
+    MonitorEventFlags Flags = MonitorEventFlags.None
 );

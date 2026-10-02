@@ -1038,21 +1038,25 @@ framework_deadline_executor (const std::shared_ptr<detail::spot_node_builder_sta
     return node->lane.run ([&] { return framework_deadline_executor_core (node); }).get ();
 }
 
-void configure_spot_execution (const std::shared_ptr<detail::spot_context_state_t> &state,
-                               const std::shared_ptr<runtime::offload_executor_t> &worker_executor)
+void configure_spot_execution (
+  const std::shared_ptr<detail::spot_context_state_t> &state,
+  const std::shared_ptr<runtime::offload_executor_t> &worker_executor,
+  std::shared_ptr<runtime::serial_execution_queue_t> retained_queue = {})
 {
     /* The queue owns turn ordering. Execution resources are shared by the
      * node; a Spot must not allocate its own worker pool. A yielded turn is
      * resumed through this same queue, so it does not require a Spot-local
      * executor. */
     state->serial_executor = worker_executor;
-    state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
-      *state->serial_executor, runtime::serial_execution_queue_options_t{},
-      runtime::serial_execution_queue_t::error_handler_t{},
-      state->is_entry_spot () ? runtime::serial_lane_policy_t::entry_spot ()
-      : state->execution_mode == user_spot_execution_mode_t::spot_wide
-        ? runtime::serial_lane_policy_t::spot_wide ()
-        : runtime::serial_lane_policy_t::per_actor_spot ());
+    state->serial_queue =
+      retained_queue ? std::move (retained_queue)
+                     : std::make_shared<runtime::serial_execution_queue_t> (
+                         *state->serial_executor, runtime::serial_execution_queue_options_t{},
+                         runtime::serial_execution_queue_t::error_handler_t{},
+                         state->is_entry_spot () ? runtime::serial_lane_policy_t::entry_spot ()
+                         : state->execution_mode == user_spot_execution_mode_t::spot_wide
+                           ? runtime::serial_lane_policy_t::spot_wide ()
+                           : runtime::serial_lane_policy_t::per_actor_spot ());
     state->spot_serial_executor = std::make_shared<detail::spot_serial_executor_t> (
       worker_executor, state->node->lane,
       state->is_entry_spot () ? runtime::serial_lane_policy_t::entry_spot ()
@@ -2281,18 +2285,31 @@ bool spot_context_state_t::idle_quiescent () const
     return true;
 }
 
-bool spot_context_state_t::admit_core (bool claim) noexcept
+bool spot_context_state_t::admit_core (
+  bool claim, const instance_spot_retained_message_t *retained_record) noexcept
 {
-    if (admission_sealed)
+    if (admission_sealed || (closed && claim && !retained_record))
         return false;
     if (claim)
         ++callback_depth;
     return true;
 }
 
-bool spot_context_state_t::admit (bool claim)
+bool spot_context_state_t::admit (bool claim,
+                                  const instance_spot_retained_message_t *retained_record)
 {
-    return state_sync ([this, claim] { return admit_core (claim); });
+    return state_sync (
+      [this, claim, retained_record] { return admit_core (claim, retained_record); });
+}
+
+framework_exception_t spot_context_state_t::admission_error () const
+{
+    return state_sync ([this] {
+        return closed && !admission_sealed
+                 ? detail::make_framework_origin_exception (framework_error_kind_t::not_found,
+                                                            "Spot incarnation was closed")
+                 : sealed_admission_error ();
+    });
 }
 
 spot_context_state_t::timer_fire_state_snapshot_t spot_context_state_t::admit_timer_fire ()
@@ -2325,7 +2342,6 @@ void spot_context_state_t::leave_callback (std::function<void ()> settle_owner_s
 {
     struct leave_decision_t
     {
-        std::function<void ()> finish;
         std::exception_ptr settle_error;
     };
     leave_decision_t decision;
@@ -2342,12 +2358,6 @@ void spot_context_state_t::leave_callback (std::function<void ()> settle_owner_s
                     current.settle_error = std::current_exception ();
                 }
             }
-            if (callback_depth != 0 || !close_requested)
-                return current;
-            // The last accepted callback left the sealed activation (§7 step 2).
-            close_requested = false;
-            closed = true;
-            current.finish = std::move (pending_close_finish);
             return current;
         });
     }
@@ -2359,8 +2369,6 @@ void spot_context_state_t::leave_callback (std::function<void ()> settle_owner_s
           node, message_flow_outcome_t::completed, dispatch_error_surface_t::spot_actor,
           dispatch_message_kind_t::control, "spot_turn_settle", {}, spot_id, {}, {},
           message_flow_result_t::failed, std::nullopt, "failed", decision.settle_error);
-    if (decision.finish)
-        decision.finish ();
 }
 
 void spot_context_state_t::request_close (service::spot_close_begin_t begin,
@@ -2399,7 +2407,7 @@ void spot_context_state_t::request_close (service::spot_close_begin_t begin,
     };
     // Without an open lifecycle lane no other lifecycle work can precede the Close.
     const auto queue = serial_queue;
-    if (!queue || queue->closed () || owns_current_serial_turn ()) {
+    if (!queue) {
         run ([] {}, {});
         return;
     }
@@ -2410,8 +2418,13 @@ void spot_context_state_t::request_close (service::spot_close_begin_t begin,
               run ([complete] () mutable { complete ([] {}); },
                    turn ? turn->resume_scheduler () : detail::task_scheduler_t{});
           },
-          runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle}))
-        run ([] {}, {});
+          [] {
+              runtime::serial_work_options_t options{runtime::serial_work_lane_t::lifecycle};
+              options.holds_application_while_waiting = true;
+              return options;
+          }()))
+        (*report) (result_t<bool>::failure (framework_error_kind_t::shutting_down,
+                                            "Spot lifecycle lane is closed"));
 }
 
 service::spot_close_begin_t spot_context_state_t::local_close_step ()
@@ -2437,32 +2450,9 @@ namespace
 template <typename T>
 task_t<T> run_close_step (std::function<task_t<T> ()> step, const detail::task_scheduler_t &resume)
 {
-    auto completion = std::make_shared<task_completion_source_t<T>> ();
-    auto result = completion->task ();
-    auto run = [step = std::move (step), completion] () mutable {
-        try {
-            auto running = std::make_shared<task_t<T>> (step ());
-            detail::observe_task_terminal (
-              *running, [running, completion] (const result_t<T> &value) mutable {
-                  completion->complete (value);
-              });
-        }
-        catch (const framework_exception_t &error) {
-            completion->complete (detail::result_access_t::failure<T> (error));
-        }
-        catch (...) {
-            completion->complete (result_t<T>::failure (framework_error_kind_t::internal_failure,
-                                                        "Spot Close step failed"));
-        }
-    };
-    if (!resume) {
-        run ();
-        return result;
-    }
-    if (!detail::submit_blocking_call (std::move (run)))
-        completion->complete (result_t<T>::failure (framework_error_kind_t::shutting_down,
-                                                    "Spot Close step executor is stopping"));
-    return result;
+    if (!resume)
+        return step ();
+    return runtime::run_blocking_step<T> (std::move (step));
 }
 
 } // namespace
@@ -2559,6 +2549,8 @@ void spot_context_state_t::close_now (service::spot_close_begin_t begin,
               return;
           }
           self->run_local_close_steps (owner, token, std::move (commit.value ().release),
+                                       std::move (commit.value ().reincarnate),
+                                       std::move (commit.value ().discard_reincarnation),
                                        std::move (settle), std::move (resume));
       });
 }
@@ -2567,12 +2559,15 @@ void spot_context_state_t::run_local_close_steps (
   const std::shared_ptr<spot_node_builder_state_t> &owner,
   std::uint64_t token,
   std::function<task_t<bool> ()> release,
+  std::function<task_t<authority_snapshot_t> ()> reincarnate,
+  std::function<task_t<bool> (const authority_snapshot_t &)> discard_reincarnation,
   service::spot_close_done_t done,
   detail::task_scheduler_t resume)
 {
     // Steps 3 and 4: OnClosing once, local cleanup, then the fenced release.
-    auto finish = [self = shared_from_this (), owner, token, release = std::move (release), done,
-                   resume] () mutable {
+    auto finish = [self = shared_from_this (), owner, token, release = std::move (release),
+                   reincarnate = std::move (reincarnate), done,
+                   discard_reincarnation = std::move (discard_reincarnation), resume] () mutable {
         const bool sealed =
           owner->lane.run ([&] { return self->close_reservation == token && self->closed; }).get ();
         if (!sealed) {
@@ -2590,39 +2585,161 @@ void spot_context_state_t::run_local_close_steps (
                                            "Spot Close could not release its local activation"));
             return;
         }
-        service::after_close_step (run_close_step<bool> (release, resume), resume,
-                                   [done] (result_t<bool> result) mutable { done (result); });
-    };
-    // Step 2, in the step that observed the Closing commit: seal admission.
-    // Work admitted before the seal (queued or running) finishes first; the
-    // last one to leave returns the Close to its lifecycle turn.
-    auto continuation = [finish, resume] () mutable {
-        if (!resume) {
-            finish ();
+        const auto original = self->serial_queue ? self->serial_queue->first_pending_message ()
+                                                 : std::shared_ptr<const void>{};
+        const auto fail_pending = [self, owner] (const result_t<bool> &failure) {
+            const auto messages = self->serial_queue ? self->serial_queue->pending_messages ()
+                                                     : std::vector<std::shared_ptr<const void>>{};
+            const auto kind =
+              failure ? framework_error_kind_t::internal_failure : failure.error_kind ();
+            const auto message = failure.error ()
+                                   ? std::string (failure.error ()->what ())
+                                   : "Spot initialization did not create an incarnation";
+            for (const auto &retained : messages) {
+                const auto command =
+                  std::static_pointer_cast<const instance_spot_retained_message_t> (retained);
+                if (command->completion)
+                    command->completion->complete (
+                      result_t<zlink::message_t>::failure (kind, message));
+            }
+            owner->lane
+              .run ([&] {
+                  const auto found = owner->spot_contexts_by_id.find (std::string (self->spot_id));
+                  if (found != owner->spot_contexts_by_id.end ()
+                      && spot_context_access_t::state (found->second) == self)
+                      owner->spot_contexts_by_id.erase (found);
+              })
+              .get ();
+        };
+        // Spot address messaging §7 step 3: drain or relocation forbids
+        // Reincarnate, and its kind ends the Instance intent messages left after
+        // the release. Accepted messages are never placed again.
+        const auto boundary = owner->lane
+                                .run ([&] {
+                                    const auto phase = owner->host_phase
+                                                         ? std::optional{owner->host_phase ()}
+                                                         : std::nullopt;
+                                    return phase == framework_runtime_state_t::draining
+                                             ? std::optional{framework_error_kind_t::shutting_down}
+                                           : phase == framework_runtime_state_t::relocating
+                                               || phase == framework_runtime_state_t::relocated
+                                             ? std::optional{framework_error_kind_t::unavailable}
+                                             : std::optional<framework_error_kind_t>{};
+                                })
+                                .get ();
+        if (original && !boundary && reincarnate) {
+            service::after_close_step (
+              run_close_step<authority_snapshot_t> (reincarnate, resume), resume,
+              [self, owner, done, resume, original, discard_reincarnation,
+               fail_pending] (result_t<authority_snapshot_t> snapshot) {
+                  if (!snapshot) {
+                      const auto failure = result_t<bool>::failure (
+                        snapshot.error_kind (),
+                        snapshot.error () ? snapshot.error ()->what () : "Spot Reincarnate failed");
+                      fail_pending (failure);
+                      done (failure);
+                      return;
+                  }
+                  const auto next = snapshot.value ();
+                  service::after_close_step (
+                    run_close_step<bool> (
+                      [self, owner, next, original] {
+                          const auto command =
+                            std::static_pointer_cast<const instance_spot_retained_message_t> (
+                              original);
+                          auto flow = runtime::flow_context_t::enter (
+                            command->original_activation->application_payload.flow_id,
+                            command->original_activation->application_payload.flow_origin,
+                            message_flow_tracer_t (owner->dispatch).mode (), flow_origin_t::inbound,
+                            std::nullopt);
+                          const auto created = spot_node_runtime_t (owner).create_spot_context (
+                            command->original_activation->activation.target.stable_type,
+                            self->spot_id,
+                            zlink::message_t::from (
+                              command->original_activation->application_payload.payload_bytes ()),
+                            next.object_generation, next.allocation.target.mesh_name, {},
+                            next.authority_owner_generation, self->serial_queue);
+                          return task_t<bool> (result_t<bool>::success (
+                            created.state == spot_create_state_t::created));
+                      },
+                      resume),
+                    resume,
+                    [done, next, discard_reincarnation, resume,
+                     fail_pending] (result_t<bool> initialized) {
+                        if (initialized && initialized.value ()) {
+                            done (initialized);
+                            return;
+                        }
+                        service::after_close_step (
+                          run_close_step<bool> (
+                            [discard_reincarnation, next] { return discard_reincarnation (next); },
+                            resume),
+                          resume, [done, initialized, fail_pending] (result_t<bool> deleted) {
+                              const auto failure =
+                                !deleted ? deleted
+                                : !initialized
+                                  ? initialized
+                                  : result_t<bool>::failure (
+                                      framework_error_kind_t::internal_failure,
+                                      "Spot initialization did not create an incarnation");
+                              fail_pending (failure);
+                              done (failure);
+                          });
+                    });
+              });
             return;
         }
-        try {
-            resume (finish);
-        }
-        catch (...) {
-            // The lifecycle queue refused the resumption; the Close finishes here.
-            finish ();
-        }
+        service::after_close_step (
+          run_close_step<bool> (release, resume), resume,
+          [done, owner, self, original, boundary, fail_pending] (result_t<bool> result) mutable {
+              if (original && boundary) {
+                  fail_pending (result_t<bool>::failure (
+                    *boundary, *boundary == framework_error_kind_t::shutting_down
+                                 ? "Spot Close released its authority during host drain"
+                                 : "Spot Close released its authority during relocation"));
+                  done (result);
+                  return;
+              }
+              owner->lane
+                .run ([&] {
+                    const auto found =
+                      owner->spot_contexts_by_id.find (std::string (self->spot_id));
+                    if (found != owner->spot_contexts_by_id.end ()
+                        && spot_context_access_t::state (found->second) == self)
+                        owner->spot_contexts_by_id.erase (found);
+                })
+                .get ();
+              done (result);
+          });
     };
-    const auto deferred = owner->lane
-                            .run ([&] {
-                                admission_sealed = true;
-                                if (callback_depth == 0) {
-                                    closed = true;
-                                    return false;
-                                }
-                                close_requested = true;
-                                pending_close_finish = continuation;
-                                return true;
-                            })
-                            .get ();
-    if (!deferred)
-        finish ();
+    owner->lane.run ([&] { closed = true; }).get ();
+    cancel_timers ();
+    try {
+        const auto instance = spot_instance;
+        auto on_closing =
+          owner->lane.run ([&] { return std::exchange (lifecycle.on_closing, {}); }).get ();
+        if (on_closing && instance) {
+            service::after_close_step (
+              on_closing (instance.get (),
+                          spot_closing_context_t{spot_close_reason_t::explicit_close,
+                                                 std::chrono::system_clock::time_point::max ()},
+                          {}),
+              resume,
+              [self = shared_from_this (), owner, instance,
+               finish] (result_t<void> result) mutable {
+                  if (!result)
+                      report_spot_close_diagnostic (owner, std::string (self->spot_id),
+                                                    "on_closing_failed", result.exception ());
+                  finish ();
+              });
+            return;
+        }
+    }
+    catch (...) {
+        report_spot_close_diagnostic (owner, std::string (spot_id), "on_closing_failed",
+                                      std::current_exception ());
+    }
+    finish ();
 }
 
 void report_spot_close_diagnostic (const std::shared_ptr<spot_node_builder_state_t> &owner,
@@ -4335,7 +4452,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
   std::function<void ()> transfer_owner_reservation,
   std::size_t transferred_owner_byte_cost,
   std::function<void ()> application_admission_terminal,
-  bool *actor_handoff_fence_refused) const
+  bool *actor_handoff_fence_refused,
+  std::shared_ptr<const void> retained_message) const
 {
     for (std::size_t index = 0; index < _state->handlers.size (); ++index) {
         const auto &descriptor = _state->handlers[index];
@@ -4348,8 +4466,12 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             std::string trace_packet_name;
             std::string trace_actor_id;
             std::string trace_spot_id;
-            if (_state->node) {
-                detail::message_flow_tracer_t (_state->node->dispatch)
+            const auto retained_trace_owner =
+              _state->node ? std::shared_ptr<detail::spot_node_builder_state_t>{}
+                           : _state->state_lane_owner ();
+            const auto &trace_owner = _state->node ? _state->node : retained_trace_owner;
+            if (trace_owner) {
+                detail::message_flow_tracer_t (trace_owner->dispatch)
                   .trace (message_flow_log_mode_t::detailed, message_flow_outcome_t::received, [&] {
                       trace_packet_name = packet_name;
                       const auto actor_key_separator = actor_execution_key.rfind (':');
@@ -4373,6 +4495,12 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             }
             auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
             auto task = completion->task ();
+            if (retained_message) {
+                const auto original =
+                  std::static_pointer_cast<const detail::instance_spot_retained_message_t> (
+                    retained_message);
+                original->completion = completion;
+            }
             auto state = _state;
             const auto coordinator = state->ensure_spot_serial_executor ();
             const bool requires_spot_serial =
@@ -4382,7 +4510,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                 serial_dispatch = true;
             }
             report_actor_dispatch_stage_trace_lazy (
-              state->node, message_flow_outcome_t::received, trace_message_kind, trace_packet_name,
+              trace_owner, message_flow_outcome_t::received, trace_message_kind, trace_packet_name,
               trace_spot_id, trace_actor_id, "invoke_erased.queue_select", [&] {
                   return std::string ("actor_queue=coordinator")
                          + " spot_serial=" + (requires_spot_serial ? "true" : "false");
@@ -4390,10 +4518,13 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             if (!serial_dispatch) {
                 const bool admission_preclaimed =
                   static_cast<bool> (application_admission_terminal);
-                if (!admission_preclaimed && !state->admit (true)) {
+                if (!admission_preclaimed
+                    && !state->admit (
+                      true, static_cast<const detail::instance_spot_retained_message_t *> (
+                              retained_message.get ()))) {
                     return task_t<zlink::message_t> (
                       detail::result_access_t::failure<zlink::message_t> (
-                        detail::spot_context_state_t::sealed_admission_error ()));
+                        state->admission_error ()));
                 }
                 auto admission_terminal = std::make_shared<std::function<void ()>> (
                   admission_preclaimed
@@ -4480,6 +4611,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             work_options.refuse_when_actor_handoff_fenced = fences_on_actor_handoff;
             work_options.actor_handoff_fence_refused =
               fences_on_actor_handoff ? actor_handoff_fence_refused : nullptr;
+            work_options.retained_message = retained_message;
             auto carrier = std::make_shared<std::pair<zlink::message_t, spot_inbound_message_t>> (
               std::move (message), std::move (metadata));
             auto dispatch_flow = runtime::flow_context_t::current ();
@@ -4528,10 +4660,12 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
               && !actor_execution_key.empty ();
             // The work is admitted here, before its queue: a turn that starts
             // after the seal still runs it (Spot address messaging §7 step 2).
-            if (!admission_preclaimed && !state->admit (true)) {
+            if (!admission_preclaimed
+                && !state->admit (true,
+                                  static_cast<const detail::instance_spot_retained_message_t *> (
+                                    retained_message.get ()))) {
                 return task_t<zlink::message_t> (
-                  detail::result_access_t::failure<zlink::message_t> (
-                    detail::spot_context_state_t::sealed_admission_error ()));
+                  detail::result_access_t::failure<zlink::message_t> (state->admission_error ()));
             }
             auto admission_terminal = std::make_shared<std::function<void ()>> (
               admission_preclaimed ? std::move (application_admission_terminal)
@@ -4545,9 +4679,110 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                before_invoke = std::move (before_invoke),
                before_application_handler = std::move (before_application_handler),
                trace_message_kind, trace_packet_name, trace_actor_id, trace_spot_id,
-               finish_after_active, completes_outer_actor_after_spot_yield,
-               admission_terminal] (auto complete) mutable {
+               finish_after_active, completes_outer_actor_after_spot_yield, admission_terminal,
+               retained_message] (auto complete) mutable {
                   runtime::flow_context_t::scope_t callback_flow (std::move (dispatch_flow));
+                  // incarnation을 넘길 때는 원본 activation record를 그대로 사용한다.
+                  if (state->closed) {
+                      if (retained_message) {
+                          const auto original = std::static_pointer_cast<
+                            const detail::instance_spot_retained_message_t> (retained_message);
+                          if (original->completion) {
+                              auto pending = original->completion->task ();
+                              if (pending.await_ready ()) {
+                                  const auto terminal = pending.result ();
+                                  complete ([state, completion, admission_terminal, terminal] {
+                                      settle_handler_admission_once (admission_terminal);
+                                      completion->complete (terminal);
+                                  });
+                                  return;
+                              }
+                          }
+                      }
+                      const auto owner = state->state_lane_owner ();
+                      const auto current =
+                        owner
+                          ? owner->lane
+                              .run ([&] {
+                                  const auto found =
+                                    owner->spot_contexts_by_id.find (std::string (state->spot_id));
+                                  return found == owner->spot_contexts_by_id.end ()
+                                           ? std::shared_ptr<detail::spot_context_state_t>{}
+                                           : detail::spot_context_access_t::state (found->second);
+                              })
+                              .get ()
+                          : std::shared_ptr<detail::spot_context_state_t>{};
+                      if (retained_message && !current) {
+                          const auto original = std::static_pointer_cast<
+                            const detail::instance_spot_retained_message_t> (retained_message);
+                          if (original->resume_missing) {
+                              auto running = std::make_shared<task_t<zlink::message_t>> (
+                                original->resume_missing ());
+                              detail::observe_task_terminal (
+                                *running, [state, running, completion, admission_terminal,
+                                           complete] (const result_t<zlink::message_t> &result) {
+                                    complete ([state, completion, admission_terminal, result] {
+                                        settle_handler_admission_once (admission_terminal);
+                                        completion->complete (result);
+                                    });
+                                });
+                              return;
+                          }
+                      }
+                      if (!retained_message || !current || current == state
+                          || !current->spot_instance) {
+                          complete ([state, completion, admission_terminal, retained_message] {
+                              settle_handler_admission_once (admission_terminal);
+                              completion->complete (result_t<zlink::message_t>::failure (
+                                retained_message ? framework_error_kind_t::internal_failure
+                                                 : framework_error_kind_t::not_found,
+                                "Spot incarnation was closed"));
+                          });
+                          return;
+                      }
+                      const auto original =
+                        std::static_pointer_cast<const detail::instance_spot_retained_message_t> (
+                          retained_message);
+                      const auto now = std::chrono::duration_cast<std::chrono::milliseconds> (
+                                         std::chrono::system_clock::now ().time_since_epoch ())
+                                         .count ();
+                      if (original->original_activation->activation.target
+                              .authority_owner_generation
+                            == 0
+                          && original->original_activation->activation.target.deadline_unix_ms
+                               <= now) {
+                          complete ([state, completion, admission_terminal] {
+                              settle_handler_admission_once (admission_terminal);
+                              completion->complete (result_t<zlink::message_t>::failure (
+                                framework_error_kind_t::deadline_exceeded,
+                                "Instance Spot activation deadline expired"));
+                          });
+                          return;
+                      }
+                      auto empty_services = current->activation_scope
+                                              ? std::shared_ptr<service_provider_t>{}
+                                              : std::make_shared<service_provider_t> ();
+                      auto &provider = current->activation_scope
+                                         ? current->activation_scope->provider ()
+                                         : *empty_services;
+                      auto replay = spot_handler_registry_t (current).invoke_erased (
+                        spot_handler_kind_t::packet,
+                        original->original_activation->application_payload.packet_name, {},
+                        std::type_index (typeid (void)), current->spot_instance.get (), nullptr,
+                        provider, *current->channel_runtime->serializers, carrier->first,
+                        carrier->second, false);
+                      detail::observe_task_completion (
+                        replay,
+                        [state, current, carrier, completion, admission_terminal, complete,
+                         empty_services] (const result_t<zlink::message_t> &result) mutable {
+                            complete ([state, completion, admission_terminal, result] {
+                                settle_handler_admission_once (admission_terminal);
+                                completion->complete (result);
+                            });
+                        });
+                      return;
+                  }
+
                   runtime::actor_execution_scope_t actor_execution (
                     std::move (actor_execution_key), std::move (actor_execution_spot_id));
                   report_actor_dispatch_stage_trace (
@@ -4665,7 +4900,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
               },
               work_options);
             report_actor_dispatch_stage_trace_lazy (
-              state->node,
+              trace_owner,
               posted ? message_flow_outcome_t::admitted : message_flow_outcome_t::received,
               trace_message_kind, trace_packet_name, trace_spot_id, trace_actor_id,
               "invoke_erased.post_serial", [&] {
@@ -8205,162 +8440,170 @@ bool spot_node_runtime_t::commit_relocation_materialization (
         }
         auto completion_record =
           std::make_shared<actor_join_completion_record_t> (std::move (completion));
-        auto complete_join = [node = _state, completion_record] () mutable {
+        auto fail_commit = [node = _state, completion_record] (result_t<void> failed) noexcept {
+            try {
+                (void) node->actor_transfer_coordinator.fail_commit (completion_record->handoff_id,
+                                                                     true);
+            }
+            catch (...) {
+                failed = detail::current_exception_result<void> ();
+            }
+            if (completion_record->lifecycle_reservation)
+                completion_record->lifecycle_reservation->settle (std::move (failed));
+        };
+        auto complete_join = [node = _state, completion_record, fail_commit] () mutable {
             auto &completion = *completion_record;
-            auto runtime = spot_node_runtime_t (node);
-            const auto fail_commit = [node, handoff_id = completion.handoff_id,
-                                      reservation = completion.lifecycle_reservation] () noexcept {
-                try {
-                    fail_handoff_backlog (
-                      node, node->actor_transfer_coordinator.fail_commit (handoff_id, true));
-                }
-                catch (...) {
-                }
-                if (reservation)
-                    reservation->settle (result_t<void>::failure (
-                      framework_error_kind_t::internal_failure, "Actor Join commit failed"));
-            };
             std::shared_ptr<join_completion_delivery_fence_scope_t> delivery_scope;
             try {
                 auto root_services = node->lane.run ([&] { return node->root_services; }).get ();
                 if (!root_services) {
-                    fail_commit ();
+                    fail_commit (result_t<void>::failure (
+                      framework_error_kind_t::internal_failure,
+                      "Actor Join completion root services are unavailable"));
                     return;
                 }
                 delivery_scope = join_completion_delivery_fence_scope_t::begin (
                   root_services->get_required<actor_gateway_runtime_t> (), completion.actor,
-                  fail_commit);
+                  [fail_commit] {
+                      fail_commit (result_t<void>::failure (
+                        framework_error_kind_t::internal_failure, "Actor Join commit failed"));
+                  });
             }
             catch (...) {
-                fail_commit ();
+                fail_commit (detail::current_exception_result<void> ());
                 return;
             }
-            auto fail_join = [node, delivery_scope, handoff_id = completion.handoff_id,
-                              reservation = completion.lifecycle_reservation] (
-                               framework_error_kind_t kind, std::string error) mutable {
-                auto failed = result_t<void>::failure (kind, std::move (error));
-                auto finish = [node, handoff_id, reservation] (result_t<void> result) noexcept {
-                    try {
-                        fail_handoff_backlog (
-                          node, node->actor_transfer_coordinator.fail_commit (handoff_id, true));
-                    }
-                    catch (...) {
-                    }
-                    if (reservation)
-                        reservation->settle (std::move (result));
-                };
-                delivery_scope->settle (std::move (failed), std::move (finish));
+            auto fail_join = [delivery_scope, fail_commit] (result_t<void> failed) mutable {
+                delivery_scope->settle (std::move (failed), fail_commit);
             };
-            auto finish_join = [node, completion_record, delivery_scope,
-                                fail_join] (result_t<void> joined) mutable {
+            auto finish_join = [node, completion_record, delivery_scope, fail_join,
+                                fail_commit] (result_t<void> joined) mutable {
                 auto &completion = *completion_record;
                 auto runtime = spot_node_runtime_t (node);
-                if (!joined) {
-                    fail_join (joined.error_kind (), joined.error () != nullptr
-                                                       ? joined.error ()->what ()
-                                                       : "spot actor joined callback failed");
-                    return;
-                }
-                serializer_registry_t *serializers = nullptr;
-                serializers = node->lane
-                                .run ([&] {
-                                    if (node->channel_runtime)
-                                        return node->channel_runtime->serializers;
-                                    return static_cast<serializer_registry_t *> (nullptr);
-                                })
-                                .get ();
-                if (serializers == nullptr) {
-                    fail_join (framework_error_kind_t::protocol_error,
-                               "Actor Join completion serializer registry is unavailable");
-                    return;
-                }
-                try {
-                    runtime::messaging::envelope_header_t leave_header;
-                    leave_header.kind = runtime::messaging::message_kind_t::command;
-                    leave_header.channel_name = "node";
-                    leave_header.message_name =
-                      detail::spot_actor_leave_route_command_t::packet_name;
-                    auto leave_parts = runtime::messaging::envelope_codec_t{}.encode_parts (
-                      leave_header,
-                      detail::spot_actor_leave_route_command_t{
-                        .transfer_id = completion.handoff_id,
-                        .actor_node_rid =
-                          std::string (completion.source_actor.node_rid ().value ()),
-                        .actor_type =
-                          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (
-                            completion.source_actor)),
-                        .actor_id = std::string (completion.source_actor.actor_id ().value ()),
-                        .actor_generation = completion.source_actor.object_generation (),
-                        .source_spot_id = std::string (completion.source_spot_id),
-                        .source_spot_generation = 0,
-                        .target_spot_id = std::string (completion.target_spot_id),
-                        .target_node_rid = std::string (completion.actor.node_rid ().value ()),
-                        .target_node_generation = completion.target_node_generation,
-                        .target_authority_owner_generation =
-                          completion.target_authority_owner_generation,
-                        .target_owner_lease_generation = completion.target_owner_lease_generation},
-                      *serializers);
-                    auto notification = std::make_shared<task_t<zlink::submit_result_t>> (
-                      runtime.send_actor_leave_notification (
-                        zlink::routing_id_t::from (
-                          std::string (completion.source_actor.node_rid ().value ())),
-                        std::move (leave_parts)));
-                    detail::observe_task_completion (
-                      *notification, [notification] (const result_t<zlink::submit_result_t> &) {});
-                }
-                catch (...) {
-                    // Source OnLeave is post-commit, one-way housekeeping.
-                }
                 std::optional<message_t> reply;
-                try {
-                    if (!completion.reply.empty ()) {
-                        reply = message_t::from_raw (
-                          zlink::message_t::from (std::move (completion.reply)), serializers);
+                auto report_source_leave_failure = [node, completion_record] (auto &&build_error) {
+                    detail::message_flow_tracer_t (node->dispatch)
+                      .trace (
+                        message_flow_outcome_t::completed, message_flow_result_t::failed, [&] {
+                            return message_flow_event_t{
+                              .outcome = message_flow_outcome_t::completed,
+                              .surface = dispatch_error_surface_t::spot_actor,
+                              .message_kind = dispatch_message_kind_t::control,
+                              .packet_name = detail::spot_actor_leave_route_command_t::packet_name,
+                              .correlation_id = completion_record->handoff_id,
+                              .spot_id = std::string (completion_record->source_spot_id),
+                              .actor_id =
+                                std::string (completion_record->source_actor.actor_id ().value ()),
+                              .exception = build_error (),
+                              .result = message_flow_result_t::failed};
+                        });
+                };
+                if (joined) {
+                    try {
+                        auto *serializers = node->lane
+                                              .run ([&] {
+                                                  return node->channel_runtime
+                                                           ? node->channel_runtime->serializers
+                                                           : nullptr;
+                                              })
+                                              .get ();
+                        if (serializers == nullptr) {
+                            throw framework_exception_t (
+                              framework_error_kind_t::protocol_error,
+                              "Actor Join completion serializer registry is unavailable");
+                        }
+                        try {
+                            runtime::messaging::envelope_header_t leave_header;
+                            leave_header.kind = runtime::messaging::message_kind_t::command;
+                            leave_header.channel_name =
+                              detail::spot_actor_leave_route_command_t::channel_name;
+                            leave_header.message_name =
+                              detail::spot_actor_leave_route_command_t::packet_name;
+                            auto leave_parts = runtime::messaging::envelope_codec_t{}.encode_parts (
+                              leave_header,
+                              detail::spot_actor_leave_route_command_t{
+                                .transfer_id = completion.handoff_id,
+                                .actor_node_rid =
+                                  std::string (completion.source_actor.node_rid ().value ()),
+                                .actor_type = std::string (
+                                  ::zlink::framework::detail::actor_ref_access_t::actor_type (
+                                    completion.source_actor)),
+                                .actor_id =
+                                  std::string (completion.source_actor.actor_id ().value ()),
+                                .actor_generation = completion.source_actor.object_generation (),
+                                .source_spot_id = std::string (completion.source_spot_id),
+                                .source_spot_generation = 0,
+                                .target_spot_id = std::string (completion.target_spot_id),
+                                .target_node_rid =
+                                  std::string (completion.actor.node_rid ().value ()),
+                                .target_node_generation = completion.target_node_generation,
+                                .target_authority_owner_generation =
+                                  completion.target_authority_owner_generation,
+                                .target_owner_lease_generation =
+                                  completion.target_owner_lease_generation},
+                              *serializers);
+                            auto notification = std::make_shared<task_t<zlink::submit_result_t>> (
+                              runtime.send_actor_leave_notification (
+                                zlink::routing_id_t::from (
+                                  std::string (completion.source_actor.node_rid ().value ())),
+                                std::move (leave_parts)));
+                            detail::observe_task_completion (
+                              *notification, [notification, report_source_leave_failure] (
+                                               const result_t<zlink::submit_result_t> &submitted) {
+                                  if (submitted && submitted.value () == zlink::submit_result_t::ok)
+                                      return;
+                                  report_source_leave_failure ([&] {
+                                      if (!submitted && submitted.error ())
+                                          return std::make_exception_ptr (*submitted.error ());
+                                      return std::make_exception_ptr (framework_exception_t (
+                                        submitted
+                                          ? runtime::messaging::map_submit_result_error_kind (
+                                              submitted.value ())
+                                          : submitted.error_kind (),
+                                        "source Actor leave submission failed"));
+                                  });
+                              });
+                        }
+                        catch (...) {
+                            report_source_leave_failure ([] { return std::current_exception (); });
+                        }
+                        if (!completion.reply.empty ()) {
+                            reply = message_t::from_raw (
+                              zlink::message_t::from (std::move (completion.reply)), serializers);
+                        }
+                    }
+                    catch (...) {
+                        joined = detail::current_exception_result<void> ();
                     }
                 }
-                catch (const framework_exception_t &error) {
-                    fail_join (error.kind (), error.what ());
-                    return;
-                }
-                catch (const std::exception &error) {
-                    fail_join (framework_error_kind_t::internal_failure, error.what ());
-                    return;
-                }
-                catch (...) {
-                    fail_join (framework_error_kind_t::internal_failure,
-                               "Actor Join completion reply decoding failed");
-                    return;
-                }
                 const auto actor = completion.actor;
-                const auto source_actor = completion.source_actor;
-                const auto target_spot_id = completion.target_spot_id;
-                const auto completion_handoff_id = completion.handoff_id;
-                const auto key = actor_key (actor);
+                actor_join_completion_t outcome =
+                  joined
+                    ? actor_join_completion_t (actor_join_accepted_t{completion.operation_high,
+                                                                     completion.operation_low,
+                                                                     actor, std::move (reply)})
+                    : actor_join_completion_t (actor_join_failed_t{
+                        completion.operation_high, completion.operation_low, joined.error_kind ()});
                 try {
                     runtime.deliver_actor_join_completion_async (
-                      actor,
-                      actor_join_accepted_t{completion.operation_high, completion.operation_low,
-                                            actor, std::move (reply)},
-                      target_spot_id,
-                      [node, actor, source_actor, target_spot_id, completion_handoff_id, key,
-                       reservation =
-                         completion.lifecycle_reservation] (result_t<void> delivered) noexcept {
+                      actor, std::move (outcome), completion.target_spot_id,
+                      [node, completion_record, joined = std::move (joined),
+                       fail_commit] (result_t<void> delivered) mutable noexcept {
+                          if (!delivered || !joined) {
+                              fail_commit (!delivered ? std::move (delivered) : std::move (joined));
+                              return;
+                          }
+                          auto &completion = *completion_record;
                           try {
-                              if (!delivered) {
-                                  fail_handoff_backlog (
-                                    node, node->actor_transfer_coordinator.fail_commit (
-                                            completion_handoff_id, true));
-                                  if (reservation)
-                                      reservation->settle (std::move (delivered));
-                                  return;
-                              }
+                              const auto key = actor_key (completion.actor);
                               auto [replay, replay_services] =
                                 node->lane
                                   .run ([&] {
                                       auto backlog =
                                         node->actor_transfer_coordinator
                                           .complete_commit_and_take_backlog (
-                                            completion_handoff_id, source_actor, target_spot_id);
+                                            completion.handoff_id, completion.source_actor,
+                                            completion.target_spot_id);
                                       if (backlog)
                                           node->actor_join_relocation_recoveries.erase (key);
                                       return std::make_pair (std::move (backlog),
@@ -8368,48 +8611,31 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                                   })
                                   .get ();
                               if (!replay) {
-                                  fail_handoff_backlog (
-                                    node, node->actor_transfer_coordinator.fail_commit (
-                                            completion_handoff_id, true));
-                                  if (reservation)
-                                      reservation->settle (result_t<void>::failure (
-                                        framework_error_kind_t::internal_failure,
-                                        "Actor Join completion commit failed"));
+                                  fail_commit (result_t<void>::failure (
+                                    framework_error_kind_t::internal_failure,
+                                    "Actor Join completion commit failed"));
                                   return;
                               }
-                              if (replay->empty ()) {
-                                  if (reservation)
-                                      reservation->settle (result_t<void>::success ());
-                                  return;
-                              }
-                              if (!replay_services) {
-                                  auto runtime = spot_node_runtime_t (node);
-                                  if (runtime.actor_transfer_marker_enabled ()) {
-                                      runtime.emit_actor_transfer_marker (
-                                        "handoff_replay_unavailable", actor, completion_handoff_id);
+                              if (!replay->empty ()) {
+                                  if (replay_services) {
+                                      spot_node_runtime_t (node).enqueue_actor_handoff_replay (
+                                        completion.actor, std::move (*replay), *replay_services,
+                                        completion.handoff_id);
+                                  } else {
+                                      auto runtime = spot_node_runtime_t (node);
+                                      if (runtime.actor_transfer_marker_enabled ()) {
+                                          runtime.emit_actor_transfer_marker (
+                                            "handoff_replay_unavailable", completion.actor,
+                                            completion.handoff_id);
+                                      }
                                   }
-                                  if (reservation)
-                                      reservation->settle (result_t<void>::success ());
-                                  return;
                               }
-                              spot_node_runtime_t (node).enqueue_actor_handoff_replay (
-                                actor, std::move (*replay), *replay_services,
-                                completion_handoff_id);
-                              if (reservation)
-                                  reservation->settle (result_t<void>::success ());
+                              if (completion.lifecycle_reservation)
+                                  completion.lifecycle_reservation->settle (
+                                    result_t<void>::success ());
                           }
                           catch (...) {
-                              try {
-                                  fail_handoff_backlog (
-                                    node, node->actor_transfer_coordinator.fail_commit (
-                                            completion_handoff_id, true));
-                              }
-                              catch (...) {
-                              }
-                              if (reservation)
-                                  reservation->settle (result_t<void>::failure (
-                                    framework_error_kind_t::internal_failure,
-                                    "Actor Join completion failed"));
+                              fail_commit (detail::current_exception_result<void> ());
                           }
                       },
                       [delivery_scope] (result_t<void> result,
@@ -8417,15 +8643,8 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                           delivery_scope->settle (std::move (result), std::move (settled));
                       });
                 }
-                catch (const framework_exception_t &error) {
-                    fail_join (error.kind (), error.what ());
-                }
-                catch (const std::exception &error) {
-                    fail_join (framework_error_kind_t::internal_failure, error.what ());
-                }
                 catch (...) {
-                    fail_join (framework_error_kind_t::internal_failure,
-                               "Actor Join completion delivery failed");
+                    fail_join (detail::current_exception_result<void> ());
                 }
             };
             if (completion.admission.on_actor_joined) {
@@ -8443,28 +8662,20 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                               try {
                                   finish_join (std::move (value));
                               }
-                              catch (const framework_exception_t &error) {
-                                  fail_join (error.kind (), error.what ());
-                              }
-                              catch (const std::exception &error) {
-                                  fail_join (framework_error_kind_t::internal_failure,
-                                             error.what ());
+                              catch (...) {
+                                  fail_join (detail::current_exception_result<void> ());
                               }
                           });
                     }
-                    catch (const framework_exception_t &error) {
-                        fail_join (error.kind (), error.what ());
-                    }
-                    catch (const std::exception &error) {
-                        fail_join (framework_error_kind_t::internal_failure, error.what ());
+                    catch (...) {
+                        finish_join (detail::current_exception_result<void> ());
                     }
                 };
                 if (completion.lifecycle_reservation) {
                     const auto activated =
                       completion.lifecycle_reservation->activate_async (std::move (run_joined));
                     if (!activated)
-                        fail_join (activated.error_kind (),
-                                   "Actor Join lifecycle reservation was not activated");
+                        fail_join (activated);
                 } else {
                     run_joined ();
                 }
@@ -8476,8 +8687,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
             complete_join ();
         }
         catch (...) {
-            // The delivery scope owns the exact failure terminal after it is
-            // installed; setup failures call fail_commit before returning.
+            fail_commit (detail::current_exception_result<void> ());
         }
     }
     return true;
@@ -12446,14 +12656,15 @@ local_spot_create_result_t spot_node_runtime_t::create_spot (std::string spot_na
     return create_spot (std::move (spot_name), zlink::message_t{});
 }
 
-local_spot_create_result_t
-spot_node_runtime_t::create_spot_context (std::string spot_name,
-                                          spot_id_t spot_id,
-                                          zlink::message_t request,
-                                          std::uint64_t object_generation,
-                                          std::string mesh_name,
-                                          std::function<task_t<void> (void *)> staged_restore,
-                                          std::uint64_t authority_owner_generation)
+local_spot_create_result_t spot_node_runtime_t::create_spot_context (
+  std::string spot_name,
+  spot_id_t spot_id,
+  zlink::message_t request,
+  std::uint64_t object_generation,
+  std::string mesh_name,
+  std::function<task_t<void> (void *)> staged_restore,
+  std::uint64_t authority_owner_generation,
+  std::shared_ptr<runtime::serial_execution_queue_t> retained_queue)
 {
     auto context_state = std::make_shared<spot_context_state_t> ();
     struct creation_plan_t
@@ -12546,7 +12757,7 @@ spot_node_runtime_t::create_spot_context (std::string spot_name,
                                                           ? service_scope_kind_t::entry_spot
                                                           : service_scope_kind_t::spot_activation));
     }
-    configure_spot_execution (context_state, plan.worker_executor);
+    configure_spot_execution (context_state, plan.worker_executor, retained_queue);
     spot_context_t context (context_state);
     std::optional<message_t> create_reply;
     std::shared_ptr<service::spot_t> staged_native;
@@ -12676,11 +12887,14 @@ spot_node_runtime_t::create_spot_context (std::string spot_name,
     const auto published =
       _state->lane
         .run ([&] {
-            if (_state->spot_contexts_by_id.contains (id_value)
+            const auto previous = _state->spot_contexts_by_id.find (id_value);
+            if ((previous != _state->spot_contexts_by_id.end ()
+                 && (!retained_queue || !previous->second._state->closed))
                 || (_state->native_spots_by_id.contains (id_value)
                     && _state->native_spots_by_id.at (id_value) != native)) {
                 return false;
             }
+            _state->spot_contexts_by_id.erase (id_value);
             _state->spot_contexts_by_id.emplace (id_value, spot_context_t (context_state));
             _state->spot_ids_by_name[spot_name] = spot_id;
             _state->spot_names_by_id[id_value] = spot_name;
@@ -12860,19 +13074,21 @@ spot_node_runtime_t::get_or_create_spot (std::string spot_name,
     }
 }
 
-task_t<zlink::message_t>
-spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
-                                                   std::string packet_name,
-                                                   std::string content_type,
-                                                   std::vector<std::uint8_t> payload,
-                                                   std::map<std::string, std::string> metadata,
-                                                   bool request,
-                                                   std::string correlation_id,
-                                                   service_provider_t &services,
-                                                   serializer_registry_t &serializers,
-                                                   std::optional<std::string> flow_id,
-                                                   std::optional<flow_origin_t> flow_origin,
-                                                   std::function<void ()> *accepted_turn_terminal)
+task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
+  const spot_id_t &spot_id,
+  std::string packet_name,
+  std::string content_type,
+  std::vector<std::uint8_t> payload,
+  std::map<std::string, std::string> metadata,
+  bool request,
+  std::string correlation_id,
+  service_provider_t &services,
+  serializer_registry_t &serializers,
+  std::optional<std::string> flow_id,
+  std::optional<flow_origin_t> flow_origin,
+  std::function<void ()> *accepted_turn_terminal,
+  std::shared_ptr<const instance_spot_retained_message_t> retained_message,
+  std::shared_ptr<detail::deferred_barrier_t> *activation_terminal)
 {
     if (accepted_turn_terminal)
         *accepted_turn_terminal = {};
@@ -12890,7 +13106,8 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
     const auto materialized =
       _state->lane
         .run ([&] {
-            return context_state && context_state->spot_instance
+            return context_state
+                   && (context_state->spot_instance || (retained_message && context_state->closed))
                    && std::find (_state->snapshot.instance_spot_names.begin (),
                                  _state->snapshot.instance_spot_names.end (),
                                  context_state->spot_name)
@@ -12900,28 +13117,14 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
     if (!materialized) {
         const framework_exception_t error (framework_error_kind_t::not_found,
                                            "Instance Spot activation target is not materialized");
-        report_spot_dispatch_error (
-          _state, dispatch_error_surface_t::spot_route,
-          request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
-          dispatch_reason_from_error (error.kind ()),
-          request ? dispatch_error_action_t::reply_error : dispatch_error_action_t::drop,
-          packet_name, std::nullopt, std::string (spot_id), std::nullopt,
-          std::make_exception_ptr (error), correlation_id);
         return task_t<zlink::message_t> (
           detail::result_access_t::failure<zlink::message_t> (error));
     }
     auto state = context_state;
     std::function<void ()> release_accepted_turn;
     if (accepted_turn_terminal) {
-        if (!state->admit (true)) {
-            const auto error = spot_context_state_t::sealed_admission_error ();
-            report_spot_dispatch_error (
-              _state, dispatch_error_surface_t::spot_route,
-              request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
-              dispatch_reason_from_error (error.kind ()),
-              request ? dispatch_error_action_t::reply_error : dispatch_error_action_t::drop,
-              packet_name, std::nullopt, std::string (spot_id), std::nullopt,
-              std::make_exception_ptr (error), correlation_id);
+        if (!state->admit (true, retained_message.get ())) {
+            const auto error = state->admission_error ();
             return task_t<zlink::message_t> (
               detail::result_access_t::failure<zlink::message_t> (error));
         }
@@ -12958,7 +13161,17 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
               spot_inbound_message_t{.content_type = std::move (content_type),
                                      .values = std::move (metadata),
                                      .mesh_name = state->mesh_name,
-                                     .correlation_id = std::move (correlation_id)});
+                                     .correlation_id = std::move (correlation_id)},
+              true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
+              activation_terminal ? std::function<void ()>{[state, activation_terminal] {
+                  const auto reserved =
+                    state->serial_queue->reserve_barrier_next ("instance-activation-terminal");
+                  if (!reserved)
+                      throw *reserved.error ();
+                  *activation_terminal = reserved.value ();
+              }}
+                                  : std::function<void ()>{},
+              {}, {}, 0, {}, nullptr, retained_message);
         }
         catch (...) {
             if (release_accepted_turn)
@@ -12985,16 +13198,6 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
                 trace_spot_id, {}, trace_correlation_id);
               return;
           }
-          const auto *error = result.error ();
-          const framework_exception_t exception (result.error_kind (),
-                                                 error != nullptr ? error->what ()
-                                                                  : "Instance Spot handler failed");
-          report_spot_dispatch_error (node, dispatch_error_surface_t::spot_route, message_kind,
-                                      dispatch_reason_from_error (exception.kind ()),
-                                      request ? dispatch_error_action_t::reply_error
-                                              : dispatch_error_action_t::drop,
-                                      trace_packet_name, std::nullopt, trace_spot_id, std::nullopt,
-                                      std::make_exception_ptr (exception), trace_correlation_id);
       });
     return handler_task;
 }
@@ -13702,7 +13905,7 @@ void spot_node_runtime_t::evict_idle_spots () noexcept
                         std::string (state->spot_id))
                       && last > 0 && now_ns >= last && now_ns - last >= timeout_ns
                       && state->close_reservation == 0 && !state->admission_sealed
-                      && state->callback_depth == 0 && !state->close_requested;
+                      && state->callback_depth == 0;
                     if (!accepted)
                         return std::uint64_t{0};
                     /* Seal and reserve in this one node-owner turn. Admitted
@@ -13819,6 +14022,10 @@ spot_node_runtime_t::serialize_actor_snapshot (const actor_ref_t &actor_ref) con
 void spot_node_runtime_t::bind_drain_flag (std::shared_ptr<std::atomic_bool> flag)
 {
     _state->lane.run ([&] { _state->drain_flag = std::move (flag); }).get ();
+}
+void spot_node_runtime_t::bind_host_phase (std::function<framework_runtime_state_t ()> read_phase)
+{
+    _state->lane.run ([&] { _state->host_phase = std::move (read_phase); }).get ();
 }
 
 void spot_node_runtime_t::bind_spot_location_resolver (runtime::spot_address_resolver_t &resolver)

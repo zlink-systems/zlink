@@ -1392,14 +1392,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 return;
             }
             catch (Exception error)
-                when (error
-                        is not (
-                            ZLinkRelocationTargetSettledException
-                            or ZLinkRelocationDataLostException
-                            or ZLinkAuthorityGenerationExhaustedException
-                        )
-                    && !cancellationToken.IsCancellationRequested
-                )
+                when (ZLinkLocationStoreFailure.IsIndeterminate(error, cancellationToken))
             {
                 //  Indeterminate: the same key and expected version are read
                 //  again before any resubmission (location runtime §10).

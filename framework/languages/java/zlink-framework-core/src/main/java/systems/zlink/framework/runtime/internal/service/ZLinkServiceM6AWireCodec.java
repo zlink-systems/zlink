@@ -17,6 +17,8 @@ import java.util.Objects;
 
 /** Closed M6A codec for admission, Node/Channel messaging and reply records. */
 public final class ZLinkServiceM6AWireCodec {
+    public static final int IDENTITY_MISMATCH_REJECT_REASON =
+            (int) ServiceWireCodec.RejectReason.IDENTITY_MISMATCH.wire;
     private static final int FIELD_STATE = 1;
     private static final int FIELD_APPLICATION_VERSION = 2;
     private static final int FIELD_PROTOCOL_CAPABILITIES = 6;

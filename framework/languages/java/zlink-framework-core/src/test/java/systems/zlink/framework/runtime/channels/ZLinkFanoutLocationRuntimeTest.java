@@ -287,6 +287,7 @@ final class ZLinkFanoutLocationRuntimeTest {
 
             Future<?> monitor = lifecycle.submit(() -> subscriber.monitor.emit("DISCONNECTED"));
             monitor.get(1, TimeUnit.SECONDS);
+            subscriber.monitor.disconnectedDrained.get(1, TimeUnit.SECONDS);
             var publisher = runtimeView(fixture).snapshot("events").publishers().getFirst();
             assertEquals(ZLinkPeerState.NOT_CONNECTED, publisher.state());
             assertEquals(
@@ -841,6 +842,8 @@ final class ZLinkFanoutLocationRuntimeTest {
         private final Semaphore readable = new Semaphore(0);
         private final AtomicInteger closeCalls = new AtomicInteger();
         private final CompletableFuture<Void> handlerReady = new CompletableFuture<>();
+        private final CompletableFuture<Void> disconnectedDrained = new CompletableFuture<>();
+        private boolean disconnectedReceived;
         private volatile boolean closed;
         private volatile RuntimeException closeFailure;
 
@@ -853,7 +856,8 @@ final class ZLinkFanoutLocationRuntimeTest {
         public boolean waitForReadable(Duration timeout) {
             handlerReady.complete(null);
             try {
-                return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS) && !closed;
+                readable.acquire();
+                return !closed;
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return false;
@@ -862,7 +866,14 @@ final class ZLinkFanoutLocationRuntimeTest {
 
         @Override
         public ZLinkBackendSocketMonitorEvent recvDontWait() {
-            return events.poll();
+            var event = events.poll();
+            if (event != null && event.event().equals("DISCONNECTED")) {
+                disconnectedReceived = true;
+            } else if (event == null && disconnectedReceived) {
+                // The drain loop requests the next event after the callback returns.
+                disconnectedDrained.complete(null);
+            }
+            return event;
         }
 
         @Override

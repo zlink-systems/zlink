@@ -25,6 +25,12 @@ internal sealed class TestHostMessageFlowListener : IDisposable
 
     public void Dispose() => _listener.Dispose();
 
+    public string[] ReadLines()
+    {
+        lock (_fileGate)
+            return File.ReadAllLines(_filePath);
+    }
+
     private void Capture(Activity activity)
     {
         var line =

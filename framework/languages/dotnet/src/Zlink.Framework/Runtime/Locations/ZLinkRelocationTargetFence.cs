@@ -67,7 +67,8 @@ internal static class ZLinkRelocationTargetFence
         {
             read = await store.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception error)
+            when (ZLinkLocationStoreFailure.IsIndeterminate(error, cancellationToken))
         {
             return ZLinkRelocationTargetFenceReading.Pending;
         }

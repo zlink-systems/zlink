@@ -3,12 +3,16 @@ package systems.zlink.framework.runtime.internal.service;
 import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 
 import java.util.concurrent.locks.LockSupport;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Owns the process-wide execution lane for service operation terminals. A registered work item is
  * also its intrusive queue node, so a terminal winner never needs a second queue allocation.
  */
 final class ZLinkServiceCompletionDispatcher {
+    private static final Logger LOGGER =
+            Logger.getLogger(ZLinkServiceCompletionDispatcher.class.getName());
     static final ZLinkServiceCompletionDispatcher INSTANCE = new ZLinkServiceCompletionDispatcher();
 
     private final Object gate = new Object();
@@ -91,8 +95,8 @@ final class ZLinkServiceCompletionDispatcher {
             }
             try {
                 item.dispatch();
-            } catch (Throwable ignored) {
-                // One application completion must not stop later completions.
+            } catch (Throwable failure) {
+                LOGGER.log(Level.SEVERE, "service completion dispatch failed", failure);
             } finally {
                 synchronized (gate) {
                     releaseRegistration(item);

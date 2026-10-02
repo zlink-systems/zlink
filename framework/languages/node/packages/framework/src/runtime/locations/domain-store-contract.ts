@@ -128,14 +128,23 @@ export interface ZLinkDomainLocationStore {
   ): Promise<ZLinkCreationTerminalReadResult>;
   reserve(
     request: ZLinkObjectReserveRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ZLinkObjectReserveResult>;
-  commit(request: ZLinkObjectCommitRequest, signal?: AbortSignal): Promise<ZLinkObjectCommitResult>;
+  commit(
+    request: ZLinkObjectCommitRequest,
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
+  ): Promise<ZLinkObjectCommitResult>;
   completeCreation(
     request: ZLinkObjectCreationCompleteRequest,
     signal?: AbortSignal
   ): Promise<ZLinkObjectCreationCompleteResult>;
-  abort(request: ZLinkObjectAbortRequest, signal?: AbortSignal): Promise<ZLinkObjectAbortResult>;
+  abort(
+    request: ZLinkObjectAbortRequest,
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
+  ): Promise<ZLinkObjectAbortResult>;
 
   prepareAggregate(
     request: ZLinkAggregatePrepareRequest,

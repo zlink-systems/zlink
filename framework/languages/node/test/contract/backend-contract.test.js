@@ -1,4 +1,9 @@
 const assert = require('node:assert/strict');
+const failUnexpectedRuntimeTask = {
+  reportRuntimeTaskException(task, error) {
+    assert.fail(`unexpected runtime task error ${task}: ${String(error)}`);
+  }
+};
 const { once } = require('node:events');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
@@ -399,6 +404,7 @@ test('MeshNode descriptors keep an explicit Spot stable type instead of adding a
       .addSpotFactory('game.room', ConfiguredRoomSpot, (factory) => factory.disableRelocation());
   });
   const manager = new framework.ZLinkSpotNodeRuntimeManager({
+    errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration
   });
@@ -442,6 +448,7 @@ test('Object Server descriptor publishes an Entry Spot ID without application En
       .addActorFactory('player', PlayerActorFactory, (factory) => factory.disableRelocation());
   });
   const manager = new framework.ZLinkSpotNodeRuntimeManager({
+    errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration
   });
@@ -1591,6 +1598,7 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
     resolveRecord = resolve;
   });
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration,
     backendAdapterFactory: factory,
@@ -1652,6 +1660,7 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
 
 test('Logical Multicast completion does not expose or record target admission results', async () => {
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
@@ -1672,6 +1681,7 @@ test('Logical Multicast completion does not expose or record target admission re
 
 test('Logical Multicast terminal completes while target processing remains blocked', async () => {
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
@@ -1696,6 +1706,7 @@ test('Logical Multicast terminal completes while target processing remains block
 
 test('Logical Multicast post-start failure does not change the caller terminal', async () => {
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
@@ -1718,6 +1729,7 @@ test('Logical Multicast post-start failure does not change the caller terminal',
 
 test('Logical Multicast shutdown after handoff does not change the caller terminal', async () => {
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
@@ -1750,6 +1762,7 @@ test('Logical Multicast shutdown after handoff does not change the caller termin
 
 test('Logical Multicast accepts zero subscribers as normal completion', async () => {
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
@@ -1769,6 +1782,7 @@ test('Logical Multicast accepts zero subscribers as normal completion', async ()
 
 test('Logical Multicast remains usable after envelope encoding fails', async () => {
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
@@ -1798,6 +1812,7 @@ test('Logical Multicast remains usable after envelope encoding fails', async () 
 
 test('Logical Multicast abort before handoff calls Core zero times', async () => {
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
@@ -1823,6 +1838,7 @@ test('Logical Multicast abort before handoff calls Core zero times', async () =>
 
 test('Logical Multicast abort after Core start preserves committed completion', async () => {
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},

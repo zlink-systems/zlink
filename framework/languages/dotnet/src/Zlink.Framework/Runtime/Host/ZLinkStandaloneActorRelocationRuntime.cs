@@ -658,7 +658,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     .ReadAuthorityAsync(authorityKey, token)
                     .ConfigureAwait(false);
             }
-            catch (Exception) when (!token.IsCancellationRequested)
+            catch (Exception error) when (ZLinkLocationStoreFailure.IsIndeterminate(error, token))
             {
                 //  Indeterminate: keep every copy and read again.
             }
@@ -719,7 +719,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                             )
                             .ConfigureAwait(false);
                     }
-                    catch (Exception)
+                    catch (Exception error)
+                        when (ZLinkLocationStoreFailure.IsIndeterminate(error, token))
                     {
                         //  Indeterminate Preserve: the next read decides.
                     }

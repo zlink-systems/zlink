@@ -59,7 +59,9 @@ internal abstract partial class ZLinkSpotActivation
         );
 
         if (state.Item2 is not null)
-            _ = CompleteFinalizationAsync(state.Item2);
+            _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+                Task.Run(() => CompleteFinalizationAsync(state.Item2))
+            );
         return new ValueTask(state.Item1);
     }
 
@@ -98,10 +100,12 @@ internal abstract partial class ZLinkSpotActivation
     {
         Func<ValueTask>[] releases =
         [
-            () =>
+            async () =>
             {
                 DisposePendingMessageFollowRoutes();
-                return ValueTask.CompletedTask;
+                await _dispatcher
+                    .DiscardSubscriptionsAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
             },
             _timers.DisposeAsync,
             _outbound.DisposeAsync,
@@ -145,6 +149,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         var failures = new List<Exception>();
         Capture(RequestStop);
+        Capture(DrainNativeRoutes);
         await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
         if (await ReleaseLocalResourcesAsync().ConfigureAwait(false) is { } releaseFailure)
             failures.AddRange(releaseFailure.InnerExceptions);
@@ -415,8 +420,8 @@ internal abstract partial class ZLinkSpotActivation
         );
     }
 
-    internal Task<bool>? PostCloseLifecycle(
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask<bool>> close
+    internal Task<T>? PostCloseLifecycle<T>(
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> close
     ) => _serial.PostCloseLifecycle(close);
 
     internal void AttachNativeDispatch()
@@ -480,13 +485,17 @@ internal abstract partial class ZLinkSpotActivation
         });
     }
 
-    private void DrainNativeRoutes()
-    {
-        while (NativeSpot.RecvRoute(RecvFlags.DontWait) is { } received)
-            AdmitNativeRoute(received);
-    }
+    private void DrainNativeRoutes() =>
+        _serial.RunIngress(() =>
+        {
+            while (NativeSpot.RecvRoute(RecvFlags.DontWait) is { } received)
+                AdmitNativeRouteOnLane(received);
+        });
 
-    private void AdmitNativeRoute(ZLinkBackendRouteReceived received)
+    private void AdmitNativeRoute(ZLinkBackendRouteReceived received) =>
+        _serial.RunIngress(() => AdmitNativeRouteOnLane(received));
+
+    private void AdmitNativeRouteOnLane(ZLinkBackendRouteReceived received)
     {
         if (ZLinkSpotActivationDispatcher.IsInfrastructureRoute(received))
         {
@@ -494,9 +503,11 @@ internal abstract partial class ZLinkSpotActivation
             // lifecycle callbacks. Keep that wait off the native route drain
             // so a slow handoff cannot delay the next admission or commit.
             if (
-                !_serial.TryRunDetached(
-                    "user-spot-infrastructure-route",
-                    ct => _dispatcher.DispatchRouteAsync(received, ct)
+                !ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+                    _serial.TryRunDetached(
+                        "user-spot-infrastructure-route",
+                        ct => _dispatcher.DispatchRouteAsync(received, ct)
+                    )
                 )
             )
                 received.Dispose();
@@ -553,7 +564,6 @@ internal abstract partial class ZLinkSpotActivation
 
     protected ValueTask InitializeInstanceCoreAsync(CancellationToken cancellationToken)
     {
-        AttachNativeDispatch();
         return ExecuteSerializedAsync(
             static (activation, state, ct) => state.OnInitializeAsync(ct),
             InstanceSpot,
@@ -572,7 +582,8 @@ internal abstract partial class ZLinkSpotActivation
         IReadOnlyList<ReadOnlyMemory<byte>> payload,
         ReadOnlyMemory<byte>? metadata,
         bool request,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        InstanceSpotActivationOperation originalOperation
     )
     {
         if (
@@ -634,8 +645,10 @@ internal abstract partial class ZLinkSpotActivation
             authorityOwnerGeneration: authorityOwnerGeneration,
             ownerLeaseGeneration: ownerLeaseGeneration,
             sourceNodeGeneration: requestSource.NodeGeneration,
-            requestSource: requestSource
+            requestSource: requestSource,
+            deadlineUnixMs: originalOperation.DeadlineUnixMs
         );
+        var state = new DurableActivationDispatch(received, completion, originalOperation);
         int acceptedJournalLength;
         try
         {
@@ -652,83 +665,148 @@ internal abstract partial class ZLinkSpotActivation
         Func<ReadOnlyMemory<byte>> acceptedJournalFactory = () =>
             ZLinkSpotAcceptedJournal.Encode(received, request ? operationId.Low : 0);
 
-        var queued = QueueApplicationSerialized(
-            static async (activation, state, ct) =>
-            {
-                try
+        var queued = _serial.RunIngress(() =>
+            QueueApplicationSerialized(
+                static (activation, state, ct) =>
+                    activation.DispatchQueuedApplicationRouteAsync(state, ct),
+                state,
+                acceptedJournalLength,
+                acceptedJournalFactory,
+                false,
+                request,
+                _ =>
                 {
-                    await activation
-                        ._dispatcher.DispatchRouteAsync(state.Received, ct)
-                        .ConfigureAwait(false);
-                    if (!state.Request)
-                        state.Completion.TrySetResult(
-                            new InstanceSpotActivationTerminal(
-                                RequestResult.Ok,
-                                Systems
-                                    .Zlink
-                                    .Framework
-                                    .Runtime
-                                    .Protocol
-                                    .ServiceWireConstants
-                                    .FrameworkErrorCode
-                                    .None,
-                                []
-                            )
-                        );
-                    else if (!state.Completion.Task.IsCompleted)
-                        state.Completion.TrySetResult(
-                            new InstanceSpotActivationTerminal(
-                                RequestResult.InternalError,
-                                Systems
-                                    .Zlink
-                                    .Framework
-                                    .Runtime
-                                    .Protocol
-                                    .ServiceWireConstants
-                                    .FrameworkErrorCode
-                                    .RequestFailed,
-                                []
-                            )
-                        );
-                }
-                catch (Exception error)
-                {
-                    state.Completion.TrySetException(error);
-                }
-            },
-            new DurableActivationDispatch(received, completion, request),
-            acceptedJournalLength,
-            acceptedJournalFactory,
-            false,
-            request,
-            _ =>
-            {
-                received.Dispose();
-                completion.TrySetException(
-                    new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.ShuttingDown,
-                        "The Instance Spot activation queue stopped before admission."
-                    )
-                );
-            },
-            () =>
-            {
-                received.Dispose();
-                completion.TrySetException(
-                    new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        "The Instance Spot activation queue is relocating.",
-                        ZLinkRetryAdvice.RetryAfterBackoff
-                    )
-                );
-            },
-            received.Dispose
+                    received.Dispose();
+                    completion.TrySetException(
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.ShuttingDown,
+                            "The Instance Spot activation queue stopped before admission."
+                        )
+                    );
+                },
+                state.ReleaseForRelocation,
+                state.ReleaseForRelocation
+            )
         );
         if (!queued)
             return await completion.Task.ConfigureAwait(false);
         // Admission is durable at this point. Caller cancellation no longer
         // removes the accepted queue record or prevents terminal publication.
         return await completion.Task.ConfigureAwait(false);
+    }
+
+    private async ValueTask DispatchQueuedApplicationRouteAsync(
+        DurableActivationDispatch state,
+        CancellationToken ct
+    )
+    {
+        try
+        {
+            if (_successor is { } outcome)
+            {
+                var turn =
+                    ZLinkSerialTurn.Current
+                    ?? throw new InvalidOperationException(
+                        "Accepted message retirement requires its original turn."
+                    );
+                var successor = await turn.YieldFrameworkCallAsync(
+                        _ => new ValueTask<ZLinkSpotActivation?>(outcome.Task),
+                        ct
+                    )
+                    .ConfigureAwait(false);
+                if (successor is not null)
+                {
+                    await turn.YieldFrameworkCallAsync(
+                            _ => new ValueTask<InstanceSpotActivationTerminal>(
+                                state.Completion.Task
+                            ),
+                            ct
+                        )
+                        .ConfigureAwait(false);
+                    return;
+                }
+            }
+            await DispatchQueuedApplicationRouteAsync(state.Received, ct, state.Operation)
+                .ConfigureAwait(false);
+            if (!state.Request)
+                state.Completion.TrySetResult(
+                    new InstanceSpotActivationTerminal(
+                        RequestResult.Ok,
+                        Systems
+                            .Zlink
+                            .Framework
+                            .Runtime
+                            .Protocol
+                            .ServiceWireConstants
+                            .FrameworkErrorCode
+                            .None,
+                        []
+                    )
+                );
+            else if (state.Operation is null || !state.Completion.Task.IsCompleted)
+                state.Completion.TrySetResult(
+                    new InstanceSpotActivationTerminal(
+                        state.Operation is null ? RequestResult.Ok : RequestResult.InternalError,
+                        state.Operation is null
+                            ? Systems
+                                .Zlink
+                                .Framework
+                                .Runtime
+                                .Protocol
+                                .ServiceWireConstants
+                                .FrameworkErrorCode
+                                .None
+                            : Systems
+                                .Zlink
+                                .Framework
+                                .Runtime
+                                .Protocol
+                                .ServiceWireConstants
+                                .FrameworkErrorCode
+                                .RequestFailed,
+                        []
+                    )
+                );
+        }
+        catch (Exception error)
+        {
+            state.Fail(error);
+        }
+    }
+
+    private ValueTask<InstanceSpotActivationTerminal> DispatchDurableActivationAsync(
+        DurableActivationDispatch state
+    )
+    {
+        var received = state.Received;
+        var journalLength = ZLinkSpotAcceptedJournal.MeasureEncodedLength(
+            received,
+            state.Request ? received.OperationId.Low : 0
+        );
+        var admission = _serial.QueueAcceptedOnLane(
+            journalLength,
+            () =>
+                ZLinkSpotAcceptedJournal.Encode(
+                    received,
+                    state.Request ? received.OperationId.Low : 0
+                ),
+            (activation, ct) => activation.DispatchQueuedApplicationRouteAsync(state, ct),
+            state.ReleaseForRelocation,
+            false,
+            out _,
+            state
+        );
+        if (admission != ZLinkAcceptedWorkAdmission.Accepted)
+        {
+            received.Dispose();
+            state.Completion.TrySetException(
+                new ZLinkFrameworkException(
+                    admission.ErrorKind(),
+                    "Retained Instance Spot message admission failed."
+                )
+            );
+        }
+        return new ValueTask<InstanceSpotActivationTerminal>(state.Completion.Task);
     }
 
     public ValueTask SubmitActorAsync(
@@ -757,8 +835,126 @@ internal abstract partial class ZLinkSpotActivation
     private sealed record DurableActivationDispatch(
         ZLinkBackendRouteReceived Received,
         TaskCompletionSource<InstanceSpotActivationTerminal> Completion,
-        bool Request
-    );
+        InstanceSpotActivationOperation? Operation,
+        Action<Exception>? OnFailure = null
+    )
+    {
+        internal bool Request => Received.CanReply;
+
+        internal void Fail(Exception error)
+        {
+            try
+            {
+                OnFailure?.Invoke(error);
+            }
+            finally
+            {
+                Received.Dispose();
+                Completion.TrySetException(error);
+            }
+        }
+
+        internal void ReleaseForRelocation() =>
+            Fail(
+                ZLinkDispatchErrorReporter.WithBoundary(
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        "The Instance Spot activation queue released its accepted record.",
+                        ZLinkRetryAdvice.RetryAfterBackoff
+                    ),
+                    Systems
+                        .Zlink
+                        .Framework
+                        .Runtime
+                        .Protocol
+                        .ServiceWireConstants
+                        .FrameworkErrorCode
+                        .RouteNotConnected
+                )
+            );
+    }
+
+    internal bool HasPendingCreationIntent
+    {
+        get
+        {
+            var now = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            return _serial.HasPendingAcceptedState(state =>
+                state is DurableActivationDispatch pending
+                && (pending.Operation is null || pending.Operation.Value.DeadlineUnixMs > now)
+            );
+        }
+    }
+
+    internal Task PendingApplicationCompletion => _serial.PendingApplicationCompletion;
+
+    internal void AbortCloseBoundary() => _serial.AbortCloseBoundary();
+
+    internal ValueTask AwaitStartedCloseCallsAsync(CancellationToken cancellationToken) =>
+        _serial.AwaitStartedCloseCallsAsync(cancellationToken);
+
+    internal bool HasCommittedClose => _successor is not null;
+    internal bool HasCompletedClose => _successor?.Task.IsCompleted == true;
+
+    internal void BeginCommittedClose()
+    {
+        _successor = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _serial.SchedulePendingApplications();
+    }
+
+    internal ZLinkSpotActivation? CompletedSuccessor =>
+        _successor is { Task.IsCompletedSuccessfully: true } outcome ? outcome.Task.Result : null;
+
+    internal void SetSuccessor(
+        ZLinkSpotActivation? successor,
+        ZLinkAuthoritySnapshot? authority,
+        ZLinkFrameworkException? intentFailure,
+        Action publish
+    )
+    {
+        _serial.VisitPendingAcceptedState(
+            successor?._serial,
+            state =>
+            {
+                if (state is DurableActivationDispatch pending && authority is { } snapshot)
+                {
+                    pending.Received.RebindAuthority(
+                        snapshot.Allocation.DescriptorLifecycleGeneration,
+                        snapshot.AuthorityOwnerGeneration,
+                        checked((ulong)snapshot.OwnerLeaseGeneration)
+                    );
+                    _ = successor!.DispatchDurableActivationAsync(pending);
+                }
+            },
+            () =>
+            {
+                publish();
+                if (intentFailure is null)
+                    _successor!.TrySetResult(successor);
+                else
+                {
+                    _successor!.TrySetException(intentFailure);
+                    _ = _successor.Task.Exception;
+                }
+            }
+        );
+        _serial.SchedulePendingApplications();
+    }
+
+    internal void SetSuccessorFailure(Exception error)
+    {
+        _successor!.TrySetException(
+            error is ZLinkFrameworkException
+                ? error
+                : new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InternalFailure,
+                    "Spot Close incarnation initialization or cleanup failed.",
+                    innerException: error
+                )
+        );
+        _ = _successor.Task.Exception;
+        _serial.SchedulePendingApplications();
+    }
 
     public ValueTask<ZLinkActorReply> SubmitActorForReplyAsync(
         IZLinkActor actor,
@@ -916,8 +1112,8 @@ internal abstract partial class ZLinkSpotActivation
             .ConfigureAwait(false);
     }
 
-    internal ValueTask AwaitCloseDrainAsync(CancellationToken cancellationToken) =>
-        _serial.AwaitCloseDrainAsync(cancellationToken);
+    internal ValueTask BeginCloseBoundaryAsync(CancellationToken cancellationToken) =>
+        _serial.BeginCloseBoundaryAsync(cancellationToken);
 
     internal async ValueTask InvokeExplicitClosingAsync(
         ZLinkSpotCloseReason reason,
@@ -1158,7 +1354,7 @@ internal abstract partial class ZLinkSpotActivation
             relocationRelease();
         }
 
-        var admission = _serial.QueueAccepted(
+        var admission = _serial.QueueAcceptedOnLane(
             acceptedJournalLength,
             acceptedJournalFactory,
             async (activation, ct) =>
@@ -1168,7 +1364,8 @@ internal abstract partial class ZLinkSpotActivation
             },
             ReleaseForRelocation,
             previousOwnerMessageFollow,
-            out _
+            out _,
+            state
         );
         if (admission == ZLinkAcceptedWorkAdmission.Accepted)
             return true;
@@ -1183,6 +1380,8 @@ internal abstract partial class ZLinkSpotActivation
 
     private bool QueueApplicationRouteSerialized(ZLinkBackendRouteReceived received)
     {
+        if (RejectNonIntentClosing(received, received.InstanceIntent))
+            return true;
         var replyRouteId = 0UL;
         if (received.CanReply)
         {
@@ -1217,6 +1416,40 @@ internal abstract partial class ZLinkSpotActivation
         Func<ReadOnlyMemory<byte>> acceptedJournalFactory = () =>
             ZLinkSpotAcceptedJournal.Encode(received, replyRouteId);
 
+        var state = received.InstanceIntent
+            ? new DurableActivationDispatch(
+                received,
+                new(TaskCreationOptions.RunContinuationsAsynchronously),
+                null,
+                error =>
+                    _dispatcher.RejectApplicationRouteForFailure(
+                        received,
+                        ChannelName,
+                        error,
+                        _runtime.Flow.CaptureEnabled
+                    )
+            )
+            : null;
+        if (state is not null)
+            return QueueApplicationSerialized(
+                static (activation, retained, ct) =>
+                    activation.DispatchQueuedApplicationRouteAsync(retained, ct),
+                state,
+                acceptedJournalLength,
+                acceptedJournalFactory,
+                received.MessageFollowHopCount != 0,
+                received.CanReply,
+                admission =>
+                    ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
+                        received,
+                        ChannelName,
+                        admission,
+                        _runtime
+                    ),
+                state.ReleaseForRelocation,
+                state.ReleaseForRelocation
+            );
+
         return QueueApplicationSerialized(
             static (activation, state, ct) =>
                 activation.DispatchQueuedApplicationRouteAsync(state, ct),
@@ -1247,37 +1480,86 @@ internal abstract partial class ZLinkSpotActivation
         );
     }
 
-    private ValueTask DispatchQueuedApplicationRouteAsync(
+    private async ValueTask DispatchQueuedApplicationRouteAsync(
         ZLinkBackendRouteReceived received,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        InstanceSpotActivationOperation? originalOperation = null
     )
     {
+        if (
+            originalOperation is { } operation
+            && operation.DeadlineUnixMs
+                <= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+        )
+        {
+            received.Dispose();
+            throw ZLinkRequestFailureMapper.CreateTimedOutRequestException(
+                "Instance Spot accepted message"
+            );
+        }
+        if (
+            RejectNonIntentClosing(
+                received,
+                originalOperation is not null || received.InstanceIntent
+            )
+        )
+            return;
+        if (HasClosingSeal)
+        {
+            if (originalOperation is not null || received.InstanceIntent)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "The accepted Instance Spot message has no successor after Close."
+                );
+            ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
+                received,
+                ChannelName,
+                _runtime
+            );
+            return;
+        }
         // A route can enter the serial queue immediately before relocation
         // seals the Spot. Re-evaluate Message Follow at execution time so
         // that queued work cannot run on the source after authority moved.
         switch (TryMessageFollow(received))
         {
             case ZLinkSpotMessageFollowResult.Followed:
-                return ValueTask.CompletedTask;
+                return;
             case ZLinkSpotMessageFollowResult.StaleRejected:
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForStaleMessageFollow(
                     received,
                     ChannelName,
                     _runtime
                 );
-                return ValueTask.CompletedTask;
+                return;
             case ZLinkSpotMessageFollowResult.Full:
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
                     received,
                     ChannelName,
                     _runtime
                 );
-                return ValueTask.CompletedTask;
+                return;
             case ZLinkSpotMessageFollowResult.NotApplicable:
-                return _dispatcher.DispatchRouteAsync(received, cancellationToken);
+                await _dispatcher
+                    .DispatchRouteAsync(received, cancellationToken)
+                    .ConfigureAwait(false);
+                return;
             default:
                 throw new InvalidOperationException("Unknown Spot Message Follow result.");
         }
+    }
+
+    private bool RejectNonIntentClosing(ZLinkBackendRouteReceived received, bool hasIntent)
+    {
+        if (!HasCommittedClose || hasIntent)
+            return false;
+        ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
+            received,
+            ChannelName,
+            ZLinkAcceptedWorkAdmission.Closing,
+            _runtime
+        );
+        return true;
     }
 
     private bool QueueActorFrames(ZLinkSpotActorFrameBatch frames)
@@ -2163,7 +2445,8 @@ internal abstract partial class ZLinkSpotActivation
                 authorityOwnerGeneration: journal.AuthorityOwnerGeneration,
                 ownerLeaseGeneration: journal.OwnerLeaseGeneration,
                 messageFollowHopCount: journal.MessageFollowHopCount,
-                sourceNodeGeneration: journal.SourceNodeGeneration
+                sourceNodeGeneration: journal.SourceNodeGeneration,
+                instanceIntent: journal.InstanceIntent
             );
             try
             {

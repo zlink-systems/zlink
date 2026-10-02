@@ -99,9 +99,9 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
     public CompletionStage<Void> reconcile() {
         return scan(Optional.empty(), new HashMap<>())
                 .thenCompose(this::recoverActivations)
-                .thenAccept(
+                .thenCompose(
                         next ->
-                                inStateLane(
+                                stateLane.runAsync(
                                         () -> {
                                             applyCore(next);
                                             return null;

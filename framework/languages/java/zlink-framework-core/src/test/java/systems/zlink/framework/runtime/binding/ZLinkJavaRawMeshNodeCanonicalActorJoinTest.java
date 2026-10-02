@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 import java.nio.charset.StandardCharsets;
@@ -241,15 +242,14 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
     }
 
     @Test
-    void supersededActorJoinAloneMapsToActorLocationStale() {
+    void supersededActorJoinMapsToInvalidOperation() {
+        // Error model §2.1 sends InvalidOperation without a cause as invalidState/none.
         assertArrayEquals(
-                new int[] {107, 21},
+                new int[] {111, 0},
                 ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                "attempt was superseded",
-                                null,
-                                java.util.Map.of("zlink.actorJoin.superseded", "true"))));
+                                "attempt was superseded")));
         assertArrayEquals(
                 new int[] {105, 13},
                 ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
@@ -261,12 +261,20 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
                 systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult
                         .INTERNAL_ERROR
                         .toFrameworkErrorKind(13));
-        assertArrayEquals(
-                new int[] {105, 17},
+        int[] unrelatedInvalidOperation =
                 ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                "an unmarked invalid operation")));
+                                "an unrelated invalid operation"));
+        assertArrayEquals(new int[] {111, 0}, unrelatedInvalidOperation);
+        assertTrue(
+                ServiceWireConstants.validTerminalFailure(
+                        unrelatedInvalidOperation[0], unrelatedInvalidOperation[1]));
+        assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult
+                        .fromWireTerminal(unrelatedInvalidOperation[0])
+                        .toFrameworkErrorKind(unrelatedInvalidOperation[1]));
     }
 
     private static void awaitAdmitted(ZLinkJavaRawMeshNode node) throws InterruptedException {

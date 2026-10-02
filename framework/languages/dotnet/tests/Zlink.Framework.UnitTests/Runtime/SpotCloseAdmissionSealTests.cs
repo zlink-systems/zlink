@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Spots;
 
@@ -13,10 +14,141 @@ public sealed class SpotCloseAdmissionSealTests
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
 
-    // (a) Work the queue accepted before the Close seal runs before Close
-    // continues past step 2, even when it had not started at seal time.
     [Fact]
-    public async Task Close_seal_processes_work_accepted_before_the_seal()
+    public async Task Failed_close_CAS_preserves_message_admitted_during_the_attempt()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(errorSink);
+        var boundary = Signal();
+        var releaseCAS = Signal();
+        var messageCalls = 0;
+        var close = executor.PostCloseLifecycle(
+            async (_, ct) =>
+            {
+                await executor.BeginCloseBoundaryAsync(ct);
+                boundary.TrySetResult();
+                await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                    _ => new ValueTask(releaseCAS.Task),
+                    ct
+                );
+                executor.AbortCloseBoundary();
+                return false;
+            }
+        );
+        await boundary.Task.WaitAsync(Wait);
+        Assert.Equal(
+            ZLinkAcceptedWorkAdmission.Accepted,
+            executor.QueueAccepted(
+                new byte[] { 1 },
+                (_, _) =>
+                {
+                    Interlocked.Increment(ref messageCalls);
+                    return ValueTask.CompletedTask;
+                },
+                static () => { },
+                out var message
+            )
+        );
+        Assert.False(message.IsCompleted);
+        releaseCAS.TrySetResult();
+        Assert.False(await close!.WaitAsync(Wait));
+        await message.WaitAsync(Wait);
+        Assert.Equal(1, messageCalls);
+    }
+
+    [Fact]
+    public async Task Close_preserves_started_message_continuation()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(errorSink);
+        var started = Signal();
+        var release = Signal();
+        var closeStarted = Signal();
+        var order = new ConcurrentQueue<string>();
+        Assert.Equal(
+            ZLinkAcceptedWorkAdmission.Accepted,
+            executor.QueueAccepted(
+                new byte[] { 1 },
+                async (_, ct) =>
+                {
+                    started.TrySetResult();
+                    await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                        _ => new ValueTask(release.Task),
+                        ct
+                    );
+                    order.Enqueue("started-message-completed");
+                },
+                static () => { },
+                out var application
+            )
+        );
+        await started.Task.WaitAsync(Wait);
+        var close = executor.PostCloseLifecycle(
+            async (_, ct) =>
+            {
+                await executor.BeginCloseBoundaryAsync(ct);
+                closeStarted.TrySetResult();
+                await executor.AwaitStartedCloseCallsAsync(ct);
+                order.Enqueue("close");
+                return true;
+            }
+        );
+        await closeStarted.Task.WaitAsync(Wait);
+        Assert.False(close!.IsCompleted);
+        release.TrySetResult();
+        Assert.True(await close.WaitAsync(Wait));
+        await application.WaitAsync(Wait);
+        Assert.Equal(new[] { "started-message-completed", "close" }, order.ToArray());
+    }
+
+    [Fact]
+    public async Task Close_cleans_pending_timer_without_running_its_handler()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(errorSink);
+        var started = Signal();
+        var release = Signal();
+        Assert.True(
+            executor.Queue(
+                async (_, _) =>
+                {
+                    started.TrySetResult();
+                    await release.Task;
+                }
+            )
+        );
+        await started.Task.WaitAsync(Wait);
+        var timerCalls = 0;
+        var timer = executor
+            .ExecuteTimerAsync(
+                "pending-timer",
+                (_, _, _) =>
+                {
+                    Interlocked.Increment(ref timerCalls);
+                    return ValueTask.CompletedTask;
+                },
+                0,
+                CancellationToken.None
+            )
+            .AsTask();
+        var close = executor.PostCloseLifecycle(
+            async (_, ct) =>
+            {
+                await executor.BeginCloseBoundaryAsync(ct);
+                await executor.AwaitStartedCloseCallsAsync(ct);
+                return true;
+            }
+        );
+        release.TrySetResult();
+        Assert.True(await close!.WaitAsync(Wait));
+        await timer.WaitAsync(Wait);
+        Assert.Equal(0, timerCalls);
+    }
+
+    // Spot messaging §7: a lifecycle Close precedes application messages
+    // whose handler turn has not started.
+    [Fact]
+    public async Task Close_item_precedes_unstarted_application_work()
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateExecutor(errorSink);
@@ -56,7 +188,7 @@ public sealed class SpotCloseAdmissionSealTests
         var close = executor.PostCloseLifecycle(
             async (_, ct) =>
             {
-                await executor.AwaitCloseDrainAsync(ct).ConfigureAwait(false);
+                await executor.BeginCloseBoundaryAsync(ct).ConfigureAwait(false);
                 order.Enqueue("drained");
                 return true;
             }
@@ -66,20 +198,20 @@ public sealed class SpotCloseAdmissionSealTests
 
         Assert.True(await close.WaitAsync(Wait));
         await secondCompletion.WaitAsync(Wait);
-        Assert.Equal(new[] { "first", "second", "drained" }, order.ToArray());
+        Assert.Equal(new[] { "first", "drained", "second" }, order.ToArray());
     }
 
-    // (b) After the Close seal, new work of every entry receives the seal's
-    // result: Closing (Rejected), not a silent drop or ShuttingDown.
+    // Application message records remain admitted to the existing FIFO;
+    // timer and actor admission remain sealed for the old incarnation.
     [Fact]
-    public async Task Close_seal_answers_new_admission_with_closing()
+    public async Task Close_preserves_message_admission_and_seals_old_timer_and_actor_turns()
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateExecutor(errorSink);
         var close = executor.PostCloseLifecycle(
             async (_, ct) =>
             {
-                await executor.AwaitCloseDrainAsync(ct).ConfigureAwait(false);
+                await executor.BeginCloseBoundaryAsync(ct).ConfigureAwait(false);
                 return true;
             }
         );
@@ -87,7 +219,7 @@ public sealed class SpotCloseAdmissionSealTests
         Assert.True(await close.WaitAsync(Wait));
 
         Assert.Equal(
-            ZLinkAcceptedWorkAdmission.Closing,
+            ZLinkAcceptedWorkAdmission.Accepted,
             executor.QueueAccepted(
                 new byte[] { 1 },
                 static (_, _) => ValueTask.CompletedTask,
@@ -125,10 +257,10 @@ public sealed class SpotCloseAdmissionSealTests
         Assert.Equal(ZLinkFrameworkErrorKind.Rejected, actor.Kind);
     }
 
-    // (b) End to end: after Closing commit a request resolves a Closing
-    // authority, and the resolver ends it Rejected (spec 06 §9, 08-routing).
+    // Closing preserves its owner route. A request without creation intent
+    // completes NotFound before the held OnClosing callback is released.
     [Fact]
-    public async Task Request_after_closing_commit_is_rejected()
+    public async Task Request_without_intent_after_closing_commit_is_not_found()
     {
         await using var host = await SpotCloseHost.StartAsync();
         var spot = await host.CreateSpotAsync();
@@ -138,14 +270,16 @@ public sealed class SpotCloseAdmissionSealTests
 
         // The resolver observes the Closing authority and ends with the §9
         // terminal kind; the request below takes the same resolver path.
-        var resolved = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await host.Runtime.ResolveSpotHandleAsync(spot.SpotId, CancellationToken.None)
+        var resolved = await host.Runtime.ResolveSpotHandleAsync(
+            spot.SpotId,
+            CancellationToken.None
         );
-        Assert.Equal(ZLinkFrameworkErrorKind.Rejected, resolved.Kind);
+        Assert.NotNull(resolved);
+        Assert.Equal(spot.NodeRid, resolved.Snapshot.NodeRid);
         var result = await host.RequestAsync(spot.SpotId);
 
         Assert.Equal(
-            ZLinkFrameworkErrorKind.Rejected,
+            ZLinkFrameworkErrorKind.NotFound,
             Assert.IsType<ZLinkFrameworkException>(result).Kind
         );
         host.State.ReleaseOnClosing.TrySetResult();

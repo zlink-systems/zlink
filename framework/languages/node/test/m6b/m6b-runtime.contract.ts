@@ -2105,6 +2105,73 @@ test('direct Spot request maps an owner fence mismatch to Unavailable', async ()
   runtime.close();
 });
 
+const spotCloseFixture = JSON.parse(
+  readFileSync('../../runtime/conformance/spot-close-v1.json', 'utf8')
+);
+for (const scenario of spotCloseFixture.readyRouteCases) {
+  for (const instanceIntent of scenario.given.instanceIntent) {
+    test(`shared Ready route ${scenario.name} (instanceIntent=${instanceIntent})`, async () => {
+      const current: ServiceInstanceRouteFence = {
+        targetNodeRid: 'node-a',
+        targetNodeGeneration: 3n,
+        targetSpotId: 'close-room',
+        objectGeneration: 9n,
+        ownerId: 'owner-a',
+        authorityOwnerGeneration: 13n,
+        leaseGeneration: 17n,
+        storeVersion: 'store-v9'
+      };
+      assert.equal(scenario.given.ownerFence, 'mismatch');
+      const harness = readyInstanceIngressHarness(
+        scenario.given.authority === 'Ready' ? current : undefined
+      );
+      const diagnostics: string[] = [];
+      harness.runtime.setDispatchErrorReporter(
+        {
+          captureEnabled: () => true,
+          report: (event: {
+            readonly error?: unknown;
+            readonly surface: string;
+            readonly reason: string;
+          }) => {
+            assert.ok(event.error instanceof ZLinkFrameworkException);
+            diagnostics.push(ZLinkFrameworkErrorKind[event.error.kind]);
+            assert.equal(event.surface, scenario.expect.surface);
+            assert.equal(event.reason, scenario.expect.reason);
+          }
+        } as unknown as import('../../packages/framework/src/runtime/channels/dispatch-error-reporter').ZLinkDispatchErrorReporter,
+        'mesh'
+      );
+      try {
+        const kind = scenario.given.messageKind as 'request' | 'send';
+        const ingressResult = await harness.ingress(
+          harness.request(
+            { ...current, authorityOwnerGeneration: current.authorityOwnerGeneration + 1n },
+            kind,
+            instanceIntent
+          )
+        );
+        if (kind === 'request') {
+          assert.equal(ingressResult, 'infrastructure');
+          assert.equal(harness.replies.length, scenario.expect.messageTerminalCount);
+          const reply = decodeStatefulReply(harness.replies[0]![0]!, 2n, 'instanceSpotRequest');
+          assert.equal(reply.failureCode, 34);
+          assert.equal(scenario.expect.messageTerminal, 'Unavailable');
+        } else {
+          assert.equal(ingressResult, 'protocolError');
+          assert.deepEqual(diagnostics, scenario.expect.diagnostics);
+          assert.equal(harness.replies.length, 0);
+        }
+        assert.equal(harness.queued.length, scenario.expect.handlerCalls);
+        assert.equal(harness.factoryCalls(), scenario.expect.factoryCalls);
+        assert.equal(harness.missingPlacementCalls(), scenario.expect.missingPlacementCalls);
+      } finally {
+        harness.runtime.close();
+      }
+    });
+  }
+}
+
 test('Ready Instance application admission uses the current same-owner incarnation', async () => {
   const current: ServiceInstanceRouteFence = {
     targetNodeRid: 'node-a',
@@ -2222,8 +2289,8 @@ test('Ready Instance application admission preserves generation and owner error 
   );
   assert.deepEqual(missingReply, {
     correlation: 2n,
-    terminalResult: RequestResult.NotFound,
-    failureCode: 14
+    terminalResult: RequestResult.Conflict,
+    failureCode: 34
   });
   missingHarness.runtime.close();
 
@@ -2844,9 +2911,11 @@ test('durable missing Instance authority discards a materialized orphan before r
     beginTerminal: () => undefined,
     completeTerminal: async () => false
   });
+  const originalDeadlineUnixMs = BigInt(Date.now() + 10_000);
   const authority: ServiceAsyncInstanceActivationAuthority = {
     read: async () => ({ kind: 'missing' }),
     reserve: async (activation) => {
+      assert.equal(activation.deadlineUnixMs, originalDeadlineUnixMs);
       events.push('reserve');
       assert.equal(runtime.registry.spot(activation.target.targetSpotId)?.ref.generation, 1n);
       return {
@@ -2859,8 +2928,10 @@ test('durable missing Instance authority discards a materialized orphan before r
       };
     },
     resume: async () => assert.fail('Live activation must not resume a startup reservation'),
-    commit: async (_target, _reservation, spot) => {
+    commit: async (_target, _reservation, spot, ...deadlines: unknown[]) => {
       events.push('commit');
+      assert.equal(typeof deadlines[0], 'bigint');
+      assert.equal(deadlines[0], originalDeadlineUnixMs);
       assert.equal(spot.ref.generation, 2n);
       return {
         kind: 'committed',
@@ -2900,7 +2971,7 @@ test('durable missing Instance authority discards a materialized orphan before r
           undefined,
           'send',
           { high: 7n, low: 45n },
-          BigInt(Date.now() + 10_000)
+          originalDeadlineUnixMs
         ),
         encodeApplicationPayload({
           packetName: 'FirstMessage',
@@ -4133,12 +4204,13 @@ test('Instance Close prevents a waiting materialization of the closed generation
       ready ? { stableType: 'TenantWorker', objectGeneration: 8n } : undefined,
     beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
       onCommitted();
-      return { release: async () => undefined };
-    },
-    releaseInstanceAuthority: async () => {
-      releaseStarted();
-      await releaseFinished;
-      ready = false;
+      return {
+        release: async () => {
+          releaseStarted();
+          await releaseFinished;
+          ready = false;
+        }
+      };
     }
   });
   await manager.materializeInstance('mesh-a', 'TenantWorker', 'tenant:closed-race', 8n);
@@ -5465,7 +5537,8 @@ test('production Instance authority adapter writes schema ColdActivating then Re
   assert.deepEqual(await authority.read(target), {
     kind: 'creating',
     objectGeneration: creating.objectGeneration,
-    authorityOwnerGeneration: creating.authorityOwnerGeneration
+    authorityOwnerGeneration: creating.authorityOwnerGeneration,
+    authority: creating
   });
   assert.ok(storedRequest !== undefined);
   assert.equal(recordedRequestReference, requestReference?.value);
@@ -6490,11 +6563,15 @@ test('Ready Instance request ends on a disconnected stale route without resubmis
   assert.equal(invalidations, 1);
 });
 
-test('Instance target-not-found refreshes a Missing authority into one cold activation', async () => {
+test('Instance target-not-found completes once and a new call cold-activates Missing authority', async () => {
   let invalidations = 0;
   let refreshReads = 0;
   let directAttempts = 0;
   let missingAttempts = 0;
+  const targetFailure = createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+    'closed target'
+  );
   const readyTarget = {
     routerChannelId: 'mesh',
     targetNodeRid: 'node-a',
@@ -6558,10 +6635,7 @@ test('Instance target-not-found refreshes a Missing authority into one cold acti
       },
       async requestToSpot() {
         directAttempts += 1;
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-          'closed target'
-        );
+        throw targetFailure;
       }
     },
     meshNames: () => ['mesh'],
@@ -6596,15 +6670,34 @@ test('Instance target-not-found refreshes a Missing authority into one cold acti
   });
 
   class Lookup {}
-  const reply = await address.requestToSpotAddress('instance-42', new Lookup(), {
-    instanceSpot: true,
-    instanceSpotType: 'chat-room',
-    initialMeshName: 'mesh'
-  });
+  const request = () =>
+    address.requestToSpotAddress('instance-42', new Lookup(), {
+      instanceSpot: true,
+      instanceSpotType: 'chat-room',
+      initialMeshName: 'mesh'
+    });
 
-  assert.equal(reply, 'reactivated');
+  // Spot Address and Submit §5: stale-target completion preserves the original
+  // failure; cache invalidation does not re-resolve or resubmit this operation.
+  await assert.rejects(request(), (error: unknown) => error === targetFailure);
   assert.equal(directAttempts, 1);
   assert.equal(invalidations, 1);
+  assert.equal(refreshReads, 0);
+  assert.equal(missingAttempts, 0);
+
+  // A separate application call still finds the old Ready owner and fails once.
+  await assert.rejects(request(), (error: unknown) => error === targetFailure);
+  assert.equal(directAttempts, 2);
+  assert.equal(invalidations, 2);
+  assert.equal(refreshReads, 1);
+  assert.equal(missingAttempts, 0);
+
+  // Only this new call resolves Missing and submits one cold activation.
+  const reply = await request();
+
+  assert.equal(reply, 'reactivated');
+  assert.equal(directAttempts, 2);
+  assert.equal(invalidations, 2);
   assert.equal(refreshReads, 2);
   assert.equal(missingAttempts, 1);
 });
@@ -6985,10 +7078,13 @@ function readyInstanceIngressHarness(
   readonly ingress: (record: RawServiceIngressRecord) => string | undefined;
   readonly request: (
     route: ServiceInstanceRouteFence,
-    operationKind: 'send' | 'request'
+    operationKind: 'send' | 'request',
+    instanceIntent?: boolean
   ) => RawServiceIngressRecord;
   readonly queued: unknown[];
   readonly replies: readonly (readonly Buffer[])[];
+  readonly factoryCalls: () => number;
+  readonly missingPlacementCalls: () => number;
 } {
   let ingressHandler: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
   const queued: unknown[] = [];
@@ -7015,6 +7111,23 @@ function readyInstanceIngressHarness(
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
+  let factoryCalls = 0;
+  let missingPlacementCalls = 0;
+  runtime.registerInstanceApplicationLifecycle({
+    isMaterialized: () => true,
+    materialize: async () => {
+      factoryCalls++;
+    },
+    discard: async () => {},
+    beginTerminal: () => {},
+    completeTerminal: async () => false
+  });
+  runtime.registerAsyncInstanceActivationAuthority({
+    reserve: async () => {
+      missingPlacementCalls++;
+      throw new Error('Ready ingress must not place Missing authority');
+    }
+  } as unknown as import('../../packages/framework/src/runtime/foundation/service-stateful-runtime').ServiceAsyncInstanceActivationAuthority);
   if (current !== undefined) {
     runtime.restoreSpotAuthority(
       current.targetSpotId,
@@ -7031,7 +7144,7 @@ function readyInstanceIngressHarness(
       if (ingressHandler === undefined) throw new Error('Stateful ingress was not registered.');
       return ingressHandler(record);
     },
-    request: (route, operationKind) => ({
+    request: (route, operationKind, instanceIntent = false) => ({
       command: M6bServiceWireCommand.instanceSpot,
       flags: 0,
       sourceRoutingId: 'source',
@@ -7044,7 +7157,9 @@ function readyInstanceIngressHarness(
           undefined,
           operationKind,
           operationKind === 'request' ? { high: 1n, low: 1n } : { high: 0n, low: 0n },
-          operationKind === 'request' ? 2n : undefined
+          operationKind === 'request' ? 2n : undefined,
+          false,
+          instanceIntent
         ),
         encodeApplicationPayload({
           packetName: 'ReadyInstanceApplication',
@@ -7054,7 +7169,9 @@ function readyInstanceIngressHarness(
       ]
     }),
     queued,
-    replies
+    replies,
+    factoryCalls: () => factoryCalls,
+    missingPlacementCalls: () => missingPlacementCalls
   };
 }
 

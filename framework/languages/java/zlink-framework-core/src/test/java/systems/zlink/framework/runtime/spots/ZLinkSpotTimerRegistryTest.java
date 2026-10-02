@@ -41,6 +41,102 @@ import java.util.function.Supplier;
 
 final class ZLinkSpotTimerRegistryTest {
     @Test
+    void cancelWhileOwnerIsBusyPreventsHandlerAfterGateReacquisition() throws Exception {
+        var scheduledTick = new AtomicReference<Runnable>();
+        var scheduler =
+                new ScheduledThreadPoolExecutor(1) {
+                    @Override
+                    public ScheduledFuture<?> schedule(
+                            Runnable command, long delay, TimeUnit unit) {
+                        scheduledTick.set(command);
+                        return super.schedule(() -> {}, 1, TimeUnit.HOURS);
+                    }
+                };
+        var queue = new systems.zlink.framework.execution.ZLinkSerialExecutionQueue();
+        var releaseOwner = new CompletableFuture<Void>();
+        var ownerEntered = new CompletableFuture<Void>();
+        var attempted = new CompletableFuture<Void>();
+        var releaseGate = new CompletableFuture<Void>();
+        var gateEntered = new CompletableFuture<Void>();
+        var handled = new AtomicBoolean();
+        var registryRef = new AtomicReference<ZLinkSpotTimerRegistry>();
+        var registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        scheduler,
+                        ignored -> new PreviousTimerHandler(handled),
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) -> {
+                            try {
+                                var field =
+                                        ZLinkSpotTimerRegistry.class.getDeclaredField("stateLane");
+                                field.setAccessible(true);
+                                var lane =
+                                        (systems.zlink.framework.runtime.internal.execution
+                                                        .ZLinkStateLane)
+                                                field.get(registryRef.get());
+                                lane.runAsync(
+                                        () -> {
+                                            ownerEntered.complete(null);
+                                            releaseOwner.join();
+                                            return null;
+                                        });
+                                ownerEntered.get(3, TimeUnit.SECONDS);
+                            } catch (ReflectiveOperationException | TimeoutException failure) {
+                                return CompletableFuture.failedFuture(failure);
+                            } catch (ExecutionException failure) {
+                                return CompletableFuture.failedFuture(failure.getCause());
+                            } catch (InterruptedException failure) {
+                                Thread.currentThread().interrupt();
+                                return CompletableFuture.failedFuture(failure);
+                            }
+                            return queue.enqueue(
+                                    () -> {
+                                        var completion = operation.get();
+                                        attempted.complete(null);
+                                        return completion;
+                                    },
+                                    null);
+                        });
+        registryRef.set(registry);
+        registry.setSpot(new TestSpot());
+        try {
+            var timer =
+                    registry.add("timer", Duration.ofMillis(1), PreviousTimerHandler.class, null)
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            CompletableFuture.runAsync(scheduledTick.get());
+            attempted.get(3, TimeUnit.SECONDS);
+            var other =
+                    queue.enqueue(
+                            () -> {
+                                gateEntered.complete(null);
+                                return releaseGate;
+                            },
+                            null);
+            gateEntered.get(3, TimeUnit.SECONDS);
+            var cancelled = timer.cancel();
+            releaseOwner.complete(null);
+            cancelled.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertFalse(handled.get());
+            releaseGate.complete(null);
+            other.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            assertFalse(handled.get());
+        } finally {
+            releaseOwner.complete(null);
+            releaseGate.complete(null);
+            registry.closeAsync().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            scheduler.shutdownNow();
+            queue.close();
+        }
+    }
+
+    @Test
     void emptyCanonicalTimerEnvelopeRestoresAsNoTimers() {
         var decoded =
                 ZLinkSpotTimerRelocationEnvelope.decode(
@@ -88,7 +184,9 @@ final class ZLinkSpotTimerRegistryTest {
         registry.setSpot(new TestSpot());
 
         try {
-            registry.add("timer", Duration.ofMillis(1), CountingTimerHandler.class, null);
+            registry.add("timer", Duration.ofMillis(1), CountingTimerHandler.class, null)
+                    .toCompletableFuture()
+                    .join();
             assertEquals(1, preparations.get());
             assertTrue(handled.await(2, TimeUnit.SECONDS));
             assertEquals(1, creates.get());
@@ -385,8 +483,12 @@ final class ZLinkSpotTimerRegistryTest {
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
         try {
-            registry.add("z-timer", Duration.ofHours(1), PreviousTimerHandler.class, null);
-            registry.add("a-timer", Duration.ofHours(1), PreviousTimerHandler.class, null);
+            registry.add("z-timer", Duration.ofHours(1), PreviousTimerHandler.class, null)
+                    .toCompletableFuture()
+                    .join();
+            registry.add("a-timer", Duration.ofHours(1), PreviousTimerHandler.class, null)
+                    .toCompletableFuture()
+                    .join();
             byte[] first = ZLinkSpotTimerRelocationEnvelope.encode(registry.freeze());
             byte[] second =
                     ZLinkSpotTimerRelocationEnvelope.encode(

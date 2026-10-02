@@ -11,6 +11,7 @@ internal enum ZLinkInstanceSpotAuthorityState : byte
 {
     Creating = 1,
     Ready = 2,
+    Closing = 3,
 }
 
 internal sealed record ZLinkInstanceSpotAuthorityPayload(
@@ -55,6 +56,8 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
                     ServiceWireCodec.InstanceAuthorityState.ColdActivating,
                 ZLinkInstanceSpotAuthorityState.Ready => (byte)
                     ServiceWireCodec.InstanceAuthorityState.Ready,
+                ZLinkInstanceSpotAuthorityState.Closing => (byte)
+                    ServiceWireCodec.InstanceAuthorityState.Closing,
                 _ => throw new ArgumentOutOfRangeException(nameof(payload)),
             }
         );
@@ -174,6 +177,9 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
                 (byte)ServiceWireCodec.InstanceAuthorityState.Ready
                     when operation == (byte)ServiceWireCodec.AuthorityOperationKind.Steady =>
                     ZLinkInstanceSpotAuthorityState.Ready,
+                (byte)ServiceWireCodec.InstanceAuthorityState.Closing
+                    when operation == (byte)ServiceWireCodec.AuthorityOperationKind.Steady =>
+                    ZLinkInstanceSpotAuthorityState.Closing,
                 _ => (ZLinkInstanceSpotAuthorityState)0,
             };
             if (state == 0)
@@ -771,6 +777,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 .CommitAsync(
                     reservation,
                     ZLinkInstanceSpotAuthorityPayloadCodec.Encode(readyPayload),
+                    DateTimeOffset.FromUnixTimeMilliseconds(
+                        checked((long)operation.DeadlineUnixMs)
+                    ),
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -1191,6 +1200,36 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     operationRoot.Reference,
                     StringComparison.Ordinal
                 );
+            // A Missing intent can reach its owner after another operation
+            // has already started Close. Its original operation remains the
+            // accepted application record behind the owner's lifecycle item.
+            if (
+                authority.State == ZLinkInstanceSpotAuthorityState.Closing
+                && await catalog
+                    .TryGetInstanceActivationAsync(
+                        authority.SpotId,
+                        authority.StableType,
+                        current.ObjectGeneration
+                    )
+                    .ConfigureAwait(false)
+                    is { } closingActivation
+            )
+            {
+                var terminal = await DispatchFirstMessageAsync(
+                        closingActivation,
+                        operation,
+                        requestSource,
+                        current,
+                        metadata,
+                        payload,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                await relocationStore
+                    .DeleteRelocationAsync(operationRoot.Reference, CancellationToken.None)
+                    .ConfigureAwait(false);
+                return terminal;
+            }
             if (
                 authority.State == ZLinkInstanceSpotAuthorityState.Ready
                 && !anotherOperationIsAccepted
@@ -1331,7 +1370,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 payload,
                 metadata,
                 operation.IsRequest,
-                cancellationToken
+                cancellationToken,
+                operation
             )
             .ConfigureAwait(false);
     }

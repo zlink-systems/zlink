@@ -223,6 +223,9 @@ function createContext(redisEndpoint) {
         env
       );
       return {
+        observe(stage) {
+          fs.writeFileSync(`${completionSignalPath}.${stage}`, 'observed\n', { mode: 0o600 });
+        },
         async complete() {
           if (state.status !== undefined) {
             throw new Error(`Browser sample exited before lifecycle evidence completed. See ${state.logPath}.`);
@@ -525,25 +528,12 @@ async function cleanChildren() {
   for (const state of [...active].reverse()) {
     signalChild(state, 'SIGTERM');
   }
-  // Wait for the host Shutdown default deadline (30 s); finish as soon as the owned processes close.
-  const hostShutdownDeadlineMs = 30_000;
-  let deadline;
-  try {
-    await Promise.race([Promise.all(exited), new Promise((resolve) => {
-      deadline = setTimeout(resolve, hostShutdownDeadlineMs);
-    })]);
-  } finally {
-    clearTimeout(deadline);
-  }
+  await Promise.all(exited);
   for (const state of active) {
     if (state.exitCode === 137 || state.exitCode === -9 || state.signalCode === 'SIGKILL') {
       teardownFailures.set(state, state.signalCode ?? state.exitCode);
     }
-    if (!state.closed) {
-      if (signalChild(state, 'SIGKILL')) teardownFailures.set(state, 'SIGKILL');
-    }
   }
-  await Promise.all(exited);
   if (redisContainer) {
     removeRedisAttempt(redisContainer, '');
   }

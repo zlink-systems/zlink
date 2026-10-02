@@ -285,7 +285,8 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
   public:
     task_wait_registration_t (std::coroutine_handle<> handle, task_scheduler_t scheduler) :
         task_wait_registration_t (
-          [handle] (bool cancelled) {
+          [handle] (bool cancelled, const ambient_context_snapshot_t &ambient) {
+              const auto ambient_guard = enter_ambient_context (ambient, false);
               if (cancelled)
                   set_serial_resume_failure (framework_error_kind_t::shutting_down,
                                              registered_execution_context_shutting_down_message);
@@ -297,7 +298,7 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
     {
     }
 
-    task_wait_registration_t (std::function<void (bool)> work,
+    task_wait_registration_t (std::function<void (bool, const ambient_context_snapshot_t &)> work,
                               task_scheduler_t explicit_scheduler) :
         _work (std::move (work)),
         _turn (capture_current_serial_turn ()),
@@ -307,8 +308,7 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
             _turn.reset ();
         if (_turn)
             _ambient.wait_owner = _turn->wait_cancellation ();
-        if (_turn || _ambient.application_job)
-            _scheduler = capture_runtime_native_continuation_scheduler ();
+        _scheduler = capture_runtime_native_continuation_scheduler ();
         if (explicit_scheduler) {
             _scheduler = [explicit_scheduler = std::move (explicit_scheduler),
                           runtime = std::move (_scheduler)] (std::function<void ()> work) {
@@ -371,15 +371,14 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
         bool pending = false;
         if (!_started.compare_exchange_strong (pending, true, std::memory_order_acq_rel))
             return true;
-        const auto ambient_guard = enter_ambient_context (_ambient, false);
         serial_turn_scope_t turn_guard (_turn);
         auto work = std::move (_work);
-        work (cancelled);
+        work (cancelled, _ambient);
         return true;
     }
 
     std::atomic_bool _started{false};
-    std::function<void (bool)> _work;
+    std::function<void (bool, const ambient_context_snapshot_t &)> _work;
     task_scheduler_t _scheduler;
     std::shared_ptr<serial_turn_t> _turn;
     ambient_context_snapshot_t _ambient;
@@ -407,7 +406,6 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     {
         std::function<void (const result_t<T> &)> invoke;
         ambient_context_snapshot_t ambient;
-        std::unique_ptr<task_scheduler_t> scheduler;
         std::shared_ptr<serial_turn_t> owner;
     };
 
@@ -417,7 +415,6 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     bool complete (result_t<T> result)
     {
         std::vector<std::shared_ptr<task_wait_registration_t>> continuations;
-        std::vector<callback_t> callbacks;
         std::vector<callback_t> terminal_callbacks;
         auto self = this->shared_from_this ();
         {
@@ -427,7 +424,6 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             }
             _result.emplace (std::move (result));
             continuations = std::move (_continuations);
-            callbacks = std::move (_callbacks);
             terminal_callbacks = std::move (_terminal_callbacks);
         }
         _ready.notify_all ();
@@ -436,21 +432,6 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             for (auto &callback : terminal_callbacks) {
                 const auto ambient_guard = enter_ambient_context (callback.ambient);
                 callback.invoke (*_result);
-            }
-            for (auto &callback : callbacks) {
-                auto scheduler = std::move (callback.scheduler);
-                if (!scheduler) {
-                    const auto ambient_guard = enter_ambient_context (callback.ambient);
-                    callback.invoke (*_result);
-                    continue;
-                }
-                auto invoke = [self, invoke = std::move (callback.invoke),
-                               ambient = callback.ambient, owner = callback.owner] () noexcept {
-                    (void) owner;
-                    const auto ambient_guard = enter_ambient_context (ambient);
-                    invoke (*self->_result);
-                };
-                (*scheduler) (std::move (invoke));
             }
             for (auto &continuation : continuations)
                 deliver_registration (continuation, self);
@@ -520,24 +501,14 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         const auto self = this->shared_from_this ();
         std::shared_ptr<task_wait_registration_t> registration;
         std::weak_ptr<task_shared_state_t<T>> owner_state;
-        auto owner = capture_current_serial_turn ();
-        if (owner && owner->released ())
-            owner.reset ();
         {
             std::lock_guard lock (_mutex);
             if (!_result) {
-                const auto token = owner ? owner->wait_cancellation () : current_wait_owner ();
-                if (!token.stop_possible ()) {
-                    _callbacks.push_back (callback_t{
-                      std::move (callback), capture_ambient_context (),
-                      scheduler ? std::make_unique<task_scheduler_t> (std::move (scheduler))
-                                : nullptr,
-                      std::move (owner)});
-                    return;
-                }
                 owner_state = this->weak_from_this ();
                 registration = std::make_shared<task_wait_registration_t> (
-                  [weak = owner_state, callback = std::move (callback)] (bool cancelled) {
+                  [weak = owner_state, callback = std::move (callback)] (
+                    bool cancelled, const ambient_context_snapshot_t &ambient) {
+                      const auto ambient_guard = enter_ambient_context (ambient);
                       if (cancelled) {
                           const auto failure = result_t<T>::failure (
                             framework_error_kind_t::shutting_down,
@@ -574,7 +545,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             std::lock_guard lock (_mutex);
             if (!_result) {
                 _terminal_callbacks.push_back (callback_t{
-                  std::move (callback), std::move (snapshot), {}, capture_current_serial_turn ()});
+                  std::move (callback), std::move (snapshot), capture_current_serial_turn ()});
                 return;
             }
         }
@@ -617,7 +588,6 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     std::condition_variable _ready;
     std::optional<result_t<T>> _result;
     std::vector<std::shared_ptr<task_wait_registration_t>> _continuations;
-    std::vector<callback_t> _callbacks;
     std::vector<callback_t> _terminal_callbacks;
 };
 

@@ -32,7 +32,6 @@ import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
-import systems.zlink.framework.locationprovider.ZLinkStoreWriteConflict;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -104,7 +103,10 @@ final class ZLinkSpotCloseConformanceTest {
                     "onClosingCallsPerAcceptedClose",
                     "onClosingFailureChangesCloseResult",
                     "managerCloseResubmitsToNewOwner",
-                    "closeRetargetsCurrentIncarnation");
+                    "closeRetargetsCurrentIncarnation",
+                    "unexecutedTimersCancelled",
+                    "oldIncarnationPendingHandlerCalls",
+                    "messageTerminalsPerRequest");
 
     // One scenario runs at a time; the Spot and Actor types reach these through static state.
     static final AtomicInteger ON_CLOSING_CALLS = new AtomicInteger();
@@ -242,88 +244,6 @@ final class ZLinkSpotCloseConformanceTest {
     }
 
     @Test
-    void routeAcceptedBeforeClosingSealCompletesAfterSeal() throws Exception {
-        resetStatics();
-        HANDLER_MODE.set("firstBlock");
-        handlerBlock = new CompletableFuture<>();
-        CompletableFuture<Void> firstBlock = handlerBlock;
-        CompletableFuture<Void> secondBlock = new CompletableFuture<>();
-        String spotId = "accepted-before-close-" + UUID.randomUUID();
-        FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
-        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        options.addLocationStore(store);
-        var node = options.addRouteMesh("close-mesh");
-        node.listen("inproc://spot-close-" + UUID.randomUUID())
-                .setRoutingId(RoutingId.from("spot-close-" + UUID.randomUUID()));
-        var objects = node.objects().server();
-        objects.addEntrySpot(EntrySpot.class);
-        objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
-
-        try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory())) {
-            SpotRef ref = create(runtime, spotId);
-            CompletableFuture<Reply> first = request(runtime, spotId);
-            handlerEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
-            handlerBlock = secondBlock;
-            CompletableFuture<Reply> second = request(runtime, spotId);
-            SpotActivation activation =
-                    ((ZLinkSpotRuntime) runtime.spotManager())
-                            .spotLifecycle()
-                            .spotActivationFor(spotId);
-            var serialsField = DefaultSpotContext.class.getDeclaredField("serials");
-            serialsField.setAccessible(true);
-            var serials = serialsField.get(activation.context);
-            var spotQueueField = ZLinkSpotSerialExecutor.class.getDeclaredField("spotQueue");
-            spotQueueField.setAccessible(true);
-            var queue = spotQueueField.get(serials);
-            var outstandingField = ZLinkSerialExecutionQueue.class.getDeclaredField("outstanding");
-            outstandingField.setAccessible(true);
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
-            long outstanding;
-            while (true) {
-                synchronized (queue) {
-                    outstanding = (long) outstandingField.get(queue);
-                }
-                if (outstanding >= 2 || System.nanoTime() >= deadline) {
-                    break;
-                }
-                Thread.onSpinWait();
-            }
-            assertTrue(outstanding >= 2);
-            store.watchNextAuthorityPut.set(true);
-            CompletableFuture<Boolean> close = closeStage(runtime, ref);
-            firstBlock.complete(null);
-            store.closingAuthorityStored.get(WAIT_SECONDS, TimeUnit.SECONDS);
-            var closingSealField =
-                    ZLinkSerialExecutionQueue.class.getDeclaredField("closingAdmissionSealed");
-            closingSealField.setAccessible(true);
-            long sealDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
-            boolean closingSealed;
-            while (true) {
-                synchronized (queue) {
-                    closingSealed = closingSealField.getBoolean(queue);
-                }
-                if (closingSealed || System.nanoTime() >= sealDeadline) {
-                    break;
-                }
-                Thread.onSpinWait();
-            }
-            assertTrue(closingSealed);
-            assertFalse(second.isDone());
-            assertFalse(close.isDone());
-            secondBlock.complete(null);
-            assertEquals(spotId, first.get(WAIT_SECONDS, TimeUnit.SECONDS).spotId());
-            assertEquals(spotId, second.get(WAIT_SECONDS, TimeUnit.SECONDS).spotId());
-            assertTrue(close.get(WAIT_SECONDS, TimeUnit.SECONDS));
-            assertEquals(2, HANDLER_CALLS.get());
-        } finally {
-            firstBlock.complete(null);
-            secondBlock.complete(null);
-        }
-    }
-
-    @Test
     void runsEverySpotCloseFixtureScenario() throws Exception {
         JsonNode fixture = new ObjectMapper().readTree(Files.readString(sharedFixture()));
         assertEquals("zlink.framework.spot-close", fixture.path("fixture").asText());
@@ -332,7 +252,12 @@ final class ZLinkSpotCloseConformanceTest {
                 .fieldNames()
                 .forEachRemaining(
                         name -> assertTrue(INVARIANTS.contains(name), "unknown invariant " + name));
+        assertTrue(fixture.path("invariants").path("unexecutedTimersCancelled").asBoolean());
+        assertEquals(
+                0, fixture.path("invariants").path("oldIncarnationPendingHandlerCalls").asInt());
+        assertEquals(1, fixture.path("invariants").path("messageTerminalsPerRequest").asInt());
         List<String> failures = new ArrayList<>();
+        List<Throwable> failureCauses = new ArrayList<>();
         // Both context surfaces return the Close completion result.
         for (Class<?> surface :
                 List.of(
@@ -354,11 +279,37 @@ final class ZLinkSpotCloseConformanceTest {
                 runScenario(scenario);
             } catch (AssertionError | Exception failure) {
                 failures.add(name + ": " + failure);
+                failureCauses.add(failure);
             }
             ran.add(name);
         }
         assertEquals(SCENARIOS, Set.copyOf(ran));
-        assertEquals(List.of(), failures);
+        List<String> ranBranches = new ArrayList<>();
+        for (JsonNode branch : fixture.path("closeBranches")) {
+            String name = branch.path("name").asText();
+            try {
+                ZLinkInstanceSpotCloseConformanceTest.runBranch(branch);
+            } catch (AssertionError | Exception failure) {
+                failures.add(name + ": " + failure);
+                failureCauses.add(failure);
+            }
+            ranBranches.add(name);
+        }
+        assertEquals(ZLinkInstanceSpotCloseConformanceTest.BRANCHES, Set.copyOf(ranBranches));
+        for (JsonNode routeCase : fixture.path("readyRouteCases")) {
+            try {
+                ZLinkInstanceSpotCloseConformanceTest.runReadyRouteCase(routeCase);
+            } catch (AssertionError | Exception failure) {
+                failures.add(routeCase.path("name").asText() + ": " + failure);
+                failureCauses.add(failure);
+            }
+        }
+        try {
+            assertEquals(List.of(), failures);
+        } catch (AssertionError assertion) {
+            failureCauses.forEach(assertion::addSuppressed);
+            throw assertion;
+        }
     }
 
     private static void runScenario(JsonNode scenario) throws Exception {
@@ -851,8 +802,54 @@ final class ZLinkSpotCloseConformanceTest {
                                                             .startsWith("authority\0")
                                                     && delete.key().value().endsWith(authorityKey));
             if (authorityPut && conflictNextAuthorityPut.compareAndSet(true, false)) {
-                return CompletableFuture.completedFuture(
-                        new ZLinkStoreWriteConflict(java.time.Instant.now()));
+                ZLinkStoreKey key =
+                        request.mutations().stream()
+                                .filter(ZLinkStorePut.class::isInstance)
+                                .map(ZLinkStorePut.class::cast)
+                                .map(ZLinkStorePut::key)
+                                .filter(
+                                        candidate ->
+                                                candidate.value().startsWith("authority\0")
+                                                        && candidate.value().endsWith(authorityKey))
+                                .findFirst()
+                                .orElseThrow();
+                return inner.read(key, cancellation)
+                        .thenCompose(
+                                read -> {
+                                    var current =
+                                            (systems.zlink.framework.locationprovider
+                                                            .ZLinkStoreReadFound)
+                                                    read;
+                                    return inner.write(
+                                                    new ZLinkStoreWriteRequest(
+                                                            List.of(),
+                                                            List.of(
+                                                                    new ZLinkStorePut(
+                                                                            key,
+                                                                            current.value().bytes(),
+                                                                            null))),
+                                                    cancellation)
+                                            .thenCompose(
+                                                    rewritten -> {
+                                                        var applied =
+                                                                (ZLinkStoreWriteApplied) rewritten;
+                                                        assertNotEquals(
+                                                                current.value().version(),
+                                                                applied.putVersions().get(key));
+                                                        return inner.write(request, cancellation)
+                                                                .thenApply(
+                                                                        result -> {
+                                                                            assertInstanceOf(
+                                                                                    systems.zlink
+                                                                                            .framework
+                                                                                            .locationprovider
+                                                                                            .ZLinkStoreWriteConflict
+                                                                                            .class,
+                                                                                    result);
+                                                                            return result;
+                                                                        });
+                                                    });
+                                });
             }
             if (authorityDelete && failNextAuthorityDelete.compareAndSet(true, false)) {
                 return CompletableFuture.failedFuture(

@@ -14,8 +14,9 @@ internal sealed partial class ZLinkProviderLocationRepository
     private const string AggregatePrefix = Prefix + "aggregate:";
     private static readonly TimeSpan AmbiguousReconciliationTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan CounterRetryWindow = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan AggregateStagingRetention = TimeSpan.FromHours(24);
     private const int CounterRetryLimit = 64;
+    private static readonly TimeSpan AggregateStagingRetention = TimeSpan.FromHours(24);
+    private const int MaximumStoreConcurrency = 64;
     private const int MaxInventoryPageEntries = 1024;
     private const int MaxInventoryPageBytes = 1024 * 1024;
     private const int MaxInventoryTreeLevels = 32;
@@ -29,7 +30,6 @@ internal sealed partial class ZLinkProviderLocationRepository
     private const byte AggregateHeaderRecordKind = 1;
     private const byte AggregateRequestRecordKind = 2;
     private static readonly UTF8Encoding InventoryUtf8 = new(false, true);
-    private readonly SemaphoreSlim authorityGenerationGate = new(1, 1);
     private readonly SemaphoreSlim aggregateRecoveryGate = new(1, 1);
     private int aggregateStagingRecoveryCompleted;
 
@@ -140,9 +140,13 @@ internal sealed partial class ZLinkProviderLocationRepository
 
             //  Four separate reasons collapse into one Conflict, and the caller
             //  reports all of them as "authority changed".
-            Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"cas_conflict_reason missing={current is null} state={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(current?.Snapshot.Allocation.State)} version_match={current is not null && current.Version.Value == expectedStoreVersion} fence={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(current?.Meta.AggregateFence)}"
-            );
+            if (Diagnostics.ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
+                Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"cas_conflict_reason missing={current is null} "
+                        + $"state={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(current?.Snapshot.Allocation.State)} "
+                        + $"version_match={current is not null && current.Version.Value == expectedStoreVersion} "
+                        + $"fence={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(current?.Meta.AggregateFence)}"
+                );
             return Conflict(current);
         }
 
@@ -293,11 +297,35 @@ internal sealed partial class ZLinkProviderLocationRepository
             nextAllocation = targetAllocation;
         }
 
-        // ObjectGeneration/AuthorityOwnerGeneration live only on this single
-        // authority row now (checklist C-2b) -- current.Meta already carries
-        // both, atomically consistent by construction, so there is no
-        // separate GenerationKey read/condition to reconcile against.
+        var nextObjectGeneration = current.Meta.ObjectGeneration;
         var nextAuthorityOwnerGeneration = current.Meta.AuthorityOwnerGeneration;
+        if (put.GenerationTransition == ZLinkAuthorityGenerationTransition.Reincarnate)
+        {
+            var objectCounter = await ReadObjectGenerationCounterAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var ownerCounter = await ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (objectCounter.Value == MaximumGeneration || ownerCounter.Value == MaximumGeneration)
+                return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
+            nextObjectGeneration = objectCounter.Value;
+            nextAuthorityOwnerGeneration = ownerCounter.Value;
+            AddCondition(conditions, objectCounter.Condition);
+            AddCondition(conditions, ownerCounter.Condition);
+            mutations.Add(
+                new ZLinkStoreMutation.Put(
+                    ObjectGenerationCounterKey(),
+                    EncodeGenerationCounter(nextObjectGeneration + 1),
+                    null
+                )
+            );
+            mutations.Add(
+                new ZLinkStoreMutation.Put(
+                    AuthorityOwnerGenerationCounterKey(),
+                    EncodeGenerationCounter(nextAuthorityOwnerGeneration + 1),
+                    null
+                )
+            );
+        }
         if (changesOwner)
         {
             var counter = await ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
@@ -332,6 +360,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         var meta = current.Meta with
         {
             Payload = put.Payload.ToArray(),
+            ObjectGeneration = nextObjectGeneration,
             AuthorityOwnerGeneration = nextAuthorityOwnerGeneration,
             OwnerId = targetOwner.OwnerId,
             OwnerLeaseGeneration = targetOwner.LeaseGeneration,
@@ -395,195 +424,147 @@ internal sealed partial class ZLinkProviderLocationRepository
         );
     }
 
-    public async ValueTask<ZLinkObjectReserveResult> ReserveAsync(
+    public ValueTask<ZLinkObjectReserveResult> ReserveAsync(
         ZLinkObjectReservationRequest request,
         CancellationToken cancellationToken = default
-    )
-    {
-        ValidateReservation(request);
-        await authorityGenerationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            return await ReserveCoreAsync(
-                    request,
-                    0,
-                    Stopwatch.GetElapsedTime(0) + CounterRetryWindow,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            authorityGenerationGate.Release();
-        }
-    }
+    ) => ReserveCoreAsync(request, cancellationToken);
 
     private async ValueTask<ZLinkObjectReserveResult> ReserveCoreAsync(
         ZLinkObjectReservationRequest request,
-        int counterRetry,
-        TimeSpan retryDeadline,
         CancellationToken cancellationToken
     )
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ValidateReservation(request);
-        var current = await ReadAuthorityRecordAsync(request.Key, cancellationToken)
-            .ConfigureAwait(false);
-        if (current is not null)
-        {
-            var reclaim = await TryReclaimStaleAuthorityAsync(current, cancellationToken)
-                .ConfigureAwait(false);
-            if (reclaim == StaleAuthorityReclaimResult.Reclaimed)
-                return await ReserveCoreAsync(
-                        request,
-                        counterRetry,
-                        retryDeadline,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-            if (
-                reclaim == StaleAuthorityReclaimResult.Conflict
-                && counterRetry < CounterRetryLimit
-                && Stopwatch.GetElapsedTime(0) < retryDeadline
-            )
-            {
-                await DelayCounterRetryAsync(counterRetry, retryDeadline, cancellationToken)
-                    .ConfigureAwait(false);
-                return await ReserveCoreAsync(
-                        request,
-                        counterRetry + 1,
-                        retryDeadline,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-            }
-            return current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
-                ? new ZLinkObjectReserveResult.AlreadyExists(current.Snapshot)
-                : new ZLinkObjectReserveResult.Conflict(
-                    new ZLinkAuthorityReadResult.Found(current.Snapshot)
-                );
-        }
-        var target = await ReadEligibleTargetAsync(
-                request.TargetDescriptor,
-                request.TargetNodeLifecycleGeneration,
-                request.TargetOwner,
-                request.ObjectKind,
-                request.StableType,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (target is null)
-            return new ZLinkObjectReserveResult.Conflict(
-                new ZLinkAuthorityReadResult.Missing(
-                    await ReadStoreNowAsync(cancellationToken).ConfigureAwait(false)
-                )
-            );
-
-        var capacity = await ReadCapacityAsync(request.TargetDescriptor, cancellationToken)
-            .ConfigureAwait(false);
-        if (!HasCapacity(target.Descriptor, capacity.Record, request.Capacity))
-            return new ZLinkObjectReserveResult.PlacementCapacityExhausted();
-        // Reserve always creates a brand-new authority row (current is
-        // null here), so both generations are issued fresh from their
-        // Store-wide monotonic sequence -- no per-identity prior value to
-        // max against (checklist C-2b; ObjectGeneration's counter is a
-        // sibling of AuthorityOwnerGenerationCounterKey).
-        var objectCounter = await ReadObjectGenerationCounterAsync(cancellationToken)
-            .ConfigureAwait(false);
-        var authorityCounter = await ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
-            .ConfigureAwait(false);
-        if (objectCounter.Value == MaximumGeneration || authorityCounter.Value == MaximumGeneration)
-            return new ZLinkObjectReserveResult.GenerationExhausted();
-
-        var objectGeneration = objectCounter.Value;
-        var authorityOwnerGeneration = authorityCounter.Value;
         var reservationId = Guid.NewGuid().ToString("N");
-        var allocation = new ZLinkPlacementAllocation(
-            ZLinkPlacementAllocationState.Reserved,
-            request.ObjectKind,
-            request.StableType,
-            request.TargetDescriptor,
-            request.TargetNodeLifecycleGeneration,
-            request.Capacity
-        );
-        var meta = new AuthorityMeta(
-            request.CreatingPayload.ToArray(),
-            objectGeneration,
-            authorityOwnerGeneration,
-            request.TargetOwner.OwnerId,
-            request.TargetOwner.LeaseGeneration,
-            allocation,
-            new ZLinkReservedObjectCreation(
-                reservationId,
-                request.CreationIntentReference,
-                request.CreationIntentHash.ToArray(),
-                request.CreationIntentEncodedSize
-            )
-        );
-        var nextCapacity = capacity.Record.Clone();
-        ApplyCapacity(nextCapacity, allocation, pendingDelta: 1);
-        var metaKey = AuthorityMetaKey(request.Key);
-        var result = await provider
-            .WriteAsync(
-                new ZLinkStoreWriteRequest(
-                    [
-                        new ZLinkStoreCondition.Missing(metaKey),
-                        objectCounter.Condition,
-                        target.DescriptorCondition,
-                        target.OwnerCondition,
-                        capacity.Condition,
-                        authorityCounter.Condition,
-                    ],
-                    [
-                        new ZLinkStoreMutation.Put(metaKey, Encode(meta), null),
-                        new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null),
-                        new ZLinkStoreMutation.Put(
-                            ObjectGenerationCounterKey(),
-                            EncodeGenerationCounter(objectGeneration + 1),
-                            null
-                        ),
-                        new ZLinkStoreMutation.Put(
-                            AuthorityOwnerGenerationCounterKey(),
-                            EncodeGenerationCounter(authorityOwnerGeneration + 1),
-                            null
-                        ),
-                    ]
-                ),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (
-            result is ZLinkStoreWriteResult.Conflict
-            && counterRetry < CounterRetryLimit
-            && Stopwatch.GetElapsedTime(0) < retryDeadline
-            && await ReadAuthorityRecordAsync(request.Key, cancellationToken).ConfigureAwait(false)
-                is null
-        )
+        for (; ; )
         {
-            await DelayCounterRetryAsync(counterRetry, retryDeadline, cancellationToken)
+            cancellationToken.ThrowIfCancellationRequested();
+            var current = await ReadAuthorityRecordAsync(request.Key, cancellationToken)
                 .ConfigureAwait(false);
-            return await ReserveCoreAsync(
-                    request,
-                    counterRetry + 1,
-                    retryDeadline,
+            if (current is not null)
+            {
+                var reclaim = await TryReclaimStaleAuthorityAsync(current, cancellationToken)
+                    .ConfigureAwait(false);
+                if (reclaim == StaleAuthorityReclaimResult.Reclaimed)
+                    continue;
+                if (reclaim == StaleAuthorityReclaimResult.Conflict)
+                {
+                    continue;
+                }
+                return current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
+                    ? new ZLinkObjectReserveResult.AlreadyExists(current.Snapshot)
+                    : new ZLinkObjectReserveResult.Conflict(
+                        new ZLinkAuthorityReadResult.Found(current.Snapshot)
+                    );
+            }
+            var target = await ReadEligibleTargetAsync(
+                    request.TargetDescriptor,
+                    request.TargetNodeLifecycleGeneration,
+                    request.TargetOwner,
+                    request.ObjectKind,
+                    request.StableType,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-        }
-        if (result is ZLinkStoreWriteResult.Conflict)
-            return await ReserveConflictAsync(request.Key, cancellationToken).ConfigureAwait(false);
-        var applied = (ZLinkStoreWriteResult.Applied)result;
-        return new ZLinkObjectReserveResult.Reserved(
-            new ZLinkObjectReservation(
-                request.Key,
-                applied.PutVersions[metaKey].Value,
-                objectGeneration,
-                authorityOwnerGeneration,
-                reservationId,
+            if (target is null)
+                return new ZLinkObjectReserveResult.Conflict(
+                    new ZLinkAuthorityReadResult.Missing(
+                        await ReadStoreNowAsync(cancellationToken).ConfigureAwait(false)
+                    )
+                );
+
+            var capacity = await ReadCapacityAsync(request.TargetDescriptor, cancellationToken)
+                .ConfigureAwait(false);
+            if (!HasCapacity(target.Descriptor, capacity.Record, request.Capacity))
+                return new ZLinkObjectReserveResult.PlacementCapacityExhausted();
+            // Reserve always creates a brand-new authority row (current is
+            // null here), so both generations are issued fresh from their
+            // Store-wide monotonic sequence -- no per-identity prior value to
+            // max against (checklist C-2b; ObjectGeneration's counter is a
+            // sibling of AuthorityOwnerGenerationCounterKey).
+            var objectCounter = await ReadObjectGenerationCounterAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var authorityCounter = await ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (
+                objectCounter.Value == MaximumGeneration
+                || authorityCounter.Value == MaximumGeneration
+            )
+                return new ZLinkObjectReserveResult.GenerationExhausted();
+
+            var objectGeneration = objectCounter.Value;
+            var authorityOwnerGeneration = authorityCounter.Value;
+            var allocation = new ZLinkPlacementAllocation(
+                ZLinkPlacementAllocationState.Reserved,
+                request.ObjectKind,
+                request.StableType,
                 request.TargetDescriptor,
                 request.TargetNodeLifecycleGeneration,
-                request.TargetOwner
-            )
-        );
+                request.Capacity
+            );
+            var meta = new AuthorityMeta(
+                request.CreatingPayload.ToArray(),
+                objectGeneration,
+                authorityOwnerGeneration,
+                request.TargetOwner.OwnerId,
+                request.TargetOwner.LeaseGeneration,
+                allocation,
+                new ZLinkReservedObjectCreation(
+                    reservationId,
+                    request.CreationIntentReference,
+                    request.CreationIntentHash.ToArray(),
+                    request.CreationIntentEncodedSize
+                )
+            );
+            var nextCapacity = capacity.Record.Clone();
+            ApplyCapacity(nextCapacity, allocation, pendingDelta: 1);
+            var metaKey = AuthorityMetaKey(request.Key);
+            var result = await provider
+                .WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [
+                            new ZLinkStoreCondition.Missing(metaKey),
+                            objectCounter.Condition,
+                            target.DescriptorCondition,
+                            target.OwnerCondition,
+                            capacity.Condition,
+                            authorityCounter.Condition,
+                        ],
+                        [
+                            new ZLinkStoreMutation.Put(metaKey, Encode(meta), null),
+                            new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null),
+                            new ZLinkStoreMutation.Put(
+                                ObjectGenerationCounterKey(),
+                                EncodeGenerationCounter(objectGeneration + 1),
+                                null
+                            ),
+                            new ZLinkStoreMutation.Put(
+                                AuthorityOwnerGenerationCounterKey(),
+                                EncodeGenerationCounter(authorityOwnerGeneration + 1),
+                                null
+                            ),
+                        ]
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (result is ZLinkStoreWriteResult.Conflict)
+                continue;
+            var applied = (ZLinkStoreWriteResult.Applied)result;
+            return new ZLinkObjectReserveResult.Reserved(
+                new ZLinkObjectReservation(
+                    request.Key,
+                    applied.PutVersions[metaKey].Value,
+                    objectGeneration,
+                    authorityOwnerGeneration,
+                    reservationId,
+                    request.TargetDescriptor,
+                    request.TargetNodeLifecycleGeneration,
+                    request.TargetOwner
+                )
+            );
+        }
     }
 
     private async ValueTask<StaleAuthorityReclaimResult> TryReclaimStaleAuthorityAsync(
@@ -670,36 +651,28 @@ internal sealed partial class ZLinkProviderLocationRepository
         ZLinkObjectReservation reservation,
         ReadOnlyMemory<byte> readyPayload,
         CancellationToken cancellationToken = default
-    ) =>
-        CompleteCommitAsync(
-            reservation,
-            readyPayload,
-            0,
-            Stopwatch.GetElapsedTime(0) + CounterRetryWindow,
-            cancellationToken
-        );
+    ) => CompleteCommitAsync(reservation, readyPayload, null, cancellationToken);
+
+    public ValueTask<ZLinkObjectCommitResult> CommitAsync(
+        ZLinkObjectReservation reservation,
+        ReadOnlyMemory<byte> readyPayload,
+        DateTimeOffset operationDeadline,
+        CancellationToken cancellationToken = default
+    ) => CompleteCommitAsync(reservation, readyPayload, operationDeadline, cancellationToken);
 
     public ValueTask<ZLinkObjectCreationCompleteResult> CompleteCreationAsync(
         ZLinkObjectReservation reservation,
         ZLinkObjectCreationCompletion completion,
         CancellationToken cancellationToken = default
-    ) =>
-        CompleteCreationCoreAsync(
-            reservation,
-            completion,
-            0,
-            Stopwatch.GetElapsedTime(0) + CounterRetryWindow,
-            cancellationToken
-        );
+    ) => CompleteCreationCoreAsync(reservation, completion, cancellationToken);
 
     private async ValueTask<ZLinkObjectCreationCompleteResult> CompleteCreationCoreAsync(
         ZLinkObjectReservation reservation,
         ZLinkObjectCreationCompletion completion,
-        int counterRetry,
-        TimeSpan retryDeadline,
         CancellationToken cancellationToken
     )
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(reservation);
         ArgumentNullException.ThrowIfNull(completion);
         var publication = completion switch
@@ -711,139 +684,118 @@ internal sealed partial class ZLinkProviderLocationRepository
         };
         ValidateTerminal(publication);
         var terminalKey = TerminalKey(publication.Operation);
-        var existingTerminal = await ReadTerminalAsync(publication.Operation, cancellationToken)
-            .ConfigureAwait(false);
-        if (existingTerminal is not null)
-            return new ZLinkObjectCreationCompleteResult.AlreadyCompleted(existingTerminal.Record);
-
-        var current = await ReadAuthorityRecordAsync(reservation.Key, cancellationToken)
-            .ConfigureAwait(false);
-        if (!MatchesReservation(current, reservation))
-            return new ZLinkObjectCreationCompleteResult.Stale();
-        if (publication.ExpiresAt <= current!.Snapshot.StoreNow)
-            throw new ArgumentOutOfRangeException(
-                nameof(completion),
-                "The creation terminal must expire after StoreNow."
-            );
-        var target = await ReadEligibleTargetAsync(
-                reservation.TargetDescriptor,
-                reservation.TargetNodeLifecycleGeneration,
-                reservation.TargetOwner,
-                current!.Snapshot.Allocation.ObjectKind,
-                current.Snapshot.Allocation.StableType,
-                cancellationToken,
-                requireNewPlacementEligibility: false
-            )
-            .ConfigureAwait(false);
-        if (target is null)
-            return new ZLinkObjectCreationCompleteResult.Stale();
-        var capacity = await ReadCapacityAsync(reservation.TargetDescriptor, cancellationToken)
-            .ConfigureAwait(false);
-        var nextCapacity = capacity.Record.Clone();
-        ApplyCapacity(
-            nextCapacity,
-            current.Snapshot.Allocation,
-            pendingDelta: -1,
-            activeDelta: completion is ZLinkObjectCreationCompletion.Created ? 1 : 0
-        );
-        var terminal = new ZLinkCreationTerminalRecord(
-            publication.Operation,
-            publication.TerminalEnvelope.ToArray(),
-            publication.ExpiresAt,
-            current.Snapshot.StoreNow
-        );
-        var conditions = new List<ZLinkStoreCondition>
+        for (; ; )
         {
-            new ZLinkStoreCondition.Version(AuthorityMetaKey(reservation.Key), current.Version),
-            new ZLinkStoreCondition.Missing(terminalKey),
-            target.DescriptorCondition,
-            target.OwnerCondition,
-            capacity.Condition,
-        };
-        var mutations = new List<ZLinkStoreMutation>
-        {
-            new ZLinkStoreMutation.Put(
-                terminalKey,
-                publication.TerminalEnvelope.ToArray(),
-                publication.ExpiresAt - current.Snapshot.StoreNow
-            ),
-            new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null),
-        };
-        AuthorityMeta? readyMeta = null;
-        if (completion is ZLinkObjectCreationCompletion.Created created)
-        {
-            ValidateAuthorityPayload(created.ReadyPayload);
-            readyMeta = current.Meta with
-            {
-                Payload = created.ReadyPayload.ToArray(),
-                Allocation = current.Snapshot.Allocation with
-                {
-                    State = ZLinkPlacementAllocationState.Active,
-                },
-                ReservedCreation = null,
-            };
-            mutations.Add(
-                new ZLinkStoreMutation.Put(
-                    AuthorityMetaKey(reservation.Key),
-                    Encode(readyMeta),
-                    null
-                )
-            );
-        }
-        else
-        {
-            mutations.Add(new ZLinkStoreMutation.Delete(AuthorityMetaKey(reservation.Key)));
-        }
-        var result = await provider
-            .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
-            .ConfigureAwait(false);
-        if (result is ZLinkStoreWriteResult.Conflict)
-        {
-            var raced = await ReadTerminalAsync(publication.Operation, cancellationToken)
+            cancellationToken.ThrowIfCancellationRequested();
+            var existingTerminal = await ReadTerminalAsync(publication.Operation, cancellationToken)
                 .ConfigureAwait(false);
-            if (raced is not null)
-                return new ZLinkObjectCreationCompleteResult.AlreadyCompleted(raced.Record);
+            if (existingTerminal is not null)
+                return new ZLinkObjectCreationCompleteResult.AlreadyCompleted(
+                    existingTerminal.Record
+                );
 
-            if (counterRetry < CounterRetryLimit && Stopwatch.GetElapsedTime(0) < retryDeadline)
+            var current = await ReadAuthorityRecordAsync(reservation.Key, cancellationToken)
+                .ConfigureAwait(false);
+            if (!MatchesReservation(current, reservation))
+                return new ZLinkObjectCreationCompleteResult.Stale();
+            if (publication.ExpiresAt <= current!.Snapshot.StoreNow)
+                throw new ArgumentOutOfRangeException(
+                    nameof(completion),
+                    "The creation terminal must expire after StoreNow."
+                );
+            var target = await ReadEligibleTargetAsync(
+                    reservation.TargetDescriptor,
+                    reservation.TargetNodeLifecycleGeneration,
+                    reservation.TargetOwner,
+                    current!.Snapshot.Allocation.ObjectKind,
+                    current.Snapshot.Allocation.StableType,
+                    cancellationToken,
+                    requireNewPlacementEligibility: false
+                )
+                .ConfigureAwait(false);
+            if (target is null)
+                return new ZLinkObjectCreationCompleteResult.Stale();
+            var capacity = await ReadCapacityAsync(reservation.TargetDescriptor, cancellationToken)
+                .ConfigureAwait(false);
+            var nextCapacity = capacity.Record.Clone();
+            ApplyCapacity(
+                nextCapacity,
+                current.Snapshot.Allocation,
+                pendingDelta: -1,
+                activeDelta: completion is ZLinkObjectCreationCompletion.Created ? 1 : 0
+            );
+            var terminal = new ZLinkCreationTerminalRecord(
+                publication.Operation,
+                publication.TerminalEnvelope.ToArray(),
+                publication.ExpiresAt,
+                current.Snapshot.StoreNow
+            );
+            var conditions = new List<ZLinkStoreCondition>
             {
-                var unchangedAuthority = await ReadAuthorityRecordAsync(
-                        reservation.Key,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                if (MatchesReservation(unchangedAuthority, reservation))
-                {
-                    await DelayCounterRetryAsync(counterRetry, retryDeadline, cancellationToken)
-                        .ConfigureAwait(false);
-                    return await CompleteCreationCoreAsync(
-                            reservation,
-                            completion,
-                            counterRetry + 1,
-                            retryDeadline,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                }
-            }
-            return new ZLinkObjectCreationCompleteResult.Stale();
-        }
-        var applied = (ZLinkStoreWriteResult.Applied)result;
-        terminal = terminal with { StoreNow = applied.StoreNow };
-        return completion switch
-        {
-            ZLinkObjectCreationCompletion.Created => new ZLinkObjectCreationCompleteResult.Created(
-                Snapshot(
-                    readyMeta!,
-                    applied.PutVersions[AuthorityMetaKey(reservation.Key)],
-                    applied.StoreNow,
-                    ((ZLinkObjectCreationCompletion.Created)completion).ReadyPayload
+                new ZLinkStoreCondition.Version(AuthorityMetaKey(reservation.Key), current.Version),
+                new ZLinkStoreCondition.Missing(terminalKey),
+                target.DescriptorCondition,
+                target.OwnerCondition,
+                capacity.Condition,
+            };
+            var mutations = new List<ZLinkStoreMutation>
+            {
+                new ZLinkStoreMutation.Put(
+                    terminalKey,
+                    publication.TerminalEnvelope.ToArray(),
+                    publication.ExpiresAt - current.Snapshot.StoreNow
                 ),
-                terminal
-            ),
-            ZLinkObjectCreationCompletion.Rejected =>
-                new ZLinkObjectCreationCompleteResult.Rejected(terminal),
-            _ => new ZLinkObjectCreationCompleteResult.Failed(terminal),
-        };
+                new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null),
+            };
+            AuthorityMeta? readyMeta = null;
+            if (completion is ZLinkObjectCreationCompletion.Created created)
+            {
+                ValidateAuthorityPayload(created.ReadyPayload);
+                readyMeta = current.Meta with
+                {
+                    Payload = created.ReadyPayload.ToArray(),
+                    Allocation = current.Snapshot.Allocation with
+                    {
+                        State = ZLinkPlacementAllocationState.Active,
+                    },
+                    ReservedCreation = null,
+                };
+                mutations.Add(
+                    new ZLinkStoreMutation.Put(
+                        AuthorityMetaKey(reservation.Key),
+                        Encode(readyMeta),
+                        null
+                    )
+                );
+            }
+            else
+            {
+                mutations.Add(new ZLinkStoreMutation.Delete(AuthorityMetaKey(reservation.Key)));
+            }
+            var result = await provider
+                .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
+                .ConfigureAwait(false);
+            if (result is ZLinkStoreWriteResult.Conflict)
+                continue;
+            var applied = (ZLinkStoreWriteResult.Applied)result;
+            terminal = terminal with { StoreNow = applied.StoreNow };
+            return completion switch
+            {
+                ZLinkObjectCreationCompletion.Created =>
+                    new ZLinkObjectCreationCompleteResult.Created(
+                        Snapshot(
+                            readyMeta!,
+                            applied.PutVersions[AuthorityMetaKey(reservation.Key)],
+                            applied.StoreNow,
+                            ((ZLinkObjectCreationCompletion.Created)completion).ReadyPayload
+                        ),
+                        terminal
+                    ),
+                ZLinkObjectCreationCompletion.Rejected =>
+                    new ZLinkObjectCreationCompleteResult.Rejected(terminal),
+                _ => new ZLinkObjectCreationCompleteResult.Failed(terminal),
+            };
+        }
     }
 
     public async ValueTask<ZLinkCreationTerminalReadResult> ReadCreationTerminalAsync(
@@ -972,7 +924,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 Enumerable.Range(0, request.Participants.Count),
                 new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 64,
+                    MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
                 async (index, token) =>
@@ -1287,7 +1239,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         bool allowPreparingTarget
     )
     {
-        while (true)
+        for (; ; )
         {
             cancellationToken.ThrowIfCancellationRequested();
             var key = AggregateKey(fence);
@@ -1331,7 +1283,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     Enumerable.Range(0, request.Participants.Count),
                     new ParallelOptions
                     {
-                        MaxDegreeOfParallelism = 64,
+                        MaxDegreeOfParallelism = MaximumStoreConcurrency,
                         CancellationToken = cancellationToken,
                     },
                     async (index, token) =>
@@ -1370,7 +1322,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     Enumerable.Range(0, sourceAllocations.Length),
                     new ParallelOptions
                     {
-                        MaxDegreeOfParallelism = 64,
+                        MaxDegreeOfParallelism = MaximumStoreConcurrency,
                         CancellationToken = cancellationToken,
                     },
                     async (index, token) =>
@@ -1481,7 +1433,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                     return ZLinkAggregateCommitResult.AlreadyCommitted;
                 }
                 if (reconciled?.Record.Status == AggregateStatus.Prepared)
+                {
                     continue;
+                }
                 return ZLinkAggregateCommitResult.Stale;
             }
             await NormalizeCommittedAggregateAsync(
@@ -1525,7 +1479,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 storedParticipants,
                 new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 64,
+                    MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
                 async (storedParticipant, token) =>
@@ -2097,7 +2051,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 Enumerable.Range(0, participants.Count),
                 new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 64,
+                    MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
                 async (index, token) =>
@@ -2174,7 +2128,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 inventory,
                 new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 64,
+                    MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
                 async (entry, token) =>
@@ -2392,7 +2346,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 Enumerable.Range(0, participants.Count),
                 new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 64,
+                    MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
                 async (index, token) =>
@@ -2723,7 +2677,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 inventory.Pages,
                 new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 64,
+                    MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
                 async (page, token) =>
@@ -2996,7 +2950,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 participants,
                 new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 64,
+                    MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
                 async (participant, token) =>
@@ -3072,7 +3026,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 Enumerable.Range(0, request.Participants.Count),
                 new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 64,
+                    MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
                 async (index, token) =>
@@ -3235,7 +3189,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 Enumerable.Range(0, aggregate.ParticipantCount),
                 new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 64,
+                    MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
                 async (index, token) =>
@@ -3520,7 +3474,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 Enumerable.Range(0, participants.Count),
                 new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 64,
+                    MaxDegreeOfParallelism = MaximumStoreConcurrency,
                     CancellationToken = cancellationToken,
                 },
                 async (index, token) =>
@@ -3876,110 +3830,109 @@ internal sealed partial class ZLinkProviderLocationRepository
     private async ValueTask<ZLinkObjectCommitResult> CompleteCommitAsync(
         ZLinkObjectReservation reservation,
         ReadOnlyMemory<byte> readyPayload,
-        int counterRetry,
-        TimeSpan retryDeadline,
+        DateTimeOffset? operationDeadline,
         CancellationToken cancellationToken
     )
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(reservation);
         ValidateAuthorityPayload(readyPayload);
-        var current = await ReadAuthorityRecordAsync(reservation.Key, cancellationToken)
-            .ConfigureAwait(false);
-        if (current is null)
-            return new ZLinkObjectCommitResult.Stale();
-        if (!MatchesReservation(current, reservation))
-            return current.Meta.ReservedCreation is null
-                ? new ZLinkObjectCommitResult.AlreadyCommitted(current.Snapshot)
-                : new ZLinkObjectCommitResult.Stale();
-        var target = await ReadEligibleTargetAsync(
-                reservation.TargetDescriptor,
-                reservation.TargetNodeLifecycleGeneration,
-                reservation.TargetOwner,
-                current!.Snapshot.Allocation.ObjectKind,
-                current.Snapshot.Allocation.StableType,
-                cancellationToken,
-                requireNewPlacementEligibility: false
-            )
-            .ConfigureAwait(false);
-        if (target is null)
-            return new ZLinkObjectCommitResult.Stale();
-        var capacity = await ReadCapacityAsync(reservation.TargetDescriptor, cancellationToken)
-            .ConfigureAwait(false);
-        var nextCapacity = capacity.Record.Clone();
-        ApplyCapacity(nextCapacity, current.Snapshot.Allocation, pendingDelta: -1, activeDelta: 1);
-        var meta = current.Meta with
+        var counterRetry = 0;
+        var retryDeadline = operationDeadline is null
+            ? Stopwatch.GetElapsedTime(0) + CounterRetryWindow
+            : default;
+        for (; ; )
         {
-            Payload = readyPayload.ToArray(),
-            Allocation = current.Snapshot.Allocation with
-            {
-                State = ZLinkPlacementAllocationState.Active,
-            },
-            ReservedCreation = null,
-        };
-        var result = await provider
-            .WriteAsync(
-                new ZLinkStoreWriteRequest(
-                    [
-                        new ZLinkStoreCondition.Version(
-                            AuthorityMetaKey(reservation.Key),
-                            current.Version
-                        ),
-                        target.DescriptorCondition,
-                        target.OwnerCondition,
-                        capacity.Condition,
-                    ],
-                    [
-                        new ZLinkStoreMutation.Put(
-                            AuthorityMetaKey(reservation.Key),
-                            Encode(meta),
-                            null
-                        ),
-                        new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null),
-                    ]
-                ),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (result is not ZLinkStoreWriteResult.Applied applied)
-        {
-            if (counterRetry < CounterRetryLimit && Stopwatch.GetElapsedTime(0) < retryDeadline)
-            {
-                var unchangedAuthority = await ReadAuthorityRecordAsync(
-                        reservation.Key,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                if (
-                    unchangedAuthority is not null
-                    && unchangedAuthority.Meta.ReservedCreation is null
+            cancellationToken.ThrowIfCancellationRequested();
+            if (operationDeadline is { } deadline && DateTimeOffset.UtcNow >= deadline)
+                throw new OperationCanceledException(cancellationToken);
+            var current = await ReadAuthorityRecordAsync(reservation.Key, cancellationToken)
+                .ConfigureAwait(false);
+            if (current is null)
+                return new ZLinkObjectCommitResult.Stale();
+            if (!MatchesReservation(current, reservation))
+                return current.Meta.ReservedCreation is null
+                    ? new ZLinkObjectCommitResult.AlreadyCommitted(current.Snapshot)
+                    : new ZLinkObjectCommitResult.Stale();
+            var target = await ReadEligibleTargetAsync(
+                    reservation.TargetDescriptor,
+                    reservation.TargetNodeLifecycleGeneration,
+                    reservation.TargetOwner,
+                    current!.Snapshot.Allocation.ObjectKind,
+                    current.Snapshot.Allocation.StableType,
+                    cancellationToken,
+                    requireNewPlacementEligibility: false
                 )
-                    return new ZLinkObjectCommitResult.AlreadyCommitted(
-                        unchangedAuthority.Snapshot
-                    );
-                if (MatchesReservation(unchangedAuthority, reservation))
+                .ConfigureAwait(false);
+            if (target is null)
+                return new ZLinkObjectCommitResult.Stale();
+            var capacity = await ReadCapacityAsync(reservation.TargetDescriptor, cancellationToken)
+                .ConfigureAwait(false);
+            var nextCapacity = capacity.Record.Clone();
+            ApplyCapacity(
+                nextCapacity,
+                current.Snapshot.Allocation,
+                pendingDelta: -1,
+                activeDelta: 1
+            );
+            var meta = current.Meta with
+            {
+                Payload = readyPayload.ToArray(),
+                Allocation = current.Snapshot.Allocation with
                 {
+                    State = ZLinkPlacementAllocationState.Active,
+                },
+                ReservedCreation = null,
+            };
+            var result = await provider
+                .WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [
+                            new ZLinkStoreCondition.Version(
+                                AuthorityMetaKey(reservation.Key),
+                                current.Version
+                            ),
+                            target.DescriptorCondition,
+                            target.OwnerCondition,
+                            capacity.Condition,
+                        ],
+                        [
+                            new ZLinkStoreMutation.Put(
+                                AuthorityMetaKey(reservation.Key),
+                                Encode(meta),
+                                null
+                            ),
+                            new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null),
+                        ]
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (result is ZLinkStoreWriteResult.Conflict)
+            {
+                if (operationDeadline is null)
+                {
+                    if (
+                        counterRetry >= CounterRetryLimit
+                        || Stopwatch.GetElapsedTime(0) >= retryDeadline
+                    )
+                        return new ZLinkObjectCommitResult.Stale();
                     await DelayCounterRetryAsync(counterRetry, retryDeadline, cancellationToken)
                         .ConfigureAwait(false);
-                    return await CompleteCommitAsync(
-                            reservation,
-                            readyPayload,
-                            counterRetry + 1,
-                            retryDeadline,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
+                    counterRetry++;
                 }
+                continue;
             }
-            return new ZLinkObjectCommitResult.Stale();
+            var applied = (ZLinkStoreWriteResult.Applied)result;
+            return new ZLinkObjectCommitResult.Committed(
+                Snapshot(
+                    meta,
+                    applied.PutVersions[AuthorityMetaKey(reservation.Key)],
+                    applied.StoreNow,
+                    readyPayload
+                )
+            );
         }
-        return new ZLinkObjectCommitResult.Committed(
-            Snapshot(
-                meta,
-                applied.PutVersions[AuthorityMetaKey(reservation.Key)],
-                applied.StoreNow,
-                readyPayload
-            )
-        );
     }
 
     private async ValueTask<ZLinkAuthorityCompareExchangeResult> StoreAuthorityAsync(
@@ -4411,25 +4364,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         };
     }
 
-    private async ValueTask<ZLinkObjectReserveResult> ReserveConflictAsync(
-        ZLinkAuthorityKey key,
-        CancellationToken cancellationToken
-    )
-    {
-        var current = await ReadAuthorityRecordAsync(key, cancellationToken).ConfigureAwait(false);
-        return current is null
-                ? new ZLinkObjectReserveResult.Conflict(
-                    new ZLinkAuthorityReadResult.Missing(
-                        await ReadStoreNowAsync(cancellationToken).ConfigureAwait(false)
-                    )
-                )
-            : current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
-                ? new ZLinkObjectReserveResult.AlreadyExists(current.Snapshot)
-            : new ZLinkObjectReserveResult.Conflict(
-                new ZLinkAuthorityReadResult.Found(current.Snapshot)
-            );
-    }
-
     private static bool MatchesReservation(
         StoredAuthority? current,
         ZLinkObjectReservation reservation
@@ -4597,7 +4531,10 @@ internal sealed partial class ZLinkProviderLocationRepository
     {
         if (mutation is not ZLinkAuthorityMutation.Put put)
             return;
-        var preserve = put.GenerationTransition == ZLinkAuthorityGenerationTransition.Preserve;
+        var preserve =
+            put.GenerationTransition
+            is ZLinkAuthorityGenerationTransition.Preserve
+                or ZLinkAuthorityGenerationTransition.Reincarnate;
         var changesOwner = put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
         if (
             !preserve && !changesOwner
@@ -4660,6 +4597,11 @@ internal sealed partial class ZLinkProviderLocationRepository
                 string.IsNullOrWhiteSpace(participant.Key.Value)
                 || string.IsNullOrWhiteSpace(participant.ExpectedStoreVersion)
                 || participant.AuthorityPayload.Length > 1024 * 1024
+                || participant.OwnerTransition
+                    is not (
+                        ZLinkAuthorityGenerationTransition.Preserve
+                        or ZLinkAuthorityGenerationTransition.NewOwner
+                    )
             )
         )
             throw new ArgumentOutOfRangeException(nameof(request));

@@ -26,6 +26,8 @@ use zlink::{
 // Wire-level stop token used by sender threads to signal phase end to a
 // receiver waiting on a poller. PERF_SINGLE_TEST_POLICY § 1.4 mandates this
 // pattern instead of `AtomicBool sender_done` + short polling.
+const DEFAULT_TIMEOUT_MS: u64 = 200;
+
 pub const STOP_TOKEN: &[u8] = b"__zlink_perf_stop__";
 
 pub fn is_stop_token(data: &[u8]) -> bool {
@@ -788,7 +790,7 @@ pub fn run_reqrep<S>(
 where
     S: FnMut(Message, Duration) -> Result<zlink::RequestSubmission, ZlinkError>,
 {
-    let request_timeout = Duration::from_millis(env_or_u64("PERF_SINGLE_REQREP_TIMEOUT_MS", 200));
+    let request_timeout = Duration::from_millis(env_or_u64("PERF_SINGLE_REQREP_TIMEOUT_MS", DEFAULT_TIMEOUT_MS));
     let drain_timeout = Duration::from_millis(env_or_u64(
         "PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS",
         (request_timeout.as_millis().saturating_mul(4).max(1_000)) as u64,
@@ -1091,15 +1093,12 @@ macro_rules! impl_single_socket_hwm_options {
 impl_single_socket_hwm_options!(PairSocket, PubSocket, DealerSocket, RouterSocket, SubSocket);
 
 pub fn resolve_single_idle_drain_ms() -> u64 {
-    env_or_u64("PERF_SINGLE_RCVTIMEO_MS", 200)
+    env_or_u64("PERF_SINGLE_RCVTIMEO_MS", DEFAULT_TIMEOUT_MS)
 }
 
-pub fn resolve_single_receive_timeout() -> Duration {
-    Duration::from_millis(env_or_u64("PERF_SINGLE_RCVTIMEO_MS", 200))
-}
-
-pub fn resolve_single_send_timeout() -> Duration {
-    Duration::from_millis(env_or_u64("PERF_SINGLE_SNDTIMEO_MS", 200))
+pub fn resolve_single_send_timeout() -> i32 {
+    env_or_u64("PERF_SINGLE_SNDTIMEO_MS", DEFAULT_TIMEOUT_MS)
+        .try_into().expect("PERF_SINGLE_SNDTIMEO_MS exceeds Core milliseconds")
 }
 
 pub fn is_single_send_retry_error(err: &SubmitError) -> bool {

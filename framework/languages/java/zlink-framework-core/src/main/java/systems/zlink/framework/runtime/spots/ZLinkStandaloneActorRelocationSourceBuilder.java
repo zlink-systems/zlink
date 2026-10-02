@@ -461,9 +461,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                 relocationReplies
                                                         .resumeActorTimersAfterRelocationAbort(
                                                                 admission.owned().actorId());
-                                                actors.abortActorRelocation(
-                                                        admission.owned().actorId(), seal);
-                                                return failed(unwrap(failure));
+                                                return actors.abortActorRelocationAsync(
+                                                                admission.owned().actorId(), seal)
+                                                        .thenCompose(
+                                                                ignored -> failed(unwrap(failure)));
                                             });
                         });
     }
@@ -1193,7 +1194,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                             () -> {
                                                 if (terminal || committed) {
                                                     throw new IllegalStateException(
-                                                            "Actor relocation relay boundary is terminal");
+                                                            "Actor relocation relay boundary is"
+                                                                    + " terminal");
                                                 }
                                                 return relayed;
                                             }))
@@ -1324,7 +1326,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             () -> {
                                 if (relocationCommit == null || !committed && !captureFinished) {
                                     throw new IllegalStateException(
-                                            "Actor relocation source queue is not durably committed");
+                                            "Actor relocation source queue is not durably"
+                                                    + " committed");
                                 }
                                 committed = true;
                                 return relocationCommit;

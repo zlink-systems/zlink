@@ -1637,8 +1637,8 @@ class public_memory_authority_store_t final
                   ? zlink::framework::authority_read_result_t{*snapshot}
                   : zlink::framework::authority_read_result_t{
                       zlink::framework::authority_missing_t{std::chrono::system_clock::now ()}}}});
-        if (remaining_auxiliary_conflicts != 0) {
-            --remaining_auxiliary_conflicts;
+        if (remaining_authority_conflicts != 0) {
+            --remaining_authority_conflicts;
             snapshot->store_version = std::to_string (std::stoull (snapshot->store_version) + 1);
             snapshot->store_now = std::chrono::system_clock::now ();
             return completed (zlink::framework::authority_compare_exchange_result_t{
@@ -1674,7 +1674,7 @@ class public_memory_authority_store_t final
     std::optional<zlink::framework::location_owner_token_t> observed_target_owner;
     std::optional<zlink::framework::object_creation_target_t> observed_target_placement;
     std::vector<std::string> observed_keys;
-    int remaining_auxiliary_conflicts = 0;
+    int remaining_authority_conflicts = 0;
     std::uint64_t retarget_authority_generation_advance = 1;
 
   private:
@@ -1688,8 +1688,11 @@ class public_memory_authority_store_t final
 class public_memory_relocation_repository_t final : public zlink::framework::relocation_repository_t
 {
   public:
-    zlink::framework::task_t<zlink::framework::relocation_stored_t> put_relocation (
-      std::vector<std::byte> payload, std::chrono::hours retention, std::stop_token) override
+    zlink::framework::task_t<zlink::framework::relocation_stored_t>
+    put_relocation (std::vector<std::byte> payload,
+                    std::chrono::hours retention,
+                    std::chrono::steady_clock::time_point,
+                    std::stop_token) override
     {
         if (retention != std::chrono::hours (24))
             throw std::runtime_error ("unexpected retention");
@@ -1748,7 +1751,8 @@ class memory_relocation_repository_t final : public relocation_store_port_t
 {
   public:
     relocation_stored_t put (const std::vector<std::uint8_t> &payload,
-                             std::chrono::hours retention) override
+                             std::chrono::hours retention,
+                             std::chrono::steady_clock::time_point) override
     {
         if (retention != std::chrono::hours (24))
             throw std::runtime_error ("unexpected retention");
@@ -1807,7 +1811,9 @@ class memory_authority_store_t final : public authority_relocation_port_t
                                         std::uint32_t checksum_crc32c,
                                         inventory_digest_t inventory_digest,
                                         std::vector<std::byte> target_application_payload = {},
-                                        std::string = {}) override
+                                        std::string = {},
+                                        zlink::framework::runtime::protocol::relocation_id_t = {},
+                                        zlink::framework::location_owner_token_t = {}) override
     {
         std::lock_guard lock (mutex);
         log.push_back ("publish");
@@ -2135,50 +2141,54 @@ void test_generation_barrier_quiesces_yield_spot_and_timer (test_context_t &test
                   "the current pre-Cutover abort must reopen application ingress");
 }
 
-void test_close_barrier_waits_and_abort_restores_ingress (test_context_t &test)
+void test_close_eligibility_preserves_execution_and_deletion_is_fenced (test_context_t &test)
 {
     stateful_object_runtime_t objects;
     const auto spot = create_spot (objects, object_kind_t::user_spot, "closing-spot");
     test.require (objects.enqueue (spot, turn_domain_t::application, {1, {1}})
                     == stateful_error_t::none,
-                  "close barrier test turn must enqueue");
+                  "eligibility test turn must enqueue");
     const auto [claim_error, claim] = objects.try_claim (spot, turn_domain_t::application);
     test.require (claim_error == stateful_error_t::none && claim && claim->sequence == 1,
-                  "Spot lane must be active before close");
-
-    std::atomic<bool> close_completed = false;
-    stateful_error_t close_error = stateful_error_t::conflict;
-    std::optional<spot_close_token_t> close_token;
-    std::thread closing ([&] {
-        auto result = objects.begin_close_spot (spot);
-        close_error = result.first;
-        close_token = std::move (result.second);
-        close_completed.store (true, std::memory_order_release);
-    });
-
-    const bool sealed = wait_until_bounded (
-      [&] { return objects.register_timer (spot, {1, 1000, 1000, 1}) == stateful_error_t::moving; },
-      std::chrono::seconds (5));
-    test.require (sealed && !close_completed.load (std::memory_order_acquire),
-                  "close must seal timer admission and wait for the active Spot lane");
-    test.require (objects.enqueue (spot, turn_domain_t::application, {2, {2}})
-                    == stateful_error_t::none,
-                  "application ingress during close must be retained");
+                  "Spot lane must be active before eligibility is read");
+    test.require (objects.can_close_spot (spot) == std::pair{stateful_error_t::none, true},
+                  "eligibility must return without waiting for the active application turn");
+    test.require (objects.find (object_kind_t::user_spot, spot.key) == spot
+                    && objects.register_timer (spot, {1, 1000, 1000, 1}) == stateful_error_t::none
+                    && objects.cancel_timer (spot, 1) == stateful_error_t::none,
+                  "eligibility must preserve the exact object and timer admission");
+    test.require (
+      objects.enqueue (spot, turn_domain_t::application, {2, {2}}) == stateful_error_t::none
+        && objects.complete_claim (spot, turn_domain_t::application) == stateful_error_t::none,
+      "eligibility must preserve application ingress and current turn completion");
+    const auto [next_error, next] = objects.try_claim (spot, turn_domain_t::application);
+    test.require (next_error == stateful_error_t::none && next && next->sequence == 2,
+                  "eligibility must not hold the next accepted application turn");
     test.require (objects.complete_claim (spot, turn_domain_t::application)
                     == stateful_error_t::none,
-                  "active Spot lane must complete before close continues");
-    closing.join ();
-    test.require (close_error == stateful_error_t::none && close_token,
-                  "close must return its generation token after quiescence");
-    test.require (objects.abort_close_spot (*close_token) == stateful_error_t::none
-                    && objects.commit_close_spot (*close_token)
-                         == stateful_error_t::generation_stale,
-                  "only the current close generation may reopen or commit");
-    const auto [held_error, held] = objects.try_claim (spot, turn_domain_t::application);
-    test.require (held_error == stateful_error_t::none && held && held->sequence == 2,
-                  "close abort must restore held ingress");
+                  "the execution owner completes application work before local release");
+    auto stale = spot;
+    ++stale.object_generation;
+    test.require (objects.can_close_spot (stale).first == stateful_error_t::generation_stale
+                    && objects.close_spot (stale).first == stateful_error_t::generation_stale
+                    && objects.find (object_kind_t::user_spot, spot.key) == spot,
+                  "stale eligibility and deletion must preserve the current generation");
+    const auto actor = create_actor (objects, "closing-member");
+    const auto [join_error, join] = objects.begin_membership_move (actor, spot);
+    const auto [membership_error, member] = objects.commit_membership_move (join);
+    test.require (join_error == stateful_error_t::none && membership_error == stateful_error_t::none
+                    && objects.can_close_spot (spot) == std::pair{stateful_error_t::none, false}
+                    && objects.close_spot (spot) == std::pair{stateful_error_t::none, false}
+                    && objects.find (object_kind_t::user_spot, spot.key) == spot,
+                  "active Actor membership keeps eligibility false and preserves the Spot");
+    test.require (objects.destroy_actor (member) == stateful_error_t::none
+                    && objects.can_close_spot (spot) == std::pair{stateful_error_t::none, true},
+                  "removing the last member makes the same exact Spot eligible");
+    test.require (objects.close_spot (spot) == std::pair{stateful_error_t::none, true}
+                    && !objects.find (object_kind_t::user_spot, spot.key)
+                    && objects.close_spot (spot).first == stateful_error_t::not_found,
+                  "exact local release deletes once and never retains a Close token");
 }
-
 void test_envelope_round_trip (test_context_t &test)
 {
     namespace protocol = zlink::framework::runtime::protocol;
@@ -2919,7 +2929,8 @@ void test_public_relocation_store_adapter (test_context_t &test)
     auto public_store = std::make_shared<public_memory_relocation_repository_t> ();
     public_relocation_store_adapter_t adapter (public_store);
     const std::vector<std::uint8_t> payload{0, 1, 127, 255};
-    const auto stored = adapter.put (payload, std::chrono::hours (24));
+    const auto stored = adapter.put (payload, std::chrono::hours (24),
+                                     std::chrono::steady_clock::now () + std::chrono::minutes (1));
     test.require (stored.reference == "public-root"
                     && stored.checksum_crc32c == maintenance_runtime_t::crc32c (payload),
                   "public relocation adapter must preserve reference and CRC32C");
@@ -2971,11 +2982,109 @@ void test_public_authority_store_adapter (test_context_t &test)
          .mesh_name = "mesh-b",
          .node_rid = zlink::framework::node_rid_t::from_string ("node-b"),
          .node_generation = 17});
-    /* A foreign source can preserve its relocating envelope between the
-     * target's read and owner-changing CAS.  That advances only storeVersion,
-     * not either logical fence, so the target must refresh through the same
-     * bounded retry window used by the other runtime implementations. */
-    store.remaining_auxiliary_conflicts = 7;
+    public_memory_authority_store_t conflicting_store;
+    conflicting_store.snapshot = store.snapshot;
+    conflicting_store.remaining_authority_conflicts = 1;
+    public_authority_store_adapter_t conflicting_adapter (conflicting_store);
+    const auto conflicted =
+      conflicting_adapter.publish (source, target, target_owner, target_placement, "root-public",
+                                   42, digest_with (9), relocated_application_payload);
+    test.require (
+      conflicted.status == authority_publish_status_t::conflict && conflicted.current
+        && conflicting_store.remaining_authority_conflicts == 0
+        && conflicting_store.snapshot->store_version != store.snapshot->store_version
+        && conflicting_store.snapshot->authority_owner_generation
+             == source.authority_owner_generation
+        && conflicting_store.snapshot->payload == source_application_payload,
+      "public authority adapter must preserve a changed initial authority version as conflict");
+    namespace actor_wire = zlink::framework::runtime::actor_authority_detail;
+    const auto source_projection =
+      zlink::framework::runtime::decode_direct_actor_authority_payload (source_application_payload);
+    constexpr std::uint64_t relocation_id_high = 1;
+    constexpr std::uint64_t relocation_id_low = 2;
+    constexpr std::uint8_t absent_wire_field = 0;
+    constexpr std::uint8_t present_wire_slot = 1;
+    constexpr std::size_t optional_authority_slot_count = 2;
+    std::vector<std::byte> captured_slot;
+    actor_wire::append_u64be (captured_slot, relocation_id_high);
+    actor_wire::append_u64be (captured_slot, relocation_id_low);
+    actor_wire::append_u64be (captured_slot, source.object_generation);
+    actor_wire::append_u64be (captured_slot,
+                              absent_wire_field); // Source capture has no target attempt.
+    actor_wire::append_text16be (captured_slot, "root-public");
+    actor_wire::append_u32be (captured_slot, 42);
+    actor_wire::append_text8 (captured_slot, source.node_id);
+    actor_wire::append_u64be (captured_slot, source_projection->node_generation);
+    actor_wire::append_text8 (captured_slot, store.snapshot->owner.owner_id);
+    actor_wire::append_u64be (captured_slot, store.snapshot->owner.lease_generation);
+    actor_wire::append_u8 (captured_slot, absent_wire_field); // Target node is absent.
+    actor_wire::append_u64be (captured_slot, absent_wire_field);
+    actor_wire::append_u8 (captured_slot, absent_wire_field); // Target owner is absent.
+    actor_wire::append_u64be (captured_slot, absent_wire_field);
+    actor_wire::append_text8 (captured_slot, store.snapshot->owner.owner_id);
+    actor_wire::append_u64be (captured_slot, store.snapshot->owner.lease_generation);
+    actor_wire::append_text8 (captured_slot, source.node_id);
+    actor_wire::append_u64be (captured_slot, source_projection->node_generation);
+    actor_wire::append_text8 (captured_slot, store.snapshot->store_version);
+    constexpr std::uint8_t captured_phase = 2;
+    actor_wire::append_u8 (captured_slot, captured_phase);
+    actor_wire::append_u64be (captured_slot, absent_wire_field);
+    actor_wire::append_u8 (captured_slot, absent_wire_field);
+    auto captured_payload =
+      zlink::framework::runtime::decode_canonical_authority_payload (source_application_payload);
+    constexpr auto absent_slot_size = sizeof (std::uint8_t) + sizeof (std::uint32_t);
+    captured_payload->body.resize (captured_payload->body.size ()
+                                   - optional_authority_slot_count * absent_slot_size);
+    actor_wire::append_u8 (captured_payload->body, present_wire_slot);
+    actor_wire::append_u32be (captured_payload->body,
+                              static_cast<std::uint32_t> (captured_slot.size ()));
+    actor_wire::append_bytes (captured_payload->body, captured_slot);
+    actor_wire::append_u8 (captured_payload->body, absent_wire_field); // Activation slot is absent.
+    actor_wire::append_u32be (captured_payload->body, absent_wire_field);
+    public_memory_authority_store_t captured_store;
+    captured_store.snapshot = store.snapshot;
+    captured_store.snapshot->store_version = "2";
+    captured_store.snapshot->payload =
+      zlink::framework::runtime::encode_canonical_authority_payload (*captured_payload);
+    const auto captured_projection =
+      zlink::framework::runtime::decode_direct_actor_authority_payload (
+        captured_store.snapshot->payload);
+    test.require (captured_projection && captured_projection->relocation_phase == captured_phase
+                    && captured_projection->relocation_expected_store_version
+                         == store.snapshot->store_version,
+                  "captured authority fixture must retain the original coordinator version");
+    public_authority_store_adapter_t captured_adapter (captured_store);
+    const auto captured_conflict = captured_adapter.publish (
+      source, target, target_owner, target_placement, "root-public", 42, digest_with (9),
+      relocated_application_payload, store.snapshot->store_version);
+    test.require (captured_conflict.status == authority_publish_status_t::conflict
+                    && captured_store.snapshot->authority_owner_generation
+                         == source.authority_owner_generation
+                    && !captured_store.observed_target_owner,
+                  "captured source metadata must not replace the initial authority version fence");
+    const relocation_authority_fence_t captured_fence{
+      source.kind,           source.key,   store.snapshot->store_version,
+      store.snapshot->owner, target_owner, {relocation_id_high, relocation_id_low}};
+    test.require (captured_adapter.observe_relocation (captured_fence)
+                    == relocation_authority_t::unsettled,
+                  "matching Captured source must keep target staging eligible");
+    auto other_relocation = captured_fence;
+    ++other_relocation.relocation.low;
+    test.require (captured_adapter.observe_relocation (other_relocation)
+                    == relocation_authority_t::source_preserved,
+                  "another relocation must not inherit the captured source fence");
+    auto other_owner = captured_fence;
+    other_owner.source_owner.lease_generation++;
+    test.require (captured_adapter.observe_relocation (other_owner)
+                    == relocation_authority_t::source_preserved,
+                  "another source lease must not inherit the captured source fence");
+    const auto captured_published = captured_adapter.publish (
+      source, target, target_owner, target_placement, "root-public", 42, digest_with (9),
+      relocated_application_payload, store.snapshot->store_version,
+      {relocation_id_high, relocation_id_low}, store.snapshot->owner);
+    test.require (captured_published.status == authority_publish_status_t::published
+                    && captured_store.observed_target_owner,
+                  "matching Captured source must use its current provider version for target CAS");
     store.retarget_authority_generation_advance = 9;
     const auto published =
       adapter.publish (source, target, target_owner, target_placement, "root-public", 42,
@@ -2987,8 +3096,8 @@ void test_public_authority_store_adapter (test_context_t &test)
         && published.current->target.node_id == "node-b"
         && published.current->target.authority_owner_generation == 20
         && published.current->application_payload == relocated_application_payload
-        && store.remaining_auxiliary_conflicts == 0,
-      "public authority adapter must refresh through bounded auxiliary store-version conflicts");
+        && store.remaining_authority_conflicts == 0,
+      "public authority adapter must publish with an unchanged initial authority fence");
     const auto stored_projection = store.snapshot
                                      ? zlink::framework::runtime::decode_actor_authority_payload (
                                          store.snapshot->payload, store.snapshot->object_generation)
@@ -3390,7 +3499,9 @@ class settlement_authority_t final : public authority_relocation_port_t
                                         std::uint32_t,
                                         inventory_digest_t,
                                         std::vector<std::byte> = {},
-                                        std::string = {}) override
+                                        std::string = {},
+                                        zlink::framework::runtime::protocol::relocation_id_t = {},
+                                        zlink::framework::location_owner_token_t = {}) override
     {
         return {};
     }
@@ -3877,15 +3988,29 @@ void test_application_relocation_remote_production_path (test_context_t &test)
     target.configure_relocation_runtime (authority, roots);
     std::optional<detail::bound_session_relocation_route_t> bound_session_route;
     std::atomic<std::uint64_t> observed_session_sequence{0};
+    framework::task_completion_source_t<std::optional<detail::bound_session_relocation_route_t>>
+      first_route_resolution;
+    std::promise<void> first_route_started;
+    auto route_started = first_route_started.get_future ();
+    bool resolve_first_route = true;
     source.configure_bound_session_relocation_resolver (
-      [&bound_session_route, &observed_session_sequence] (
-        const object_ref_t &candidate) -> std::optional<detail::bound_session_relocation_route_t> {
+      [&bound_session_route, &observed_session_sequence, &first_route_resolution,
+       &first_route_started, &resolve_first_route] (const object_ref_t &candidate)
+        -> framework::task_t<std::optional<detail::bound_session_relocation_route_t>> {
           if (!bound_session_route || candidate.key != "production-remote-actor"
               || candidate.object_generation != 1 || candidate.authority_owner_generation != 1)
-              return std::nullopt;
+              return framework::task_t<std::optional<detail::bound_session_relocation_route_t>> (
+                framework::result_t<
+                  std::optional<detail::bound_session_relocation_route_t>>::success (std::nullopt));
+          if (std::exchange (resolve_first_route, false)) {
+              first_route_started.set_value ();
+              return first_route_resolution.task ();
+          }
           auto resolved = *bound_session_route;
           resolved.observed_sequence = observed_session_sequence.load (std::memory_order_acquire);
-          return resolved;
+          return framework::task_t<std::optional<detail::bound_session_relocation_route_t>> (
+            framework::result_t<std::optional<detail::bound_session_relocation_route_t>>::success (
+              std::move (resolved)));
       });
     source.configure_stateful_dispatch ([] (const accepted_record_authority_query_t &query)
                                           -> std::optional<accepted_record_authority_t> {
@@ -4031,12 +4156,23 @@ void test_application_relocation_remote_production_path (test_context_t &test)
           *bound_source_object, "production.actor", std::nullopt}};
     }
     relocation_result_t result;
+    std::promise<bool> relocation_submitted;
+    auto submitted = relocation_submitted.get_future ();
     std::thread relocation_thread ([&] {
-        result = await_task (source.relocate_application_actor (actor, target_descriptor, snapshot,
-                                                                std::chrono::steady_clock::now ()
-                                                                  + std::chrono::seconds (5)));
+        auto relocation = source.relocate_application_actor (actor, target_descriptor, snapshot,
+                                                             std::chrono::steady_clock::now ()
+                                                               + std::chrono::seconds (5));
+        relocation_submitted.set_value (!relocation.await_ready ());
+        result = await_task (std::move (relocation));
     });
-    std::this_thread::sleep_for (10ms);
+    test.require (submitted.get (),
+                  "production relocation must suspend while Session route resolution is pending");
+    route_started.get ();
+    auto resolved_route = *bound_session_route;
+    resolved_route.observed_sequence = observed_session_sequence.load (std::memory_order_acquire);
+    first_route_resolution.complete (
+      framework::result_t<std::optional<detail::bound_session_relocation_route_t>>::success (
+        std::move (resolved_route)));
     std::thread source_dispatch ([&] { dispatch (source); });
     std::thread target_dispatch ([&] { dispatch (target); });
     std::thread session_owner_dispatch ([&] { dispatch (session_owner); });
@@ -6007,9 +6143,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
 
     const auto closing_capped =
       create_spot (normal_lane_caps, object_kind_t::user_spot, "closing-normal-cap");
-    const auto [close_error, close_token] = normal_lane_caps.begin_close_spot (closing_capped);
+    const auto [close_error, close_eligible] = normal_lane_caps.can_close_spot (closing_capped);
     test.require (
-      close_error == stateful_error_t::none && close_token
+      close_error == stateful_error_t::none && close_eligible
         && normal_lane_caps.enqueue (
              closing_capped, turn_domain_t::application,
              {99, std::vector<std::uint8_t> (2u * limits::fixed_work_byte_cost + 5, 0x62)})
@@ -6020,9 +6156,10 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
              == stateful_error_t::none
         && normal_lane_caps.enqueue (closing_capped, turn_domain_t::application, {3, {}})
              == stateful_error_t::none,
-      "closing objects must retain work beyond former lane limits");
-    if (close_token)
-        (void) normal_lane_caps.abort_close_spot (*close_token);
+      "Close eligibility must preserve work beyond former lane limits");
+    test.require (normal_lane_caps.close_spot (closing_capped)
+                    == std::pair{stateful_error_t::none, true},
+                  "eligible Spot local release must succeed");
 }
 
 void test_advertised_receive_chunk_limit_wiring (test_context_t &test)
@@ -6174,7 +6311,7 @@ int main ()
       test, std::make_shared<memory_authority_store_t> ());
     test_temporary_channel_request_yield_owns_call_state (test);
     test_accepted_message_payload_is_deserialized_once (test);
-    test_close_barrier_waits_and_abort_restores_ingress (test);
+    test_close_eligibility_preserves_execution_and_deletion_is_fenced (test);
     test_envelope_round_trip (test);
     test_actor_join_recovery_round_trip (test);
     test_spot_restore_stages_before_publication (test);

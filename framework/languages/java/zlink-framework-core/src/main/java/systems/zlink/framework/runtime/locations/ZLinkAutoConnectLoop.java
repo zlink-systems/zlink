@@ -11,8 +11,6 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 final class ZLinkAutoConnectLoop implements AutoCloseable {
-    private static final long STARTUP_POLLING_MILLIS = 100;
-
     private final ZLinkAutoConnectReconciler reconciler;
     private final ZLinkLocationOptions options;
     private final ScheduledExecutorService executor;
@@ -21,7 +19,6 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
     private CompletionStage<Void> inFlightTick = CompletableFuture.completedFuture(null);
     private CompletionStage<Void> termination;
     private volatile boolean running;
-    private volatile long startupPollingUntilNanos;
 
     ZLinkAutoConnectLoop(ZLinkAutoConnectReconciler reconciler, ZLinkLocationOptions options) {
         this.reconciler = Objects.requireNonNull(reconciler, "reconciler");
@@ -38,8 +35,6 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
     CompletionStage<Void> start() {
         synchronized (lifecycleGate) {
             running = true;
-            startupPollingUntilNanos =
-                    System.nanoTime() + options.ownerLeaseRenewInterval().toNanos();
             inFlightTick = tick().whenComplete((ignored, failure) -> scheduleNext());
             return inFlightTick;
         }
@@ -106,11 +101,11 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
             if (!running) {
                 return;
             }
-            long delayMillis = options.pollingInterval().toMillis();
-            if (System.nanoTime() < startupPollingUntilNanos) {
-                delayMillis = Math.min(delayMillis, STARTUP_POLLING_MILLIS);
-            }
-            task = executor.schedule(this::tickOnLoop, delayMillis, TimeUnit.MILLISECONDS);
+            task =
+                    executor.schedule(
+                            this::tickOnLoop,
+                            options.pollingInterval().toNanos(),
+                            TimeUnit.NANOSECONDS);
         }
     }
 

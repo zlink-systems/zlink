@@ -9,13 +9,6 @@ namespace Zlink.Framework.Runtime.Streams;
 
 internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 {
-    private enum InboundLivenessSignal
-    {
-        None,
-        Application,
-        HeartbeatPong,
-    }
-
     private readonly ZLinkSessionContext _context;
     private readonly ZLinkMessageFlowTracer _flow;
     private readonly ZLinkStreamSessionLiveness _liveness;
@@ -33,8 +26,11 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private readonly Dictionary<ActorBindingReplacementIdentity, ITimer> _replacementCloseTimers =
     [];
     private readonly bool _requireConnectionReady;
-    private readonly TaskCompletionSource<(string LocalAddr, string RemoteAddr)> _connectionReady =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<(
+        string LocalAddr,
+        string RemoteAddr,
+        long ConnectedAt
+    )> _connectionReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _connected;
     private readonly TaskCompletionSource<bool> _completion = new(
         TaskCreationOptions.RunContinuationsAsynchronously
@@ -263,7 +259,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     public ZLinkSerialPostAdmission EnqueueConnected(string localAddr, string remoteAddr)
     {
-        _connectionReady.TrySetResult((localAddr, remoteAddr));
+        _connectionReady.TrySetResult((localAddr, remoteAddr, _timeProvider.GetTimestamp()));
         return _serial.ExecuteControl(cancellationToken =>
             MarkConnectedAsync(localAddr, remoteAddr, cancellationToken)
         );
@@ -285,7 +281,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     {
         if (Volatile.Read(ref _applicationDispatchClosed) != 0)
             return ZLinkSerialPostAdmission.Closed;
-        var signal = ClassifyInboundLiveness(header, payload);
+        _liveness.RecordInbound();
+        var applicationInbound = ZlinkStreamHeaderCodec.IsApplicationHeader(
+            header.AsReadOnlySpan()
+        );
         var admission = _serial.ExecuteApplication(
             async cancellationToken =>
             {
@@ -299,8 +298,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             Math.Max(header.Size, 0),
             applicationJobAdmission is not null
         );
-        if (admission == ZLinkSerialPostAdmission.Accepted)
-            ApplyInboundLiveness(signal);
+        if (admission == ZLinkSerialPostAdmission.Accepted && applicationInbound)
+            _liveness.RecordApplicationInbound();
         return admission;
     }
 
@@ -354,7 +353,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         IDisposable? payloadOwner = null
     )
     {
-        var signal = ClassifyInboundLiveness(header, payload);
+        _liveness.RecordInbound();
+        var applicationInbound = ZlinkStreamHeaderCodec.IsApplicationHeader(
+            header.AsReadOnlySpan()
+        );
         var admission = _serial.ExecuteControl(
             async cancellationToken =>
             {
@@ -369,8 +371,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             Math.Max(header.Size, 0),
             applicationJobAdmission is not null
         );
-        if (admission == ZLinkSerialPostAdmission.Accepted)
-            ApplyInboundLiveness(signal);
+        if (admission == ZLinkSerialPostAdmission.Accepted && applicationInbound)
+            _liveness.RecordApplicationInbound();
         return admission;
     }
 
@@ -378,7 +380,12 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     {
         if (IsClosing)
             return;
-        switch (_liveness.Evaluate())
+        if (_requireConnectionReady && !_connectionReady.Task.IsCompletedSuccessfully)
+            return;
+        var connectedAt = _connectionReady.Task.IsCompletedSuccessfully
+            ? _connectionReady.Task.Result.ConnectedAt
+            : (long?)null;
+        switch (_liveness.Evaluate(connectedAt))
         {
             case ZLinkStreamLivenessDecision.None:
                 return;
@@ -1060,42 +1067,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 return true;
             })
         );
-    }
-
-    private static InboundLivenessSignal ClassifyInboundLiveness(Message header, Message payload)
-    {
-        try
-        {
-            var headerBytes = header.AsReadOnlySpan();
-            if (headerBytes.Length < 2)
-                return InboundLivenessSignal.None;
-            var kind = (ZlinkStreamMessageKind)headerBytes[1];
-            if (kind != ZlinkStreamMessageKind.Control)
-                return InboundLivenessSignal.Application;
-
-            var decoded = ZLinkStreamProtocolDefaults.DecodeHeader(header.AsReadOnlyMemory());
-            if (
-                payload.AsReadOnlyMemory().Length == 0
-                && ZLinkStreamControlFrames.IsHeartbeatPong(decoded)
-            )
-                return InboundLivenessSignal.HeartbeatPong;
-        }
-        catch { }
-
-        return InboundLivenessSignal.None;
-    }
-
-    private void ApplyInboundLiveness(InboundLivenessSignal signal)
-    {
-        switch (signal)
-        {
-            case InboundLivenessSignal.Application:
-                _liveness.RecordApplicationInbound();
-                break;
-            case InboundLivenessSignal.HeartbeatPong:
-                _liveness.RecordHeartbeatPong();
-                break;
-        }
     }
 
     private static void DisposeRejectedPacket(Message header, Message payload)

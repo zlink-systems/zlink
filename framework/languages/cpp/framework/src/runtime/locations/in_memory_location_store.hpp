@@ -480,10 +480,18 @@ class in_memory_location_repository_t : public location_repository_t
                     authority_compare_exchange_result_t{authority_conflict_t{std::move (current)}});
               }
 
+              if (std::any_of (_aggregates.begin (), _aggregates.end (), [&] (const auto &entry) {
+                      return entry.second.status == aggregate_status_t::prepared
+                             && std::any_of (entry.second.request.participants.begin (),
+                                             entry.second.request.participants.end (),
+                                             [&] (const auto &participant) {
+                                                 return participant.key.value == key.value;
+                                             });
+                  }))
+                  return completed (
+                    authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+
               if (std::holds_alternative<authority_delete_t> (mutation)) {
-                  if (found == _authorities.end ())
-                      return completed (authority_compare_exchange_result_t{
-                        authority_conflict_t{authority_missing_t{now}}});
                   if (found->second.allocation.state != placement_allocation_state_t::active
                       || !owner_token_is_live (found->second.owner, now)
                       || !capacity_bundle_present (_active_by_placement,
@@ -521,7 +529,6 @@ class in_memory_location_repository_t : public location_repository_t
 
               if (auto *retarget = std::get_if<authority_retarget_t> (&mutation)) {
                   if (found->second.allocation.state != placement_allocation_state_t::active
-                      || !owner_token_is_live (found->second.owner, now)
                       || !capacity_bundle_present (_active_by_placement,
                                                    found->second.allocation.target,
                                                    found->second.allocation.capacity_bundle))
@@ -559,14 +566,11 @@ class in_memory_location_repository_t : public location_repository_t
                     authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
               }
 
-              auto put = std::get<authority_put_t> (std::move (mutation));
-              if (found == _authorities.end ()
-                  || found->second.allocation.state != placement_allocation_state_t::active)
-                  return completed (authority_compare_exchange_result_t{authority_conflict_t{
-                    found == _authorities.end () ? authority_read_result_t{authority_missing_t{now}}
-                                                 : authority_read_result_t{found->second}}});
+              if (found->second.allocation.state != placement_allocation_state_t::active)
+                  return completed (
+                    authority_compare_exchange_result_t{authority_conflict_t{found->second}});
               auto owner = found->second.owner;
-              const auto object_generation = found->second.object_generation;
+              auto object_generation = found->second.object_generation;
               auto owner_generation = found->second.authority_owner_generation;
               auto allocation = found->second.allocation;
               if (!owner_token_is_live (found->second.owner, now))
@@ -576,7 +580,19 @@ class in_memory_location_repository_t : public location_repository_t
                   return completed (
                     authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
 
-              authority_snapshot_t snapshot{next_store_version (), std::move (put.payload),
+              std::vector<std::byte> payload;
+              if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
+                  if (!issue_generations (
+                        {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
+                      return completed (
+                        authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
+                  object_generation = _object_generation;
+                  owner_generation = _authority_owner_generation;
+                  payload = std::move (reincarnate->payload);
+              } else {
+                  payload = std::move (std::get<authority_put_t> (mutation).payload);
+              }
+              authority_snapshot_t snapshot{next_store_version (), std::move (payload),
                                             object_generation,     owner_generation,
                                             std::move (owner),     now,
                                             std::move (allocation)};
@@ -683,7 +699,7 @@ class in_memory_location_repository_t : public location_repository_t
         const auto publication = std::visit (
           [] (const auto &value) -> creation_terminal_publication_t { return value.terminal; },
           request.completion);
-        if (publication.terminal_envelope.size () > 1024u * 1024u)
+        if (publication.terminal_envelope.size () > location_record_payload_limit)
             throw std::invalid_argument ("creation terminal envelope is too large");
         const auto expires_at = publication.operation_deadline + creation_terminal_retention;
         return _lane
@@ -756,8 +772,8 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<object_reserve_result_t> ();
-        if (request.creating_payload.size () > 1024u * 1024u
-            || request.intent.request_encoded_size > 1024u * 1024u)
+        if (request.creating_payload.size () > location_record_payload_limit
+            || request.intent.request_encoded_size > location_record_payload_limit)
             throw std::invalid_argument ("object reservation payload exceeds 1 MiB");
         return _lane
           .run ([&] {
@@ -830,11 +846,12 @@ class in_memory_location_repository_t : public location_repository_t
     }
 
     task_t<object_commit_result_t> commit (object_commit_request_t request,
-                                           std::stop_token cancellation = {}) override
+                                           std::stop_token cancellation = {},
+                                           std::chrono::system_clock::time_point = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<object_commit_result_t> ();
-        if (request.ready_payload.size () > 1024u * 1024u)
+        if (request.ready_payload.size () > location_record_payload_limit)
             throw std::invalid_argument ("object commit payload exceeds 1 MiB");
         return _lane
           .run ([&] {
@@ -884,7 +901,8 @@ class in_memory_location_repository_t : public location_repository_t
     }
 
     task_t<object_abort_result_t> abort (object_abort_request_t request,
-                                         std::stop_token cancellation = {}) override
+                                         std::stop_token cancellation = {},
+                                         std::chrono::system_clock::time_point = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<object_abort_result_t> ();

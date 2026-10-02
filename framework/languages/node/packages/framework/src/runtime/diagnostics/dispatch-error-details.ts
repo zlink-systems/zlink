@@ -1,3 +1,38 @@
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} from '../../contracts/Errors/ZLinkFrameworkException';
+import { ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason } from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import {
+  internalFrameworkErrorKind,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+
+export function dispatchReasonFromError(error: unknown): ZLinkDispatchErrorReason {
+  if (!(error instanceof ZLinkFrameworkException)) return ZLinkDispatchErrorReason.HandlerException;
+  const origin = internalFrameworkErrorKind(error);
+  if (origin === ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed)
+    return ZLinkDispatchErrorReason.PayloadDecodeFailed;
+  if (
+    origin === ZLinkFrameworkInternalErrorKind.SpotGenerationStale ||
+    origin === ZLinkFrameworkInternalErrorKind.ActorGenerationStale ||
+    origin === ZLinkFrameworkInternalErrorKind.SpotMoving ||
+    origin === ZLinkFrameworkInternalErrorKind.ActorMoving ||
+    origin === ZLinkFrameworkInternalErrorKind.ActorLocationStale
+  )
+    return ZLinkDispatchErrorReason.StaleTarget;
+  switch (error.kind) {
+    case ZLinkFrameworkErrorKind.NotFound:
+      return ZLinkDispatchErrorReason.HandlerMissing;
+    case ZLinkFrameworkErrorKind.ProtocolError:
+      return ZLinkDispatchErrorReason.InvalidFrame;
+    case ZLinkFrameworkErrorKind.ShuttingDown:
+      return ZLinkDispatchErrorReason.Shutdown;
+    default:
+      return ZLinkDispatchErrorReason.HandlerException;
+  }
+}
+
 export const ERROR_MESSAGE_MAX_LENGTH = 512;
 
 const CREDENTIAL_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [

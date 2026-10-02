@@ -33,6 +33,361 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkLocationRuntimeRecoveryTest {
     @Test
+    void heartbeatSnapshotKeepsItsOwnerWhenMetricsRestartTheRuntime() throws Exception {
+        var generations = new AtomicInteger();
+        var submittedGeneration = new java.util.concurrent.atomic.AtomicLong();
+        var submitted = new CountDownLatch(1);
+        var pendingRenewal = new CompletableFuture<ZLinkOwnerLeaseRenewResult>();
+        var restarted = new AtomicBoolean();
+        var store =
+                new ZLinkLocationStoreTestAdapter() {
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+                            String ownerId, Duration ttl) {
+                        Instant now = Instant.now();
+                        return CompletableFuture.completedFuture(
+                                new ZLinkOwnerLeaseClaimed(
+                                        new ZLinkLocationOwnerToken(
+                                                ownerId, generations.incrementAndGet()),
+                                        now.plus(ttl),
+                                        now));
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
+                            ZLinkLocationOwnerToken token, Duration ttl) {
+                        submittedGeneration.compareAndSet(0, token.leaseGeneration());
+                        submitted.countDown();
+                        return pendingRenewal;
+                    }
+
+                    @Override
+                    public CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken token) {
+                        return CompletableFuture.completedFuture(0L);
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
+                            ZLinkLocationOwnerToken token) {
+                        return CompletableFuture.completedFuture(
+                                ZLinkOwnerLeaseReleaseResult.RELEASED);
+                    }
+                };
+        try (var runtime =
+                        new ZLinkLocationRuntime(
+                                ZLinkRegisteredLocationStores.fromUnified(store),
+                                "owner-a",
+                                Duration.ofSeconds(15),
+                                Duration.ofSeconds(1),
+                                Duration.ofSeconds(5),
+                                Duration.ofSeconds(1));
+                var metrics =
+                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
+                                .install(
+                                        new systems.zlink.framework.runtime.internal.metrics
+                                                .ZLinkRuntimeMetrics.Sink() {
+                                            @Override
+                                            public void record(
+                                                    String name,
+                                                    Duration duration,
+                                                    java.util.Map<String, String> tags) {
+                                                if (name.equals(
+                                                                "zlink.location.owner_lease.renew.lateness")
+                                                        && restarted.compareAndSet(false, true)) {
+                                                    runtime.stop().toCompletableFuture().join();
+                                                    runtime.start(RoutingId.from("node-a"))
+                                                            .toCompletableFuture()
+                                                            .join();
+                                                }
+                                            }
+                                        })) {
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
+            assertTrue(submitted.await(3, TimeUnit.SECONDS));
+            assertTrue(restarted.get());
+            assertEquals(
+                    1L,
+                    submittedGeneration.get(),
+                    "the predecessor heartbeat keeps its captured owner");
+            assertEquals(2L, runtime.currentOwnerToken().leaseGeneration());
+        } finally {
+            pendingRenewal.completeExceptionally(
+                    new java.util.concurrent.CancellationException("test cleanup"));
+        }
+    }
+
+    @Test
+    void failedHeartbeatWaitsForPendingRenewalAndResumesAfterElapsedInterval() throws Exception {
+        var firstRenewal = new CompletableFuture<ZLinkOwnerLeaseRenewResult>();
+        var secondRenewal = new CompletableFuture<ZLinkOwnerLeaseRenewResult>();
+        var firstStarted = new CountDownLatch(1);
+        var secondStarted = new CountDownLatch(1);
+        var renewals = new AtomicInteger();
+        var store =
+                new ZLinkLocationStoreTestAdapter() {
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+                            String ownerId, Duration ttl) {
+                        Instant now = Instant.now();
+                        return CompletableFuture.completedFuture(
+                                new ZLinkOwnerLeaseClaimed(
+                                        new ZLinkLocationOwnerToken(ownerId, 1),
+                                        now.plus(ttl),
+                                        now));
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
+                            ZLinkLocationOwnerToken token, Duration ttl) {
+                        if (renewals.incrementAndGet() == 1) {
+                            firstStarted.countDown();
+                            return firstRenewal;
+                        }
+                        secondStarted.countDown();
+                        return secondRenewal;
+                    }
+                };
+        try (var runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(15),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1))) {
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
+            assertTrue(firstStarted.await(2, TimeUnit.SECONDS));
+            assertFalse(secondStarted.await(2, TimeUnit.SECONDS));
+            firstRenewal.completeExceptionally(
+                    new IllegalStateException("provider rejected renewal"));
+            assertTrue(secondStarted.await(500, TimeUnit.MILLISECONDS));
+            assertEquals(2, renewals.get());
+        } finally {
+            firstRenewal.completeExceptionally(
+                    new java.util.concurrent.CancellationException("test cleanup"));
+            secondRenewal.completeExceptionally(
+                    new java.util.concurrent.CancellationException("test cleanup"));
+        }
+    }
+
+    @Test
+    void predecessorRecoveryFailureCannotCloseRestartedOwnerAdmission() throws Exception {
+        var generation = new AtomicInteger();
+        var republishStarted = new CountDownLatch(1);
+        var republish = new CompletableFuture<Void>();
+        var store =
+                new ZLinkLocationStoreTestAdapter() {
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+                            String ownerId, Duration ttl) {
+                        Instant now = Instant.now();
+                        return CompletableFuture.completedFuture(
+                                new ZLinkOwnerLeaseClaimed(
+                                        new ZLinkLocationOwnerToken(
+                                                ownerId, generation.incrementAndGet()),
+                                        now.plus(ttl),
+                                        now));
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
+                            ZLinkLocationOwnerToken token, Duration ttl) {
+                        return CompletableFuture.completedFuture(new ZLinkOwnerLeaseRenewStale());
+                    }
+
+                    @Override
+                    public CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken token) {
+                        return CompletableFuture.completedFuture(0L);
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
+                            ZLinkLocationOwnerToken token) {
+                        return CompletableFuture.completedFuture(
+                                ZLinkOwnerLeaseReleaseResult.RELEASED);
+                    }
+                };
+        try (var runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(15),
+                        Duration.ofHours(1),
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1))) {
+            runtime.setOwnerLeaseRecoveryListener(
+                    () -> {
+                        republishStarted.countDown();
+                        return republish;
+                    });
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
+            var previousRecovery = runtime.renewOwnerLeaseOnce().toCompletableFuture();
+            assertTrue(republishStarted.await(2, TimeUnit.SECONDS));
+            assertEquals(1, runtime.recoveryPreviousOwnerToken().leaseGeneration());
+            runtime.stop().toCompletableFuture().join();
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
+            assertEquals(3, runtime.currentOwnerToken().leaseGeneration());
+            assertTrue(runtime.isOwnerAdmissionOpen());
+            republish.completeExceptionally(new IllegalStateException("previous recovery failed"));
+            previousRecovery.get(2, TimeUnit.SECONDS);
+            assertTrue(
+                    runtime.isOwnerAdmissionOpen(),
+                    "an earlier recovery cannot close the new owner admission");
+        } finally {
+            republish.completeExceptionally(
+                    new java.util.concurrent.CancellationException("fixture closed"));
+        }
+    }
+
+    @Test
+    void stoppedOwnerRenewalCannotOverwriteTheRestartedOwnerLease() {
+        Instant now = Instant.parse("2026-10-01T00:00:00Z");
+        var generation = new AtomicInteger();
+        var pending = new CompletableFuture<ZLinkOwnerLeaseRenewResult>();
+        var store =
+                new ZLinkLocationStoreTestAdapter() {
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+                            String ownerId, Duration ttl) {
+                        int current = generation.incrementAndGet();
+                        Instant storeNow = now.plusSeconds(current);
+                        return CompletableFuture.completedFuture(
+                                new ZLinkOwnerLeaseClaimed(
+                                        new ZLinkLocationOwnerToken(ownerId, current),
+                                        storeNow.plus(ttl),
+                                        storeNow));
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
+                            ZLinkLocationOwnerToken token, Duration ttl) {
+                        return pending;
+                    }
+
+                    @Override
+                    public CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken token) {
+                        return CompletableFuture.completedFuture(0L);
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
+                            ZLinkLocationOwnerToken token) {
+                        return CompletableFuture.completedFuture(
+                                ZLinkOwnerLeaseReleaseResult.RELEASED);
+                    }
+                };
+        try (var runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(15),
+                        Duration.ofHours(1),
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1))) {
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
+            var oldRenewal = runtime.renewOwnerLeaseOnce().toCompletableFuture();
+            runtime.stop().toCompletableFuture().join();
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
+            Instant currentStoreNow = runtime.ownerLeaseRenewedAt();
+            pending.complete(
+                    new systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewed(
+                            now.plusSeconds(15), now));
+            oldRenewal.join();
+            assertEquals(currentStoreNow, runtime.ownerLeaseRenewedAt());
+            assertEquals(2, runtime.currentOwnerToken().leaseGeneration());
+        }
+    }
+
+    @Test
+    void heartbeatWaitsForPendingClaimAndStartsItsIntervalAfterCompletion() throws Exception {
+        var claim = new CompletableFuture<ZLinkOwnerLeaseClaimResult>();
+        var renewStarted = new CountDownLatch(1);
+        var overlappingRenewal = new CountDownLatch(1);
+        var releaseRenew = new CompletableFuture<ZLinkOwnerLeaseRenewResult>();
+        var renewCount = new AtomicInteger();
+        var store =
+                new ZLinkLocationStoreTestAdapter() {
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+                            String ownerId, Duration ttl) {
+                        return claim;
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
+                            ZLinkLocationOwnerToken token, Duration ttl) {
+                        if (renewCount.incrementAndGet() > 1) {
+                            overlappingRenewal.countDown();
+                        }
+                        renewStarted.countDown();
+                        return releaseRenew;
+                    }
+                };
+        try (var runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(15),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1))) {
+            var startup = runtime.start(RoutingId.from("node-a")).toCompletableFuture();
+            assertFalse(renewStarted.await(2, TimeUnit.SECONDS));
+            Instant now = Instant.now();
+            claim.complete(
+                    new ZLinkOwnerLeaseClaimed(
+                            new ZLinkLocationOwnerToken("owner-a", 1), now.plusSeconds(15), now));
+            startup.get(1, TimeUnit.SECONDS);
+            assertFalse(
+                    renewStarted.await(500, TimeUnit.MILLISECONDS),
+                    "the initial claim completion starts the first renewal interval");
+            assertTrue(renewStarted.await(2, TimeUnit.SECONDS));
+            assertFalse(releaseRenew.isDone());
+            assertFalse(overlappingRenewal.await(2, TimeUnit.SECONDS));
+            assertEquals(1, renewCount.get(), "a pending renewal must not overlap");
+            releaseRenew.complete(
+                    new systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewed(
+                            now.plusSeconds(15), now));
+        }
+    }
+
+    @Test
+    void renewalDiagnosticsPreserveTheProviderStoreNow() {
+        Instant now = Instant.parse("2026-10-01T00:00:00Z");
+        var store =
+                new ZLinkLocationStoreTestAdapter() {
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+                            String ownerId, Duration ttl) {
+                        return CompletableFuture.completedFuture(
+                                new ZLinkOwnerLeaseClaimed(
+                                        new ZLinkLocationOwnerToken(ownerId, 1),
+                                        now.plus(ttl),
+                                        now));
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
+                            ZLinkLocationOwnerToken token, Duration ttl) {
+                        return CompletableFuture.completedFuture(
+                                new systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkOwnerLeaseRenewed(now.plus(ttl), now));
+                    }
+                };
+        try (var runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(15),
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(3))) {
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
+            assertTrue(runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            assertEquals(now, runtime.ownerLeaseRenewedAt());
+        }
+    }
+
+    @Test
     void unavailableInitialClaimStartsWithoutAnOwnerAndHeartbeatClaimsAfterRecovery()
             throws Exception {
         ToggleClaimStore store = new ToggleClaimStore();
@@ -138,6 +493,30 @@ final class ZLinkLocationRuntimeRecoveryTest {
             store.completeClaim();
 
             assertTrue(store.released.await(1, TimeUnit.SECONDS));
+            assertEquals(0, store.heartbeatRenewals.get());
+        }
+    }
+
+    @Test
+    void stopObservesCancelledStartupProviderBeforeCompleting() throws Exception {
+        CancelledLateClaimStore store = new CancelledLateClaimStore();
+        try (ZLinkLocationRuntime runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(100))) {
+            CompletableFuture<Void> startup =
+                    runtime.start(RoutingId.from("node-a")).toCompletableFuture();
+            assertTrue(startup.cancel(true));
+            CompletableFuture<Void> stopping = runtime.stop().toCompletableFuture();
+            assertFalse(stopping.isDone(), "stop must observe the pending provider claim");
+            store.completeLateClaim();
+            stopping.get(1, TimeUnit.SECONDS);
+            assertEquals(1, store.readCount.get());
+            assertEquals(1, store.releaseCount.get());
             assertEquals(0, store.heartbeatRenewals.get());
         }
     }
@@ -249,6 +628,250 @@ final class ZLinkLocationRuntimeRecoveryTest {
             }
             assertEquals("owner lease operation timed out", runtime.lastError());
             assertEquals(0, store.heartbeatRenewals.get());
+        }
+    }
+
+    @Test
+    void stopPreservesCancelledStartupReleaseFailure() throws Exception {
+        HangingReleaseStore store = new HangingReleaseStore();
+        try (ZLinkLocationRuntime runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(100))) {
+            CompletableFuture<Void> startup =
+                    runtime.start(RoutingId.from("node-a")).toCompletableFuture();
+            assertTrue(startup.cancel(true));
+            CompletableFuture<Void> stopping = runtime.stop().toCompletableFuture();
+            store.completeClaim();
+            assertTrue(store.releaseStarted.await(1, TimeUnit.SECONDS));
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> stopping.get(2, TimeUnit.SECONDS));
+            assertTrue(failure.getCause() instanceof java.util.concurrent.TimeoutException);
+            assertThrows(java.util.concurrent.CancellationException.class, startup::join);
+            assertEquals(0, store.heartbeatRenewals.get());
+        }
+    }
+
+    @Test
+    void oldStartupCleanupPreservesTheNewLifecycleLeaseAndError() throws Exception {
+        for (boolean providerFailure : new boolean[] {false, true}) {
+            RestartedClaimStore store = new RestartedClaimStore();
+            try (ZLinkLocationRuntime runtime =
+                    new ZLinkLocationRuntime(
+                            ZLinkRegisteredLocationStores.fromUnified(store),
+                            "owner-a",
+                            Duration.ofSeconds(5),
+                            Duration.ofSeconds(1),
+                            Duration.ofSeconds(1),
+                            Duration.ofMillis(100))) {
+                var first = runtime.start(RoutingId.from("node-a")).toCompletableFuture();
+                assertTrue(first.cancel(true));
+                var oldStopping = runtime.stop().toCompletableFuture();
+                runtime.start(RoutingId.from("node-b"))
+                        .toCompletableFuture()
+                        .get(1, TimeUnit.SECONDS);
+                if (providerFailure) {
+                    store.firstClaim.completeExceptionally(
+                            new IllegalStateException("old provider failed"));
+                } else {
+                    Instant now = Instant.now();
+                    store.firstClaim.complete(
+                            new ZLinkOwnerLeaseClaimed(
+                                    new ZLinkLocationOwnerToken("owner-a", 1),
+                                    now.plusSeconds(5),
+                                    now));
+                }
+                oldStopping.get(1, TimeUnit.SECONDS);
+                assertEquals(store.current, runtime.currentOwnerToken());
+                assertEquals(0, store.releases.get());
+                assertEquals(null, runtime.lastError());
+                runtime.stop().toCompletableFuture().get(1, TimeUnit.SECONDS);
+                assertEquals(1, store.releases.get());
+            }
+        }
+    }
+
+    @Test
+    void normalDirectStopUsesItsOwnRenewBudgetAfterTheStartupDeadlinePassed() throws Exception {
+        RestartedClaimStore store = new RestartedClaimStore();
+        try (ZLinkLocationRuntime runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(100),
+                        Duration.ofMillis(100))) {
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().get(1, TimeUnit.SECONDS);
+            assertFalse(runtime.ownerLeaseHealthy());
+            assertTrue(
+                    runtime.renewOwnerLeaseOnce().toCompletableFuture().get(1, TimeUnit.SECONDS));
+            Instant now = Instant.now();
+            store.firstClaim.complete(
+                    new ZLinkOwnerLeaseClaimed(
+                            new ZLinkLocationOwnerToken("owner-a", 1), now.plusSeconds(5), now));
+            runtime.stop().toCompletableFuture().get(1, TimeUnit.SECONDS);
+            assertEquals(1, store.releases.get());
+        }
+    }
+
+    @Test
+    void normalDirectStopUsesItsRenewDeadlineForThePendingInitialClaim() throws Exception {
+        RestartedClaimStore store = new RestartedClaimStore();
+        try (ZLinkLocationRuntime runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(100),
+                        Duration.ofMillis(100))) {
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().get(1, TimeUnit.SECONDS);
+            assertFalse(runtime.ownerLeaseHealthy());
+            assertTrue(
+                    runtime.renewOwnerLeaseOnce().toCompletableFuture().get(1, TimeUnit.SECONDS));
+            var stopping = runtime.stop().toCompletableFuture();
+            assertFalse(stopping.isDone());
+            store.firstClaim.completeExceptionally(
+                    new IllegalStateException("initial claim failed"));
+            stopping.get(1, TimeUnit.SECONDS);
+            assertEquals(1, store.releases.get());
+            assertFalse(runtime.ownerLeaseHealthy());
+        }
+    }
+
+    @Test
+    void pendingClaimCleanupLeavesTheRecoveredTokenToStopAndPreservesConfirmationFailure()
+            throws Exception {
+        for (boolean failConfirmation : new boolean[] {false, true}) {
+            RestartedClaimStore store = new RestartedClaimStore();
+            try (ZLinkLocationRuntime runtime =
+                    new ZLinkLocationRuntime(
+                            ZLinkRegisteredLocationStores.fromUnified(store),
+                            "owner-a",
+                            Duration.ofSeconds(5),
+                            Duration.ofSeconds(1),
+                            Duration.ofMillis(100),
+                            Duration.ofMillis(100))) {
+                Instant deadline =
+                        Instant.now()
+                                .plus(
+                                        systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
+                                                .DEFAULT_TERMINATION_DEADLINE);
+                runtime.start(RoutingId.from("node-a"), () -> deadline)
+                        .toCompletableFuture()
+                        .get(1, TimeUnit.SECONDS);
+                assertTrue(
+                        runtime.renewOwnerLeaseOnce()
+                                .toCompletableFuture()
+                                .get(1, TimeUnit.SECONDS));
+                store.failRead = failConfirmation;
+                var stopping = runtime.stop(deadline).toCompletableFuture();
+                store.firstClaim.completeExceptionally(
+                        new IllegalStateException("initial provider failed"));
+                if (failConfirmation) {
+                    var failure =
+                            assertThrows(
+                                    java.util.concurrent.ExecutionException.class,
+                                    () -> stopping.get(1, TimeUnit.SECONDS));
+                    assertEquals("confirmation failed", failure.getCause().getMessage());
+                } else {
+                    stopping.get(1, TimeUnit.SECONDS);
+                }
+                assertEquals(1, store.releases.get());
+                assertFalse(runtime.ownerLeaseHealthy());
+            }
+        }
+    }
+
+    @Test
+    void repeatedStopObservesTheSameOwnerCleanupWithoutResubmittingIt() throws Exception {
+        RestartedClaimStore store = new RestartedClaimStore();
+        store.releaseResult = new CompletableFuture<>();
+        Instant now = Instant.now();
+        store.firstClaim.complete(
+                new ZLinkOwnerLeaseClaimed(store.current, now.plusSeconds(5), now));
+        try (ZLinkLocationRuntime runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(100))) {
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().get(1, TimeUnit.SECONDS);
+            var first = runtime.stop().toCompletableFuture();
+            assertTrue(store.releaseCalled.await(1, TimeUnit.SECONDS));
+            var second = runtime.stop().toCompletableFuture();
+            org.junit.jupiter.api.Assertions.assertSame(first, second);
+            assertFalse(second.isDone());
+            assertEquals(1, store.releases.get());
+            store.releaseResult.complete(ZLinkOwnerLeaseReleaseResult.RELEASED);
+            first.get(1, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void hostCleanupDeadlinePreservesBothCleanupFailures() throws Exception {
+        RestartedClaimStore store = new RestartedClaimStore();
+        try (ZLinkLocationRuntime runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(100),
+                        Duration.ofMillis(100))) {
+            Instant deadline =
+                    Instant.now()
+                            .plus(
+                                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
+                                            .DEFAULT_TERMINATION_DEADLINE);
+            runtime.start(RoutingId.from("node-a"), () -> deadline)
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS);
+            assertTrue(
+                    runtime.renewOwnerLeaseOnce().toCompletableFuture().get(1, TimeUnit.SECONDS));
+            store.failRead = true;
+            store.releaseResult =
+                    CompletableFuture.failedFuture(new IllegalStateException("release failed"));
+            var stopping = runtime.stop(deadline).toCompletableFuture();
+            store.firstClaim.completeExceptionally(
+                    new IllegalStateException("initial provider failed"));
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> stopping.get(1, TimeUnit.SECONDS));
+            assertEquals("confirmation failed", failure.getCause().getMessage());
+            assertEquals(1, failure.getCause().getSuppressed().length);
+            assertEquals("release failed", failure.getCause().getSuppressed()[0].getMessage());
+            assertEquals(1, store.releases.get());
+        }
+    }
+
+    @Test
+    void confirmedInitialClaimFailureLeavesSuccessfulStartupDiagnosticsHealthy() throws Exception {
+        RestartedClaimStore store = new RestartedClaimStore();
+        store.firstClaim.completeExceptionally(
+                new IllegalStateException("claim outcome uncertain"));
+        try (ZLinkLocationRuntime runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(100))) {
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().get(1, TimeUnit.SECONDS);
+            assertTrue(runtime.ownerLeaseHealthy());
+            assertEquals(store.current, runtime.currentOwnerToken());
+            assertEquals(null, runtime.lastError());
         }
     }
 
@@ -407,6 +1030,52 @@ final class ZLinkLocationRuntimeRecoveryTest {
             Instant now = Instant.now();
             committed.set(true);
             firstClaim.complete(new ZLinkOwnerLeaseClaimed(token, now.plusSeconds(1), now));
+        }
+    }
+
+    private static final class RestartedClaimStore extends ZLinkLocationStoreTestAdapter {
+        private final CompletableFuture<ZLinkOwnerLeaseClaimResult> firstClaim =
+                new CompletableFuture<>();
+        private final ZLinkLocationOwnerToken current = new ZLinkLocationOwnerToken("owner-a", 2);
+        private final AtomicInteger claims = new AtomicInteger();
+        private final AtomicInteger releases = new AtomicInteger();
+        private boolean failRead;
+        private final CountDownLatch releaseCalled = new CountDownLatch(1);
+        private CompletableFuture<ZLinkOwnerLeaseReleaseResult> releaseResult =
+                CompletableFuture.completedFuture(ZLinkOwnerLeaseReleaseResult.RELEASED);
+
+        @Override
+        public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+                String ownerId, Duration ttl) {
+            if (claims.getAndIncrement() == 0) return firstClaim;
+            Instant now = Instant.now();
+            return CompletableFuture.completedFuture(
+                    new ZLinkOwnerLeaseClaimed(current, now.plus(ttl), now));
+        }
+
+        @Override
+        public CompletionStage<ZLinkOwnerLeaseReadResult> readOwnerLease(String ownerId) {
+            if (failRead)
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException("confirmation failed"));
+            Instant now = Instant.now();
+            return CompletableFuture.completedFuture(
+                    new ZLinkOwnerLeaseFound(current, now.plusSeconds(5), now));
+        }
+
+        @Override
+        public CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken token) {
+            assertEquals(current, token);
+            return CompletableFuture.completedFuture(0L);
+        }
+
+        @Override
+        public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
+                ZLinkLocationOwnerToken token) {
+            assertEquals(current, token);
+            releases.incrementAndGet();
+            releaseCalled.countDown();
+            return releaseResult;
         }
     }
 

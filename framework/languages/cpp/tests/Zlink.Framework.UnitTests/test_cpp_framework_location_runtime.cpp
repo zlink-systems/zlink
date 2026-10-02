@@ -3,6 +3,10 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/location_runtime.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
+#include <zlink/framework/contracts/configuration/detail/framework_options_validation.hpp>
+
+#include <zlink/framework/contracts/configuration/app.hpp>
 
 #include <gtest/gtest.h>
 
@@ -19,22 +23,98 @@ using zlink::framework::runtime::in_memory_location_repository_t;
 using zlink::framework::runtime::location_runtime_t;
 
 constexpr auto heartbeat_observation_timeout = std::chrono::seconds (5);
+const location_options_t asynchronous_heartbeat_options{
+  .owner_lease_renew_interval = std::chrono::milliseconds (5),
+  .owner_lease_ttl = std::chrono::seconds (15)};
+
+TEST (ZLinkFrameworkLocationRuntime, RejectsLeaseTimeoutLongerThanFencedRenewalWindow)
+{
+    location_options_t options;
+    options.owner_lease_renew_interval = std::chrono::seconds (1);
+    options.owner_lease_renew_timeout = std::chrono::seconds (8);
+    EXPECT_THROW (zlink::framework::detail::validate_location_options (options),
+                  zlink::framework::framework_exception_t);
+    EXPECT_NO_THROW (zlink::framework::detail::validate_location_options (location_options_t{}));
+}
+
+TEST (ZLinkFrameworkLocationRuntime, RejectsLeaseRenewalWindowOverflow)
+{
+    location_options_t options;
+    options.owner_lease_renew_interval = std::chrono::milliseconds (1);
+    options.owner_lease_renew_timeout =
+      std::chrono::milliseconds::max () / 2 + std::chrono::milliseconds (1);
+    EXPECT_THROW (zlink::framework::detail::validate_location_options (options),
+                  zlink::framework::framework_exception_t);
+    options.owner_lease_renew_timeout = std::chrono::milliseconds::max ();
+    EXPECT_THROW (zlink::framework::detail::validate_location_options (options),
+                  zlink::framework::framework_exception_t);
+    options.owner_lease_renew_interval = std::chrono::milliseconds::max ();
+    options.owner_lease_renew_timeout = std::chrono::milliseconds (1);
+    EXPECT_THROW (zlink::framework::detail::validate_location_options (options),
+                  zlink::framework::framework_exception_t);
+}
+
+class timed_renew_repository_t final : public in_memory_location_repository_t
+{
+  public:
+    std::future<std::chrono::steady_clock::duration> renew_spacing ()
+    {
+        return _spacing.get_future ();
+    }
+
+    zlink::framework::task_t<zlink::framework::owner_lease_renew_result_t>
+    renew_owner_lease (zlink::framework::location_owner_token_t token,
+                       std::chrono::milliseconds ttl) override
+    {
+        const auto now = std::chrono::steady_clock::now ();
+        if (_calls++ == 0)
+            _first_started = now;
+        else if (_calls == 2)
+            _spacing.set_value (now - _first_started);
+        return in_memory_location_repository_t::renew_owner_lease (std::move (token), ttl);
+    }
+
+  private:
+    int _calls = 0;
+    std::chrono::steady_clock::time_point _first_started;
+    std::promise<std::chrono::steady_clock::duration> _spacing;
+};
+
+TEST (ZLinkFrameworkLocationRuntime, CompletedHeartbeatWaitsUntilPreviousStartPlusInterval)
+{
+    timed_renew_repository_t store;
+    const auto interval = std::chrono::milliseconds (400);
+    location_runtime_t runtime (store,
+                                location_options_t{.owner_lease_renew_interval = interval,
+                                                   .owner_lease_renew_timeout = interval / 4},
+                                "owner-spacing");
+    auto spacing = store.renew_spacing ();
+    runtime.start (zlink::routing_id_t::from ("node-spacing"));
+    ASSERT_EQ (std::future_status::ready, spacing.wait_for (std::chrono::seconds (5)));
+    EXPECT_GE (spacing.get (), interval);
+    runtime.stop ();
+}
 
 class pending_renew_repository_t final : public in_memory_location_repository_t
 {
   public:
     std::future<void> renew_started () { return _renew_started.get_future (); }
+    std::future<void> next_renew_started () { return _next_renew_started.get_future (); }
 
     int renew_calls () const noexcept { return _renew_calls.load (); }
 
     zlink::framework::task_t<zlink::framework::owner_lease_renew_result_t>
     renew_owner_lease (zlink::framework::location_owner_token_t, std::chrono::milliseconds) override
     {
-        if (_renew_calls.fetch_add (1) != 0)
+        const auto call = _renew_calls.fetch_add (1);
+        if (call != 0) {
+            if (call == 1)
+                _next_renew_started.set_value ();
             return zlink::framework::task_t<zlink::framework::owner_lease_renew_result_t> (
               zlink::framework::result_t<zlink::framework::owner_lease_renew_result_t>::success (
                 zlink::framework::owner_lease_renew_result_t{
                   zlink::framework::owner_lease_stale_t{}}));
+        }
         _renew_started.set_value ();
         return _renew_completion.task ();
     }
@@ -48,16 +128,35 @@ class pending_renew_repository_t final : public in_memory_location_repository_t
 
   private:
     std::promise<void> _renew_started;
+    std::promise<void> _next_renew_started;
     std::atomic_int _renew_calls = 0;
     zlink::framework::task_completion_source_t<zlink::framework::owner_lease_renew_result_t>
       _renew_completion;
 };
 
+TEST (ZLinkFrameworkLocationRuntime, PendingHeartbeatDoesNotOverlapAndCompletionWakesNextRenewal)
+{
+    pending_renew_repository_t store;
+    const auto interval = std::chrono::milliseconds (400);
+    location_runtime_t runtime (store, location_options_t{.owner_lease_renew_interval = interval},
+                                "owner-pending");
+    auto started = store.renew_started ();
+    auto next = store.next_renew_started ();
+    runtime.start (zlink::routing_id_t::from ("node-pending"));
+    ASSERT_EQ (std::future_status::ready, started.wait_for (std::chrono::seconds (5)));
+    EXPECT_EQ (std::future_status::timeout, next.wait_for (interval + interval / 4));
+    const auto lease = store.read_owner_lease ("owner-pending").result ().value ();
+    const auto &found = std::get<zlink::framework::owner_lease_found_t> (lease);
+    store.complete_renew (
+      zlink::framework::owner_lease_renewed_t{found.lease_expires_at, found.store_now});
+    EXPECT_EQ (std::future_status::ready, next.wait_for (interval / 4));
+    runtime.stop ();
+}
+
 TEST (ZLinkFrameworkLocationRuntime, HeartbeatContinuesWhenRenewCompletesAsynchronously)
 {
     pending_renew_repository_t store;
-    const location_options_t options{.owner_lease_renew_interval = std::chrono::milliseconds (5),
-                                     .owner_lease_ttl = std::chrono::seconds (15)};
+    const auto &options = asynchronous_heartbeat_options;
     location_runtime_t runtime (store, options, "owner-a");
     auto renew_started = store.renew_started ();
     const auto observation_deadline =
@@ -79,11 +178,7 @@ TEST (ZLinkFrameworkLocationRuntime, HeartbeatContinuesWhenRenewCompletesAsynchr
 TEST (ZLinkFrameworkLocationRuntime, StopDiscardsLateHeartbeatRenewCompletion)
 {
     pending_renew_repository_t store;
-    location_runtime_t runtime (
-      store,
-      location_options_t{.owner_lease_renew_interval = std::chrono::milliseconds (5),
-                         .owner_lease_ttl = std::chrono::seconds (15)},
-      "owner-a");
+    location_runtime_t runtime (store, asynchronous_heartbeat_options, "owner-a");
     auto renew_started = store.renew_started ();
     runtime.start (zlink::routing_id_t::from ("node-a"));
     const auto initial_renewed_at = runtime.owner_lease_renewed_at ();
@@ -94,6 +189,23 @@ TEST (ZLinkFrameworkLocationRuntime, StopDiscardsLateHeartbeatRenewCompletion)
     store.complete_renew (zlink::framework::owner_lease_renewed_t{
       late_store_now + std::chrono::seconds (15), late_store_now});
     EXPECT_EQ (initial_renewed_at, runtime.owner_lease_renewed_at ());
+}
+
+TEST (ZLinkFrameworkLocationRuntime, HostShutdownDiscardsLateHeartbeatStoreCompletion)
+{
+    using namespace zlink::framework;
+    runtime::configure_handler_coroutine_executor (1);
+    runtime::install_host_context_hooks ();
+    pending_renew_repository_t store;
+    location_runtime_t location (store, asynchronous_heartbeat_options, "owner-late-host");
+    auto started = store.renew_started ();
+    location.start (zlink::routing_id_t::from ("node-late-host"));
+    EXPECT_EQ (std::future_status::ready, started.wait_for (heartbeat_observation_timeout));
+    const auto renewed_at = location.owner_lease_renewed_at ();
+    location.stop ();
+    runtime::shutdown_handler_coroutine_executor ();
+    EXPECT_NO_THROW (store.complete_renew (owner_lease_stale_t{}));
+    EXPECT_EQ (renewed_at, location.owner_lease_renewed_at ());
 }
 
 class startup_owner_lease_repository_t final : public in_memory_location_repository_t
@@ -129,7 +241,20 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
 
     void fail_owner_lease_releases () noexcept { _fail_releases = true; }
 
-    void block_owner_lease_releases () noexcept { _block_releases = true; }
+    void block_owner_lease_releases ()
+    {
+        _block_releases = true;
+        _pending_release = std::make_shared<zlink::framework::task_completion_source_t<
+          zlink::framework::owner_lease_release_result_t>> ();
+    }
+
+    void complete_pending_release ()
+    {
+        _pending_release->complete (
+          zlink::framework::result_t<zlink::framework::owner_lease_release_result_t>::success (
+            zlink::framework::owner_lease_release_result_t{
+              zlink::framework::owner_lease_released_t{}}));
+    }
 
     int claim_calls () const noexcept { return _claim_calls.load (); }
 
@@ -215,8 +340,6 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
     {
         _release_calls.fetch_add (1);
         if (_block_releases) {
-            _pending_release = std::make_shared<zlink::framework::task_completion_source_t<
-              zlink::framework::owner_lease_release_result_t>> ();
             return _pending_release->task ();
         }
         if (_fail_releases) {
@@ -264,6 +387,96 @@ TEST (ZLinkFrameworkLocationRuntime, ClaimsAndReleasesOwnerLease)
     runtime.stop ();
     EXPECT_TRUE (std::holds_alternative<zlink::framework::owner_lease_missing_t> (
       store.read_owner_lease ("owner-a").result ().value ()));
+}
+
+TEST (ZLinkFrameworkLocationRuntime, BoundsNonCooperativeOwnerCleanup)
+{
+    startup_owner_lease_repository_t store;
+    store.set_claim_mode (startup_owner_lease_repository_t::claim_mode_t::succeed);
+    store.block_owner_lease_releases ();
+    const auto renew_timeout = std::chrono::milliseconds (20);
+    location_runtime_t runtime (
+      store,
+      location_options_t{.owner_lease_renew_interval = std::chrono::seconds (1),
+                         .owner_lease_ttl = std::chrono::seconds (15),
+                         .owner_lease_renew_timeout = renew_timeout},
+      "owner-a");
+    runtime.start (zlink::routing_id_t::from ("node-a"));
+
+    auto cleanup = std::async (std::launch::async, [&] { return runtime.cleanup_owner (); });
+    const auto status = cleanup.wait_for (renew_timeout + std::chrono::seconds (1));
+    EXPECT_EQ (std::future_status::ready, status);
+    store.complete_pending_release ();
+    EXPECT_FALSE (cleanup.get ());
+    ASSERT_TRUE (runtime.last_error ().has_value ());
+    EXPECT_NE (std::string::npos, runtime.last_error ()->find ("timed out"));
+}
+
+TEST (ZLinkFrameworkLocationRuntime, HostCleanupUsesShutdownDeadline)
+{
+    startup_owner_lease_repository_t store;
+    store.set_claim_mode (startup_owner_lease_repository_t::claim_mode_t::succeed);
+    store.block_owner_lease_releases ();
+    auto runtime = std::make_unique<location_runtime_t> (
+      store,
+      location_options_t{.owner_lease_renew_interval = std::chrono::seconds (1),
+                         .owner_lease_ttl = std::chrono::seconds (15),
+                         .owner_lease_renew_timeout = std::chrono::seconds (2)},
+      "owner-a");
+    runtime->start (zlink::routing_id_t::from ("node-a"));
+    auto *location = runtime.get ();
+    auto host = zlink::framework::app_t::create ();
+    host.advanced ().services ().add_singleton (std::move (runtime));
+    const auto deadline = std::chrono::milliseconds (200);
+
+    auto shutdown = host.shutdown (deadline);
+    auto completed = zlink::framework::detail::observe_task_result_for (
+      shutdown, deadline + std::chrono::seconds (1), std::stop_token{});
+    store.complete_pending_release ();
+    ASSERT_TRUE (completed.has_value ());
+    ASSERT_TRUE (completed->has_value ());
+    EXPECT_EQ (zlink::framework::termination_outcome_t::force_stopped, completed->value ().outcome);
+    EXPECT_EQ (zlink::framework::termination_reason_t::deadline_exceeded,
+               completed->value ().reason);
+    EXPECT_EQ (1, store.release_calls ());
+    ASSERT_TRUE (location->last_error ().has_value ());
+    EXPECT_NE (std::string::npos, location->last_error ()->find ("timed out"));
+}
+
+TEST (ZLinkFrameworkLocationRuntime, HostCleanupPreservesProviderFailure)
+{
+    startup_owner_lease_repository_t store;
+    store.set_claim_mode (startup_owner_lease_repository_t::claim_mode_t::succeed);
+    store.fail_owner_lease_releases ();
+    auto runtime = std::make_unique<location_runtime_t> (store, location_options_t{}, "owner-a");
+    runtime->start (zlink::routing_id_t::from ("node-a"));
+    auto host = zlink::framework::app_t::create ();
+    host.advanced ().services ().add_singleton (std::move (runtime));
+
+    const auto completed = host.shutdown (std::chrono::seconds (1)).result ().value ();
+    EXPECT_EQ (zlink::framework::termination_outcome_t::force_stopped, completed.outcome);
+    EXPECT_EQ (zlink::framework::termination_reason_t::teardown_failed, completed.reason);
+    EXPECT_EQ (1, store.release_calls ());
+}
+
+TEST (ZLinkFrameworkLocationRuntime, CleanupStopsPendingHeartbeatWithinDeadline)
+{
+    pending_renew_repository_t store;
+    location_runtime_t runtime (
+      store,
+      location_options_t{.owner_lease_renew_interval = std::chrono::milliseconds (5),
+                         .owner_lease_ttl = std::chrono::seconds (15)},
+      "owner-a");
+    auto renew_started = store.renew_started ();
+    runtime.start (zlink::routing_id_t::from ("node-a"));
+    ASSERT_EQ (std::future_status::ready, renew_started.wait_for (std::chrono::seconds (5)));
+    const auto started_at = std::chrono::steady_clock::now ();
+    const auto deadline = std::chrono::milliseconds (20);
+
+    EXPECT_TRUE (runtime.cleanup_owner (started_at + deadline));
+    EXPECT_LT (std::chrono::steady_clock::now () - started_at, deadline + std::chrono::seconds (1));
+    store.complete_renew (zlink::framework::owner_lease_stale_t{});
+    EXPECT_FALSE (runtime.current_owner_token ().has_value ());
 }
 
 TEST (ZLinkFrameworkLocationRuntime, StartsDegradedAfterInitialOwnerLeaseClaimFailure)

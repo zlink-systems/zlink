@@ -68,6 +68,59 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkJavaRawSpotNodeM6BTest {
     @Test
+    void readyFrameWithoutIntentPassesFalseToClosingOwnerAdmission() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            var spots = (ZLinkJavaRawSpotNode) node.spotNode();
+            spots.setSpotAdmissionResolver(
+                    (spotId, generation, instanceIntent, activationPresent) -> {
+                        assertFalse(instanceIntent);
+                        assertFalse(activationPresent);
+                        return CompletableFuture.completedFuture(
+                                new ZLinkFrameworkException(
+                                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                                .NOT_FOUND,
+                                        "Closing owner rejects a request without Instance intent"));
+                    });
+            var codec = new ZLinkServiceM6BWireCodec();
+            var message =
+                    new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
+                            0,
+                            new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                                    RoutingId.from("owner"),
+                                    1,
+                                    "spot",
+                                    2,
+                                    "owner",
+                                    3,
+                                    4,
+                                    "version"),
+                            false,
+                            5,
+                            RoutingId.from("source"),
+                            null,
+                            true,
+                            6,
+                            7,
+                            8L);
+            CompletableFuture<Throwable> rejected = new CompletableFuture<>();
+            assertTrue(
+                    spots.enqueueRemoteInstanceSpot(
+                            RoutingId.from("source"),
+                            codec.decodeInstanceSpotHeader(codec.encodeInstanceSpotHeader(message)),
+                            new byte[0],
+                            List.of(),
+                            null,
+                            ignored -> {},
+                            rejected::complete));
+            var failure = rejected.get(5, TimeUnit.SECONDS);
+            assertEquals(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+                    ((ZLinkFrameworkException) failure).kind());
+        }
+    }
+
+    @Test
     void serviceDescriptorStaysPreparingUntilHostMarksReady() throws Exception {
         RoutingId targetRid = RoutingId.from("jvm-ready-target");
         RoutingId sourceRid = RoutingId.from("jvm-ready-source");
@@ -1745,33 +1798,42 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     systems.zlink.framework.runtime.internal.backend
                                             .ZLinkBackendActorReceived>>
                     firstDispatch = new CompletableFuture<>();
+            CompletableFuture<Void> firstHandling = new CompletableFuture<>();
             entry.onDispatchEvent(
-                    info -> {
-                        if (info.event() != ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
-                            return;
-                        }
-                        List<
+                    new ZLinkInternalAsyncSpotDispatchHandler() {
+                        @Override
+                        public CompletionStage<Void> handleAsync(
+                                ZLinkBackendSpotDispatchInfo info) {
+                            if (info.event() != ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            List<
+                                            systems.zlink.framework.runtime.internal.backend
+                                                    .ZLinkBackendActorReceived>
+                                    received = info.actorMessages();
+                            if (firstDispatch.complete(received)) {
+                                // Spec 01-execution/02-handler-turn-and-execution-gate.ko.md:94 and
+                                // 01-execution/08-messaging-hot-path.ko.md:216 keep the dispatch
+                                // terminal after its reply operation.
+                                return firstHandling;
+                            }
+                            var first = received.getFirst();
+                            try (Message reply = Message.from("remote-actor-reply")) {
+                                left.spotNode()
+                                        .replyActorNoBind(
+                                                first.actor(),
+                                                first.sourceNodeRid(),
+                                                first.sourceSessionRid(),
+                                                first.requestId(),
+                                                first.flags(),
+                                                List.of(reply));
+                            } finally {
+                                received.forEach(
                                         systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkBackendActorReceived>
-                                received = info.actorMessages();
-                        if (firstDispatch.complete(received)) {
-                            return;
-                        }
-                        var first = received.getFirst();
-                        try (Message reply = Message.from("remote-actor-reply")) {
-                            left.spotNode()
-                                    .replyActorNoBind(
-                                            first.actor(),
-                                            first.sourceNodeRid(),
-                                            first.sourceSessionRid(),
-                                            first.requestId(),
-                                            first.flags(),
-                                            List.of(reply));
-                        } finally {
-                            received.forEach(
-                                    systems.zlink.framework.runtime.internal.backend
-                                                    .ZLinkBackendActorReceived
-                                            ::close);
+                                                        .ZLinkBackendActorReceived
+                                                ::close);
+                            }
+                            return CompletableFuture.completedFuture(null);
                         }
                     });
             ZLinkBackendActorRef actor;
@@ -1793,22 +1855,26 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         SendFlags.DONT_WAIT,
                                         Duration.ofSeconds(2));
             }
-            List<systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived>
-                    retained = firstDispatch.get(2, TimeUnit.SECONDS);
-            assertEquals(1, retained.size());
-            var first = retained.getFirst();
-            awaitOutstandingApplicationLease(context, 0L);
-            first.close();
-            awaitOutstandingApplicationLease(context, 0L);
-            try (Message response = Message.from("remote-actor-reply")) {
-                left.spotNode()
-                        .replyActorNoBind(
-                                first.actor(),
-                                first.sourceNodeRid(),
-                                first.sourceSessionRid(),
-                                first.requestId(),
-                                first.flags(),
-                                List.of(response));
+            try {
+                List<systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived>
+                        retained = firstDispatch.get(2, TimeUnit.SECONDS);
+                assertEquals(1, retained.size());
+                var first = retained.getFirst();
+                awaitOutstandingApplicationLease(context, 0L);
+                first.close();
+                awaitOutstandingApplicationLease(context, 0L);
+                try (Message response = Message.from("remote-actor-reply")) {
+                    left.spotNode()
+                            .replyActorNoBind(
+                                    first.actor(),
+                                    first.sourceNodeRid(),
+                                    first.sourceSessionRid(),
+                                    first.requestId(),
+                                    first.flags(),
+                                    List.of(response));
+                }
+            } finally {
+                firstHandling.complete(null);
             }
             List<Message> reply = firstRequest.toCompletableFuture().get(2, TimeUnit.SECONDS);
             try {
@@ -2532,7 +2598,6 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             sessionRid,
                             null,
                             new ZLinkStringMessageSerializer(),
-                            ignored -> true,
                             null,
                             true,
                             ZLinkStreamCodec.RAW);

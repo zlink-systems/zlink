@@ -1012,6 +1012,12 @@ channel은 MeshNode가 아니므로 이 목록에 나타나지 않으며, 그것
 [Runtime 상태와 운영 진단 §5](../06-observability/01-runtime-monitoring.ko.md#5-topology-상태--routemeshclientserverautomatic-fanout)로
 확인한다(§4). Object 위치 조회는 이 열거와 별개이며 ActorId·SpotId 기준으로만 답한다.
 
+MeshName별 service summary는 같은 열거의 descriptor를 센다. [§4.1](#41-대상-descriptor의-owner-lease-검증)의 owner lease
+검증을 통과한 descriptor는 ready, 통과하지 못한 descriptor는 stopped로 세며, 전체 수는 둘의 합이다.
+Error 수는 이 열거에서 쓰지 않으므로 0이다. Owner lease 조회가 실패하거나 §4.1이 손상으로 판정한 lease를
+읽으면 summary를 반환하지 않고 query 전체를 오류로 끝낸다. 조회 실패는 `Unavailable`, 손상은
+`InternalFailure`다.
+
 ## 8. Actor·Spot을 다른 node로 옮길 때 이 Store가 하는 일
 
 Actor와 Spot이 공통으로 따르는 source·target handoff와 queue 순서의 단일 기준은

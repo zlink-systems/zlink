@@ -26,7 +26,7 @@ export const zlinkRuntimeDefaultLocationOptions: Readonly<
   ownerLeaseRenewIntervalMs: 5000,
   ownerLeaseTtlMs: 15000,
   pollingIntervalMs: 1000,
-  listPageSize: 1000,
+  listPageSize: 100,
   storeFailureGraceMs: 30000,
   ownerLeaseFencingMarginMs: 5000,
   ownerLeaseRenewTimeoutMs: 3000,

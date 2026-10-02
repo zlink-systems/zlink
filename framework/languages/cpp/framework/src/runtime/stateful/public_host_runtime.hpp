@@ -3,6 +3,7 @@
 
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/dispatch/application_record.hpp"
+#include "runtime/dispatch/blocking_task.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
@@ -18,6 +19,7 @@
 #include <zlink/Contracts/Sockets/results.hpp>
 #include <zlink/framework/contracts/actors/actor.hpp>
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/contracts/channels/call.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
 #include <zlink/framework/contracts/locations/options.hpp>
 
@@ -260,6 +262,8 @@ struct spot_close_commit_t
 {
     result_t<bool> result = result_t<bool>::success (false);
     std::function<task_t<bool> ()> release;
+    std::function<task_t<authority_snapshot_t> ()> reincarnate;
+    std::function<task_t<bool> (const authority_snapshot_t &)> discard_reincarnation;
 };
 using spot_close_begin_t = std::function<task_t<spot_close_commit_t> ()>;
 using spot_close_done_t = std::function<void (result_t<bool>)>;
@@ -415,12 +419,17 @@ struct instance_spot_activation_result_t
 
 struct instance_spot_activation_materializer_t
 {
-    std::function<bool (const protocol::instance_spot_activation_header_t &)> prepare;
-    std::function<instance_spot_activation_result_t (
-      const protocol::instance_spot_activation_header_t &,
-      const std::optional<std::vector<std::uint8_t>> &,
-      const protocol::application_payload_t &)>
+    std::function<bool (const protocol::instance_spot_activation_header_t &,
+                        const authority_snapshot_t &)>
+      prepare;
+    std::function<task_t<instance_spot_activation_result_t> (
+      std::shared_ptr<const protocol::instance_activation_recovery_t>,
+      std::function<task_t<zlink::message_t> (std::function<void ()> &)>,
+      std::shared_ptr<::zlink::framework::detail::deferred_barrier_t> *)>
       dispatch;
+    std::function<result_t<protocol::instance_spot_activation_header_t> (
+      const protocol::instance_spot_activation_header_t &)>
+      select_target;
 
     explicit operator bool () const noexcept
     {
@@ -705,6 +714,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<bool> seal_session_remote (const zlink::routing_id_t &session_owner_node,
                                       protocol::session_relocation_seal_t seal,
                                       std::chrono::milliseconds timeout,
+                                      std::chrono::steady_clock::time_point operation_deadline,
                                       session_relocation_journal_capture_t capture_journal,
                                       session_relocation_seal_completion_t completion);
     task_t<bool> activate_instance_spot_remote (const zlink::routing_id_t &target_node,
@@ -830,6 +840,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::optional<stateful::object_ref_t> resolve_spot (const std::string &spot_id) const;
 
   private:
+    task_t<void> dispatch_instance_spot_activation (
+      protocol::instance_activation_recovery_t command,
+      std::shared_ptr<const mesh::service_mailbox_record_t> reply_record,
+      std::function<void (instance_spot_activation_result_t)> done = {});
     friend class spot_handle_t;
     friend class actor_handle_t;
     friend class actor_transfer_token_t;
@@ -1022,11 +1036,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
             /* Bounded record of a failed one-way send: this state lives
              * inside _relocation_target_attempts, which is itself bounded
              * by the attempt authority settlement, so this is not unbounded
-             * ad-hoc logging. There is no gated trace/diagnostics sink
-             * reachable from public_host_runtime_t (message_flow_tracer_t
-             * and dispatch_error_reporter_t both require a
-             * dispatch_options_t this runtime does not hold); wiring one
-             * in is a separate, larger change. */
+             * ad-hoc logging. Dispatch diagnostics use the host's existing
+             * mesh dispatch options; this retained state belongs to the
+             * relocation attempt settlement. */
             bool send_failed = false;
         };
         protocol::relocation_prepare_t prepare;

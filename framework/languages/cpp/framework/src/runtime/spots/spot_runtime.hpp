@@ -71,6 +71,12 @@ using instance_spot_close_begin_callback_t = std::function<task_t<service::spot_
   const spot_id_t &, std::string_view, std::uint64_t, std::uint64_t)>;
 using user_spot_close_begin_callback_t = std::function<task_t<service::spot_close_commit_t> (
   const spot_id_t &, std::uint64_t, std::uint64_t)>;
+struct instance_spot_retained_message_t
+{
+    std::shared_ptr<const runtime::protocol::instance_activation_recovery_t> original_activation;
+    std::function<task_t<zlink::message_t> ()> resume_missing;
+    mutable std::shared_ptr<task_completion_source_t<zlink::message_t>> completion;
+};
 
 class spot_node_builder_state_t
 {
@@ -120,6 +126,9 @@ class spot_node_builder_state_t
     std::function<task_t<bool> (spot_ref_t)> close_user_spot;
     instance_spot_idle_eviction_callback_t admit_instance_spot_idle_eviction;
     instance_spot_close_begin_callback_t begin_instance_spot_close;
+    std::function<result_t<runtime::protocol::instance_spot_activation_header_t> (
+      const runtime::protocol::instance_spot_activation_header_t &)>
+      select_instance_spot_target;
     user_spot_close_begin_callback_t begin_user_spot_close;
     std::shared_ptr<channel_runtime_state_t> channel_runtime;
     dispatch_options_t dispatch;
@@ -127,6 +136,7 @@ class spot_node_builder_state_t
     runtime::spot_address_resolver_t *spot_location_resolver = nullptr;
     std::optional<service_provider_t> root_services;
     std::shared_ptr<std::atomic_bool> drain_flag;
+    std::function<framework_runtime_state_t ()> host_phase;
     /* The host admission gate (Spot address messaging §9): a draining host
      * ends new Spot creation and Actor admission with ShuttingDown before any
      * Spot seal is consulted. The host owns the flag (bind_drain_flag). */
@@ -905,6 +915,7 @@ class spot_serial_executor_t
 class spot_context_state_t : public std::enable_shared_from_this<spot_context_state_t>
 {
     friend class ::zlink::framework::spot_context_t;
+    friend class ::zlink::framework::spot_handler_registry_t;
 
   private:
     template <typename Work> decltype (auto) state_sync (Work &&work) const
@@ -938,9 +949,11 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             std::exception_ptr callback_error;
             if (notify_closing && lifecycle.on_closing && instance) {
                 try {
-                    lifecycle.on_closing (instance.get (),
-                                          spot_closing_context_t{close_reason, deadline},
-                                          cleanup_cancellation);
+                    lifecycle
+                      .on_closing (instance.get (), spot_closing_context_t{close_reason, deadline},
+                                   cleanup_cancellation)
+                      .result ()
+                      .value ();
                 }
                 catch (...) {
                     callback_error = std::current_exception ();
@@ -1016,12 +1029,13 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         bool admitted = false;
     };
 
-    /* The local admission seal (Spot address messaging §7 step 2, §9) is the
-     * one decision on new work for this activation, taken once where the work
-     * enters. `claim` counts accepted application work until its terminal
-     * (leave_callback), so the Close that sealed the activation drains it
-     * before OnClosing. A refused caller reports sealed_admission_error. */
-    bool admit (bool claim = false);
+    /* 요청 수락은 owner lane에서 한 번 판정한다. Explicit Close는 intent
+     * record를 application FIFO에 보존하며, 닫힌 incarnation은 나머지
+     * 메시지를 거부한다. Idle과 운영 seal의 수락 계약은 그대로 유지한다.
+     * claim은 수락한 작업의 terminal에서 leave_callback이 해제한다. */
+    bool admit (bool claim = false,
+                const instance_spot_retained_message_t *retained_record = nullptr);
+    framework_exception_t admission_error () const;
     static framework_exception_t sealed_admission_error ();
     // Admits one timer fire (a claimed admit) and returns what it runs against.
     timer_fire_state_snapshot_t admit_timer_fire ();
@@ -1113,9 +1127,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       on_leave_actor_callbacks;
     std::map<std::type_index, std::function<task_t<void> (void *, void *)>>
       on_disconnect_actor_callbacks;
-    bool close_requested = false;
-    // The local admission seal read by admit(). A Close sets it after its
-    // step 1 commit; idle cleanup and operational teardown set it first.
+    // Idle 정리와 운영 teardown이 이 admission seal을 소유한다.
+    // Explicit Close는 lifecycle FIFO 작업으로 application 실행 순서를 정한다.
     bool admission_sealed = false;
     bool closed = false;
     std::size_t actor_count = 0;
@@ -1140,9 +1153,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     // A token acquired in a node turn can therefore retain this depth through
     // queue wait, Yield, and handler terminal without a second owner claim.
     std::size_t callback_depth = 0;
-    // Continues a Close whose seal found an accepted callback still running;
-    // the last leave returns it to the Close's lifecycle turn (§7 step 2).
-    std::function<void ()> pending_close_finish;
     // Close requests that merged into the running Close receive its result.
     std::vector<service::spot_close_done_t> merged_close_results;
 
@@ -1172,7 +1182,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
 
   private:
     // The seal check behind admit and admit_timer_fire; runs on the owner lane.
-    bool admit_core (bool claim) noexcept;
+    bool admit_core (bool claim,
+                     const instance_spot_retained_message_t *retained_record = nullptr) noexcept;
 
     std::shared_ptr<spot_serial_executor_t>
     ensure_spot_serial_executor_on_lane (runtime::state_lane_t &state_lane)
@@ -1237,8 +1248,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                     if (!closed && close_reservation == token
                         && close_reservation_kind == close_reservation_kind_t::idle) {
                         clear_close_reservation_core (token);
-                        if (!close_requested)
-                            admission_sealed = false;
+                        admission_sealed = false;
                     }
                 });
             }
@@ -1256,17 +1266,16 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         auto owner = state_lane_owner ();
         if (!owner)
             return false;
-        const auto sealed = owner->lane
-                              .run ([this, &owner, reservation] {
-                                  return reservation != 0 && close_reservation == reservation
-                                         && close_reservation_kind == close_reservation_kind_t::idle
-                                         && node.get () == owner.get () && !closed
-                                         && actor_count == 0
-                                         && lifecycle_domain.allows_idle_eviction ()
-                                         && callback_depth == 0 && !close_requested
-                                         && admission_sealed && idle_age_allows_close_core (*owner);
-                              })
-                              .get ();
+        const auto sealed =
+          owner->lane
+            .run ([this, &owner, reservation] {
+                return reservation != 0 && close_reservation == reservation
+                       && close_reservation_kind == close_reservation_kind_t::idle
+                       && node.get () == owner.get () && !closed && actor_count == 0
+                       && lifecycle_domain.allows_idle_eviction () && callback_depth == 0
+                       && admission_sealed && idle_age_allows_close_core (*owner);
+            })
+            .get ();
         return sealed && idle_quiescent ();
     }
 
@@ -1308,16 +1317,20 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     };
 
     /* Steps 2-4 after step 1 committed `Closing`. */
-    void run_local_close_steps (const std::shared_ptr<spot_node_builder_state_t> &owner,
-                                std::uint64_t token,
-                                std::function<task_t<bool> ()> release,
-                                service::spot_close_done_t done,
-                                detail::task_scheduler_t resume);
+    void run_local_close_steps (
+      const std::shared_ptr<spot_node_builder_state_t> &owner,
+      std::uint64_t token,
+      std::function<task_t<bool> ()> release,
+      std::function<task_t<authority_snapshot_t> ()> reincarnate,
+      std::function<task_t<bool> (const authority_snapshot_t &)> discard_reincarnation,
+      service::spot_close_done_t done,
+      detail::task_scheduler_t resume);
 
     struct application_detach_work_t
     {
         std::shared_ptr<void> instance;
-        std::function<void (void *, const spot_closing_context_t &, std::stop_token)> on_closing;
+        std::function<task_t<void> (void *, const spot_closing_context_t &, std::stop_token)>
+          on_closing;
     };
 
     std::shared_ptr<spot_node_builder_state_t> state_lane_owner () const
@@ -1386,9 +1399,11 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         std::exception_ptr callback_error;
         if (notify_closing && work.on_closing && work.instance) {
             try {
-                work.on_closing (work.instance.get (),
-                                 spot_closing_context_t{close_reason, deadline},
-                                 cleanup_cancellation);
+                work
+                  .on_closing (work.instance.get (), spot_closing_context_t{close_reason, deadline},
+                               cleanup_cancellation)
+                  .result ()
+                  .value ();
             }
             catch (...) {
                 callback_error = std::current_exception ();
@@ -1463,7 +1478,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         }
 
         owner->lane
-          .run ([this, &owner, &rid, token] {
+          .run ([this, &owner, &rid, token, reason] {
               if (close_reservation != token)
                   return;
               const auto context = owner->spot_contexts_by_id.find (rid);
@@ -1471,7 +1486,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                 context != owner->spot_contexts_by_id.end ()
                 && std::addressof (context->second) == close_registered_context;
               if (exact_context) {
-                  owner->spot_contexts_by_id.erase (context);
+                  if (reason != spot_close_reason_t::explicit_close)
+                      owner->spot_contexts_by_id.erase (context);
                   owner->spot_names_by_id.erase (rid);
                   owner->native_spots_by_id.erase (rid);
                   for (auto iterator = owner->spot_ids_by_name.begin ();
@@ -1491,6 +1507,10 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
 class spot_context_access_t final
 {
   public:
+    static std::shared_ptr<spot_context_state_t> state (const spot_context_t &context)
+    {
+        return context._state;
+    }
     static spot_context_t create () { return spot_context_t (); }
 
     static spot_context_t create (std::shared_ptr<spot_context_state_t> state)
@@ -1542,6 +1562,8 @@ inline std::string effective_spot_node_rid (const spot_node_snapshot_t &snapshot
 
 class spot_node_runtime_t
 {
+    friend struct spot_context_state_t;
+
   public:
     struct application_relocation_unit_t
     {
@@ -1574,19 +1596,21 @@ class spot_node_runtime_t
                                                    std::uint64_t object_generation = 1,
                                                    std::string mesh_name = {},
                                                    std::uint64_t authority_owner_generation = 1);
-    task_t<zlink::message_t>
-    dispatch_instance_activation (const spot_id_t &spot_id,
-                                  std::string packet_name,
-                                  std::string content_type,
-                                  std::vector<std::uint8_t> payload,
-                                  std::map<std::string, std::string> metadata,
-                                  bool request,
-                                  std::string correlation_id,
-                                  service_provider_t &services,
-                                  serializer_registry_t &serializers,
-                                  std::optional<std::string> flow_id = std::nullopt,
-                                  std::optional<flow_origin_t> flow_origin = std::nullopt,
-                                  std::function<void ()> *accepted_turn_terminal = nullptr);
+    task_t<zlink::message_t> dispatch_instance_activation (
+      const spot_id_t &spot_id,
+      std::string packet_name,
+      std::string content_type,
+      std::vector<std::uint8_t> payload,
+      std::map<std::string, std::string> metadata,
+      bool request,
+      std::string correlation_id,
+      service_provider_t &services,
+      serializer_registry_t &serializers,
+      std::optional<std::string> flow_id = std::nullopt,
+      std::optional<flow_origin_t> flow_origin = std::nullopt,
+      std::function<void ()> *accepted_turn_terminal = nullptr,
+      std::shared_ptr<const instance_spot_retained_message_t> retained_message = {},
+      std::shared_ptr<detail::deferred_barrier_t> *activation_terminal = nullptr);
     std::optional<spot_info_t> find_spot (spot_id_t spot_id) const;
     std::vector<spot_info_t> list_spots () const;
     task_t<bool> close_spot (spot_id_t spot_id);
@@ -1645,6 +1669,7 @@ class spot_node_runtime_t
     void bind_spot_location_resolver (runtime::spot_address_resolver_t &resolver);
     void bind_service_provider (service_provider_t &services);
     void bind_drain_flag (std::shared_ptr<std::atomic_bool> flag);
+    void bind_host_phase (std::function<framework_runtime_state_t ()> read_phase);
     /* Entry spots are host infrastructure and are excluded. */
     std::size_t active_user_spot_count () const;
     task_t<std::pair<std::size_t, std::size_t>> monitoring_counts_async () const;
@@ -2131,7 +2156,8 @@ class spot_node_runtime_t
                          std::uint64_t object_generation = 1,
                          std::string mesh_name = {},
                          std::function<task_t<void> (void *)> staged_restore = {},
-                         std::uint64_t authority_owner_generation = 1);
+                         std::uint64_t authority_owner_generation = 1,
+                         std::shared_ptr<runtime::serial_execution_queue_t> retained_queue = {});
     struct actor_join_state_snapshot_t
     {
         std::optional<spot_context_t> context;

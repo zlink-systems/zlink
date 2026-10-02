@@ -43,12 +43,12 @@ export function hasApplicationJobPermit(): boolean {
 }
 
 /** Re-enters the captured permit scope when a serial executor runs later. */
-export function bindApplicationJobPermit<TResult>(
-  callback: () => Promise<TResult> | TResult
-): () => Promise<TResult> | TResult {
+export function bindApplicationJobPermit<TResult, TArgument>(
+  callback: (argument?: TArgument) => Promise<TResult> | TResult
+): (argument?: TArgument) => Promise<TResult> | TResult {
   const scope = applicationJobPermitScope.getStore();
   if (scope === undefined) return callback;
-  return () => applicationJobPermitScope.run(scope, callback);
+  return (argument?: TArgument) => applicationJobPermitScope.run(scope, callback, argument);
 }
 
 /**
