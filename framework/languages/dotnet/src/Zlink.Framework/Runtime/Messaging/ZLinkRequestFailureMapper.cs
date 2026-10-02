@@ -221,6 +221,7 @@ internal static class ZLinkRequestFailureMapper
         string operationName,
         bool completionFailure = true
     ) => ZLinkSubmitFailureMapper.CreateException(error, operationName, completionFailure);
+
     public static Exception CreateSubmitTimeoutException(
         Exception? lastSubmitFailure,
         string operationName

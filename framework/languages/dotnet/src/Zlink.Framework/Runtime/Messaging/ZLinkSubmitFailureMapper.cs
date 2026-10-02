@@ -36,16 +36,14 @@ internal static class ZLinkSubmitFailureMapper
     public static ZLinkFrameworkException CreateException(
         SubmitResult result,
         string targetDescription
-    ) => CreateException(
-        new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result),
-        targetDescription,
-        completionFailure: false
-    );
-
-    public static RequestResult ToRequestResult(
-        SubmitResult result,
-        bool completionFailure
     ) =>
+        CreateException(
+            new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result),
+            targetDescription,
+            completionFailure: false
+        );
+
+    public static RequestResult ToRequestResult(SubmitResult result, bool completionFailure) =>
         result switch
         {
             SubmitResult.Ok => RequestResult.Ok,
@@ -59,8 +57,7 @@ internal static class ZLinkSubmitFailureMapper
             SubmitResult.InvalidState => RequestResult.InvalidState,
             SubmitResult.InvalidArgument
             or SubmitResult.InvalidHandle
-            or SubmitResult.ThreadViolation =>
-                RequestResult.InvalidArgument,
+            or SubmitResult.ThreadViolation => RequestResult.InvalidArgument,
             SubmitResult.NotSupported => RequestResult.NotSupported,
             _ => RequestResult.InternalError,
         };
@@ -69,7 +66,8 @@ internal static class ZLinkSubmitFailureMapper
         ZlinkSubmitException error,
         string operationName,
         bool completionFailure = true
-    ) => ZLinkRequestFailureMapper.CreateCompletionException(
+    ) =>
+        ZLinkRequestFailureMapper.CreateCompletionException(
             ToRequestResult((SubmitResult)(int)error.Result, completionFailure),
             operationName,
             error
