@@ -139,7 +139,10 @@ def windowsCorePackage = coreSource == 'release' && corePackagePrefix != null
 sourceSets {
     main {
         resources.srcDir(generatedNativeResourcesDir)
-        resources.srcDir(layout.buildDirectory.dir('generated/zlink-errno-resources'))
+        // builtBy makes every consumer of main resources (processResources,
+        // sourcesJar) depend on the generator.
+        resources.srcDir(files(layout.buildDirectory.dir('generated/zlink-errno-resources'))
+            .builtBy('prepareZlinkErrnoResources'))
     }
 }
 
@@ -310,7 +313,6 @@ tasks.register('prepareZlinkErrnoResources', Copy) {
 }
 
 processResources {
-    dependsOn tasks.named('prepareZlinkErrnoResources')
     dependsOn tasks.named('prepareZlinkNativeResources')
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     // A published package must use only the runtime materialized from the
