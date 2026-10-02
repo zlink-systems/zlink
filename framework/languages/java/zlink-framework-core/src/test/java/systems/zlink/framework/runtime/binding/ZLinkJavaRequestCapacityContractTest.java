@@ -6,11 +6,13 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.RequestOperation;
 import systems.zlink.contracts.messaging.RequestSubmission;
 import systems.zlink.contracts.messaging.RequestSubmitOperation;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -64,6 +66,9 @@ final class ZLinkJavaRequestCapacityContractTest {
     @ValueSource(booleans = {true, false})
     void requestCapacityFailureUsesTheSubmissionPhase(boolean initialSubmission) {
         var failure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
+        assertEquals(
+                initialSubmission ? RequestResult.NOT_CONNECTED : RequestResult.TIMED_OUT,
+                ZLinkJavaRawMeshNode.requestResult(failure, initialSubmission));
         var reply = new CompletableFuture<List<Message>>();
         var request = new CapacityRejectedRequest(initialSubmission, failure, reply);
         try (var message = Message.from(new byte[] {1})) {
@@ -91,8 +96,30 @@ final class ZLinkJavaRequestCapacityContractTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void unknownRequestFailuresKeepTheirOriginalCause(boolean initialSubmission) {
-        var failure = new IllegalStateException("request fixture failure");
+    void wrappedFailuresUseTheTypedRequestProjection(boolean initialSubmission) {
+        assertNull(
+                ZLinkJavaRawMeshNode.requestResult(
+                        new CompletionException(new IllegalStateException("unknown")),
+                        initialSubmission));
+        assertEquals(
+                RequestResult.INTERNAL_ERROR,
+                ZLinkJavaRawMeshNode.requestResult(
+                        new CompletionException(
+                                new ZlinkSubmitException(SubmitResult.INTERNAL_ERROR)),
+                        initialSubmission));
+        assertEquals(
+                RequestResult.INTERNAL_ERROR,
+                ZLinkJavaRawMeshNode.requestResult(
+                        new CompletionException(
+                                new ZlinkRequestException(RequestResult.INTERNAL_ERROR)),
+                        initialSubmission));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"true, false", "true, true", "false, false", "false, true"})
+    void unknownRequestFailuresKeepTheirOriginalCause(boolean initialSubmission, boolean wrapped) {
+        var original = new IllegalStateException("request fixture failure");
+        RuntimeException failure = wrapped ? new CompletionException(original) : original;
         var reply = new CompletableFuture<List<Message>>();
         var request = new CapacityRejectedRequest(initialSubmission, failure, reply);
         try (var message = Message.from(new byte[] {1})) {
@@ -101,8 +128,8 @@ final class ZLinkJavaRequestCapacityContractTest {
                                     request, List.of(message), Duration.ofSeconds(1))
                             .toCompletableFuture();
             if (!initialSubmission) reply.completeExceptionally(failure);
-            assertSame(
-                    failure, assertThrows(CompletionException.class, completion::join).getCause());
+            var terminal = assertThrows(CompletionException.class, completion::join);
+            assertSame(failure, initialSubmission && wrapped ? terminal : terminal.getCause());
         }
     }
 

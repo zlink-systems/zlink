@@ -131,7 +131,7 @@ public final class ZLinkOneWayCalls {
         return switch (result) {
             case OK -> RequestResult.OK;
             case BACKPRESSURED ->
-                    initialSubmission ? RequestResult.BACKPRESSURED : RequestResult.TIMED_OUT;
+                    initialSubmission ? RequestResult.NOT_CONNECTED : RequestResult.TIMED_OUT;
             case NOT_CONNECTED -> RequestResult.NOT_CONNECTED;
             case NOT_FOUND -> RequestResult.NOT_FOUND;
             case NOT_ADMITTED -> RequestResult.REJECTED;

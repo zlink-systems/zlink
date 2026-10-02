@@ -339,10 +339,7 @@ final class ZLinkStreamConnectionLifecycle {
                         cause);
             }
         }
-        if (cause instanceof TimeoutException
-                || cause instanceof java.net.http.HttpTimeoutException
-                || cause instanceof io.netty.channel.ConnectTimeoutException
-                || cause instanceof io.netty.handler.ssl.SslHandshakeTimeoutException) {
+        if (cause instanceof TimeoutException) {
             return ZLinkStreamException.of(
                     ZLinkStreamErrorCode.CONNECT_TIMEOUT, "Connect timed out.", cause);
         }

@@ -238,7 +238,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             completionOwns = true;
             return completion;
         } catch (RuntimeException failure) {
-            RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(failure, true);
+            RequestResult terminal = ZLinkJavaRawMeshNode.requestTerminal(failure, true);
             return CompletableFuture.failedFuture(
                     terminal == RequestResult.INTERNAL_ERROR
                             ? failure

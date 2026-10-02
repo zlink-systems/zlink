@@ -272,6 +272,23 @@ final class ZLinkJavaDurableRequestTest {
     }
 
     @Test
+    void unknownBindingFailureIsPreserved() {
+        var failure = new IllegalStateException("unknown binding failure");
+        var completion =
+                ZLinkJavaDurableRequest.request(
+                        () -> List.of(new byte[] {1}),
+                        (frames, remaining) -> CompletableFuture.failedFuture(failure),
+                        () -> false,
+                        Duration.ofSeconds(1));
+        assertSame(
+                failure,
+                assertThrows(
+                                CompletionException.class,
+                                () -> completion.toCompletableFuture().join())
+                        .getCause());
+    }
+
+    @Test
     void permanentBindingFailureIsPreserved() {
         var failure = new ZlinkSubmitException(SubmitResult.TERMINATED);
         var completion =
