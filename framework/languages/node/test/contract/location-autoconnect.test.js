@@ -86,8 +86,9 @@ test('spot auto-connect carries the expected lifecycle and removes an unresolved
   assert.equal(capability.executor.isDisconnected(target), true);
 });
 
-test('spot auto-connect treats a synchronous unavailable endpoint as a retryable target', async () => {
+test('spot auto-connect preserves a rejected intent and the binding ConnectError', async () => {
   let attempts = 0;
+  const failure = new zlink.ConnectError(zlink.ConnectResult.InvalidArgument);
   const node = {
     status() {
       return {
@@ -97,7 +98,7 @@ test('spot auto-connect treats a synchronous unavailable endpoint as a retryable
     },
     connectPeer() {
       attempts += 1;
-      throw new Error('connect ECONNREFUSED');
+      throw failure;
     },
     peers() {
       return [];
@@ -116,9 +117,12 @@ test('spot auto-connect treats a synchronous unavailable endpoint as a retryable
     role: internal.ZLinkLocationRole.Router
   };
 
-  assert.equal(await capability.executor.connect(target), false);
-  assert.equal(await capability.executor.connect(target), false);
+  await assert.rejects(capability.executor.connect(target), error => error === failure);
+  assert.equal(capability.executor.isDisconnected(target), false);
+  await assert.rejects(capability.executor.connect(target), error => error === failure);
   assert.equal(attempts, 2);
+  capability.executor.disconnect(target);
+  assert.equal(capability.executor.isDisconnected(target), true);
 });
 
 test('spot auto-connect removes an admitted passive peer after its descriptor disappears', () => {
@@ -152,6 +156,58 @@ test('spot auto-connect removes an admitted passive peer after its descriptor di
   capability.executor.disconnectStalePeers([]);
 
   assert.deepEqual(calls, ['disconnect:node-remote:17']);
+});
+
+test('auto-connect reports typed connect rejection and continues peers before reconciling the same intent', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const runtime = runtimeFor(store, 'owner-local');
+  await runtime.start(rid('node-local'));
+  const failure = new zlink.ConnectError(zlink.ConnectResult.InvalidArgument);
+  const reported = [];
+  const attempts = [];
+  let reject = true;
+  const capability = spotNodeAutoConnect.spotNodeAutoConnectCapability('mesh', { router: { bind: 'tcp://local' } }, {
+    status: () => ({ routingId: rid('node-local'), localEndpoint: 'tcp://local' }),
+    peers: () => [],
+    async connectPeer(options) {
+      attempts.push(options.endpoint);
+      if (options.endpoint === 'tcp://remote' && reject) throw failure;
+      return BigInt(attempts.length);
+    }
+  });
+  const rows = ['remote', 'second'].map(name => peer('owner-' + name,
+    internal.ZLinkLocationAutoConnectType.RouteMesh, internal.ZLinkLocationRole.Router,
+    'node-' + name, 'tcp://' + name));
+  const reconciler = new internal.ZLinkAutoConnectReconciler({
+    local: local(internal.ZLinkLocationAutoConnectType.RouteMesh, internal.ZLinkLocationRole.Router, 'node-local', 'tcp://local'),
+    runtime, peerResolver: { async listLivePeers() { return rows; } },
+    executor: capability.executor,
+    errorSink: { reportRuntimeTaskException(task, error) { reported.push([task, error]); } }
+  });
+  await reconciler.tick();
+  assert.deepEqual(reported, [['auto-connect', failure]]);
+  assert.deepEqual(attempts, ['tcp://remote', 'tcp://second']);
+  assert.equal(reconciler.activeTargets.length, 1);
+  reject = false;
+  await reconciler.tick();
+  assert.deepEqual(attempts, ['tcp://remote', 'tcp://second', 'tcp://remote']);
+  assert.equal(reconciler.activeTargets.length, 2);
+});
+
+test('auto-connect propagates unrelated failures and typed failures without a reporting owner', async () => {
+  for (const [failure, errorSink] of [
+    [new Error('unexpected connect implementation failure'), { reportRuntimeTaskException() { assert.fail('unrelated failure must propagate'); } }],
+    [new zlink.ConnectError(zlink.ConnectResult.InvalidArgument), undefined]
+  ]) {
+    const reconciler = new internal.ZLinkAutoConnectReconciler({
+      local: local(internal.ZLinkLocationAutoConnectType.RouteMesh, internal.ZLinkLocationRole.Router, 'node-local', 'tcp://local'),
+      runtime: {},
+      peerResolver: { async listLivePeers() { return [peer('owner-remote', internal.ZLinkLocationAutoConnectType.RouteMesh, internal.ZLinkLocationRole.Router, 'node-remote', 'tcp://remote')]; } },
+      executor: { connect() { throw failure; }, disconnect() {} },
+      errorSink
+    });
+    await assert.rejects(reconciler.tick(), error => error === failure);
+  }
 });
 
 test('spot auto-connect preserves a peer when only its opaque lifecycle generation differs', () => {
@@ -977,6 +1033,8 @@ test('auto-connect reconciler retries the last desired target only within store 
   let nowMs = 0;
   let storeFailed = false;
   let connectAttempts = 0;
+  const failure = new zlink.ConnectError(zlink.ConnectResult.InvalidArgument);
+  const reported = [];
   const reconciler = new internal.ZLinkAutoConnectReconciler({
     local: local(
     internal.ZLinkLocationAutoConnectType.RouteMesh,
@@ -1000,11 +1058,13 @@ test('auto-connect reconciler retries the last desired target only within store 
     executor: {
       connect() {
         connectAttempts += 1;
+        if (storeFailed) throw failure;
         return false;
       },
       disconnect() {}
     },
     options: { storeFailureGraceMs: 3000 },
+    errorSink: { reportRuntimeTaskException(task, error) { reported.push([task, error]); } },
     monotonicNowMs: () => nowMs
   });
 
@@ -1013,6 +1073,7 @@ test('auto-connect reconciler retries the last desired target only within store 
   storeFailed = true;
   await reconciler.tick();
   assert.equal(connectAttempts, 2);
+  assert.deepEqual(reported, [['auto-connect', failure]]);
 
   nowMs = 4000;
   await reconciler.tick();

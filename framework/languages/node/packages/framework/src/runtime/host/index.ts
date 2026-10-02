@@ -2746,6 +2746,7 @@ export class ZLinkFrameworkRuntimeHost
     }).create();
     return {
       ...options,
+      errorSink: this.runtimeOrPreStartErrorSink,
       peerAdmissionSealed: (meshName: string) => !this.admission.accepts(meshName),
       messageFollowReceiver: (record: ServiceMessageFollowRecord) => {
         if (record.source.kind === 'actor') {
