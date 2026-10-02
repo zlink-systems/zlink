@@ -477,9 +477,9 @@ instance and delivers the failure to the caller.
 | No endpoint | `ZlinkStreamException`'s `ValidationFailed` |
 | Unsupported scheme, URI scheme/`Transport` mismatch | `ZlinkStreamException`'s `ConfigurationError` |
 | A `CompressionCodec` given together with compression turned off | `ZlinkStreamException`'s `ConfigurationError` |
-| An out-of-range individual timeout, heartbeat, or reconnect value, or dispatch queue size | `ZlinkStreamException`'s `ValidationFailed` |
+| An out-of-range individual timeout, heartbeat, or reconnect value | `ZlinkStreamException`'s `ValidationFailed` |
 
-Every timeout and dispatch queue size option must be **positive**, and the
+Every timeout option must be **positive**, and the
 preview length **can't be negative.** `MaxAttempts` must be `null` or
 positive.
 
@@ -492,7 +492,7 @@ positive.
 | `StreamConnectorTests.ConnectorOptionsMatchTheFrozenDefaults` | Fixes the connector option's default value. |
 | `StreamConnectorTests.ManualDispatchRunsHandlerOnDispatchCaller` | The Manual callback runs on the dispatch caller. |
 | `StreamConnectorTests.ImmediateDispatchRunsHandlerWithoutManualDispatch` | The Immediate callback runs with no separate manual dispatch. |
-| `StreamConnectorTests.ManualRequestCallbackAdmission_Is_Bounded_And_Never_Falls_Back_To_A_Background_Thread` | Request callback admission is bounded and doesn't allow a background bypass. |
+| `StreamConnectorTests.ManualCallbackAdmissionDoesNotWaitForDispatchPump` | Registering a Manual callback doesn't wait for the pump, and registered callbacks run in registration order when pumped. |
 | `StreamConnectorTests.RequestTimeoutRemovesPendingRequest` | Removes the pending request after timeout. |
 | `StreamConnectorTests.TcpTypedRequestCorrelatesResponse` | Keeps typed request and response correlation. |
 | `StreamConnectorTests.TypedConnectorUsesJsonByDefaultAndDecodeReply` | The typed default codec is JSON. |

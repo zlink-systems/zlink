@@ -403,9 +403,9 @@ public int? MaxAttempts { get; init; } = 3; // null은 무제한
 | endpoint 없음 | `ZlinkStreamException`의 `ValidationFailed` |
 | 지원하지 않는 scheme, URI scheme과 `Transport` 불일치 | `ZlinkStreamException`의 `ConfigurationError` |
 | 압축을 끈 구성에 `CompressionCodec`을 함께 지정 | `ZlinkStreamException`의 `ConfigurationError` |
-| 범위를 벗어난 개별 timeout·heartbeat·reconnect 값 또는 dispatch queue 크기 | `ZlinkStreamException`의 `ValidationFailed` |
+| 범위를 벗어난 개별 timeout·heartbeat·reconnect 값 | `ZlinkStreamException`의 `ValidationFailed` |
 
-모든 timeout과 dispatch queue 크기 option은 **양수**여야 하고, preview 길이는 **음수일 수 없다.**
+모든 timeout option은 **양수**여야 하고, preview 길이는 **음수일 수 없다.**
 `MaxAttempts`는 `null`이거나 양수여야 한다.
 
 ## 13. 회귀 테스트
@@ -417,7 +417,7 @@ public int? MaxAttempts { get; init; } = 3; // null은 무제한
 | `StreamConnectorTests.ConnectorOptionsMatchTheFrozenDefaults` | connector option의 기본값을 고정한다. |
 | `StreamConnectorTests.ManualDispatchRunsHandlerOnDispatchCaller` | Manual callback은 dispatch caller에서 실행된다. |
 | `StreamConnectorTests.ImmediateDispatchRunsHandlerWithoutManualDispatch` | Immediate callback은 별도 manual dispatch 없이 실행된다. |
-| `StreamConnectorTests.ManualRequestCallbackAdmission_Is_Bounded_And_Never_Falls_Back_To_A_Background_Thread` | request callback admission은 bounded이며 background 우회를 허용하지 않는다. |
+| `StreamConnectorTests.ManualCallbackAdmissionDoesNotWaitForDispatchPump` | Manual callback 등록은 pump를 기다리지 않으며, 등록한 callback은 pump 때 등록 순서대로 실행된다. |
 | `StreamConnectorTests.RequestTimeoutRemovesPendingRequest` | timeout 뒤 pending request를 제거한다. |
 | `StreamConnectorTests.TcpTypedRequestCorrelatesResponse` | typed request와 response correlation을 유지한다. |
 | `StreamConnectorTests.TypedConnectorUsesJsonByDefaultAndDecodeReply` | typed 기본 codec은 JSON이다. |
