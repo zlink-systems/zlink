@@ -1933,7 +1933,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                      done] (const result_t<zlink::message_t> &reply) {
                               if (!reply) {
                                   const auto failure =
-                                    messaging::request_failure_mapper_t{}.target_failure_reply (*reply.error ());
+                                    messaging::request_failure_mapper_t{}.target_failure_reply (
+                                      *reply.error ());
                                   if (!failure) {
                                       done ({105,
                                              static_cast<std::uint32_t> (

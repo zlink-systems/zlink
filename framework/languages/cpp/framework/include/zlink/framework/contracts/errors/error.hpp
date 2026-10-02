@@ -131,8 +131,9 @@ class framework_exception_t : public std::exception
     friend framework_exception_t detail_with_failure_code (framework_exception_t error,
                                                            std::uint32_t code) noexcept;
     friend std::uint32_t detail_failure_code (const framework_exception_t &error) noexcept;
-    friend framework_exception_t detail_with_failure_origin (framework_exception_t error,
-                                                             detail::failure_origin_t origin) noexcept;
+    friend framework_exception_t
+    detail_with_failure_origin (framework_exception_t error,
+                                detail::failure_origin_t origin) noexcept;
 
     framework_error_kind_t _kind;
     std::string _message;
@@ -189,7 +190,7 @@ inline detail::error_origin_t detail_error_origin (const framework_exception_t &
 }
 
 inline framework_exception_t detail_with_failure_code (framework_exception_t error,
-                                                      std::uint32_t code) noexcept
+                                                       std::uint32_t code) noexcept
 {
     error._failure_code = code;
     return error;
@@ -201,7 +202,7 @@ inline std::uint32_t detail_failure_code (const framework_exception_t &error) no
 }
 
 inline framework_exception_t detail_with_failure_origin (framework_exception_t error,
-                                                        detail::failure_origin_t origin) noexcept
+                                                         detail::failure_origin_t origin) noexcept
 {
     error._origin = origin;
     return error;
@@ -211,7 +212,7 @@ namespace detail
 {
 
 inline framework_exception_t with_failure_code (framework_exception_t error,
-                                               std::uint32_t code) noexcept
+                                                std::uint32_t code) noexcept
 {
     return detail_with_failure_code (std::move (error), code);
 }
@@ -222,7 +223,7 @@ inline std::uint32_t failure_code (const framework_exception_t &error) noexcept
 }
 
 inline framework_exception_t with_failure_origin (framework_exception_t error,
-                                                failure_origin_t origin) noexcept
+                                                  failure_origin_t origin) noexcept
 {
     return detail_with_failure_origin (std::move (error), origin);
 }
