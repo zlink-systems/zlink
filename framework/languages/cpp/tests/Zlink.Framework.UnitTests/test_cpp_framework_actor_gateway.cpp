@@ -1038,7 +1038,7 @@ int bound_session_route_preserves_private_fences ()
                                         zlink::routing_id_t::from (std::string ("session-node")),
                                         std::nullopt, 11, 13, 17, 19, 23, 29);
 
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     if (!route || route->object_generation != 7 || route->node_generation != 11
         || route->authority_owner_generation != 13 || route->owner_lease_generation != 17
         || route->binding_generation != 19 || route->binding_token != 23
@@ -1049,8 +1049,17 @@ int bound_session_route_preserves_private_fences ()
                                               zlink::message_t{})) {
         return 2;
     }
-    const auto advanced = gateway.bound_session_route (actor);
+    const auto advanced = gateway.bound_session_route_async (actor).result ().value ();
     return advanced && advanced->session_sequence == 29 ? 0 : 3;
+}
+
+zlink::framework::task_t<std::optional<zlink::framework::detail::actor_bound_session_route_t>>
+read_bound_session_route_for_actor_join (
+  std::shared_ptr<zlink::framework::detail::actor_gateway_state_t> state,
+  zlink::framework::actor_ref_t actor)
+{
+    zlink::framework::detail::actor_gateway_runtime_t gateway (std::move (state));
+    co_return co_await gateway.bound_session_route_async (std::move (actor));
 }
 
 int bound_session_route_suspends_until_owner_lane_runs ()
@@ -1080,14 +1089,16 @@ int bound_session_route_suspends_until_owner_lane_runs ()
         return 1;
     entered.get_future ().wait ();
 
-    std::promise<task_t<std::optional<actor_bound_session_route_t>>> submitted;
+    using route_task_t = task_t<std::optional<actor_bound_session_route_t>>;
+    std::promise<std::pair<route_task_t, bool>> submitted;
     auto submission = submitted.get_future ();
     std::promise<void> progressed;
     auto progress = progressed.get_future ();
     runtime::offload_executor_t infrastructure (1);
     if (!infrastructure.try_submit_internal ([state, actor, &submitted] {
-            actor_gateway_runtime_t gateway (state);
-            submitted.set_value (gateway.bound_session_route_async (actor));
+            auto query = read_bound_session_route_for_actor_join (state, actor);
+            const bool pending = !query.await_ready ();
+            submitted.set_value (std::make_pair (std::move (query), pending));
         })) {
         release.set_value ();
         return 2;
@@ -1096,13 +1107,14 @@ int bound_session_route_suspends_until_owner_lane_runs ()
         release.set_value ();
         return 3;
     }
-    progress.wait ();
-    auto query = submission.get ();
-    const bool pending = !query.await_ready ();
+    const bool progressed_while_lane_held =
+      progress.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     release.set_value ();
-    const auto route = query.result ().value ();
-    if (!pending)
+    auto [query, pending] = submission.get ();
+    progress.wait ();
+    if (!progressed_while_lane_held || !pending)
         return 4;
+    const auto route = query.result ().value ();
     return route && route->binding_generation == 19 && route->session_sequence == 29 ? 0 : 5;
 }
 
@@ -1320,7 +1332,7 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
     if (gateway.prepare_session_relocation_target_route (stale, 41))
         return 8;
 
-    auto replacement = *gateway.bound_session_route (target);
+    auto replacement = *gateway.bound_session_route_async (target).result ().value ();
     ++replacement.binding_generation;
     if (!gateway.record_bound_session_route_transition (target, replacement))
         return 9;
@@ -1422,7 +1434,8 @@ int bound_session_ref_normalization_preserves_type_and_rejects_conflicts ()
     if (stale_route || stale_route.error_kind () != framework_error_kind_t::invalid_operation) {
         return 8;
     }
-    const auto route_after_rejections = gateway.bound_session_route (public_ref);
+    const auto route_after_rejections =
+      gateway.bound_session_route_async (public_ref).result ().value ();
     if (!route_after_rejections || route_after_rejections->node_rid.to_string () != "session-node"
         || route_after_rejections->session_sequence != 0) {
         return 9;
@@ -1468,7 +1481,7 @@ int bound_session_route_installs_sink_and_fence_together ()
     });
     if (!route_is_installed)
         return 2;
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     if (!route || route->node_rid.to_string () != "session-node" || !route->session_rid
         || route->session_rid->to_string () != "session-rid") {
         return 3;
@@ -1481,7 +1494,7 @@ int bound_session_route_installs_sink_and_fence_together ()
     if (!non_replacing) {
         return 4;
     }
-    const auto retained = gateway.bound_session_route (actor);
+    const auto retained = gateway.bound_session_route_async (actor).result ().value ();
     if (!retained || retained->node_rid.to_string () != "session-node" || !retained->session_rid
         || retained->session_rid->to_string () != "session-rid") {
         return 5;
@@ -1494,7 +1507,7 @@ int bound_session_route_installs_sink_and_fence_together ()
     if (rejected || rejected.error_kind () != framework_error_kind_t::type_mismatch) {
         return 6;
     }
-    const auto preserved = gateway.bound_session_route (actor);
+    const auto preserved = gateway.bound_session_route_async (actor).result ().value ();
     return preserved && preserved->node_rid.to_string () == "session-node" && preserved->session_rid
                && preserved->session_rid->to_string () == "session-rid"
              ? 0
@@ -1768,7 +1781,7 @@ int bound_session_transition_is_atomic_and_idempotent ()
     authority_update.session_sequence = 0;
     const auto retained = gateway.record_bound_session_route_transition (
       test_actor_ref ("actor-target", "game.actor", "actor-a", 1), authority_update);
-    const auto retained_route = gateway.bound_session_route (actor);
+    const auto retained_route = gateway.bound_session_route_async (actor).result ().value ();
     if (!retained || retained.value ().changed || retained.value ().previous || !retained_route
         || retained_route->authority_owner_generation != 11
         || retained_route->owner_lease_generation != 13 || retained_route->binding_token != 7
@@ -1827,7 +1840,7 @@ int authority_only_route_update_keeps_physical_session_current ()
     relocated.session_sequence = 0;
     const auto updated =
       gateway.replace_session_route (target, target_sink, relocated, stream_codec_t::message_pack);
-    const auto current = gateway.bound_session_route (target);
+    const auto current = gateway.bound_session_route_async (target).result ().value ();
     if (!updated || updated.value ().changed || updated.value ().previous || !current
         || current->authority_owner_generation != 41 || current->owner_lease_generation != 43
         || current->binding_token != 31 || current->session_sequence != 37
@@ -1956,7 +1969,7 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
         || gateway.complete_session_relay (actor, session_owner, session_rid, 17, 4)) {
         return 10;
     }
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     if (!route || route->session_sequence != 2)
         return 11;
 
@@ -4385,7 +4398,7 @@ int old_stream_disconnect_does_not_retire_reconnected_binding ()
         return 3;
     }
     const auto current = sessions.current_binding (native_actor.key);
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     const auto delivered = gateway.dispatch_bound_session_send (
       actor, "after-reconnect", stream_codec_t::message_pack, zlink::message_t::from ("payload"));
     return current && *current == new_binding && route && route->session_rid == new_rid
@@ -4447,7 +4460,7 @@ int command_38_rebind_is_owned_only_by_new_connection ()
       bind_through_native_and_38 (new_connection, zlink::routing_id_t::from ("session-new"), 2);
     if (!old_binding || !new_binding)
         return 1;
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     return sessions.bindings (old_connection).empty ()
                && sessions.bindings (new_connection).size () == 1
                && !sessions.is_current_for_connection (old_connection, *new_binding)
@@ -4559,7 +4572,7 @@ int late_lower_generation_bind_and_publish_are_ignored ()
       actor_bound_session_route_t{session_owner, stale_rid, 7, 11, 13, 17, 21, 0, 0});
     const auto stale_record = gateway.record_bound_session_route_transition (
       actor, actor_bound_session_route_t{session_owner, stale_rid, 7, 11, 13, 17, 20, 0, 0});
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     const auto delivered = gateway.dispatch_bound_session_send (actor, "after-stale-publish",
                                                                 stream_codec_t::message_pack,
                                                                 zlink::message_t::from ("payload"));

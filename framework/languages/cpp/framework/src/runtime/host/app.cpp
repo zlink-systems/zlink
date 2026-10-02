@@ -2112,7 +2112,8 @@ void app_t::_apply_zlink_framework ()
                     target.node_generation, target.authority_owner_generation,
                     static_cast<std::uint64_t> (target.owner.lease_generation));
               }
-              const auto bound_session = actor_gateway_runtime.bound_session_route (actor);
+              const auto bound_session =
+                co_await actor_gateway_runtime.bound_session_route_async (actor);
               co_return co_await application_mesh->join_application_actor_to_spot (
                 actor, target, request, timeout,
                 bound_session ? std::make_optional (bound_session->node_rid) : std::nullopt,
@@ -2133,7 +2134,8 @@ void app_t::_apply_zlink_framework ()
                             const detail::stream_header_t &header,
                             const zlink::message_t &payload) mutable -> task_t<result_t<void>> {
               try {
-                  const auto route = actor_gateway_runtime.bound_session_route (actor);
+                  const auto route =
+                    co_await actor_gateway_runtime.bound_session_route_async (actor);
                   if (!route || !route->session_rid || route->binding_generation == 0
                       || (expected_binding_generation != 0
                           && expected_binding_generation != route->binding_generation)) {

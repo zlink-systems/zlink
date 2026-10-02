@@ -2310,12 +2310,6 @@ std::vector<relayed_frame_t> actor_gateway_runtime_t::bound_session_pushes () co
     return _state->sync ([this] { return _state->bound_session_pushes; });
 }
 
-std::optional<actor_bound_session_route_t>
-actor_gateway_runtime_t::bound_session_route (const actor_ref_t &actor_ref) const
-{
-    return bound_session_route_async (actor_ref).result ().value ();
-}
-
 task_t<std::optional<actor_bound_session_route_t>>
 actor_gateway_runtime_t::bound_session_route_async (actor_ref_t actor_ref) const
 {
