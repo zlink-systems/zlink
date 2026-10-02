@@ -589,7 +589,9 @@ The close procedure proceeds in the following order.
    restoring the stored state, the new incarnation runs only those Instance-intent messages, in
    arrival order. If initialization or restoration fails, that generation is `Delete`d and the
    waiting messages end with a typed failure. Otherwise the authority is released with the same
-   fence, and remaining Instance-intent messages are placed again from `Missing`.
+   fence, and remaining Instance-intent messages are placed again from `Missing`. When it places them again, the
+   owner uses the deadline, operation, and reply route that each message carried, and issues a new
+   operation only for a send that has none.
 
 A message placed after the Close work item that has no Instance intent ends with the result of
 [§9](#9-failure-and-observability). If that incarnation no longer exists, idempotent `false`; if a

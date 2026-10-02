@@ -494,7 +494,7 @@ length.
 
 | Kind | Purpose | Contents |
 |---|---|---|
-| `1` | Delivers to an existing [Ready](../00-foundation/02-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work, and whether the call carries [Instance intent](../00-foundation/02-glossary.en.md#instance-intent) (`instanceIntent`) |
+| `1` | Delivers to an existing [Ready](../00-foundation/02-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work, and whether the call carries [Instance intent](../00-foundation/02-glossary.en.md#instance-intent) (`instanceIntent`), and the call's absolute deadline (`deadlineUnixMs`) |
 | `2` | Missing cold activation only | The target Mesh/node RID/lifecycle, Spot RID, stable type, descriptor version, and deadline — an authority fence is forbidden |
 
 If a kind `2` route's operation identity or metadata presence/bytes differ

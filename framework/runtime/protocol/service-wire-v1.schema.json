@@ -6036,6 +6036,10 @@
             {
               "name": "instanceIntent",
               "$ref": "bool8"
+            },
+            {
+              "name": "deadlineUnixMs",
+              "$ref": "nonzero-u64"
             }
           ]
         },
