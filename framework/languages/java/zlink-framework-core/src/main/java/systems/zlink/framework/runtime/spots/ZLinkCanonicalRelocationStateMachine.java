@@ -839,7 +839,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         prepare.target(),
                         prepare.object(),
                         ZLinkCanonicalRelocationProtocol.TARGET,
-                        wireFailureCode(unwrap(failure), prepare.object().kind())));
+                        wireFailureCode(unwrap(failure))));
     }
 
     private void acceptRelayReady(Fence fence, TargetAttempt attempt) {
@@ -889,27 +889,18 @@ final class ZLinkCanonicalRelocationStateMachine
                                         : CompletableFuture.failedFuture(discardFailure.get()));
     }
 
-    /**
-     * The shared failure table owns existing relocation path aliases. The generated schema owns the
-     * wire vocabulary and terminal/failure integrity; object kind selects the Actor or Spot
-     * relocation context.
-     */
-    static long wireFailureCode(Throwable cause, int objectKind) {
+    /** Uses the same failure-code mapping as other Framework replies. */
+    static long wireFailureCode(Throwable cause) {
         ZLinkFrameworkErrorKind kind =
                 cause instanceof ZLinkFrameworkException framework
                         ? framework.kind()
                         : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
         return ZLinkRequestFailureMapping.outgoingCode(
-                kind,
-                objectKind == ZLinkPlacementObjectKind.ACTOR.value()
-                        ? ZLinkRequestFailureMapping.Context.ACTOR_RELOCATION
-                        : ZLinkRequestFailureMapping.Context.SPOT_RELOCATION);
+                kind, ZLinkRequestFailureMapping.causeCode(cause));
     }
 
     static ZLinkFrameworkErrorKind wireFailureKind(long failureCode) {
-        ZLinkFrameworkErrorKind kind =
-                ZLinkRequestFailureMapping.incoming(
-                        (int) failureCode, ZLinkRequestFailureMapping.Context.ACTOR_RELOCATION);
+        ZLinkFrameworkErrorKind kind = ZLinkRequestFailureMapping.incoming((int) failureCode);
         return kind != null ? kind : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
     }
 
@@ -953,9 +944,11 @@ final class ZLinkCanonicalRelocationStateMachine
         //  sees the same public classification in every language.
         attempt.ready()
                 .completeExceptionally(
-                        new ZLinkFrameworkException(
+                        ZLinkRequestFailureMapping.receivedFailure(
                                 wireFailureKind(failure.failureCode()),
-                                "target rejected canonical relocation: " + failure.failureCode()));
+                                "target rejected canonical relocation: " + failure.failureCode(),
+                                (int) failure.failureCode(),
+                                java.util.Map.of()));
         return CompletableFuture.completedFuture(null);
     }
 

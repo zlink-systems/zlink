@@ -461,6 +461,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                             "Remote Instance Spot activation failed.",
                             RetryAdviceFor(activationKind)
                         )
+                        {
+                            FrameworkFailureCode = record.FailureErrno,
+                        }
                     );
                 }
             },
@@ -546,6 +549,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                             "Remote User Spot create failed.",
                             RetryAdviceFor(createKind)
                         )
+                        {
+                            FrameworkFailureCode = record.FailureErrno,
+                        }
                     );
                 }
             },
@@ -622,6 +628,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                                 + $"failure={failure}.",
                             retryAdvice
                         )
+                        {
+                            FrameworkFailureCode = record.FailureErrno,
+                        }
                     );
                 }
             },
@@ -685,6 +694,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                         $"Remote Actor destroy failed for '{actor.ActorId}'.",
                         RetryAdviceFor(destroyKind)
                     )
+                    {
+                        FrameworkFailureCode = record.FailureErrno,
+                    }
                 );
             },
             id =>
@@ -745,6 +757,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                                 + $"failure={record.FailureErrno}.",
                             RetryAdviceFor(closeKind)
                         )
+                        {
+                            FrameworkFailureCode = record.FailureErrno,
+                        }
                     );
                 }
             },
@@ -1222,6 +1237,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                         $"Actor destroy failed for '{actor.ActorId}'.",
                         RetryAdviceFor(destroyKind)
                     )
+                    {
+                        FrameworkFailureCode = record.FailureErrno,
+                    }
                 );
             },
             id =>

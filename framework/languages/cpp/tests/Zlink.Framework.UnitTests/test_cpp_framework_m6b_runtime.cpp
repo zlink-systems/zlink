@@ -6942,6 +6942,7 @@ void verify_relocation_id_generation_retries_collisions ()
 // rather than being silently ignored.
 void verify_relocation_failure_code_classification_is_distinct ()
 {
+    using zlink::framework::framework_error_kind_t;
     assert (host::classify_relocation_failure_code (
               static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost))
             == zlink::framework::framework_error_kind_t::data_lost);
@@ -6960,34 +6961,22 @@ void verify_relocation_failure_code_classification_is_distinct ()
               static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost))
             != host::classify_relocation_failure_code (
               static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)));
-    // The rest of the reference table (spec 15 rows), pinned 1:1.
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::requestRejected))
-            == zlink::framework::framework_error_kind_t::rejected);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError))
-            == zlink::framework::framework_error_kind_t::protocol_error);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::workerQueueFull))
-            == zlink::framework::framework_error_kind_t::unavailable);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::workerTimedOut))
-            == zlink::framework::framework_error_kind_t::deadline_exceeded);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::actorTypeMismatch))
-            == zlink::framework::framework_error_kind_t::type_mismatch);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch))
-            == zlink::framework::framework_error_kind_t::type_mismatch);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::handlerNotFound))
-            == zlink::framework::framework_error_kind_t::not_configured);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::routeNotConnected))
-            == zlink::framework::framework_error_kind_t::unavailable);
-    assert (host::classify_relocation_failure_code (
-              static_cast<std::uint32_t> (protocol::framework_error_code::requestTargetNotFound))
-            == zlink::framework::framework_error_kind_t::not_found);
+    std::ifstream mapping_input (ZLINK_ERROR_MAPPING_CONFORMANCE_PATH);
+    const auto fixture = nlohmann::json::parse (mapping_input);
+    const std::map<std::string, framework_error_kind_t> kinds{
+      {"NotFound", framework_error_kind_t::not_found},
+      {"AlreadyExists", framework_error_kind_t::already_exists},
+      {"TypeMismatch", framework_error_kind_t::type_mismatch},
+      {"Rejected", framework_error_kind_t::rejected},
+      {"Unavailable", framework_error_kind_t::unavailable},
+      {"DeadlineExceeded", framework_error_kind_t::deadline_exceeded},
+      {"ProtocolError", framework_error_kind_t::protocol_error},
+      {"InvalidOperation", framework_error_kind_t::invalid_operation},
+      {"DataLost", framework_error_kind_t::data_lost},
+      {"InternalFailure", framework_error_kind_t::internal_failure}};
+    for (const auto &row : fixture.at ("receive"))
+        assert (host::classify_relocation_failure_code (row.at ("failureCode"))
+                == kinds.at (row.at ("kind")));
     // An unrecognized wire code is internal_failure, not ignored/dropped.
     assert (host::classify_relocation_failure_code (999999u)
             == zlink::framework::framework_error_kind_t::internal_failure);

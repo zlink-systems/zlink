@@ -2805,7 +2805,7 @@ export class ZLinkFrameworkRuntimeHost
       }
       const binding = record.kindData;
       const replyBindingFailure = (kind: ZLinkFrameworkInternalErrorKind): void => {
-        const terminal = internalFrameworkWireReply(kind, 'actor-binding');
+        const terminal = internalFrameworkWireReply(kind);
         if (
           record.replyFailure?.(terminal.terminalResult, terminal.failureCode) !== SubmitResult.Ok
         ) {

@@ -947,10 +947,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // restore or staging): this is terminal. Send relocationFailed
       // (command 53) once and remember it so an identical Prepare resend
       // replays the same response instead of retrying the restore.
-      const failed = relocationFailed(
-        request,
-        relocationFailedFailureCode(error, request.object.kind)
-      );
+      const failed = relocationFailed(request, relocationFailedFailureCode(error));
       this.targetReadyFailures.set(operationKey, {
         fingerprint: stringifyWire(request),
         response: failed
@@ -5407,33 +5404,15 @@ function wireIdText(value: { readonly high: bigint; readonly low: bigint }): str
  */
 export class ServiceRelocationDataLostError extends Error {}
 
-/**
- * Maps a target-side relocation Prepare failure to the closest wire
- * framework-error code the generated schema
- * ({@link ServiceWireFrameworkErrorCode}) defines — mirrors the java
- * reference mapping (commit 97fc074058) and the dotnet/cpp ports. The wire
- * vocabulary predates the framework's typed error kinds and has no
- * one-to-one code for every kind, so several kinds share the nearest fit
- * (documented per case below); unresolvable vocabulary gaps belong at the
- * schema level, not invented here. {@link ServiceRelocationDataLostError}
- * is this runtime's dedicated tag for a verified checksum/assembly/digest
- * integrity failure — the case that keeps relocationDataLost(35). An
- * unclassified error carries no evidence of integrity loss and takes the
- * generic opaque requestFailed(17). `objectKind` (the Prepare's
- * ObjectFence.kind, spec 28 §4.2) picks between an Actor- and
- * Spot-specific code where the schema splits by object kind.
- */
-export function relocationFailedFailureCode(
-  error: unknown,
-  objectKind: ServiceWireRelocationObject['kind']
-): number {
+/** Classifies relocation failure with the error model §2.1 mapping. */
+export function relocationFailedFailureCode(error: unknown): number {
   if (error instanceof ServiceRelocationDataLostError) {
-    return frameworkRelocationFailureCode(ZLinkFrameworkErrorKind.DataLost, objectKind);
+    return frameworkRelocationFailureCode(ZLinkFrameworkErrorKind.DataLost);
   }
   if (!(error instanceof ZLinkFrameworkException)) {
-    return frameworkRelocationFailureCode(ZLinkFrameworkErrorKind.InternalFailure, objectKind);
+    return frameworkRelocationFailureCode(ZLinkFrameworkErrorKind.InternalFailure);
   }
-  return frameworkRelocationFailureCode(error.kind, objectKind);
+  return frameworkRelocationFailureCode(error);
 }
 
 function relocationStagingId(value: {
@@ -5754,7 +5733,7 @@ function validateControlFailureResponse(
 /** Builds the typed exception a Prepare waiter rejects with on an explicit Failed(53). */
 function relocationFailureException(response: ServiceMaintenanceRelocationFailed) {
   return createInternalFrameworkException(
-    internalFrameworkErrorKindFromWireFailureCode(response.failureCode, 'relocation') ??
+    internalFrameworkErrorKindFromWireFailureCode(response.failureCode) ??
       ZLinkFrameworkInternalErrorKind.RequestFailed,
     `Relocation '${response.relocation.high}:${response.relocation.low}:` +
       `${response.targetAttemptGeneration}' failed with wire failureCode ${response.failureCode}.`,

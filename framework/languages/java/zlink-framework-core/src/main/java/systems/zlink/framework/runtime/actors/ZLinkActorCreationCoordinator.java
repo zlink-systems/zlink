@@ -663,12 +663,16 @@ public final class ZLinkActorCreationCoordinator
                 ZLinkFrameworkErrorKind kind =
                         ZLinkBackendRequestResult.fromWireTerminal(terminal.terminalResult())
                                 .toFrameworkErrorKind(terminal.failureCode());
-                return failed(
-                        kind,
-                        "Actor create failed with terminal result "
-                                + terminal.terminalResult()
-                                + " and failure code "
-                                + terminal.failureCode());
+                return CompletableFuture.failedFuture(
+                        systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping
+                                .receivedFailure(
+                                        kind,
+                                        "Actor create failed with terminal result "
+                                                + terminal.terminalResult()
+                                                + " and failure code "
+                                                + terminal.failureCode(),
+                                        terminal.failureCode(),
+                                        java.util.Map.of()));
             }
             ZLinkMessage reply = decodeReply(terminal.applicationPayloadFrame());
             return CompletableFuture.completedFuture(

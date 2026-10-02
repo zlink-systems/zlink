@@ -52,32 +52,6 @@ test('Unavailable errors round-trip through the generated wire schema', () => {
   assert.equal(framework.isCanonicalWireReplyTerminal(105, 42), false);
 });
 
-test('public reply and relocation representatives preserve each existing context', () => {
-  const codes = [14, 17, 4, 17, 15, 13, 17, 17, 16, 21, 17, 17];
-  const actorCodes = [14, 3, 4, 9, 15, 13, 19, 17, 16, 21, 35, 17];
-  const spotCodes = [14, 3, 7, 9, 15, 13, 19, 17, 16, 33, 35, 17];
-  const {
-    isValidServiceWireTerminalFailure
-  } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
-  for (let kind = 0; kind < codes.length; ++kind) {
-    const reply = framework.internalFrameworkWireReply(
-      new framework.ZLinkFrameworkException(kind, 'failure')
-    );
-    assert.equal(reply.failureCode, codes[kind], `reply kind ${kind}`);
-    assert.equal(isValidServiceWireTerminalFailure(reply.terminalResult, reply.failureCode), true);
-    assert.equal(framework.frameworkRelocationFailureCode(kind, 'actor'), actorCodes[kind]);
-    for (const objectKind of ['instanceSpot', 'userSpot']) {
-      assert.equal(framework.frameworkRelocationFailureCode(kind, objectKind), spotCodes[kind]);
-    }
-  }
-  const unknown = new framework.ZLinkFrameworkException(999, 'unknown category');
-  assert.deepEqual(framework.internalFrameworkWireReply(unknown), {
-    terminalResult: 105,
-    failureCode: 17
-  });
-  assert.equal(framework.frameworkRelocationFailureCode(unknown.kind, 'actor'), 17);
-});
-
 test('fine details retain their internal ABI value and generic receive aliases', () => {
   const k = framework.ZLinkFrameworkInternalErrorKind;
   const ordered = [
@@ -126,15 +100,6 @@ test('fine details retain their internal ABI value and generic receive aliases',
   for (let value = 0; value < ordered.length; ++value) {
     const error = framework.createInternalFrameworkException(ordered[value], 'fine failure');
     assert.equal(framework.internalFrameworkErrorCode(error), value);
-    const expectedFailure =
-      value === 29 ? 0 : value <= 21 || (value >= 32 && value <= 34) ? value + 1 : 17;
-    const reply = framework.internalFrameworkWireReply(error);
-    assert.equal(reply.failureCode, expectedFailure, `internal reply ${ordered[value]}`);
-    if (value === 29) assert.equal(reply.terminalResult, 101);
-    assert.equal(
-      framework.internalFrameworkErrorKindFromWireFailureCode(value + 1),
-      value === 17 ? k.RouteNotConnected : ordered[value]
-    );
   }
   assert.equal(
     framework.internalFrameworkErrorCode(
@@ -144,70 +109,6 @@ test('fine details retain their internal ABI value and generic receive aliases',
   );
   assert.equal(framework.internalFrameworkErrorKindFromWireFailureCode(0), undefined);
   assert.equal(framework.internalFrameworkErrorKindFromWireFailureCode(999), undefined);
-});
-
-test('actor and relocation receive aliases preserve fine detail instead of reducing to public kind', () => {
-  const k = framework.ZLinkFrameworkInternalErrorKind;
-  for (const [code, actor, relocation] of [
-    [9, k.RequestTargetNotFound, k.HandlerNotFound],
-    [12, k.RequestProtocolError, k.PayloadDecodeFailed],
-    [18, k.RouteNotConnected, k.WorkerQueueFull],
-    [21, k.ActorLocationStale, k.ActorLocationStale],
-    [33, k.ActorGenerationStale, k.SpotGenerationStale],
-    [34, k.ActorMoving, k.SpotMoving],
-    [35, k.RelocationDataLost, k.RelocationDataLost],
-    [22, undefined, k.ActorCreateRejected],
-    [999, undefined, undefined]
-  ]) {
-    assert.equal(framework.internalFrameworkErrorKindFromWireFailureCode(code, 'actor'), actor);
-    assert.equal(
-      framework.internalFrameworkErrorKindFromWireFailureCode(code, 'relocation'),
-      relocation
-    );
-  }
-  assert.equal(framework.internalFrameworkErrorKindFromWireReply(102, 21), k.ActorLocationStale);
-  assert.equal(framework.internalFrameworkErrorKindFromWireReply(107, 21), k.ActorLocationStale);
-  assert.equal(framework.internalFrameworkErrorKindFromWireReply(106, 21), undefined);
-});
-
-test('every internal Framework error produces a canonical stateful wire reply', () => {
-  for (const kind of Object.values(framework.ZLinkFrameworkInternalErrorKind)) {
-    const error = framework.createInternalFrameworkException(kind, `injected ${kind}`);
-    const reply = framework.internalFrameworkWireReply(error);
-    assert.equal(
-      framework.isCanonicalWireReplyTerminal(reply.terminalResult, reply.failureCode),
-      true,
-      `${kind} produced ${reply.terminalResult}/${reply.failureCode}`
-    );
-  }
-});
-
-test('stale generation and Actor binding contexts preserve their existing terminal aliases', () => {
-  const k = framework.ZLinkFrameworkInternalErrorKind;
-  const stale = framework.internalFrameworkWireReply(k.ActorLocationStale, 'stale-generation');
-  assert.deepEqual(stale, { terminalResult: 102, failureCode: 21 });
-  assert.equal(
-    framework.isCanonicalWireReplyTerminal(stale.terminalResult, stale.failureCode),
-    true
-  );
-  assert.equal(
-    framework.internalFrameworkErrorKindFromWireReply(stale.terminalResult, stale.failureCode),
-    k.ActorLocationStale
-  );
-  assert.deepEqual(framework.internalFrameworkWireReply(k.ActorLocationStale), {
-    terminalResult: 107,
-    failureCode: 21
-  });
-  const binding = framework.internalFrameworkWireReply(k.ActorGenerationStale, 'actor-binding');
-  assert.deepEqual(binding, { terminalResult: 111, failureCode: 0 });
-  assert.equal(
-    framework.isCanonicalWireReplyTerminal(binding.terminalResult, binding.failureCode),
-    true
-  );
-  assert.deepEqual(framework.internalFrameworkWireReply(k.ActorLocationStale, 'actor-binding'), {
-    terminalResult: 107,
-    failureCode: 21
-  });
 });
 
 test('stateful wire replies preserve supported detail and mask unsupported detail', () => {
@@ -225,7 +126,7 @@ test('stateful wire replies preserve supported detail and mask unsupported detai
       'runtime stopped'
     )
   );
-  assert.deepEqual(shutdown, { terminalResult: 105, failureCode: 17 });
+  assert.deepEqual(shutdown, { terminalResult: 103, failureCode: 0 });
 });
 
 test('terminal-failure integrity predicate matches the schema exact pairs (round-14)', () => {
@@ -289,4 +190,16 @@ test('m6a reply codec rejects non-canonical terminal/failure pairs as protocol e
   const patched = Buffer.from(legal);
   patched.writeUInt32BE(18, 5 + 12); // workerQueueFull pairs with 106, not 107
   assert.throws(() => decodeReplyHeader(patched), ServiceWireProtocolError);
+});
+
+test('every internal Framework error produces a canonical stateful wire reply', () => {
+  for (const kind of Object.values(framework.ZLinkFrameworkInternalErrorKind)) {
+    const error = framework.createInternalFrameworkException(kind, `injected ${kind}`);
+    const reply = framework.internalFrameworkWireReply(error);
+    assert.equal(
+      framework.isCanonicalWireReplyTerminal(reply.terminalResult, reply.failureCode),
+      true,
+      `${kind} produced ${reply.terminalResult}/${reply.failureCode}`
+    );
+  }
 });

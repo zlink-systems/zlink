@@ -843,104 +843,24 @@ test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its 
   }
 });
 
-test(
-  'a target-side Prepare failure encodes the classified error kind onto the shared wire ' +
-    'failureCode vocabulary instead of collapsing every reason to requestFailed(17)',
-  () => {
-    // Cross-language reference mapping (java commit 97fc074058, mirrored by
-    // dotnet ResolveRelocationFailedWireCode): each typed framework error kind
-    // maps to the closest code the generated ServiceWireFrameworkErrorCode
-    // vocabulary actually defines. The wire vocabulary predates the typed
-    // kinds, so kinds without a dedicated code take a documented nearest fit;
-    // ShuttingDown/InternalFailure and any unclassified error stay on the
-    // opaque requestFailed(17), and relocationDataLost(35) stays reserved for
-    // verified checksum/assembly/digest integrity failures.
-    const framework = (kind: ZLinkFrameworkErrorKind) =>
-      new ZLinkFrameworkException(kind, `kind ${kind}`);
-
-    // The dedicated integrity tag and the DataLost kind both encode 35.
-    assert.equal(
-      relocationFailedFailureCode(new ServiceRelocationDataLostError('checksum'), 'actor'),
-      35
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.DataLost), 'userSpot'),
-      35
-    );
-
-    // Kind-shaped codes shared by every object kind.
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.Rejected), 'actor'),
-      15
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.ProtocolError), 'actor'),
-      16
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.DeadlineExceeded), 'actor'),
-      19
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.Unavailable), 'actor'),
-      13
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.NotFound), 'actor'),
-      14
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.AlreadyExists), 'userSpot'),
-      3
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.NotConfigured), 'actor'),
-      9
-    );
-
-    // Object-kind splits: the schema defines Actor- and Spot-specific codes.
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.InvalidOperation), 'actor'),
-      21
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.InvalidOperation), 'userSpot'),
-      33
-    );
+test('relocation failure codes use the shared error model fixture', () => {
+  const fixture = require(
+    require('node:path').resolve(
+      process.cwd(),
+      '../../runtime/conformance/framework-error-mapping-v1.json'
+    )
+  ) as { send: { kind: keyof typeof ZLinkFrameworkErrorKind; failureCode: number }[] };
+  for (const row of fixture.send)
     assert.equal(
       relocationFailedFailureCode(
-        framework(ZLinkFrameworkErrorKind.InvalidOperation),
-        'instanceSpot'
+        new ZLinkFrameworkException(ZLinkFrameworkErrorKind[row.kind], 'fixture')
       ),
-      33
+      row.failureCode,
+      row.kind
     );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.TypeMismatch), 'actor'),
-      4
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.TypeMismatch), 'userSpot'),
-      7
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.TypeMismatch), 'instanceSpot'),
-      7
-    );
-
-    // No dedicated wire code exists for these; the opaque requestFailed(17)
-    // is the agreed closest fit (ShuttingDown re-judged 2026-08-19, C-10).
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.ShuttingDown), 'actor'),
-      17
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.InternalFailure), 'actor'),
-      17
-    );
-    assert.equal(relocationFailedFailureCode(new Error('untyped restore failure'), 'actor'), 17);
-    assert.equal(relocationFailedFailureCode('not even an Error', 'userSpot'), 17);
-  }
-);
+  assert.equal(relocationFailedFailureCode(new ServiceRelocationDataLostError('checksum')), 35);
+  assert.equal(relocationFailedFailureCode(new Error('untyped restore failure')), 17);
+});
 
 test('cutover boundary reconciliation replaces a stale pre-reconnect span with the retransmitted whole batch', async () => {
   // Spec 28 §4.4: a retransmission after reconnect always resends the entire

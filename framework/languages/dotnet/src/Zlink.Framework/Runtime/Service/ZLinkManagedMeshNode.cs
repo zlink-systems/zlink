@@ -6825,36 +6825,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
     }
 
-    /// <summary>
-    /// Maps a target-side relocation Prepare failure to the closest wire
-    /// framework-error code the generated schema
-    /// (<see cref="ServiceWireConstants.FrameworkErrorCode"/>) defines
-    /// (mirrors the java reference mapping, commit 97fc074058). The wire
-    /// vocabulary predates the framework's typed error kinds and has no
-    /// one-to-one code for every kind, so several kinds share the nearest
-    /// fit. <see cref="ZLinkRelocationDataLostException"/> is dotnet's own
-    /// dedicated type for a verified checksum/assembly/digest integrity
-    /// failure (manifest mismatch, base-chunk checksum mismatch) — the one
-    /// case that keeps <c>RelocationDataLost</c>. An unclassified
-    /// exception (neither of the above) carries no evidence of integrity
-    /// loss and takes the generic opaque <c>RequestFailed</c> code.
-    /// <paramref name="objectKind"/> (1 = Actor, else Spot/Instance — spec
-    /// 28 §4.2's ObjectFence.kind) picks between an Actor- and
-    /// Spot-specific code where the schema splits by object kind.
-    /// </summary>
+    // Error model §2.1 applies equally to relocation failures.
     private static ServiceWireConstants.FrameworkErrorCode ResolveRelocationFailedWireCode(
-        Exception exception,
-        byte objectKind
-    )
-    {
-        return ZLinkRequestFailureMapper.TargetFailureCode(
-            exception,
-            objectKind,
-            objectKind == 1
-                ? ZLinkRequestFailureMapper.FailureContext.ActorRelocation
-                : ZLinkRequestFailureMapper.FailureContext.SpotRelocation
-        );
-    }
+        Exception exception
+    ) => ZLinkRequestFailureMapper.TargetFailureCode(exception);
 
     private async Task<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareRelocationTargetAsync(
         ICanonicalRelocationTarget target,
@@ -6990,7 +6964,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             prepare.Target,
                             prepare.Object,
                             2,
-                            ResolveRelocationFailedWireCode(exception, prepare.Object.Kind)
+                            ResolveRelocationFailedWireCode(exception)
                         )
                     ),
                     ServiceWireConstants.Command.RelocationFailed,
@@ -7088,10 +7062,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             pending.Ready.TrySetException(
                 new ZLinkFrameworkException(
-                    ZLinkRequestFailureMapper.RelocationFailureKind(),
+                    ZLinkRequestFailureMapper.RelocationFailureKind(failure.FailureCode),
                     $"The target rejected canonical relocation ({failure.FailureCode}).",
                     ZLinkRetryAdvice.DoNotRetry
                 )
+                {
+                    FrameworkFailureCode = (int)failure.FailureCode,
+                }
             );
         }
         else
@@ -8420,10 +8397,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private static UserSpotOperationTerminal MapUserSpotException(ZLinkFrameworkException exception)
     {
-        var terminal = ZLinkRequestFailureMapper.TargetFailureReply(
-            exception,
-            context: ZLinkRequestFailureMapper.FailureContext.SpotControl
-        );
+        var terminal = ZLinkRequestFailureMapper.TargetFailureReply(exception);
         return new UserSpotOperationTerminal(terminal.Result, terminal.FailureCode);
     }
 
@@ -8668,10 +8642,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         catch (ZLinkFrameworkException exception)
         {
-            var failure = ZLinkRequestFailureMapper.TargetFailureReply(
-                exception,
-                context: ZLinkRequestFailureMapper.FailureContext.ActorDestroy
-            );
+            var failure = ZLinkRequestFailureMapper.TargetFailureReply(exception);
             terminal = new ActorDestroyOperationTerminal(failure.Result, failure.FailureCode);
         }
         catch (OperationCanceledException)
@@ -8922,10 +8893,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkFrameworkException exception
     )
     {
-        var terminal = ZLinkRequestFailureMapper.TargetFailureReply(
-            exception,
-            context: ZLinkRequestFailureMapper.FailureContext.ActorCreate
-        );
+        var terminal = ZLinkRequestFailureMapper.TargetFailureReply(exception);
         return new ActorCreateOperationTerminal(terminal.Result, terminal.FailureCode);
     }
 
@@ -10041,10 +10009,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 && failure.FailureCode != ServiceWireConstants.FrameworkErrorCode.None
             )
                 throw new ZLinkFrameworkException(
-                    ZLinkRequestFailureMapper.RelocationFailureKind(),
+                    ZLinkRequestFailureMapper.RelocationFailureKind(failure.FailureCode),
                     $"The target rejected canonical relocation ({failure.FailureCode}).",
                     ZLinkRetryAdvice.DoNotRetry
-                );
+                )
+                {
+                    FrameworkFailureCode = (int)failure.FailureCode,
+                };
 
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,

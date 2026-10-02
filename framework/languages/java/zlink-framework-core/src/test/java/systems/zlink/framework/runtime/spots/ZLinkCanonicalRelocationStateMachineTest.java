@@ -424,8 +424,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 ZLinkCanonicalRelocationStateMachine.wireFailureCode(
                         new systems.zlink.framework.errors.ZLinkFrameworkException(
                                 systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DATA_LOST,
-                                "relocation base payload checksum differs from the " + "manifest"),
-                        2));
+                                "relocation base payload checksum differs from the "
+                                        + "manifest")));
     }
 
     @Test
@@ -584,8 +584,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                         new systems.zlink.framework.errors.ZLinkFrameworkException(
                                 systems.zlink.framework.errors.ZLinkFrameworkErrorKind
                                         .INTERNAL_FAILURE,
-                                "Capture/factory/restore/staging failed internally"),
-                        2));
+                                "Capture/factory/restore/staging failed internally")));
     }
 
     @Test
@@ -593,7 +592,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         assertEquals(
                 ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED,
                 ZLinkCanonicalRelocationStateMachine.wireFailureCode(
-                        new IllegalStateException("opaque failure"), 2));
+                        new IllegalStateException("opaque failure")));
     }
 
     @Test

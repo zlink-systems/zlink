@@ -5,134 +5,35 @@ namespace Zlink.Framework.Runtime.Messaging;
 
 internal static class ZLinkRequestFailureMapper
 {
-    internal enum FailureContext
-    {
-        General,
-        ActorTarget,
-        ActorRelocation,
-        SpotRelocation,
-        SpotControl,
-        ActorCreate,
-        ActorDestroy,
-        ActorJoin,
-        RelocationReceive,
-    }
-
     internal readonly record struct WireFailureMapping(
-        ZLinkFrameworkErrorKind? Kind,
+        ZLinkFrameworkErrorKind Kind,
         FailureCode Code,
         RequestResult Result,
-        FailureContext Context,
         bool Receive,
         bool Send
     );
 
-    // General rows own outgoing representatives and incoming aliases. Context rows
-    // preserve the existing object-control and relocation wire contracts.
+    // Error model §2.1 owns all receive codes and outgoing representatives.
     private static readonly WireFailureMapping[] WireFailureMappings =
     [
         new(
             ZLinkFrameworkErrorKind.NotFound,
             FailureCode.RequestTargetNotFound,
             RequestResult.NotFound,
-            FailureContext.General,
             true,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.AlreadyExists,
-            FailureCode.ActorAlreadyExists,
-            RequestResult.Conflict,
-            FailureContext.General,
-            true,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.TypeMismatch,
-            FailureCode.SpotTypeMismatch,
-            RequestResult.Conflict,
-            FailureContext.General,
-            true,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.Rejected,
-            FailureCode.RequestRejected,
-            RequestResult.Rejected,
-            FailureContext.General,
-            true,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.Unavailable,
-            FailureCode.RouteNotConnected,
-            RequestResult.InternalError,
-            FailureContext.General,
-            true,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.DeadlineExceeded,
-            FailureCode.WorkerTimedOut,
-            RequestResult.InternalError,
-            FailureContext.General,
-            true,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.ProtocolError,
-            FailureCode.RequestProtocolError,
-            RequestResult.ProtocolError,
-            FailureContext.General,
-            true,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.DataLost,
-            FailureCode.RelocationDataLost,
-            RequestResult.InternalError,
-            FailureContext.General,
-            true,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.InternalFailure,
-            FailureCode.RequestFailed,
-            RequestResult.InternalError,
-            FailureContext.General,
-            true,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.ShuttingDown,
-            FailureCode.None,
-            RequestResult.Terminated,
-            FailureContext.General,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.InvalidOperation,
-            FailureCode.None,
-            RequestResult.InvalidState,
-            FailureContext.General,
-            false,
-            true
-        ),
-        // NotConfigured has no general representative; it uses the existing fallback.
-        new(
-            null,
-            FailureCode.RequestFailed,
-            RequestResult.InternalError,
-            FailureContext.General,
-            false,
             true
         ),
         new(
             ZLinkFrameworkErrorKind.NotFound,
             FailureCode.ActorRouteNotFound,
             RequestResult.NotFound,
-            FailureContext.General,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.NotFound,
+            FailureCode.SpotRouteNotFound,
+            RequestResult.NotFound,
             true,
             false
         ),
@@ -140,15 +41,104 @@ internal static class ZLinkRequestFailureMapper
             ZLinkFrameworkErrorKind.NotFound,
             FailureCode.HandlerNotFound,
             RequestResult.NotFound,
-            FailureContext.General,
             true,
             false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.NotFound,
+            FailureCode.RouteHandlerNotFound,
+            RequestResult.NotFound,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.NotFound,
+            FailureCode.ActorDispatchHandlerNotFound,
+            RequestResult.NotFound,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.AlreadyExists,
+            FailureCode.ActorAlreadyExists,
+            RequestResult.Conflict,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.TypeMismatch,
+            FailureCode.SpotTypeMismatch,
+            RequestResult.Conflict,
+            true,
+            true
         ),
         new(
             ZLinkFrameworkErrorKind.TypeMismatch,
             FailureCode.ActorTypeMismatch,
             RequestResult.Conflict,
-            FailureContext.General,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Rejected,
+            FailureCode.RequestRejected,
+            RequestResult.Rejected,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Rejected,
+            FailureCode.ActorCreateRejected,
+            RequestResult.Rejected,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            FailureCode.RouteNotConnected,
+            RequestResult.InternalError,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            FailureCode.WorkerQueueFull,
+            RequestResult.Rejected,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            FailureCode.ActorLocationStale,
+            RequestResult.Conflict,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            FailureCode.SpotMoving,
+            RequestResult.Conflict,
+            true,
+            false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.DeadlineExceeded,
+            FailureCode.WorkerTimedOut,
+            RequestResult.InternalError,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.ProtocolError,
+            FailureCode.RequestProtocolError,
+            RequestResult.ProtocolError,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.ProtocolError,
+            FailureCode.PayloadDecodeFailed,
+            RequestResult.ProtocolError,
             true,
             false
         ),
@@ -156,47 +146,6 @@ internal static class ZLinkRequestFailureMapper
             ZLinkFrameworkErrorKind.InvalidOperation,
             FailureCode.ActorSessionNotBound,
             RequestResult.NotFound,
-            FailureContext.General,
-            true,
-            false
-        ),
-        new(
-            ZLinkFrameworkErrorKind.Rejected,
-            FailureCode.ActorCreateRejected,
-            RequestResult.Rejected,
-            FailureContext.General,
-            true,
-            false
-        ),
-        new(
-            ZLinkFrameworkErrorKind.ProtocolError,
-            FailureCode.PayloadDecodeFailed,
-            RequestResult.ProtocolError,
-            FailureContext.General,
-            true,
-            false
-        ),
-        new(
-            ZLinkFrameworkErrorKind.Unavailable,
-            FailureCode.ActorLocationStale,
-            RequestResult.Conflict,
-            FailureContext.General,
-            true,
-            false
-        ),
-        new(
-            ZLinkFrameworkErrorKind.Unavailable,
-            FailureCode.WorkerQueueFull,
-            RequestResult.Rejected,
-            FailureContext.General,
-            true,
-            false
-        ),
-        new(
-            ZLinkFrameworkErrorKind.Unavailable,
-            FailureCode.SpotMoving,
-            RequestResult.Conflict,
-            FailureContext.General,
             true,
             false
         ),
@@ -204,231 +153,55 @@ internal static class ZLinkRequestFailureMapper
             ZLinkFrameworkErrorKind.InvalidOperation,
             FailureCode.SpotGenerationStale,
             RequestResult.Conflict,
-            FailureContext.General,
             true,
             false
+        ),
+        new(
+            ZLinkFrameworkErrorKind.DataLost,
+            FailureCode.RelocationDataLost,
+            RequestResult.InternalError,
+            true,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.InternalFailure,
+            FailureCode.RequestFailed,
+            RequestResult.InternalError,
+            true,
+            true
         ),
         new(
             ZLinkFrameworkErrorKind.InternalFailure,
             FailureCode.WorkerFailed,
             RequestResult.InternalError,
-            FailureContext.General,
             true,
             false
         ),
         new(
-            ZLinkFrameworkErrorKind.TypeMismatch,
-            FailureCode.ActorTypeMismatch,
-            RequestResult.Conflict,
-            FailureContext.ActorTarget,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.InvalidOperation,
-            FailureCode.ActorLocationStale,
-            RequestResult.Conflict,
-            FailureContext.ActorRelocation,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.NotConfigured,
-            FailureCode.HandlerNotFound,
-            RequestResult.NotFound,
-            FailureContext.ActorRelocation,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.ShuttingDown,
-            FailureCode.RequestFailed,
-            RequestResult.InternalError,
-            FailureContext.ActorRelocation,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.InvalidOperation,
-            FailureCode.SpotGenerationStale,
-            RequestResult.Conflict,
-            FailureContext.SpotRelocation,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.NotConfigured,
-            FailureCode.HandlerNotFound,
-            RequestResult.NotFound,
-            FailureContext.SpotRelocation,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.ShuttingDown,
-            FailureCode.RequestFailed,
-            RequestResult.InternalError,
-            FailureContext.SpotRelocation,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.TypeMismatch,
-            FailureCode.ActorTypeMismatch,
-            RequestResult.Conflict,
-            FailureContext.ActorRelocation,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.InvalidOperation,
-            FailureCode.SpotGenerationStale,
-            RequestResult.Conflict,
-            FailureContext.SpotControl,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.Unavailable,
-            FailureCode.SpotMoving,
-            RequestResult.Conflict,
-            FailureContext.SpotControl,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.TypeMismatch,
-            FailureCode.SpotTypeMismatch,
-            RequestResult.Conflict,
-            FailureContext.SpotControl,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.AlreadyExists,
-            FailureCode.SpotCreateFailed,
-            RequestResult.InternalError,
-            FailureContext.SpotControl,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.ProtocolError,
-            FailureCode.RequestProtocolError,
-            RequestResult.ProtocolError,
-            FailureContext.SpotControl,
-            false,
-            true
-        ),
-        new(
-            null,
-            FailureCode.RequestFailed,
-            RequestResult.InternalError,
-            FailureContext.SpotControl,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.TypeMismatch,
-            FailureCode.ActorTypeMismatch,
-            RequestResult.Conflict,
-            FailureContext.ActorCreate,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.AlreadyExists,
-            FailureCode.ActorAlreadyExists,
-            RequestResult.Conflict,
-            FailureContext.ActorCreate,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.ProtocolError,
-            FailureCode.RequestProtocolError,
-            RequestResult.ProtocolError,
-            FailureContext.ActorCreate,
-            false,
-            true
-        ),
-        new(
-            null,
+            ZLinkFrameworkErrorKind.InternalFailure,
             FailureCode.ActorCreateFailed,
             RequestResult.InternalError,
-            FailureContext.ActorCreate,
-            false,
-            true
+            true,
+            false
         ),
         new(
-            ZLinkFrameworkErrorKind.NotFound,
-            FailureCode.ActorRouteNotFound,
-            RequestResult.NotFound,
-            FailureContext.ActorDestroy,
-            false,
-            true
-        ),
-        new(
-            null,
-            FailureCode.ActorLocationStale,
-            RequestResult.Conflict,
-            FailureContext.ActorDestroy,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.TypeMismatch,
-            FailureCode.ActorTypeMismatch,
-            RequestResult.Conflict,
-            FailureContext.ActorJoin,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.ProtocolError,
-            FailureCode.RequestProtocolError,
-            RequestResult.ProtocolError,
-            FailureContext.ActorJoin,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.InvalidOperation,
-            FailureCode.ActorLocationStale,
-            RequestResult.Conflict,
-            FailureContext.ActorJoin,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.NotFound,
-            FailureCode.ActorRouteNotFound,
-            RequestResult.NotFound,
-            FailureContext.ActorJoin,
-            false,
-            true
-        ),
-        new(
-            ZLinkFrameworkErrorKind.Unavailable,
-            FailureCode.RouteNotConnected,
+            ZLinkFrameworkErrorKind.InternalFailure,
+            FailureCode.SpotCreateFailed,
             RequestResult.InternalError,
-            FailureContext.ActorJoin,
-            false,
-            true
+            true,
+            false
         ),
         new(
-            ZLinkFrameworkErrorKind.Rejected,
-            FailureCode.RequestRejected,
-            RequestResult.Rejected,
-            FailureContext.ActorJoin,
-            false,
-            true
-        ),
-        new(
-            null,
+            ZLinkFrameworkErrorKind.NotConfigured,
             FailureCode.RequestFailed,
             RequestResult.InternalError,
-            FailureContext.ActorJoin,
+            false,
+            true
+        ),
+        new(
+            ZLinkFrameworkErrorKind.ShuttingDown,
+            FailureCode.None,
+            RequestResult.Terminated,
             false,
             true
         ),
@@ -436,67 +209,42 @@ internal static class ZLinkRequestFailureMapper
             ZLinkFrameworkErrorKind.InvalidOperation,
             FailureCode.None,
             RequestResult.InvalidState,
-            FailureContext.RelocationReceive,
-            true,
-            false
+            false,
+            true
         ),
     ];
-
     internal static ReadOnlySpan<WireFailureMapping> Mappings => WireFailureMappings;
 
     public static (RequestResult Result, FailureCode FailureCode) TargetFailureReply(
-        Exception error,
-        byte objectKind = 2,
-        FailureContext context = FailureContext.General
+        Exception error
     )
     {
-        if (context == FailureContext.General && objectKind == 1)
-            context = FailureContext.ActorTarget;
-        var kind = error is ZLinkFrameworkException framework
-            ? framework.Kind
-            : (ZLinkFrameworkErrorKind?)null;
-        if (
+        var framework = error as ZLinkFrameworkException;
+        var kind =
             error is Zlink.Framework.Runtime.Locations.ZLinkRelocationDataLostException
-            && context is FailureContext.ActorRelocation or FailureContext.SpotRelocation
-        )
-            kind = ZLinkFrameworkErrorKind.DataLost;
-        WireFailureMapping? contextFallback = null;
-        WireFailureMapping? generalMapping = null;
-        WireFailureMapping? generalFallback = null;
-        foreach (var row in WireFailureMappings)
+                ? ZLinkFrameworkErrorKind.DataLost
+                : framework?.Kind ?? ZLinkFrameworkErrorKind.InternalFailure;
+        var cause = framework;
+        while (cause is not null)
         {
-            if (!row.Send)
-                continue;
-            if (row.Context == context)
-            {
-                if (row.Kind == kind)
-                    return (row.Result, row.Code);
-                if (row.Kind is null)
-                    contextFallback = row;
-            }
-            if (row.Context == FailureContext.General)
-            {
-                if (row.Kind == kind)
-                    generalMapping = row;
-                if (row.Kind is null)
-                    generalFallback = row;
-            }
+            if (cause.FrameworkFailureCode != (int)FailureCode.None)
+                foreach (var row in WireFailureMappings)
+                    if (
+                        row.Receive
+                        && row.Kind == kind
+                        && (int)row.Code == cause.FrameworkFailureCode
+                    )
+                        return (row.Result, row.Code);
+            cause = cause.InnerException as ZLinkFrameworkException;
         }
-        var mapped =
-            contextFallback
-            ?? generalMapping
-            ?? generalFallback
-            ?? throw new InvalidOperationException(
-                "The general failure fallback mapping is missing."
-            );
-        return (mapped.Result, mapped.Code);
+        foreach (var row in WireFailureMappings)
+            if (row.Send && row.Kind == kind)
+                return (row.Result, row.Code);
+        throw new InvalidOperationException("The failure representative mapping is missing.");
     }
 
-    public static FailureCode TargetFailureCode(
-        Exception error,
-        byte objectKind,
-        FailureContext context = FailureContext.General
-    ) => TargetFailureReply(error, objectKind, context).FailureCode;
+    public static FailureCode TargetFailureCode(Exception error) =>
+        TargetFailureReply(error).FailureCode;
 
     public static Exception CreateChannelCompletionException(
         RequestResult result,
@@ -518,26 +266,22 @@ internal static class ZLinkRequestFailureMapper
         return CreateCompletionException(result, operationName);
     }
 
-    //  Terminal replies carry a fine failure code. A recognised code is the
-    //  peer naming its own reason and keeps its kind, except a target-not-found
-    //  code on a channel: a select-one call names no target, so "not found"
-    //  there is the empty eligible set the coarse rule above already covers.
+    // Recognized fine codes retain their kind on every reply path.
     public static Exception CreateChannelCompletionException(
         RequestResult result,
         int failureErrno,
         string operationName
     )
     {
-        if (
-            (ServiceWireConstants.FrameworkErrorCode)failureErrno
-                != ServiceWireConstants.FrameworkErrorCode.RequestTargetNotFound
-            && ClassifyFineFailure(failureErrno) is { } kind
-        )
+        if (ClassifyFineFailure(failureErrno) is { } kind)
             return new ZLinkFrameworkException(
                 kind,
                 operationName,
                 innerException: CreateRequestException(result)
-            );
+            )
+            {
+                FrameworkFailureCode = failureErrno,
+            };
         return CreateChannelCompletionException(result, operationName);
     }
 
@@ -562,7 +306,10 @@ internal static class ZLinkRequestFailureMapper
             $"{operationName} failed with result '{result}' "
                 + $"(framework error code {failureErrno}).",
             innerException: CreateRequestException(result)
-        );
+        )
+        {
+            FrameworkFailureCode = failureErrno,
+        };
     }
 
     //  Fine failure-code table shared with ZLinkBackendSpotNodeWrapper's
@@ -572,23 +319,13 @@ internal static class ZLinkRequestFailureMapper
     internal static ZLinkFrameworkErrorKind? ClassifyFineFailure(int failureErrno)
     {
         foreach (var row in WireFailureMappings)
-            if (
-                row.Receive
-                && row.Context == FailureContext.General
-                && (int)row.Code == failureErrno
-            )
+            if (row.Receive && (int)row.Code == failureErrno)
                 return row.Kind;
         return null;
     }
 
-    internal static ZLinkFrameworkErrorKind RelocationFailureKind()
-    {
-        // Existing relocation completion classifies all fine codes identically.
-        foreach (var row in WireFailureMappings)
-            if (row.Receive && row.Context == FailureContext.RelocationReceive)
-                return row.Kind!.Value;
-        throw new InvalidOperationException("The relocation receive mapping is missing.");
-    }
+    internal static ZLinkFrameworkErrorKind RelocationFailureKind(FailureCode code) =>
+        ClassifyFineFailure((int)code) ?? ZLinkFrameworkErrorKind.ProtocolError;
 
     public static ZLinkFrameworkException CreateCompletionException(
         RequestResult result,

@@ -352,10 +352,7 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
     {
         if (joinRequest is not ZLinkMeshActorJoinRequest meshRequest)
             return;
-        var terminal = ZLinkRequestFailureMapper.TargetFailureReply(
-            exception,
-            context: ZLinkRequestFailureMapper.FailureContext.ActorJoin
-        );
+        var terminal = ZLinkRequestFailureMapper.TargetFailureReply(exception);
         meshRequest.ReplyTerminal(terminal.Result, (uint)terminal.FailureCode);
     }
 

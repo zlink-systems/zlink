@@ -1334,8 +1334,7 @@ export class ServiceStatefulRuntime {
       this.operations.reply(
         pending.id,
         internalFrameworkWireReply(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          'stale-generation'
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale
         )
       );
       return pending;
@@ -1395,8 +1394,7 @@ export class ServiceStatefulRuntime {
       this.operations.reply(
         pending.id,
         internalFrameworkWireReply(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          'stale-generation'
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale
         )
       );
       return pending;
@@ -1914,8 +1912,7 @@ export class ServiceStatefulRuntime {
       this.operations.reply(
         pending.id,
         internalFrameworkWireReply(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          'stale-generation'
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale
         )
       );
       return pending;
@@ -4499,8 +4496,7 @@ export class ServiceStatefulRuntime {
       this.operations.reply(
         pending.id,
         internalFrameworkWireReply(
-          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-          'stale-generation'
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale
         )
       );
       return;
@@ -5543,8 +5539,7 @@ function actorLocation(actor: ServiceActorState): ActorLocation {
 function failure(error: unknown): ServiceStatefulResult {
   if (error instanceof ServiceStaleGenerationError) {
     return internalFrameworkWireReply(
-      ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-      'stale-generation'
+      ZLinkFrameworkInternalErrorKind.ActorLocationStale
     );
   }
   if (error instanceof ZLinkFrameworkException) {

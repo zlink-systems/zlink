@@ -2139,7 +2139,11 @@ internal sealed class ZLinkSpotNodeCatalog(
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Spot '{spotId}' generation {expected} is not the current generation {observed}."
-            );
+            )
+            {
+                FrameworkFailureCode = (int)
+                    ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale,
+            };
     }
 
     // A Spot Close reached this owner, which has no activation for the Spot
@@ -2166,7 +2170,10 @@ internal sealed class ZLinkSpotNodeCatalog(
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
             $"User Spot '{spotId}' authority names an incarnation this owner does not host."
-        );
+        )
+        {
+            FrameworkFailureCode = (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving,
+        };
     }
 
     private void ForgetCloseLocked(string spotId, TaskCompletionSource<bool> transaction)

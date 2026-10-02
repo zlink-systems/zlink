@@ -1,5 +1,4 @@
 using Systems.Zlink.Framework.Runtime.Protocol;
-using Context = Zlink.Framework.Runtime.Messaging.ZLinkRequestFailureMapper.FailureContext;
 using FailureCode = Systems.Zlink.Framework.Runtime.Protocol.ServiceWireConstants.FrameworkErrorCode;
 
 namespace Zlink.Framework.UnitTests;
@@ -603,7 +602,7 @@ public sealed class RequestWireFailureTableTests
         foreach (var mapping in ZLinkRequestFailureMapper.Mappings)
             Assert.True(
                 ServiceWireConstants.ValidTerminalFailure((uint)mapping.Result, (uint)mapping.Code),
-                $"{mapping.Context}/{mapping.Kind}: {mapping.Result}/{mapping.Code}"
+                $"{mapping.Kind}: {mapping.Result}/{mapping.Code}"
             );
         Assert.False(
             ServiceWireConstants.ValidTerminalFailure(
@@ -685,107 +684,6 @@ public sealed class RequestWireFailureTableTests
         Assert.Equal(kind, received.Kind);
     }
 
-    [Theory]
-    [InlineData(
-        (int)Context.ActorTarget,
-        ZLinkFrameworkErrorKind.TypeMismatch,
-        RequestResult.Conflict,
-        (int)FailureCode.ActorTypeMismatch
-    )]
-    [InlineData(
-        (int)Context.ActorRelocation,
-        ZLinkFrameworkErrorKind.InvalidOperation,
-        RequestResult.Conflict,
-        (int)FailureCode.ActorLocationStale
-    )]
-    [InlineData(
-        (int)Context.SpotRelocation,
-        ZLinkFrameworkErrorKind.InvalidOperation,
-        RequestResult.Conflict,
-        (int)FailureCode.SpotGenerationStale
-    )]
-    [InlineData(
-        (int)Context.ActorRelocation,
-        ZLinkFrameworkErrorKind.NotConfigured,
-        RequestResult.NotFound,
-        (int)FailureCode.HandlerNotFound
-    )]
-    [InlineData(
-        (int)Context.SpotRelocation,
-        ZLinkFrameworkErrorKind.ShuttingDown,
-        RequestResult.InternalError,
-        (int)FailureCode.RequestFailed
-    )]
-    [InlineData(
-        (int)Context.SpotControl,
-        ZLinkFrameworkErrorKind.Unavailable,
-        RequestResult.Conflict,
-        (int)FailureCode.SpotMoving
-    )]
-    [InlineData(
-        (int)Context.SpotControl,
-        ZLinkFrameworkErrorKind.AlreadyExists,
-        RequestResult.InternalError,
-        (int)FailureCode.SpotCreateFailed
-    )]
-    [InlineData(
-        (int)Context.SpotControl,
-        ZLinkFrameworkErrorKind.NotFound,
-        RequestResult.InternalError,
-        (int)FailureCode.RequestFailed
-    )]
-    [InlineData(
-        (int)Context.ActorCreate,
-        ZLinkFrameworkErrorKind.AlreadyExists,
-        RequestResult.Conflict,
-        (int)FailureCode.ActorAlreadyExists
-    )]
-    [InlineData(
-        (int)Context.ActorCreate,
-        ZLinkFrameworkErrorKind.Unavailable,
-        RequestResult.InternalError,
-        (int)FailureCode.ActorCreateFailed
-    )]
-    [InlineData(
-        (int)Context.ActorDestroy,
-        ZLinkFrameworkErrorKind.NotFound,
-        RequestResult.NotFound,
-        (int)FailureCode.ActorRouteNotFound
-    )]
-    [InlineData(
-        (int)Context.ActorDestroy,
-        ZLinkFrameworkErrorKind.ProtocolError,
-        RequestResult.Conflict,
-        (int)FailureCode.ActorLocationStale
-    )]
-    [InlineData(
-        (int)Context.ActorJoin,
-        ZLinkFrameworkErrorKind.InvalidOperation,
-        RequestResult.Conflict,
-        (int)FailureCode.ActorLocationStale
-    )]
-    [InlineData(
-        (int)Context.ActorJoin,
-        ZLinkFrameworkErrorKind.ShuttingDown,
-        RequestResult.InternalError,
-        (int)FailureCode.RequestFailed
-    )]
-    public void Object_contexts_keep_existing_representatives(
-        int context,
-        ZLinkFrameworkErrorKind kind,
-        RequestResult result,
-        int code
-    )
-    {
-        Assert.Equal(
-            (result, (FailureCode)code),
-            ZLinkRequestFailureMapper.TargetFailureReply(
-                new ZLinkFrameworkException(kind, "target"),
-                context: (Context)context
-            )
-        );
-    }
-
     [Fact]
     public void Existing_fallbacks_and_relocation_receive_kind_are_preserved()
     {
@@ -803,15 +701,77 @@ public sealed class RequestWireFailureTableTests
         Assert.Null(ZLinkRequestFailureMapper.ClassifyFineFailure(int.MaxValue));
         Assert.Equal(
             ZLinkFrameworkErrorKind.InvalidOperation,
-            ZLinkRequestFailureMapper.RelocationFailureKind()
+            ZLinkRequestFailureMapper.RelocationFailureKind(FailureCode.SpotGenerationStale)
         );
         Assert.Equal(
             FailureCode.RelocationDataLost,
             ZLinkRequestFailureMapper.TargetFailureCode(
-                new Zlink.Framework.Runtime.Locations.ZLinkRelocationDataLostException("lost"),
-                1,
-                Context.ActorRelocation
+                new Zlink.Framework.Runtime.Locations.ZLinkRelocationDataLostException("lost")
             )
         );
+    }
+
+    [Fact]
+    public void Error_model_fixture_matches_receive_and_send()
+    {
+        var root = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        const string relative = "framework/runtime/conformance/framework-error-mapping-v1.json";
+        while (
+            root is not null
+            && !System.IO.File.Exists(System.IO.Path.Combine(root.FullName, relative))
+        )
+            root = root.Parent;
+        using var fixture = System.Text.Json.JsonDocument.Parse(
+            System.IO.File.ReadAllText(System.IO.Path.Combine(root!.FullName, relative))
+        );
+        Assert.Equal(25, fixture.RootElement.GetProperty("receive").GetArrayLength());
+        foreach (var row in fixture.RootElement.GetProperty("receive").EnumerateArray())
+        {
+            var kind = Enum.Parse<ZLinkFrameworkErrorKind>(row.GetProperty("kind").GetString()!);
+            var code = row.GetProperty("failureCode").GetInt32();
+            var terminal = (RequestResult)row.GetProperty("terminalResult").GetInt32();
+            Assert.Equal(kind, ZLinkRequestFailureMapper.ClassifyFineFailure(code));
+            Assert.Equal(kind, ZLinkRequestFailureMapper.RelocationFailureKind((FailureCode)code));
+            var incoming = Assert.IsType<ZLinkFrameworkException>(
+                ZLinkRequestFailureMapper.CreateCompletionException(terminal, code, "fixture")
+            );
+            Assert.Equal(
+                (terminal, (FailureCode)code),
+                ZLinkRequestFailureMapper.TargetFailureReply(incoming)
+            );
+            foreach (var target in fixture.RootElement.GetProperty("send").EnumerateArray())
+            {
+                var targetKind = Enum.Parse<ZLinkFrameworkErrorKind>(
+                    target.GetProperty("kind").GetString()!
+                );
+                var expected =
+                    targetKind == kind
+                        ? (terminal, (FailureCode)code)
+                        : (
+                            (RequestResult)target.GetProperty("terminalResult").GetInt32(),
+                            (FailureCode)target.GetProperty("failureCode").GetInt32()
+                        );
+                Assert.Equal(
+                    expected,
+                    ZLinkRequestFailureMapper.TargetFailureReply(
+                        new ZLinkFrameworkException(targetKind, "forward", innerException: incoming)
+                    )
+                );
+            }
+        }
+        Assert.Equal(12, fixture.RootElement.GetProperty("send").GetArrayLength());
+        foreach (var row in fixture.RootElement.GetProperty("send").EnumerateArray())
+            Assert.Equal(
+                (
+                    (RequestResult)row.GetProperty("terminalResult").GetInt32(),
+                    (FailureCode)row.GetProperty("failureCode").GetInt32()
+                ),
+                ZLinkRequestFailureMapper.TargetFailureReply(
+                    new ZLinkFrameworkException(
+                        Enum.Parse<ZLinkFrameworkErrorKind>(row.GetProperty("kind").GetString()!),
+                        "fixture"
+                    )
+                )
+            );
     }
 }

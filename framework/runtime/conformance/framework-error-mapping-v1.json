@@ -1,0 +1,218 @@
+{
+  "fixture": "zlink.framework.framework-error-mapping",
+  "version": 1,
+  "receive": [
+    {
+      "kind": "NotFound",
+      "code": "requestTargetNotFound",
+      "failureCode": 14,
+      "terminalResult": 102
+    },
+    {
+      "kind": "NotFound",
+      "code": "actorRouteNotFound",
+      "failureCode": 1,
+      "terminalResult": 102
+    },
+    {
+      "kind": "NotFound",
+      "code": "spotRouteNotFound",
+      "failureCode": 6,
+      "terminalResult": 102
+    },
+    {
+      "kind": "NotFound",
+      "code": "handlerNotFound",
+      "failureCode": 9,
+      "terminalResult": 102
+    },
+    {
+      "kind": "NotFound",
+      "code": "routeHandlerNotFound",
+      "failureCode": 10,
+      "terminalResult": 102
+    },
+    {
+      "kind": "NotFound",
+      "code": "actorDispatchHandlerNotFound",
+      "failureCode": 11,
+      "terminalResult": 102
+    },
+    {
+      "kind": "AlreadyExists",
+      "code": "actorAlreadyExists",
+      "failureCode": 3,
+      "terminalResult": 107
+    },
+    {
+      "kind": "TypeMismatch",
+      "code": "spotTypeMismatch",
+      "failureCode": 7,
+      "terminalResult": 107
+    },
+    {
+      "kind": "TypeMismatch",
+      "code": "actorTypeMismatch",
+      "failureCode": 4,
+      "terminalResult": 107
+    },
+    {
+      "kind": "Rejected",
+      "code": "requestRejected",
+      "failureCode": 15,
+      "terminalResult": 106
+    },
+    {
+      "kind": "Rejected",
+      "code": "actorCreateRejected",
+      "failureCode": 22,
+      "terminalResult": 106
+    },
+    {
+      "kind": "Unavailable",
+      "code": "routeNotConnected",
+      "failureCode": 13,
+      "terminalResult": 105
+    },
+    {
+      "kind": "Unavailable",
+      "code": "workerQueueFull",
+      "failureCode": 18,
+      "terminalResult": 106
+    },
+    {
+      "kind": "Unavailable",
+      "code": "actorLocationStale",
+      "failureCode": 21,
+      "terminalResult": 107
+    },
+    {
+      "kind": "Unavailable",
+      "code": "spotMoving",
+      "failureCode": 34,
+      "terminalResult": 107
+    },
+    {
+      "kind": "DeadlineExceeded",
+      "code": "workerTimedOut",
+      "failureCode": 19,
+      "terminalResult": 105
+    },
+    {
+      "kind": "ProtocolError",
+      "code": "requestProtocolError",
+      "failureCode": 16,
+      "terminalResult": 104
+    },
+    {
+      "kind": "ProtocolError",
+      "code": "payloadDecodeFailed",
+      "failureCode": 12,
+      "terminalResult": 104
+    },
+    {
+      "kind": "InvalidOperation",
+      "code": "actorSessionNotBound",
+      "failureCode": 8,
+      "terminalResult": 102
+    },
+    {
+      "kind": "InvalidOperation",
+      "code": "spotGenerationStale",
+      "failureCode": 33,
+      "terminalResult": 107
+    },
+    {
+      "kind": "DataLost",
+      "code": "relocationDataLost",
+      "failureCode": 35,
+      "terminalResult": 105
+    },
+    {
+      "kind": "InternalFailure",
+      "code": "requestFailed",
+      "failureCode": 17,
+      "terminalResult": 105
+    },
+    {
+      "kind": "InternalFailure",
+      "code": "workerFailed",
+      "failureCode": 20,
+      "terminalResult": 105
+    },
+    {
+      "kind": "InternalFailure",
+      "code": "actorCreateFailed",
+      "failureCode": 2,
+      "terminalResult": 105
+    },
+    {
+      "kind": "InternalFailure",
+      "code": "spotCreateFailed",
+      "failureCode": 5,
+      "terminalResult": 105
+    }
+  ],
+  "send": [
+    {
+      "kind": "NotFound",
+      "failureCode": 14,
+      "terminalResult": 102
+    },
+    {
+      "kind": "AlreadyExists",
+      "failureCode": 3,
+      "terminalResult": 107
+    },
+    {
+      "kind": "TypeMismatch",
+      "failureCode": 7,
+      "terminalResult": 107
+    },
+    {
+      "kind": "NotConfigured",
+      "failureCode": 17,
+      "terminalResult": 105
+    },
+    {
+      "kind": "Rejected",
+      "failureCode": 15,
+      "terminalResult": 106
+    },
+    {
+      "kind": "Unavailable",
+      "failureCode": 13,
+      "terminalResult": 105
+    },
+    {
+      "kind": "DeadlineExceeded",
+      "failureCode": 19,
+      "terminalResult": 105
+    },
+    {
+      "kind": "ShuttingDown",
+      "failureCode": 0,
+      "terminalResult": 103
+    },
+    {
+      "kind": "ProtocolError",
+      "failureCode": 16,
+      "terminalResult": 104
+    },
+    {
+      "kind": "InvalidOperation",
+      "failureCode": 0,
+      "terminalResult": 111
+    },
+    {
+      "kind": "DataLost",
+      "failureCode": 35,
+      "terminalResult": 105
+    },
+    {
+      "kind": "InternalFailure",
+      "failureCode": 17,
+      "terminalResult": 105
+    }
+  ]
+}

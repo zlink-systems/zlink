@@ -57,9 +57,7 @@ public enum ZLinkBackendRequestResult {
      * 32-framework-error-model:81-118, 99-103 (resource-owner rule).
      */
     public ZLinkFrameworkErrorKind toFrameworkErrorKind(int failureCode) {
-        ZLinkFrameworkErrorKind fine =
-                ZLinkRequestFailureMapping.incoming(
-                        failureCode, ZLinkRequestFailureMapping.Context.GENERAL);
+        ZLinkFrameworkErrorKind fine = ZLinkRequestFailureMapping.incoming(failureCode);
         return fine != null ? fine : toFrameworkErrorKind();
     }
 

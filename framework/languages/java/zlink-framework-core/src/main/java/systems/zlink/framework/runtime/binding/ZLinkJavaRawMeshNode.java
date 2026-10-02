@@ -1732,12 +1732,14 @@ final class ZLinkJavaRawMeshNode
                         "canonical actorJoin terminal reply is invalid");
             }
             ZLinkBackendRequestResult result = backendResult(terminal.terminalResult());
-            throw new ZLinkFrameworkException(
+            throw ZLinkRequestFailureMapping.receivedFailure(
                     result.toFrameworkErrorKind(terminal.failureCode()),
                     "canonical actorJoin rejected by target terminal="
                             + terminal.terminalResult()
                             + " failureCode="
-                            + terminal.failureCode());
+                            + terminal.failureCode(),
+                    terminal.failureCode(),
+                    java.util.Map.of());
         }
         final ZLinkCanonicalActorJoinReplyCodec.ActorJoinReply reply;
         try {
@@ -2540,7 +2542,7 @@ final class ZLinkJavaRawMeshNode
         }
         if (relayFailure instanceof ZLinkFrameworkException framework) {
             return ZLinkRequestFailureMapping.outgoing(
-                    framework.kind(), ZLinkRequestFailureMapping.Context.GENERAL);
+                    framework.kind(), ZLinkRequestFailureMapping.causeCode(framework));
         }
         if (relayFailure instanceof ZlinkRequestException transport
                 && ServiceWireConstants.validTerminalFailure(transport.getResult().value(), 0)) {
@@ -2728,7 +2730,7 @@ final class ZLinkJavaRawMeshNode
                                     //  (spec 32-framework-error-model:83-118). The raw
                                     //  request exception stays as the cause so upstream
                                     //  terminal-shape probes keep working.
-                                    throw new ZLinkFrameworkException(
+                                    throw ZLinkRequestFailureMapping.receivedFailure(
                                             ZLinkBackendRequestResult.fromWireTerminal(
                                                             response.terminalResult())
                                                     .toFrameworkErrorKind(response.failureCode()),
@@ -2736,6 +2738,8 @@ final class ZLinkJavaRawMeshNode
                                                     + response.terminalResult()
                                                     + " failureCode="
                                                     + response.failureCode(),
+                                            response.failureCode(),
+                                            java.util.Map.of(),
                                             new ZlinkRequestException(
                                                     RequestResult.fromValue(
                                                             response.terminalResult())));
@@ -2955,14 +2959,16 @@ final class ZLinkJavaRawMeshNode
                             //  via the authoritative ownership-aware translator
                             //  instead of collapsing to a generic rejection
                             //  (spec 32-framework-error-model:81-118, 99-108).
-                            throw new ZLinkFrameworkException(
+                            throw ZLinkRequestFailureMapping.receivedFailure(
                                     ZLinkBackendRequestResult.fromWireTerminal(
                                                     header.terminalResult())
                                             .toFrameworkErrorKind(header.failureCode()),
                                     "remote Instance Spot request failed: terminal="
                                             + header.terminalResult()
                                             + " failureCode="
-                                            + header.failureCode());
+                                            + header.failureCode(),
+                                    header.failureCode(),
+                                    java.util.Map.of());
                         }
                         if (replies.size() != 2) {
                             throw new ZLinkFrameworkException(
@@ -3184,9 +3190,11 @@ final class ZLinkJavaRawMeshNode
                                                 .toFrameworkErrorKind(received.failureCode());
                                 received.close();
                                 return CompletableFuture.failedFuture(
-                                        new ZLinkFrameworkException(
+                                        ZLinkRequestFailureMapping.receivedFailure(
                                                 errorKind,
-                                                "Actor request failed: " + received.result()));
+                                                "Actor request failed: " + received.result(),
+                                                received.failureCode(),
+                                                java.util.Map.of()));
                             }
                             return CompletableFuture.completedFuture(received.parts());
                         });
@@ -4024,13 +4032,15 @@ final class ZLinkJavaRawMeshNode
                 //  authoritative ownership-aware translator instead of
                 //  collapsing to a generic rejection
                 //  (spec 32-framework-error-model:81-118, 99-108).
-                throw new ZLinkFrameworkException(
+                throw ZLinkRequestFailureMapping.receivedFailure(
                         ZLinkBackendRequestResult.fromWireTerminal(reply.terminalResult())
                                 .toFrameworkErrorKind(reply.failureCode()),
                         "remote User Spot create failed: terminal="
                                 + reply.terminalResult()
                                 + " failureCode="
-                                + reply.failureCode());
+                                + reply.failureCode(),
+                        reply.failureCode(),
+                        java.util.Map.of());
             }
             if (reply.success() == null
                     || (reply.success().result()
@@ -4179,13 +4189,15 @@ final class ZLinkJavaRawMeshNode
     /** Classifies a User Spot Close terminal the same way for a remote reply and a local owner. */
     private static ZLinkFrameworkException userSpotCloseFailure(
             int terminalResult, int failureCode, Throwable cause) {
-        return new ZLinkFrameworkException(
+        return ZLinkRequestFailureMapping.receivedFailure(
                 ZLinkBackendRequestResult.fromWireTerminal(terminalResult)
                         .toFrameworkErrorKind(failureCode),
                 "User Spot close failed: terminal="
                         + terminalResult
                         + " failureCode="
                         + failureCode,
+                failureCode,
+                java.util.Map.of(),
                 cause);
     }
 
@@ -6347,8 +6359,8 @@ final class ZLinkJavaRawMeshNode
             return ZLinkRequestFailureMapping.outgoing(
                     framework.kind(),
                     isSupersededCanonicalActorJoin(framework)
-                            ? ZLinkRequestFailureMapping.Context.SUPERSEDED_ACTOR_JOIN
-                            : ZLinkRequestFailureMapping.Context.ACTOR_JOIN);
+                            ? (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_LOCATION_STALE
+                            : ZLinkRequestFailureMapping.causeCode(framework));
         }
         return relayedFailurePair(failure);
     }

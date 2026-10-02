@@ -22,15 +22,29 @@ struct wire_failure_mapping_t
     terminal_t terminal;
     const char *message;
     detail::boundary_error_t boundary = detail::boundary_error_t::none;
+    bool receive = true;
 };
 constexpr wire_failure_mapping_t wire_failure_mapping[] = {
   {kind_t::not_found, failure_t::requestTargetNotFound, terminal_t::notFound,
    " failed because the target was not found."},
+  {kind_t::not_found, failure_t::actorRouteNotFound, terminal_t::notFound,
+   " failed because the actor route was not found."},
+  {kind_t::not_found, failure_t::spotRouteNotFound, terminal_t::notFound,
+   " failed because the spot route was not found."},
+  {kind_t::not_found, failure_t::routeHandlerNotFound, terminal_t::notFound,
+   " failed because the route handler was not found."},
+  {kind_t::not_found, failure_t::actorDispatchHandlerNotFound, terminal_t::notFound,
+   " failed because the actor handler was not found."},
   {kind_t::already_exists, failure_t::actorAlreadyExists, terminal_t::conflict,
    " failed because the actor already exists."},
   {kind_t::type_mismatch, failure_t::spotTypeMismatch, terminal_t::conflict,
    " failed because the object type did not match."},
+  {kind_t::type_mismatch, failure_t::actorTypeMismatch, terminal_t::conflict,
+   " failed because the object type did not match."},
+  {kind_t::not_configured, failure_t::requestFailed, terminal_t::internalError, " failed.",
+   detail::boundary_error_t::none, false},
   {kind_t::rejected, failure_t::requestRejected, terminal_t::rejected, " was rejected."},
+  {kind_t::rejected, failure_t::actorCreateRejected, terminal_t::rejected, " was rejected."},
   {kind_t::unavailable, failure_t::routeNotConnected, terminal_t::internalError,
    " failed because the target route is not connected.", detail::boundary_error_t::disconnected},
   {kind_t::deadline_exceeded, failure_t::workerTimedOut, terminal_t::internalError,
@@ -42,8 +56,6 @@ constexpr wire_failure_mapping_t wire_failure_mapping[] = {
   {kind_t::data_lost, failure_t::relocationDataLost, terminal_t::internalError,
    " failed because relocation data was lost."},
   {kind_t::internal_failure, failure_t::requestFailed, terminal_t::internalError, " failed."},
-  {kind_t::type_mismatch, failure_t::actorTypeMismatch, terminal_t::conflict,
-   " failed because the object type did not match."},
   {kind_t::invalid_operation, failure_t::actorSessionNotBound, terminal_t::notFound,
    " failed because the actor session is not bound."},
   {kind_t::not_found, failure_t::handlerNotFound, terminal_t::notFound,
@@ -53,6 +65,10 @@ constexpr wire_failure_mapping_t wire_failure_mapping[] = {
   // Legacy peers may still report an unavailable target as workerQueueFull.
   {kind_t::unavailable, failure_t::workerQueueFull, terminal_t::rejected,
    " failed because the remote worker queue is full."},
+  {kind_t::internal_failure, failure_t::actorCreateFailed, terminal_t::internalError,
+   " failed because actor creation failed."},
+  {kind_t::internal_failure, failure_t::spotCreateFailed, terminal_t::internalError,
+   " failed because spot creation failed."},
   {kind_t::internal_failure, failure_t::workerFailed, terminal_t::internalError,
    " failed inside the worker."},
   {kind_t::unavailable, failure_t::actorLocationStale, terminal_t::conflict,
@@ -64,15 +80,39 @@ constexpr wire_failure_mapping_t wire_failure_mapping[] = {
 }
 
 std::optional<request_wire_failure_t>
-request_failure_mapper_t::target_failure_reply (framework_error_kind_t kind) const
+request_failure_mapper_t::target_failure_reply (framework_error_kind_t kind,
+                                                std::uint32_t cause_code) const
 {
-    for (const auto &[mapped_kind, failure, terminal, message, boundary] : wire_failure_mapping) {
-        if (mapped_kind == kind)
-            return request_wire_failure_t{static_cast<std::uint32_t> (terminal),
-                                          static_cast<std::uint32_t> (failure)};
+    const wire_failure_mapping_t *representative = nullptr;
+    for (const auto &row : wire_failure_mapping) {
+        if (row.kind != kind)
+            continue;
+        if (cause_code == 0)
+            return request_wire_failure_t{static_cast<std::uint32_t> (row.terminal),
+                                          static_cast<std::uint32_t> (row.failure)};
+        if (!representative)
+            representative = &row;
+        if (cause_code != 0 && row.receive
+            && cause_code == static_cast<std::uint32_t> (row.failure))
+            return request_wire_failure_t{static_cast<std::uint32_t> (row.terminal), cause_code};
     }
-    return std::nullopt;
+    if (!representative)
+        return std::nullopt;
+    return request_wire_failure_t{static_cast<std::uint32_t> (representative->terminal),
+                                  static_cast<std::uint32_t> (representative->failure)};
 }
+
+framework_error_kind_t
+request_failure_mapper_t::failure_code_kind (std::uint32_t failure_code) const noexcept
+{
+    for (const auto &row : wire_failure_mapping) {
+        if (row.receive && failure_code != 0
+            && failure_code == static_cast<std::uint32_t> (row.failure))
+            return row.kind;
+    }
+    return framework_error_kind_t::internal_failure;
+}
+
 std::optional<foundation::operation_terminal_t>
 request_failure_mapper_t::transport_terminal (zlink::request_result_t terminal) const noexcept
 {
@@ -293,11 +333,14 @@ request_failure_mapper_t::reply_header_exception (std::uint32_t terminal_result,
     // Fine codes retain precedence even for an invalid terminal/code combination.
     // None is decoded by the unchanged source/native terminal fallback below.
     if (failure_code != static_cast<std::uint32_t> (failure_t::none)) {
-        for (const auto &[kind, failure, terminal, message, boundary] : wire_failure_mapping) {
-            if (failure_code == static_cast<std::uint32_t> (failure))
-                return boundary == detail::boundary_error_t::none
-                         ? framework_exception_t (kind, operation_name + message)
-                         : detail::make_boundary_exception (boundary, operation_name + message);
+        for (const auto &[kind, failure, terminal, message, boundary, receive] :
+             wire_failure_mapping) {
+            if (receive && failure_code == static_cast<std::uint32_t> (failure))
+                return detail::with_failure_code (
+                  boundary == detail::boundary_error_t::none
+                    ? framework_exception_t (kind, operation_name + message)
+                    : detail::make_boundary_exception (boundary, operation_name + message),
+                  failure_code);
         }
     }
     switch (static_cast<protocol::request_terminal_result> (terminal_result)) {

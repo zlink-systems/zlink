@@ -24,12 +24,18 @@ public final class ZLinkFrameworkErrorOrigin {
     }
 
     public static ZLinkFrameworkException framework(ZLinkFrameworkErrorKind kind, String message) {
-        return framework(kind, message, null);
+        return framework(kind, message, (Throwable) null);
     }
 
     public static ZLinkFrameworkException framework(
             ZLinkFrameworkErrorKind kind, String message, Throwable cause) {
         return new ZLinkFrameworkException(kind, message, cause, FRAMEWORK_METADATA);
+    }
+
+    public static ZLinkFrameworkException framework(
+            ZLinkFrameworkErrorKind kind, String message, int failureCode) {
+        return systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping
+                .receivedFailure(kind, message, failureCode, FRAMEWORK_METADATA);
     }
 
     public static boolean isFramework(Throwable error) {

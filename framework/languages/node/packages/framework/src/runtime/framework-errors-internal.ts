@@ -3,7 +3,6 @@ import {
   ZLinkFrameworkException
 } from '../contracts/Errors/ZLinkFrameworkException';
 import { RequestResult } from './backend/runtime-values';
-import type { ServiceWireRelocationObject } from './foundation/service-stateful-wire-codec';
 import { ServiceWireProtocolError } from './foundation/service-wire-m6a-codec';
 import {
   ServiceWireBoundaryTerminalResults,
@@ -57,446 +56,310 @@ export enum ZLinkFrameworkInternalErrorKind {
   ActorRouteUnavailable = 'actorRouteUnavailable'
 }
 
-type FailureContext = 'reply' | 'actor' | 'relocation';
 interface FailureMapping {
   readonly internalKind?: ZLinkFrameworkInternalErrorKind;
   readonly publicKind: ZLinkFrameworkErrorKind;
   readonly internalValue?: number;
-  readonly send: number;
+  readonly send?: number;
   readonly sendTerminal?: number;
-  readonly relocationActor?: number;
-  readonly relocationSpot?: number;
-  readonly replyTerminalAlias?: number;
-  readonly actorBindingReply?: { readonly terminalResult: number; readonly failureCode: number };
-  readonly receive?: Partial<Record<FailureContext, readonly number[]>>;
 }
 
-// This table owns kind/value/wire correspondence, including existing context aliases.
-// The generated wire schema continues to own valid terminal/failure combinations.
+// Error model §2.1 owns the wire codes and public representatives.
 const FAILURE_MAPPINGS: readonly FailureMapping[] = [
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
     publicKind: ZLinkFrameworkErrorKind.NotFound,
     internalValue: ServiceWireFrameworkErrorCode.actorRouteNotFound - 1,
-    send: ServiceWireFrameworkErrorCode.actorRouteNotFound,
-    receive: { relocation: [ServiceWireFrameworkErrorCode.actorRouteNotFound] }
+    send: ServiceWireFrameworkErrorCode.actorRouteNotFound
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
     publicKind: ZLinkFrameworkErrorKind.InternalFailure,
     internalValue: ServiceWireFrameworkErrorCode.actorCreateFailed - 1,
-    send: ServiceWireFrameworkErrorCode.actorCreateFailed,
-    receive: { relocation: [ServiceWireFrameworkErrorCode.actorCreateFailed] }
+    send: ServiceWireFrameworkErrorCode.actorCreateFailed
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ActorAlreadyExists,
     publicKind: ZLinkFrameworkErrorKind.AlreadyExists,
     internalValue: ServiceWireFrameworkErrorCode.actorAlreadyExists - 1,
-    send: ServiceWireFrameworkErrorCode.actorAlreadyExists,
-    receive: {
-      actor: [ServiceWireFrameworkErrorCode.actorAlreadyExists],
-      relocation: [ServiceWireFrameworkErrorCode.actorAlreadyExists]
-    }
+    send: ServiceWireFrameworkErrorCode.actorAlreadyExists
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ActorTypeMismatch,
     publicKind: ZLinkFrameworkErrorKind.TypeMismatch,
     internalValue: ServiceWireFrameworkErrorCode.actorTypeMismatch - 1,
-    send: ServiceWireFrameworkErrorCode.actorTypeMismatch,
-    receive: {
-      actor: [ServiceWireFrameworkErrorCode.actorTypeMismatch],
-      relocation: [ServiceWireFrameworkErrorCode.actorTypeMismatch]
-    }
+    send: ServiceWireFrameworkErrorCode.actorTypeMismatch
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.SpotCreateFailed,
     publicKind: ZLinkFrameworkErrorKind.InternalFailure,
     internalValue: ServiceWireFrameworkErrorCode.spotCreateFailed - 1,
-    send: ServiceWireFrameworkErrorCode.spotCreateFailed,
-    receive: { relocation: [ServiceWireFrameworkErrorCode.spotCreateFailed] }
+    send: ServiceWireFrameworkErrorCode.spotCreateFailed
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.SpotRouteNotFound,
     publicKind: ZLinkFrameworkErrorKind.NotFound,
     internalValue: ServiceWireFrameworkErrorCode.spotRouteNotFound - 1,
-    send: ServiceWireFrameworkErrorCode.spotRouteNotFound,
-    receive: { relocation: [ServiceWireFrameworkErrorCode.spotRouteNotFound] }
+    send: ServiceWireFrameworkErrorCode.spotRouteNotFound
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.SpotTypeMismatch,
     publicKind: ZLinkFrameworkErrorKind.TypeMismatch,
     internalValue: ServiceWireFrameworkErrorCode.spotTypeMismatch - 1,
-    send: ServiceWireFrameworkErrorCode.spotTypeMismatch,
-    receive: {
-      actor: [ServiceWireFrameworkErrorCode.spotTypeMismatch],
-      relocation: [ServiceWireFrameworkErrorCode.spotTypeMismatch]
-    }
+    send: ServiceWireFrameworkErrorCode.spotTypeMismatch
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
     publicKind: ZLinkFrameworkErrorKind.InvalidOperation,
     internalValue: ServiceWireFrameworkErrorCode.actorSessionNotBound - 1,
-    send: ServiceWireFrameworkErrorCode.actorSessionNotBound,
-    receive: {
-      actor: [ServiceWireFrameworkErrorCode.actorSessionNotBound],
-      relocation: [ServiceWireFrameworkErrorCode.actorSessionNotBound]
-    }
+    send: ServiceWireFrameworkErrorCode.actorSessionNotBound
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.HandlerNotFound,
     publicKind: ZLinkFrameworkErrorKind.NotFound,
     internalValue: ServiceWireFrameworkErrorCode.handlerNotFound - 1,
-    send: ServiceWireFrameworkErrorCode.handlerNotFound,
-    receive: { relocation: [ServiceWireFrameworkErrorCode.handlerNotFound] }
+    send: ServiceWireFrameworkErrorCode.handlerNotFound
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RouteHandlerNotFound,
     publicKind: ZLinkFrameworkErrorKind.NotFound,
     internalValue: ServiceWireFrameworkErrorCode.routeHandlerNotFound - 1,
-    send: ServiceWireFrameworkErrorCode.routeHandlerNotFound,
-    receive: { relocation: [ServiceWireFrameworkErrorCode.routeHandlerNotFound] }
+    send: ServiceWireFrameworkErrorCode.routeHandlerNotFound
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound,
     publicKind: ZLinkFrameworkErrorKind.NotFound,
     internalValue: ServiceWireFrameworkErrorCode.actorDispatchHandlerNotFound - 1,
-    send: ServiceWireFrameworkErrorCode.actorDispatchHandlerNotFound,
-    receive: { relocation: [ServiceWireFrameworkErrorCode.actorDispatchHandlerNotFound] }
+    send: ServiceWireFrameworkErrorCode.actorDispatchHandlerNotFound
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
     publicKind: ZLinkFrameworkErrorKind.ProtocolError,
     internalValue: ServiceWireFrameworkErrorCode.payloadDecodeFailed - 1,
-    send: ServiceWireFrameworkErrorCode.payloadDecodeFailed,
-    receive: { relocation: [ServiceWireFrameworkErrorCode.payloadDecodeFailed] }
+    send: ServiceWireFrameworkErrorCode.payloadDecodeFailed
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RouteNotConnected,
     publicKind: ZLinkFrameworkErrorKind.Unavailable,
     internalValue: ServiceWireFrameworkErrorCode.routeNotConnected - 1,
-    send: ServiceWireFrameworkErrorCode.routeNotConnected,
-    receive: {
-      reply: [
-        ServiceWireFrameworkErrorCode.routeNotConnected,
-        ServiceWireFrameworkErrorCode.workerQueueFull
-      ],
-      actor: [
-        ServiceWireFrameworkErrorCode.routeNotConnected,
-        ServiceWireFrameworkErrorCode.workerQueueFull
-      ],
-      relocation: [ServiceWireFrameworkErrorCode.routeNotConnected]
-    }
+    send: ServiceWireFrameworkErrorCode.routeNotConnected
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
     publicKind: ZLinkFrameworkErrorKind.NotFound,
     internalValue: ServiceWireFrameworkErrorCode.requestTargetNotFound - 1,
-    send: ServiceWireFrameworkErrorCode.requestTargetNotFound,
-    receive: {
-      actor: [
-        ServiceWireFrameworkErrorCode.handlerNotFound,
-        ServiceWireFrameworkErrorCode.requestTargetNotFound
-      ],
-      relocation: [ServiceWireFrameworkErrorCode.requestTargetNotFound]
-    }
+    send: ServiceWireFrameworkErrorCode.requestTargetNotFound
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RequestRejected,
     publicKind: ZLinkFrameworkErrorKind.Rejected,
     internalValue: ServiceWireFrameworkErrorCode.requestRejected - 1,
-    send: ServiceWireFrameworkErrorCode.requestRejected,
-    receive: {
-      actor: [ServiceWireFrameworkErrorCode.requestRejected],
-      relocation: [ServiceWireFrameworkErrorCode.requestRejected]
-    }
+    send: ServiceWireFrameworkErrorCode.requestRejected
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RequestProtocolError,
     publicKind: ZLinkFrameworkErrorKind.ProtocolError,
     internalValue: ServiceWireFrameworkErrorCode.requestProtocolError - 1,
-    send: ServiceWireFrameworkErrorCode.requestProtocolError,
-    receive: {
-      actor: [
-        ServiceWireFrameworkErrorCode.payloadDecodeFailed,
-        ServiceWireFrameworkErrorCode.requestProtocolError
-      ],
-      relocation: [ServiceWireFrameworkErrorCode.requestProtocolError]
-    }
+    send: ServiceWireFrameworkErrorCode.requestProtocolError
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RequestFailed,
     publicKind: ZLinkFrameworkErrorKind.InternalFailure,
     internalValue: ServiceWireFrameworkErrorCode.requestFailed - 1,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {
-      actor: [ServiceWireFrameworkErrorCode.requestFailed],
-      relocation: [ServiceWireFrameworkErrorCode.requestFailed]
-    }
+    send: ServiceWireFrameworkErrorCode.requestFailed
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
     publicKind: ZLinkFrameworkErrorKind.Unavailable,
     internalValue: ServiceWireFrameworkErrorCode.workerQueueFull - 1,
-    send: ServiceWireFrameworkErrorCode.workerQueueFull,
-    receive: { reply: [], relocation: [ServiceWireFrameworkErrorCode.workerQueueFull] }
+    send: ServiceWireFrameworkErrorCode.workerQueueFull
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.WorkerTimedOut,
     publicKind: ZLinkFrameworkErrorKind.DeadlineExceeded,
     internalValue: ServiceWireFrameworkErrorCode.workerTimedOut - 1,
-    send: ServiceWireFrameworkErrorCode.workerTimedOut,
-    receive: {
-      actor: [ServiceWireFrameworkErrorCode.workerTimedOut],
-      relocation: [ServiceWireFrameworkErrorCode.workerTimedOut]
-    }
+    send: ServiceWireFrameworkErrorCode.workerTimedOut
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.WorkerFailed,
     publicKind: ZLinkFrameworkErrorKind.InternalFailure,
     internalValue: ServiceWireFrameworkErrorCode.workerFailed - 1,
-    send: ServiceWireFrameworkErrorCode.workerFailed,
-    receive: {
-      actor: [ServiceWireFrameworkErrorCode.workerFailed],
-      relocation: [ServiceWireFrameworkErrorCode.workerFailed]
-    }
+    send: ServiceWireFrameworkErrorCode.workerFailed
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-    replyTerminalAlias: RequestResult.NotFound,
     publicKind: ZLinkFrameworkErrorKind.Unavailable,
     internalValue: ServiceWireFrameworkErrorCode.actorLocationStale - 1,
-    send: ServiceWireFrameworkErrorCode.actorLocationStale,
-    receive: {
-      actor: [ServiceWireFrameworkErrorCode.actorLocationStale],
-      relocation: [ServiceWireFrameworkErrorCode.actorLocationStale]
-    }
+    send: ServiceWireFrameworkErrorCode.actorLocationStale
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ActorCreateRejected,
     publicKind: ZLinkFrameworkErrorKind.Rejected,
     internalValue: ServiceWireFrameworkErrorCode.actorCreateRejected - 1,
-    send: ServiceWireFrameworkErrorCode.actorCreateRejected,
-    receive: { relocation: [ServiceWireFrameworkErrorCode.actorCreateRejected] }
+    send: ServiceWireFrameworkErrorCode.actorCreateRejected
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ObjectClientNotConfigured,
     publicKind: ZLinkFrameworkErrorKind.NotConfigured,
-    internalValue: 22,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 22
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.MeshSelectionRequired,
     publicKind: ZLinkFrameworkErrorKind.NotConfigured,
-    internalValue: 23,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 23
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.MeshNotFound,
     publicKind: ZLinkFrameworkErrorKind.NotFound,
-    internalValue: 24,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 24
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.InvalidConfiguration,
     publicKind: ZLinkFrameworkErrorKind.NotConfigured,
-    internalValue: 25,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 25
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.AlreadySubmitted,
     publicKind: ZLinkFrameworkErrorKind.InvalidOperation,
-    internalValue: 26,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 26
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ActorGenerationStale,
-    actorBindingReply: {
-      terminalResult: RequestResult.InvalidState,
-      failureCode: ServiceWireFrameworkErrorCode.none
-    },
     publicKind: ZLinkFrameworkErrorKind.InvalidOperation,
-    internalValue: 27,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: { actor: [ServiceWireFrameworkErrorCode.spotGenerationStale] }
+    internalValue: 27
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ActorMoving,
     publicKind: ZLinkFrameworkErrorKind.Unavailable,
-    internalValue: 28,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: { actor: [ServiceWireFrameworkErrorCode.spotMoving] }
+    internalValue: 28
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
     publicKind: ZLinkFrameworkErrorKind.DeadlineExceeded,
-    internalValue: 29,
-    send: ServiceWireFrameworkErrorCode.none,
-    sendTerminal: RequestResult.TimedOut,
-    receive: {}
+    internalValue: 29
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
     publicKind: ZLinkFrameworkErrorKind.Unavailable,
-    internalValue: 30,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 30
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RoutingIdConflict,
     publicKind: ZLinkFrameworkErrorKind.AlreadyExists,
-    internalValue: 31,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 31
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
     publicKind: ZLinkFrameworkErrorKind.InvalidOperation,
     internalValue: ServiceWireFrameworkErrorCode.spotGenerationStale - 1,
-    send: ServiceWireFrameworkErrorCode.spotGenerationStale,
-    receive: { relocation: [ServiceWireFrameworkErrorCode.spotGenerationStale] }
+    send: ServiceWireFrameworkErrorCode.spotGenerationStale
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.SpotMoving,
     publicKind: ZLinkFrameworkErrorKind.Unavailable,
     internalValue: ServiceWireFrameworkErrorCode.spotMoving - 1,
-    send: ServiceWireFrameworkErrorCode.spotMoving,
-    receive: { relocation: [ServiceWireFrameworkErrorCode.spotMoving] }
+    send: ServiceWireFrameworkErrorCode.spotMoving
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RelocationDataLost,
     publicKind: ZLinkFrameworkErrorKind.DataLost,
     internalValue: ServiceWireFrameworkErrorCode.relocationDataLost - 1,
-    send: ServiceWireFrameworkErrorCode.relocationDataLost,
-    receive: {
-      actor: [ServiceWireFrameworkErrorCode.relocationDataLost],
-      relocation: [ServiceWireFrameworkErrorCode.relocationDataLost]
-    }
+    send: ServiceWireFrameworkErrorCode.relocationDataLost
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.SpotIdConflict,
     publicKind: ZLinkFrameworkErrorKind.AlreadyExists,
-    internalValue: 35,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 35
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
     publicKind: ZLinkFrameworkErrorKind.ShuttingDown,
-    internalValue: 36,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 36
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RelocationDisabled,
     publicKind: ZLinkFrameworkErrorKind.Rejected,
-    internalValue: 37,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 37
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable,
     publicKind: ZLinkFrameworkErrorKind.Unavailable,
-    internalValue: 38,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 38
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.RelocationFailed,
     publicKind: ZLinkFrameworkErrorKind.InternalFailure,
-    internalValue: 39,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 39
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.InvalidOperation,
     publicKind: ZLinkFrameworkErrorKind.InvalidOperation,
-    internalValue: 40,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    receive: {}
+    internalValue: 40
   },
   {
     internalKind: ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable,
     publicKind: ZLinkFrameworkErrorKind.Unavailable,
-    internalValue: ServiceWireFrameworkErrorCode.routeNotConnected - 1,
-    send: ServiceWireFrameworkErrorCode.routeNotConnected,
-    receive: { reply: [] }
+    internalValue: ServiceWireFrameworkErrorCode.routeNotConnected - 1
   },
   {
     publicKind: ZLinkFrameworkErrorKind.NotFound,
     send: ServiceWireFrameworkErrorCode.requestTargetNotFound,
-    relocationActor: ServiceWireFrameworkErrorCode.requestTargetNotFound,
-    relocationSpot: ServiceWireFrameworkErrorCode.requestTargetNotFound
+    sendTerminal: RequestResult.NotFound
   },
   {
     publicKind: ZLinkFrameworkErrorKind.AlreadyExists,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    relocationActor: ServiceWireFrameworkErrorCode.actorAlreadyExists,
-    relocationSpot: ServiceWireFrameworkErrorCode.actorAlreadyExists
+    send: ServiceWireFrameworkErrorCode.actorAlreadyExists,
+    sendTerminal: RequestResult.Conflict
   },
   {
     publicKind: ZLinkFrameworkErrorKind.TypeMismatch,
-    send: ServiceWireFrameworkErrorCode.actorTypeMismatch,
-    relocationActor: ServiceWireFrameworkErrorCode.actorTypeMismatch,
-    relocationSpot: ServiceWireFrameworkErrorCode.spotTypeMismatch
+    send: ServiceWireFrameworkErrorCode.spotTypeMismatch,
+    sendTerminal: RequestResult.Conflict
   },
   {
     publicKind: ZLinkFrameworkErrorKind.NotConfigured,
     send: ServiceWireFrameworkErrorCode.requestFailed,
-    relocationActor: ServiceWireFrameworkErrorCode.handlerNotFound,
-    relocationSpot: ServiceWireFrameworkErrorCode.handlerNotFound
+    sendTerminal: RequestResult.InternalError
   },
   {
     publicKind: ZLinkFrameworkErrorKind.Rejected,
     send: ServiceWireFrameworkErrorCode.requestRejected,
-    relocationActor: ServiceWireFrameworkErrorCode.requestRejected,
-    relocationSpot: ServiceWireFrameworkErrorCode.requestRejected
+    sendTerminal: RequestResult.Rejected
   },
   {
     publicKind: ZLinkFrameworkErrorKind.Unavailable,
     send: ServiceWireFrameworkErrorCode.routeNotConnected,
-    relocationActor: ServiceWireFrameworkErrorCode.routeNotConnected,
-    relocationSpot: ServiceWireFrameworkErrorCode.routeNotConnected
+    sendTerminal: RequestResult.InternalError
   },
   {
     publicKind: ZLinkFrameworkErrorKind.DeadlineExceeded,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    relocationActor: ServiceWireFrameworkErrorCode.workerTimedOut,
-    relocationSpot: ServiceWireFrameworkErrorCode.workerTimedOut
+    send: ServiceWireFrameworkErrorCode.workerTimedOut,
+    sendTerminal: RequestResult.InternalError
   },
   {
     publicKind: ZLinkFrameworkErrorKind.ShuttingDown,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    relocationActor: ServiceWireFrameworkErrorCode.requestFailed,
-    relocationSpot: ServiceWireFrameworkErrorCode.requestFailed
+    send: ServiceWireFrameworkErrorCode.none,
+    sendTerminal: RequestResult.Terminated
   },
   {
     publicKind: ZLinkFrameworkErrorKind.ProtocolError,
     send: ServiceWireFrameworkErrorCode.requestProtocolError,
-    relocationActor: ServiceWireFrameworkErrorCode.requestProtocolError,
-    relocationSpot: ServiceWireFrameworkErrorCode.requestProtocolError
+    sendTerminal: RequestResult.ProtocolError
   },
   {
     publicKind: ZLinkFrameworkErrorKind.InvalidOperation,
-    send: ServiceWireFrameworkErrorCode.actorLocationStale,
-    relocationActor: ServiceWireFrameworkErrorCode.actorLocationStale,
-    relocationSpot: ServiceWireFrameworkErrorCode.spotGenerationStale
+    send: ServiceWireFrameworkErrorCode.none,
+    sendTerminal: RequestResult.InvalidState
   },
   {
     publicKind: ZLinkFrameworkErrorKind.DataLost,
-    send: ServiceWireFrameworkErrorCode.requestFailed,
-    relocationActor: ServiceWireFrameworkErrorCode.relocationDataLost,
-    relocationSpot: ServiceWireFrameworkErrorCode.relocationDataLost
+    send: ServiceWireFrameworkErrorCode.relocationDataLost,
+    sendTerminal: RequestResult.InternalError
   },
   {
     publicKind: ZLinkFrameworkErrorKind.InternalFailure,
     send: ServiceWireFrameworkErrorCode.requestFailed,
-    relocationActor: ServiceWireFrameworkErrorCode.requestFailed,
-    relocationSpot: ServiceWireFrameworkErrorCode.requestFailed
+    sendTerminal: RequestResult.InternalError
   }
 ];
 
@@ -512,28 +375,10 @@ const PUBLIC_MAPPING = new Map(
     row
   ])
 );
-const RECEIVE_MAPPING = new Map<
-  FailureContext,
-  ReadonlyMap<number, ZLinkFrameworkInternalErrorKind>
->(
-  (['reply', 'actor', 'relocation'] as const).map((context) => [
-    context,
-    new Map(
-      FAILURE_MAPPINGS.flatMap((row) =>
-        (
-          row.receive?.[context] ??
-          (context === 'reply' && row.internalValue !== undefined ? [row.internalValue + 1] : [])
-        ).map((code) => [code, row.internalKind!] as const)
-      )
-    )
-  ])
-);
-
-const REPLY_TERMINAL_ALIASES = new Map(
-  FAILURE_MAPPINGS.filter((row) => row.replyTerminalAlias !== undefined).map((row) => [
-    row.replyTerminalAlias!,
-    new Map([[row.send, row.internalKind!]])
-  ])
+const RECEIVE_MAPPING = new Map(
+  FAILURE_MAPPINGS.filter((row) => row.internalKind !== undefined && row.send !== undefined).map(
+    (row) => [row.send!, row.internalKind!]
+  )
 );
 
 export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES = Object.freeze(
@@ -541,12 +386,9 @@ export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES = Object.freeze(
 ) as Readonly<Record<ZLinkFrameworkInternalErrorKind, number>>;
 
 export function frameworkRelocationFailureCode(
-  kind: ZLinkFrameworkErrorKind,
-  objectKind: ServiceWireRelocationObject['kind']
+  error: ZLinkFrameworkErrorKind | ZLinkFrameworkException
 ): number {
-  const row =
-    PUBLIC_MAPPING.get(kind) ?? PUBLIC_MAPPING.get(ZLinkFrameworkErrorKind.InternalFailure)!;
-  return objectKind === 'actor' ? row.relocationActor! : row.relocationSpot!;
+  return internalFrameworkWireReply(error).failureCode;
 }
 
 const WIRE_TERMINAL_RESULT_BY_FAILURE_CODE: ReadonlyMap<number, number> = new Map([
@@ -676,36 +518,36 @@ export function internalFrameworkErrorCode(error: ZLinkFrameworkException): numb
 
 /** Produces the canonical stateful wire terminal without leaking internal kinds. */
 export function internalFrameworkWireReply(
-  error: ZLinkFrameworkException | ZLinkFrameworkInternalErrorKind,
-  context: 'canonical' | 'stale-generation' | 'actor-binding' = 'canonical'
-): {
-  readonly terminalResult: number;
-  readonly failureCode: number;
-} {
-  const kind = typeof error === 'string' ? error : INTERNAL_KIND.get(error);
+  error: ZLinkFrameworkException | ZLinkFrameworkInternalErrorKind | ZLinkFrameworkErrorKind
+): { readonly terminalResult: number; readonly failureCode: number } {
+  const internal = typeof error === 'string' ? INTERNAL_MAPPING.get(error)! : undefined;
+  const publicKind =
+    internal?.publicKind ??
+    (typeof error === 'number' ? error : (error as ZLinkFrameworkException).kind);
+  let cause: unknown = error;
+  while (cause instanceof ZLinkFrameworkException || typeof cause === 'string') {
+    const row = INTERNAL_MAPPING.get(
+      typeof cause === 'string'
+        ? (cause as ZLinkFrameworkInternalErrorKind)
+        : INTERNAL_KIND.get(cause)!
+    );
+    if (row?.send !== undefined && row.publicKind === publicKind)
+      return {
+        terminalResult: WIRE_TERMINAL_RESULT_BY_FAILURE_CODE.get(row.send)!,
+        failureCode: row.send
+      };
+    cause = typeof cause === 'string' ? undefined : cause.cause;
+  }
   const row =
-    kind === undefined
-      ? (PUBLIC_MAPPING.get((error as ZLinkFrameworkException).kind) ??
-        PUBLIC_MAPPING.get(ZLinkFrameworkErrorKind.InternalFailure)!)
-      : INTERNAL_MAPPING.get(kind)!;
-  const alias = context === 'actor-binding' ? row.actorBindingReply : undefined;
-  const failureCode = alias?.failureCode ?? row.send;
-  return {
-    terminalResult:
-      alias?.terminalResult ??
-      (context === 'stale-generation' ? row.replyTerminalAlias : undefined) ??
-      row.sendTerminal ??
-      WIRE_TERMINAL_RESULT_BY_FAILURE_CODE.get(failureCode)!,
-    failureCode
-  };
+    PUBLIC_MAPPING.get(publicKind) ?? PUBLIC_MAPPING.get(ZLinkFrameworkErrorKind.InternalFailure)!;
+  return { terminalResult: row.sendTerminal!, failureCode: row.send! };
 }
 
 /** Decodes the stateful reply failureCode convention without exposing wire offsets to callers. */
 export function internalFrameworkErrorKindFromWireFailureCode(
-  failureCode: number,
-  context: FailureContext = 'reply'
+  failureCode: number
 ): ZLinkFrameworkInternalErrorKind | undefined {
-  return RECEIVE_MAPPING.get(context)!.get(failureCode);
+  return RECEIVE_MAPPING.get(failureCode);
 }
 
 /** Restores a typed failure only when its wire terminal result is canonical. */
@@ -713,8 +555,6 @@ export function internalFrameworkErrorKindFromWireReply(
   terminalResult: number,
   failureCode: number
 ): ZLinkFrameworkInternalErrorKind | undefined {
-  const alias = REPLY_TERMINAL_ALIASES.get(terminalResult)?.get(failureCode);
-  if (alias !== undefined) return alias;
   const kind = internalFrameworkErrorKindFromWireFailureCode(failureCode);
   if (kind === undefined) return undefined;
   const expectedTerminalResult = WIRE_TERMINAL_RESULT_BY_FAILURE_CODE.get(failureCode);

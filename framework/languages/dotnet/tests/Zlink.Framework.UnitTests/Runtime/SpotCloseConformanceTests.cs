@@ -358,6 +358,41 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         }
     }
 
+    [Theory]
+    [InlineData(
+        true,
+        ZLinkFrameworkErrorKind.InvalidOperation,
+        (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
+    )]
+    [InlineData(
+        false,
+        ZLinkFrameworkErrorKind.Unavailable,
+        (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving
+    )]
+    public async Task Close_owner_preserves_known_failure_code(
+        bool staleGeneration,
+        ZLinkFrameworkErrorKind kind,
+        int code
+    )
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"close-owner-cause-{Guid.NewGuid():N}";
+        var initial = await host.RequestInstanceAsync(spotId);
+        await using var otherOwner = await SpotCloseHost.StartAsync(host.Store);
+        var catalog = otherOwner.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Catalog;
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await catalog.CloseAsync(
+                spotId,
+                staleGeneration ? initial.Generation + 1 : initial.Generation,
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(kind, error.Kind);
+        var reply = ZLinkRequestFailureMapper.TargetFailureReply(error);
+        Assert.Equal(RequestResult.Conflict, reply.Result);
+        Assert.Equal((ServiceWireConstants.FrameworkErrorCode)code, reply.FailureCode);
+    }
+
     [Fact]
     public async Task Retained_intents_precede_native_request_held_before_instance_publication()
     {

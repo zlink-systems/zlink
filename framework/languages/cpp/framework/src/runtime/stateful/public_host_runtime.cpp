@@ -113,62 +113,6 @@ struct activation_terminal_t
     }
 };
 
-/* Full-vocabulary 1:1 decode of an explicit relocationFailed(53) wire
- * failure_code into cpp's typed classification, so a source that receives
- * one can act on the actual reason instead of the code being ignored.
- * relocationDataLost(35) decodes to data_lost — the target's own encode
- * side (complete_relocation_assembly / dispatch_user_spot_operations)
- * reserves 35 for a verified checksum/assembly/digest/conflict integrity
- * failure; every other wire code here maps to the kind that already
- * carries that meaning elsewhere in the framework (e.g. requestFailed(17)
- * -> internal_failure, the same target-side restore/factory/staging
- * failure class). An unrecognized code is internal_failure, not silently
- * dropped. */
-framework_error_kind_t map_relocation_failure_code (std::uint32_t wire_code) noexcept
-{
-    switch (static_cast<protocol::framework_error_code> (wire_code)) {
-        case protocol::framework_error_code::relocationDataLost:
-            return framework_error_kind_t::data_lost;
-        case protocol::framework_error_code::requestRejected:
-            return framework_error_kind_t::rejected;
-        case protocol::framework_error_code::requestProtocolError:
-        case protocol::framework_error_code::payloadDecodeFailed:
-            return framework_error_kind_t::protocol_error;
-        case protocol::framework_error_code::workerQueueFull:
-            return framework_error_kind_t::unavailable;
-        case protocol::framework_error_code::workerTimedOut:
-            return framework_error_kind_t::deadline_exceeded;
-        case protocol::framework_error_code::actorTypeMismatch:
-        case protocol::framework_error_code::spotTypeMismatch:
-            return framework_error_kind_t::type_mismatch;
-        case protocol::framework_error_code::handlerNotFound:
-            return framework_error_kind_t::not_configured;
-        case protocol::framework_error_code::routeNotConnected:
-        case protocol::framework_error_code::spotMoving:
-            return framework_error_kind_t::unavailable;
-        case protocol::framework_error_code::actorRouteNotFound:
-        case protocol::framework_error_code::spotRouteNotFound:
-        case protocol::framework_error_code::requestTargetNotFound:
-        case protocol::framework_error_code::routeHandlerNotFound:
-        case protocol::framework_error_code::actorDispatchHandlerNotFound:
-            return framework_error_kind_t::not_found;
-        case protocol::framework_error_code::actorAlreadyExists:
-        case protocol::framework_error_code::actorCreateRejected:
-            return framework_error_kind_t::already_exists;
-        case protocol::framework_error_code::actorSessionNotBound:
-        case protocol::framework_error_code::actorLocationStale:
-        case protocol::framework_error_code::spotGenerationStale:
-            return framework_error_kind_t::invalid_operation;
-        case protocol::framework_error_code::actorCreateFailed:
-        case protocol::framework_error_code::spotCreateFailed:
-        case protocol::framework_error_code::requestFailed:
-        case protocol::framework_error_code::workerFailed:
-        case protocol::framework_error_code::none:
-        default:
-            return framework_error_kind_t::internal_failure;
-    }
-}
-
 const char *pump_result_name (mesh::raw_mesh_pump_result_t result) noexcept
 {
     switch (result) {
@@ -1400,16 +1344,16 @@ void complete_close_step (const close_completion_t &completion, spot_close_commi
     completion->complete (result_t<spot_close_commit_t>::success (std::move (commit)));
 }
 
-spot_close_commit_t close_step_failure (framework_error_kind_t kind, const char *message)
+spot_close_commit_t close_step_failure (framework_error_kind_t kind, const char *message,
+                                       std::uint32_t cause_code = 0)
 {
-    return {result_t<bool>::failure (kind, message), {}};
+    return {detail::result_access_t::failure<bool> (detail::with_failure_code (
+              framework_exception_t (kind, message), cause_code)), {}};
 }
 
 template <typename T> result_t<bool> close_store_failure (const result_t<T> &failed)
 {
-    return result_t<bool>::failure (failed.error_kind (), failed.error ()
-                                                            ? failed.error ()->what ()
-                                                            : "Location Store operation failed");
+    return detail::propagate_failure<bool> (failed, "Location Store operation failed");
 }
 
 /* Step 4: deletes the Closing authority with the same owner and generation
@@ -1643,7 +1587,8 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
        target = std::move (target)] (result_t<authority_read_result_t> read) {
           const auto moving = [] {
               return close_step_failure (framework_error_kind_t::unavailable,
-                                         "User Spot owner is moving");
+                                         "User Spot owner is moving",
+                                         static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
           };
           if (!read) {
               complete_close_step (completion, {close_store_failure (read), {}});
@@ -1657,7 +1602,8 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
           if (snapshot->object_generation != target.object_generation) {
               complete_close_step (completion,
                                    close_step_failure (framework_error_kind_t::invalid_operation,
-                                                       "User Spot generation is stale"));
+                                                       "User Spot generation is stale",
+                                                       static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale)));
               return;
           }
           // The one classification of a Close request (§7.1, §9): another
@@ -1744,7 +1690,8 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
           if (close_error == stateful::stateful_error_t::generation_stale) {
               complete_close_step (completion,
                                    close_step_failure (framework_error_kind_t::invalid_operation,
-                                                       "User Spot generation is stale"));
+                                                       "User Spot generation is stale",
+                                                       static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale)));
               return;
           }
           if (close_error != stateful::stateful_error_t::none) {
@@ -2143,12 +2090,12 @@ task_t<bool> public_host_runtime_t::send_instance_spot_activation_remote (
 // pinned directly without standing up a full relocation round trip).
 framework_error_kind_t classify_relocation_failure_code (std::uint32_t wire_code) noexcept
 {
-    return map_relocation_failure_code (wire_code);
+    return messaging::request_failure_mapper_t{}.failure_code_kind (wire_code);
 }
 
 stateful::relocation_reason_t classify_relocation_failure_reason (std::uint32_t wire_code) noexcept
 {
-    switch (map_relocation_failure_code (wire_code)) {
+    switch (classify_relocation_failure_code (wire_code)) {
         case framework_error_kind_t::data_lost:
             return stateful::relocation_reason_t::checksum_mismatch;
         // Legacy remote capacity failures cannot identify an available target,
@@ -2176,7 +2123,7 @@ task_t<stateful::relocation_reason_t> public_host_runtime_t::prepare_relocation_
         // matching-identity rejection. Map and surface its failure_code
         // instead of letting it collapse into the same "no result" a
         // timeout produces.
-        const auto kind = map_relocation_failure_code (response.failed->failure_code);
+        const auto kind = classify_relocation_failure_code (response.failed->failure_code);
         trace_mesh_host ("relocation-prepare-failed",
                          "wire_failure_code=" + std::to_string (response.failed->failure_code)
                            + " kind=" + std::to_string (static_cast<int> (kind)));
@@ -4549,7 +4496,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
         const auto selected = instance_materializer.select_target (request);
         if (!selected) {
             const auto failure =
-              messaging::request_failure_mapper_t{}.target_failure_reply (selected.error_kind ());
+              messaging::request_failure_mapper_t{}.target_failure_reply (*selected.error ());
             if (!failure)
                 throw *selected.error ();
             reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
@@ -4715,7 +4662,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     }
     catch (const framework_exception_t &error) {
         const auto failure =
-          messaging::request_failure_mapper_t{}.target_failure_reply (error.kind ());
+          messaging::request_failure_mapper_t{}.target_failure_reply (error);
         result.terminal_result = failure ? failure->terminal_result : 105;
         result.failure_code =
           failure ? failure->failure_code
@@ -5800,26 +5747,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         terminal (0, 0, result.value ());
                         return;
                     }
-                    switch (result.error_kind ()) {
-                        case framework_error_kind_t::invalid_operation:
-                            terminal (107,
-                                      static_cast<std::uint32_t> (
-                                        protocol::framework_error_code::spotGenerationStale),
-                                      false);
-                            return;
-                        case framework_error_kind_t::unavailable:
-                            terminal (107,
-                                      static_cast<std::uint32_t> (
-                                        protocol::framework_error_code::spotMoving),
-                                      false);
-                            return;
-                        default:
-                            terminal (105,
-                                      static_cast<std::uint32_t> (
-                                        protocol::framework_error_code::requestFailed),
-                                      false);
-                            return;
-                    }
+                    const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (*result.error ());
+                    terminal (failure->terminal_result, failure->failure_code, false);
                 };
                 // The started operation settles its terminal record once, also
                 // when the Close cannot be scheduled.
