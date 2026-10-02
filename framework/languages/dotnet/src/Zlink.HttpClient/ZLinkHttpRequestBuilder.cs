@@ -165,26 +165,38 @@ public class ZLinkHttpRequestBuilder
         return _client ??= _clientFactory!.Build();
     }
 
-    private void ReleaseIfOwned(ZLinkHttpClient client)
+    private ValueTask<T> ExecuteAsync<T>(ZLinkHttpClient client, ValueTask<T> operation)
     {
-        if (_ownsClient)
-            client.Dispose();
+        return _ownsClient ? ExecuteOneShotAsync(operation, client.Dispose) : operation;
+    }
+
+    internal static async ValueTask<T> ExecuteOneShotAsync<T>(ValueTask<T> operation, Action close)
+    {
+        var pending = operation.AsTask();
+        try
+        {
+            return await pending.ConfigureAwait(false);
+        }
+        finally
+        {
+            try
+            {
+                close();
+            }
+            catch (Exception) when (pending.IsFaulted || pending.IsCanceled)
+            {
+                // 요청 실패가 닫기 실패보다 우선한다(HTTP client builder §2).
+            }
+        }
     }
 
     /// <summary>Submits the request and returns the raw response.</summary>
     public async ValueTask<RawHttpResponse> AsyncRaw(CancellationToken cancellationToken = default)
     {
+        var request = MakeRequest(null);
         var client = ResolveClient();
-        try
-        {
-            return await client
-                .Runtime.ExecuteAsync(MakeRequest(null), cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            ReleaseIfOwned(client);
-        }
+        return await ExecuteAsync(client, client.Runtime.ExecuteAsync(request, cancellationToken))
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -198,17 +210,10 @@ public class ZLinkHttpRequestBuilder
     )
     {
         ArgumentNullException.ThrowIfNull(sink);
+        var request = MakeRequest(sink);
         var client = ResolveClient();
-        try
-        {
-            return await client
-                .Runtime.ExecuteAsync(MakeRequest(sink), cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            ReleaseIfOwned(client);
-        }
+        return await ExecuteAsync(client, client.Runtime.ExecuteAsync(request, cancellationToken))
+            .ConfigureAwait(false);
     }
 
     /// <summary>Submits the request and decodes the JSON body to <typeparamref name="T" />.</summary>
@@ -242,8 +247,22 @@ public class ZLinkHttpRequestBuilder
         CancellationToken cancellationToken
     )
     {
+        var request = MakeRequest(null);
+        var client = ResolveClient();
+        return await ExecuteAsync(client, PerformTypedAsync<T>(client, request, cancellationToken))
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask<HttpResponse<T>> PerformTypedAsync<T>(
+        ZLinkHttpClient client,
+        HttpRequestSpec request,
+        CancellationToken cancellationToken
+    )
+    {
         var codecs = ResolveCodecs();
-        var raw = await AsyncRaw(cancellationToken).ConfigureAwait(false);
+        var raw = await client
+            .Runtime.ExecuteAsync(request, cancellationToken)
+            .ConfigureAwait(false);
         if (raw.Status >= (int)System.Net.HttpStatusCode.BadRequest)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InternalFailure,

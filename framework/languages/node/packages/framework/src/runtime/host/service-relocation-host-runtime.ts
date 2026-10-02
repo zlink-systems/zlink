@@ -4465,8 +4465,8 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         participant.stableType,
         participant.objectGeneration,
         participant.authorityOwnerGeneration + 1n,
-        (nativeEntrySpot ? localDescriptor.rid : spotIdentity) as RoutingId,
-        nativeEntrySpot ? localDescriptor.lifecycleGeneration : membership.spotObjectGeneration,
+        nativeEntrySpot ? undefined : (spotIdentity as RoutingId),
+        membership.spotObjectGeneration,
         membership.membershipEpoch,
         signal
       );

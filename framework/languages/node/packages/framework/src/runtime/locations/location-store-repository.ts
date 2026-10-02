@@ -14,11 +14,8 @@ import {
   type ZLinkStoreKey,
   type ZLinkStoreReadResult,
   type ZLinkStoreScanCursor,
-  type ZLinkStoreScanRequest,
-  type ZLinkStoreScanResult,
   type ZLinkStoreVersion,
   type ZLinkStoreWriteRequest,
-  type ZLinkStoreWriteResult,
   ZLinkFrameworkRuntimeState,
   ZLinkObjectRole
 } from '../../contracts';
@@ -212,7 +209,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     private readonly nowProvider: () => Date = () => new Date()
   ) {
     super(nowProvider);
-    this.provider = new AmbiguousWriteReconcilingLocationStore(provider);
+    this.provider = provider;
     this.aggregateInventory = new ZLinkAggregateInventoryStore(this.provider);
   }
 
@@ -2946,97 +2943,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (result.kind === 'applied') return;
     }
   }
-}
-
-const AMBIGUOUS_WRITE_RECONCILIATION_TIMEOUT_MS = 5_000;
-
-/**
- * Keeps provider failures private while preserving the opaque Store contract.
- *
- * A write response can be lost after the provider applied the atomic batch.
- * The Framework confirms every mutation by an independent exact read. A put
- * must retain the requested bytes and a version different from the conditioned
- * version; a delete must remain absent. Any mismatch is a normal conflict, so
- * the domain repository can reread its authoritative record and classify the
- * operation without exposing a provider-specific retry API.
- */
-class AmbiguousWriteReconcilingLocationStore implements ZLinkLocationStore {
-  constructor(private readonly inner: ZLinkLocationStore) {}
-
-  read(key: ZLinkStoreKey, signal?: AbortSignal): Promise<ZLinkStoreReadResult> {
-    return this.inner.read(key, signal);
-  }
-
-  scan(request: ZLinkStoreScanRequest, signal?: AbortSignal): Promise<ZLinkStoreScanResult> {
-    return this.inner.scan(request, signal);
-  }
-
-  async write(
-    request: ZLinkStoreWriteRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkStoreWriteResult> {
-    try {
-      return await this.inner.write(request, signal);
-    } catch (failure) {
-      try {
-        return await this.reconcile(request);
-      } catch {
-        throw failure;
-      }
-    }
-  }
-
-  private async reconcile(request: ZLinkStoreWriteRequest): Promise<ZLinkStoreWriteResult> {
-    if (request.mutations.length === 0) {
-      throw new Error('Cannot reconcile an opaque Store write without mutations.');
-    }
-    const reconciliationSignal = AbortSignal.timeout(AMBIGUOUS_WRITE_RECONCILIATION_TIMEOUT_MS);
-    const reads = await Promise.all(
-      request.mutations.map((mutation) => this.inner.read(mutation.key, reconciliationSignal))
-    );
-    const putVersions: Array<{
-      readonly key: ZLinkStoreKey;
-      readonly version: ZLinkStoreVersion;
-    }> = [];
-    let storeNow = new Date(0);
-
-    for (let index = 0; index < request.mutations.length; index += 1) {
-      const mutation = request.mutations[index];
-      const read = reads[index];
-      storeNow =
-        read.kind === 'found'
-          ? latestDate(storeNow, read.value.storeNow)
-          : latestDate(storeNow, read.storeNow);
-
-      if (mutation.kind === 'delete') {
-        if (read.kind !== 'missing') return { kind: 'conflict', storeNow };
-        continue;
-      }
-      if (
-        read.kind !== 'found' ||
-        !Buffer.from(read.value.bytes).equals(Buffer.from(mutation.bytes)) ||
-        !versionAdvanced(request.conditions, mutation.key, read.value.version)
-      ) {
-        return { kind: 'conflict', storeNow };
-      }
-      putVersions.push({ key: mutation.key, version: read.value.version });
-    }
-
-    return { kind: 'applied', putVersions, storeNow };
-  }
-}
-
-function versionAdvanced(
-  conditions: readonly ZLinkStoreCondition[],
-  key: ZLinkStoreKey,
-  current: ZLinkStoreVersion
-): boolean {
-  const condition = conditions.find((candidate) => candidate.key.value === key.value);
-  return condition?.kind !== 'version' || condition.expected.value !== current.value;
-}
-
-function latestDate(left: Date, right: Date): Date {
-  return left.getTime() >= right.getTime() ? left : right;
 }
 
 type OwnedDescriptor =

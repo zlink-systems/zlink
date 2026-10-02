@@ -1,10 +1,19 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { resolveModuleProviders } = require('./helpers/nestjs-test-utils');
 
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
+const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
 const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const { BoundedReplayMap } = require('../../packages/framework/dist/runtime/host/bounded-replay-map');
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 const nestjs = require('../../packages/nestjs/dist');
 
 test('bounded terminal replay refreshes recency and evicts only the oldest record', () => {
@@ -434,6 +443,7 @@ test('degraded host rejects factory and restore confirmation until owner lease r
   }
   const scenario = recoverableHostScenario();
   scenario.runtime.setSpotManager(new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     ...scenario.runtime.createSpotManagerOptions(),
     spotFactories: [LeaseOwnedSpot]
   }));
@@ -733,7 +743,8 @@ async function resolveFrameworkRegistration(module) {
   if ('useValue' in provider) {
     return provider.useValue;
   }
-  return await provider.useFactory();
+  const container = await resolveModuleProviders(module, [nestjs.ZLINK_FRAMEWORK_REGISTRATION]);
+  return container.get(nestjs.ZLINK_FRAMEWORK_REGISTRATION);
 }
 
 test('concurrent relocation with a different deadline joins the running operation', async () => {

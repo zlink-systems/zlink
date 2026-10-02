@@ -636,7 +636,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         ZlinkStreamErrorCode errorCode = ZlinkStreamErrorCode.ValidationFailed
     )
     {
-        if (string.IsNullOrEmpty(name))
+        if (string.IsNullOrWhiteSpace(name))
             throw Error(errorCode, "Message name must not be empty.");
 
         if (!allowReserved && name.StartsWith(ReservedPacketNamePrefix, StringComparison.Ordinal))

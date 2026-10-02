@@ -45,7 +45,6 @@ add_library(zlink_stream_connector ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   core/src/runtime/protocol/framing.cpp
   core/src/runtime/protocol/header_codec.cpp
   core/src/runtime/protocol/metadata_codec.cpp
-  core/src/runtime/protocol/packet_name_resolver.cpp
   core/src/runtime/transport/stream_connection.cpp
   core/src/runtime/transport/stream_transport_factory.cpp
   core/src/runtime/transport/websocket_connection.cpp)

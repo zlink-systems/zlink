@@ -44,7 +44,13 @@ final class ProviderInputStream extends InputStream {
             if (completed) {
                 return false;
             }
-            byte[] next = provider.get();
+            byte[] next;
+            try {
+                next = provider.get();
+            } catch (RuntimeException failure) {
+                throw HttpClientErrors.fromExecutionFailure(
+                        failure, HttpClientErrors.FailureStage.APPLICATION);
+            }
             if (next == null) {
                 completed = true;
                 return false;

@@ -3,6 +3,7 @@ import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contract
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import { ZLinkSpotKind } from '../../contracts/Spots';
 import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
+import { waitActorReply } from '../actors/actor-request-deadline';
 import { emitActorOwnerLeaseObservation, isRelocationDebugEnabled } from '../diagnostics';
 import { ZLinkStateLane } from '../execution/state-lane';
 import {
@@ -407,10 +408,23 @@ export class ZLinkStoreLocationResolvers
 
   async resolveDirectActorRoute(
     actorId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineMs?: number
   ): Promise<ZLinkDirectActorRouteResolution> {
     const cached = await this.lane.run(() => this.getCachedCore(this.directActorRoutes, actorId));
     if (cached !== undefined) return { kind: 'ready', route: cached };
+    return await waitActorReply(
+      this.resolveUncachedDirectActorRoute(actorId, signal),
+      actorId,
+      deadlineMs,
+      signal
+    );
+  }
+
+  private async resolveUncachedDirectActorRoute(
+    actorId: string,
+    signal?: AbortSignal
+  ): Promise<ZLinkDirectActorRouteResolution> {
     const current = await this.options.stores.authorityStore.readAuthority(
       encodeAuthorityKey('actor', actorId),
       signal
@@ -895,6 +909,7 @@ export class ZLinkLocationSpotRouteResolver implements ZLinkSpotRouteResolver {
         targetNodeRid: entrySpot.nodeRid,
         spotId: entrySpot.spotId,
         spotKind: ZLinkSpotKind.Entry,
+        targetSpotGeneration: entrySpot.targetNodeGeneration,
         targetNodeGeneration: entrySpot.targetNodeGeneration,
         targetOwnerId: entrySpot.targetOwnerId,
         ownerLeaseGeneration: entrySpot.ownerLeaseGeneration,

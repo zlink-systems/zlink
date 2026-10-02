@@ -192,16 +192,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
         startActiveConnect?.Invoke();
         snapshot.SessionCts?.Cancel();
-        Exception? closeException = null;
-        try
-        {
-            await CloseConnectionAsync(snapshot.Connection, CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            closeException = ex;
-        }
+        await CloseConnectionAsync(snapshot.Connection, CancellationToken.None)
+            .ConfigureAwait(false);
 
         // The transport is closed, so no frame not yet written reaches it; their operations
         // fail with Disconnected here, without waiting for the peer (stream-connector spec §7).
@@ -220,9 +212,6 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         await NotifyStateChangedAsync(change, CancellationToken.None).ConfigureAwait(false);
         if (snapshot.Connection is not null)
             StartDisconnectNotification(ZlinkStreamCloseReason.ClientClose);
-
-        if (closeException is not null)
-            ExceptionDispatchInfo.Capture(closeException).Throw();
     }
 
     /// <summary>
@@ -648,21 +637,13 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             }
         }
 
-        Exception? closeFailure = null;
         List<Exception>? terminalFailures = null;
         if (publishError)
             await CaptureAsync(() => callbacks.PublishErrorAsync(error, cancellationToken))
                 .ConfigureAwait(false);
         Capture(() => snapshot.SessionCts?.Cancel());
-        try
-        {
-            await CloseConnectionAsync(snapshot.Connection, CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            closeFailure = exception;
-        }
+        await CloseConnectionAsync(snapshot.Connection, CancellationToken.None)
+            .ConfigureAwait(false);
 
         Capture(() => snapshot.SessionCts?.Dispose());
         Capture(() => pending.FailAll(GetPendingDisconnectError(error)));
@@ -674,10 +655,6 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         StartDisconnectNotification(closeReason);
         Capture(() => reconnectStart?.Start());
 
-        if (closeFailure is not null && terminalFailures is not null)
-            throw new AggregateException([closeFailure, .. terminalFailures]);
-        if (closeFailure is not null)
-            ExceptionDispatchInfo.Capture(closeFailure).Throw();
         if (terminalFailures is { Count: 1 })
             ExceptionDispatchInfo.Capture(terminalFailures[0]).Throw();
         if (terminalFailures is { Count: > 1 })
@@ -783,13 +760,31 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             ? ZlinkStreamCloseReason.ProtocolError
             : ZlinkStreamCloseReason.TransportError;
 
-    private static async ValueTask CloseConnectionAsync(
+    private async ValueTask CloseConnectionAsync(
         IZlinkStreamConnection? connection,
         CancellationToken cancellationToken
     )
     {
-        if (connection is not null)
+        if (connection is null)
+            return;
+
+        try
+        {
             await connection.CloseAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await callbacks
+                .PublishErrorAsync(
+                    new ZlinkStreamError(
+                        ZlinkStreamErrorCode.Disconnected,
+                        exception.Message,
+                        exception
+                    ),
+                    CancellationToken.None
+                )
+                .ConfigureAwait(false);
+        }
     }
 
     private static async ValueTask WaitBackgroundTaskAsync(Task? task)

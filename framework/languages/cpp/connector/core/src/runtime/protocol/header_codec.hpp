@@ -13,7 +13,6 @@
 namespace zlink::stream_connector::detail
 {
 
-inline constexpr const char *reserved_control_prefix = "$zlink.";
 inline constexpr const char *heartbeat_ping_name = "$zlink.heartbeat.ping";
 inline constexpr const char *heartbeat_pong_name = "$zlink.heartbeat.pong";
 

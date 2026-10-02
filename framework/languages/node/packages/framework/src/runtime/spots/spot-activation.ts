@@ -132,7 +132,7 @@ export interface ZLinkSpotActivationLifecycleOptions {
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
-  readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
+  readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly admission?: ZLinkRuntimeAdmissionGate;
   readonly statefulExecutionAllowed?: () => boolean;
   readonly leaveActor: (
@@ -185,6 +185,9 @@ export class ZLinkSpotActivationLifecycle {
   >();
 
   constructor(private readonly options: ZLinkSpotActivationLifecycleOptions) {
+    if ((options.detachedTaskRunner as unknown) === undefined) {
+      throw new ZLinkConfigurationException('Spot activation requires a detached task runner.');
+    }
     this.actorAdmission = new ZLinkSpotActorAdmissionCoordinator(options);
   }
 
@@ -253,7 +256,7 @@ export class ZLinkSpotActivationLifecycle {
     const common = {
       meshName,
       spotId,
-      objectGeneration: toContextGeneration(objectGeneration),
+      objectGeneration: objectGeneration,
       outbound,
       timers,
       serial,
@@ -341,11 +344,22 @@ export class ZLinkSpotActivationLifecycle {
       this.options.registerActivation(activation);
       return activation;
     } catch (error) {
-      await timers.dispose().catch(() => undefined);
-      if (instance !== undefined) {
-        await disposeLifecycleHandlers(instance).catch(() => undefined);
+      const cleanup = await Promise.allSettled([
+        timers.dispose(),
+        ...(instance === undefined
+          ? []
+          : [disposeLifecycleHandlers(instance, this.options.detachedTaskRunner)]),
+        ...(nativeSpot === undefined ? [] : [Promise.resolve().then(() => nativeSpot.dispose())])
+      ]);
+      const cleanupErrors = cleanup
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => result.reason);
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          `Spot '${spotId}' relocation materialization cleanup failed.`
+        );
       }
-      await nativeSpot?.dispose().catch(() => undefined);
       throw error;
     }
   }
@@ -392,7 +406,7 @@ export class ZLinkSpotActivationLifecycle {
     const context = createInstanceSpotContext({
       meshName,
       spotId,
-      objectGeneration: toContextGeneration(objectGeneration),
+      objectGeneration: objectGeneration,
       handlers: instanceHandlers,
       outbound,
       timers,
@@ -447,10 +461,15 @@ export class ZLinkSpotActivationLifecycle {
       this.options.registerActivation(activation);
       return activation;
     } catch (error) {
-      await timers.dispose();
-      await disposeLifecycleHandlers(instance);
+      const cleanup = await Promise.allSettled([
+        timers.dispose(),
+        disposeLifecycleHandlers(instance, this.options.detachedTaskRunner)
+      ]);
+      const cleanupErrors = cleanup
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => result.reason);
       throw new AggregateError(
-        [error],
+        [error, ...cleanupErrors],
         `Instance Spot '${instanceType}' materialization failed for '${String(spotId)}'.`
       );
     }
@@ -479,7 +498,7 @@ export class ZLinkSpotActivationLifecycle {
       errors.push(error);
     }
     try {
-      await disposeLifecycleHandlers(activation.spot);
+      await disposeLifecycleHandlers(activation.spot, this.options.detachedTaskRunner);
     } catch (error) {
       errors.push(error);
     }
@@ -580,7 +599,7 @@ export class ZLinkSpotActivationLifecycle {
     const context = createSpotContext({
       meshName,
       spotId,
-      objectGeneration: toContextGeneration(spotGeneration),
+      objectGeneration: spotGeneration,
       handlers,
       outbound,
       timers,
@@ -663,9 +682,13 @@ export class ZLinkSpotActivationLifecycle {
         } else {
           const partialCleanup = await Promise.allSettled([
             timers.dispose(),
-            ...(spot === undefined ? [] : [disposeLifecycleHandlers(spot)]),
-            nativeSpot.dispose(),
-            this.options.locationClaim.release(locationClaim.meshName, spotId)
+            ...(spot === undefined
+              ? []
+              : [disposeLifecycleHandlers(spot, this.options.detachedTaskRunner)]),
+            Promise.resolve().then(() => nativeSpot.dispose()),
+            Promise.resolve().then(() =>
+              this.options.locationClaim.release(locationClaim.meshName, spotId)
+            )
           ]);
           const partialErrors = partialCleanup
             .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
@@ -712,7 +735,7 @@ export class ZLinkSpotActivationLifecycle {
     const context = createSpotContext({
       meshName,
       spotId,
-      objectGeneration: toContextGeneration(objectGeneration),
+      objectGeneration: objectGeneration,
       handlers,
       outbound,
       timers,
@@ -1033,7 +1056,7 @@ export class ZLinkSpotActivationLifecycle {
     }
     if (!state.handlersDisposed) {
       await cleanup(
-        () => disposeLifecycleHandlers(activation.spot),
+        () => disposeLifecycleHandlers(activation.spot, this.options.detachedTaskRunner),
         () => {
           state.handlersDisposed = true;
         }
@@ -1093,13 +1116,4 @@ export class ZLinkSpotActivationLifecycle {
       message.close();
     }
   }
-}
-
-function toContextGeneration(generation: bigint): number {
-  if (generation < 0n || generation > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new ZLinkConfigurationException(
-      `Spot object generation '${generation}' cannot be represented by the Node.js public context.`
-    );
-  }
-  return Number(generation);
 }

@@ -1,10 +1,8 @@
 package systems.zlink.stream.connector;
 
-import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
 
 public final class ZLinkStreamAssert {
     private ZLinkStreamAssert() {}
@@ -25,7 +23,7 @@ public final class ZLinkStreamAssert {
             action.run();
         } catch (Throwable error) {
             failure = unwrap(error);
-            return requireKind(classify(failure), errorKind);
+            return requireKind(classify(failure, error), errorKind);
         }
         throw new IllegalStateException("Expected action to fail.");
     }
@@ -44,38 +42,27 @@ public final class ZLinkStreamAssert {
     }
 
     public static void expectTimeout(ThrowingRunnable action) {
-        ZLinkStreamError error = expectFailure(action, null);
-        if (error.code() != ZLinkStreamErrorCode.REQUEST_TIMEOUT
-                && error.code() != ZLinkStreamErrorCode.CONNECT_TIMEOUT) {
-            rethrow(error.exception());
+        Objects.requireNonNull(action, "action");
+        try {
+            action.run();
+        } catch (Throwable original) {
+            ZLinkStreamError error = classify(unwrap(original), original);
+            if (error.code() == ZLinkStreamErrorCode.REQUEST_TIMEOUT
+                    || error.code() == ZLinkStreamErrorCode.CONNECT_TIMEOUT) {
+                return;
+            }
+            rethrow(original);
         }
+        throw new IllegalStateException("Expected action to time out.");
     }
 
-    private static ZLinkStreamError classify(Throwable failure) {
+    private static ZLinkStreamError classify(Throwable failure, Throwable original) {
         //  Spec 32 9.2: when the connector itself reports a failure it
         //  carries the code, so read it instead of guessing from the type.
         if (failure instanceof ZLinkStreamException coded) {
             return coded.error();
         }
-        ZLinkStreamErrorCode code;
-        if (failure instanceof TimeoutException) {
-            code =
-                    failure.getMessage() != null
-                                    && failure.getMessage().startsWith("connect timed out")
-                            ? ZLinkStreamErrorCode.CONNECT_TIMEOUT
-                            : ZLinkStreamErrorCode.REQUEST_TIMEOUT;
-        } else if (failure instanceof IllegalArgumentException) {
-            code = ZLinkStreamErrorCode.VALIDATION_FAILED;
-        } else if (failure instanceof IOException) {
-            code = ZLinkStreamErrorCode.DISCONNECTED;
-        } else {
-            code = ZLinkStreamErrorCode.REMOTE_ERROR;
-        }
-        String message = failure.getMessage();
-        if (message == null || message.isBlank()) {
-            message = failure.getClass().getSimpleName();
-        }
-        return new ZLinkStreamError(code, message, failure);
+        return rethrow(original);
     }
 
     private static Throwable unwrap(Throwable error) {
@@ -87,14 +74,9 @@ public final class ZLinkStreamAssert {
         return current;
     }
 
-    private static void rethrow(Throwable error) {
-        if (error instanceof RuntimeException runtime) {
-            throw runtime;
-        }
-        if (error instanceof Error fatal) {
-            throw fatal;
-        }
-        throw new CompletionException(error);
+    @SuppressWarnings("unchecked")
+    private static <R, T extends Throwable> R rethrow(Throwable error) throws T {
+        throw (T) error;
     }
 
     @FunctionalInterface

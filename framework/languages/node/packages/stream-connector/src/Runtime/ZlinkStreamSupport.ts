@@ -35,11 +35,7 @@ export function unwrapStreamError(error: unknown): ZlinkStreamError {
   if (error instanceof ZlinkStreamException) {
     return error.error;
   }
-  return {
-    code: ZlinkStreamErrorCode.RemoteError,
-    message: error instanceof Error ? error.message : String(error),
-    cause: error
-  };
+  throw error;
 }
 
 export function subscription(dispose: () => void): Disposable {

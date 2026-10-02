@@ -169,7 +169,7 @@ export interface ZLinkActorTransferRuntimeActorManager {
     actorType: string,
     objectGeneration: bigint,
     authorityOwnerGeneration: bigint,
-    spotId: RoutingId,
+    spotId: RoutingId | undefined,
     spotGeneration: bigint,
     membershipEpoch: bigint,
     signal?: AbortSignal,

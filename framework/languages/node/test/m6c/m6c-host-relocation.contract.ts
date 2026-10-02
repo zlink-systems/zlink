@@ -2357,16 +2357,22 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       _actorType: string,
       objectGeneration: bigint,
       authorityOwnerGeneration: bigint,
-      spotId: string,
+      spotId: string | undefined,
       spotGeneration: bigint,
       membershipEpoch: bigint
     ) {
+      assert.equal(
+        spotId,
+        undefined,
+        'Entry relocation preserves logical membership at the native boundary'
+      );
       events.push('restore:hidden');
       targetNativeAuthority = {
         actor: { actorId: restoredActorId, generation: objectGeneration, nodeRid: 'target' },
         authorityOwnerGeneration,
-        spotId,
-        spotGeneration,
+        spotId: spotId ?? String(targetDescriptor.rid),
+        spotGeneration:
+          spotId === undefined ? targetDescriptor.lifecycleGeneration : spotGeneration,
         membershipEpoch
       };
       targetState = {

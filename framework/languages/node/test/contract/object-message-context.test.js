@@ -3,9 +3,18 @@ const test = require('node:test');
 
 const framework = require('../../packages/framework/dist/internal');
 const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+const {
   createInstanceSpotContext,
   createSpotContext
 } = require('../../packages/framework/dist/runtime/spots/spot-context');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 function contextOptions(overrides = {}) {
   return {
@@ -76,7 +85,7 @@ test('Actor factory receives the sole identity context and mismatched context is
   const manager = new framework.DefaultZLinkActorManager({
     actorFactories: new Map([['player', ExactFactory]]),
     actorMeshNameProvider: () => 'play'
-  });
+  }, detachedTaskRunner);
   const actor = await manager.getOrCreateActor('player-7', 'player');
 
   assert.equal(actor.context, suppliedContext);
@@ -102,7 +111,7 @@ test('Actor factory receives the sole identity context and mismatched context is
   const mismatched = new framework.DefaultZLinkActorManager({
     actorFactories: new Map([['player', MismatchedFactory]]),
     actorMeshNameProvider: () => 'play'
-  });
+  }, detachedTaskRunner);
   await assert.rejects(
     () => mismatched.getOrCreateActor('player-8', 'player'),
     (error) => error instanceof framework.ZLinkFrameworkException

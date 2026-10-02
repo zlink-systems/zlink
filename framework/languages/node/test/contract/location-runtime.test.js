@@ -2798,6 +2798,7 @@ test('production repository restarts an expired owner cleanup scan from its firs
 test('production repository does not delete a row after its owner lease is replaced', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const leaseRepository = new internal.ZLinkLocationStoreRepository(inner, () => now);
   let ownerToken;
   let replaced = false;
   const provider = {
@@ -2806,8 +2807,8 @@ test('production repository does not delete a row after its owner lease is repla
     async write(request, signal) {
       if (!replaced && request.mutations.some(mutation => mutation.kind === 'delete')) {
         replaced = true;
-        assert.equal(await inner.releaseOwnerLease(ownerToken), 'released');
-        assert.equal((await inner.claimOwnerLease('owner-fenced', 30_000)).kind, 'claimed');
+        assert.equal(await leaseRepository.releaseOwnerLease(ownerToken), 'released');
+        assert.equal((await leaseRepository.claimOwnerLease('owner-fenced', 30_000)).kind, 'claimed');
       }
       return await inner.write(request, signal);
     }
@@ -2826,29 +2827,57 @@ test('production repository does not delete a row after its owner lease is repla
   assert.equal((await repository.listMeshNodes('play')).items.length, 1);
 });
 
-test('production repository reconciles an opaque write applied before its response is lost', async () => {
+test('location runtime reconciles an opaque write applied before its response is lost', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
   const provider = new ReplyLossLocationStore(inner);
   const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const runtime = runtimeFor(repository, {
+    ownerId: 'owner-ambiguous',
+    locationOptions: { ownerLeaseTtlMs: 30_000 }
+  });
 
   provider.loseNextResponse = true;
-  const claimed = await repository.claimOwnerLease('owner-ambiguous', 30_000);
+  await runtime.start(rid('node-ambiguous'));
 
-  assert.equal(claimed.kind, 'claimed');
+  assert.equal((await runtime.getStatus()).ownerLeaseHealthy, true);
   assert.equal(provider.observedWrites, 1);
   assert.deepEqual(
     await repository.readOwnerLease('owner-ambiguous'),
     {
       kind: 'found',
-      token: claimed.token,
+      token: { ownerId: 'owner-ambiguous', leaseGeneration: 1n },
       leaseExpiresAt: new Date(now.getTime() + 30_000),
       storeNow: now
     }
   );
+  await runtime.stop();
 });
 
-test('production repository classifies a changed ambiguous write as conflict', async () => {
+test('location runtime preserves a corrupt owner lease error during claim confirmation', async () => {
+  const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const provider = new ReplyLossLocationStore(inner);
+  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const runtime = runtimeFor(repository, { ownerId: 'owner-corrupt' });
+
+  provider.loseNextResponse = true;
+  provider.replaceFirstMutationBeforeFailure = true;
+  await runtime.start(rid('node-corrupt'));
+
+  const status = await runtime.getStatus();
+  assert.equal(status.ownerLeaseHealthy, false);
+  assert.match(status.lastError, /Location Store owner lease record is invalid/);
+  assert.equal(provider.observedWrites, 2);
+  await assert.rejects(repository.readOwnerLease('owner-corrupt'), /invalid/);
+  await assert.rejects(runtime.stop(), (error) => {
+    assert.equal(error.name, 'ZLinkOwnerCleanupError');
+    assert.match(error.cause.message, /Location Store owner lease record is invalid/);
+    return true;
+  });
+});
+
+test('production repository rejects an ambiguous owner lease without an expiry as corrupt', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
   const provider = new ReplyLossLocationStore(inner);
@@ -2856,10 +2885,35 @@ test('production repository classifies a changed ambiguous write as conflict', a
 
   provider.loseNextResponse = true;
   provider.replaceFirstMutationBeforeFailure = true;
+  await assert.rejects(
+    repository.claimOwnerLease('owner-conflict', 30_000),
+    { name: 'TimeoutError' }
+  );
+
+  await assert.rejects(repository.readOwnerLease('owner-conflict'), /invalid/);
+  assert.equal(provider.observedWrites, 2);
+});
+
+test('production repository reports conflict for a live owner lease with an expiry', async () => {
+  const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const provider = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
   const claimed = await repository.claimOwnerLease('owner-conflict', 30_000);
 
-  assert.deepEqual(claimed, { kind: 'conflict' });
-  assert.equal(provider.observedWrites, 2);
+  assert.equal(claimed.kind, 'claimed');
+  assert.deepEqual(
+    await repository.readOwnerLease('owner-conflict'),
+    {
+      kind: 'found',
+      token: claimed.token,
+      leaseExpiresAt: new Date(now.getTime() + 30_000),
+      storeNow: now
+    }
+  );
+  assert.deepEqual(
+    await repository.claimOwnerLease('owner-conflict', 30_000),
+    { kind: 'conflict' }
+  );
 });
 
 test('production repository shares ClientServer and fanout discovery through only opaque Store primitives', async () => {
@@ -2972,7 +3026,7 @@ class ReplyLossLocationStore {
       assert.notEqual(version, undefined);
       await this.inner.write({
         conditions: [{ kind: 'version', key: mutation.key, expected: version }],
-        mutations: [{ kind: 'put', key: mutation.key, bytes: Buffer.from('changed') }]
+        mutations: [{ kind: 'put', key: mutation.key, bytes: mutation.bytes }]
       });
       this.observedWrites += 1;
     }

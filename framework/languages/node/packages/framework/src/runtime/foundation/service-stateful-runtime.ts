@@ -27,6 +27,7 @@ import {
   type ActorJoin28
 } from '../protocol/service_wire_pilot_codec.generated';
 import { canonicalActorJoinHandoffId, routingIdBytes } from './actor-join-recovery-codec';
+import { OperationRegistry } from './operation-registry';
 import {
   MessageFollowSuppressionRegistry,
   type MessageFollowSuppressionFence
@@ -371,7 +372,7 @@ export class ServiceStatefulRuntime {
 
   readonly registry: ServiceStatefulRegistry;
 
-  private readonly operations = new ServiceTerminalOperationRegistry<ServiceStatefulResult>();
+  private readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult>;
   private readonly sessionDeliveries = new Map<string, ServiceSessionDelivery>();
   /**
    * A local Actor owner can replace its own session binding before the
@@ -435,8 +436,12 @@ export class ServiceStatefulRuntime {
   constructor(
     private readonly raw: RawServiceMeshRuntime,
     readonly nodeRid: string,
-    readonly nodeGeneration: bigint
+    readonly nodeGeneration: bigint,
+    onPendingOperationsChanged?: () => void
   ) {
+    this.operations = new ServiceTerminalOperationRegistry(
+      new OperationRegistry(undefined, onPendingOperationsChanged)
+    );
     this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration);
     this.registry.createEntrySpot(nodeRid);
     raw.setServiceIngress((record) => this.ingress(record));
@@ -1975,6 +1980,14 @@ export class ServiceStatefulRuntime {
       header,
       encodeApplicationPayload(payload)
     ]);
+  }
+
+  expireOperations(nowMs: number, turnDeadlineMs: number): number {
+    return this.operations.expire(nowMs, turnDeadlineMs);
+  }
+
+  get pendingOperationCount(): number {
+    return this.operations.size;
   }
 
   close(): void {

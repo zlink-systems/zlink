@@ -48,6 +48,14 @@ export const DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS = 30_000;
 export function createFrameworkRegistration(
   options: ZLinkFrameworkRegistrationOptions = {}
 ): ZLinkFrameworkRegistration {
+  const registration = normalizeFrameworkRegistration(options);
+  validateFrameworkRegistration(registration, options);
+  return registration;
+}
+
+export function normalizeFrameworkRegistration(
+  options: ZLinkFrameworkRegistrationOptions
+): ZLinkFrameworkRegistration {
   const codecRegistry = createCodecRegistry(options.codecs);
   const network = normalizeNetworkOptions(options.network);
   const routeChannelOptions = toRouteChannelOptions(options);
@@ -98,7 +106,6 @@ export function createFrameworkRegistration(
     applicationJobQueue: normalizeApplicationJobQueue(options.applicationJobQueue),
     locations: normalizeLocationRegistration(options.locations)
   };
-  validateFrameworkRegistration(registration, options);
   return registration;
 }
 
