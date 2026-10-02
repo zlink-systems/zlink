@@ -190,6 +190,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             AtomicReference<ZLinkFrameworkRuntime> opened) {
         options.validate();
         options.registration().codecs().freeze();
+        eventDispatcher =
+                eventDispatcher == null ? new ZLinkRuntimeEventDispatcher() : eventDispatcher;
         this.eventDispatcher = eventDispatcher;
         this.registration = options.registration();
         handlerFactory.prepare(this.registration.applicationTypes());
@@ -225,6 +227,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 ZLinkFrameworkLocationSubsystem.create(
                         this.registration,
                         runtimeHandlers,
+                        eventDispatcher,
                         () -> {
                             if (!closeGate.closing()) {
                                 shutdown();

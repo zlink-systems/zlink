@@ -35,8 +35,6 @@ final class ZLinkAutoConnectLoopTest {
                                 ZLinkLocationRole.DEALER,
                                 RoutingId.from("client"),
                                 "inproc://client"),
-                        null,
-                        null,
                         resolver,
                         new RecordingExecutor(),
                         options);
@@ -68,8 +66,6 @@ final class ZLinkAutoConnectLoopTest {
                                 ZLinkLocationRole.DEALER,
                                 RoutingId.from("client"),
                                 "inproc://client"),
-                        null,
-                        null,
                         resolver,
                         executor,
                         options);

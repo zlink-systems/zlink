@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.locations;
 
+import systems.zlink.contracts.errors.ZlinkConnectException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeerResolver;
@@ -11,6 +12,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
 final class ZLinkAutoConnectReconciler {
@@ -19,6 +22,7 @@ final class ZLinkAutoConnectReconciler {
     private final ZLinkAutoConnectExecutor executor;
     private final ZLinkLocationOptions options;
     private final LongSupplier nanoTime;
+    private final Consumer<? super ZlinkConnectException> runtimeErrorSink;
     private final Map<String, ZLinkAutoConnectPlanner.Target> active = new HashMap<>();
     private final Map<String, ZLinkAutoConnectPlanner.Target> notRequired = new HashMap<>();
     private Map<String, ZLinkAutoConnectPlanner.Target> lastDesired = Map.of();
@@ -31,27 +35,42 @@ final class ZLinkAutoConnectReconciler {
 
     ZLinkAutoConnectReconciler(
             ZLinkAutoConnectPlanner.Local local,
-            ZLinkAutoConnectPeer ignoredLocalRow,
-            ZLinkLocationRuntime ignoredRuntime,
             ZLinkAutoConnectPeerResolver peers,
             ZLinkAutoConnectExecutor executor,
             ZLinkLocationOptions options) {
-        this(local, ignoredLocalRow, ignoredRuntime, peers, executor, options, System::nanoTime);
+        this(local, peers, executor, options, System::nanoTime);
     }
 
     ZLinkAutoConnectReconciler(
             ZLinkAutoConnectPlanner.Local local,
-            ZLinkAutoConnectPeer ignoredLocalRow,
-            ZLinkLocationRuntime ignoredRuntime,
             ZLinkAutoConnectPeerResolver peers,
             ZLinkAutoConnectExecutor executor,
             ZLinkLocationOptions options,
             LongSupplier nanoTime) {
+        this(
+                local,
+                peers,
+                executor,
+                options,
+                nanoTime,
+                failure -> {
+                    throw failure;
+                });
+    }
+
+    ZLinkAutoConnectReconciler(
+            ZLinkAutoConnectPlanner.Local local,
+            ZLinkAutoConnectPeerResolver peers,
+            ZLinkAutoConnectExecutor executor,
+            ZLinkLocationOptions options,
+            LongSupplier nanoTime,
+            Consumer<? super ZlinkConnectException> runtimeErrorSink) {
         this.local = Objects.requireNonNull(local, "local");
         this.peers = Objects.requireNonNull(peers, "peers");
         this.executor = Objects.requireNonNull(executor, "executor");
         this.options = Objects.requireNonNull(options, "options");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+        this.runtimeErrorSink = Objects.requireNonNull(runtimeErrorSink, "runtimeErrorSink");
     }
 
     boolean storeFailed() {
@@ -74,7 +93,7 @@ final class ZLinkAutoConnectReconciler {
     }
 
     CompletionStage<Void> shutdown() {
-        active.values().forEach(executor::disconnect);
+        active.values().forEach(target -> attemptConnection(() -> executor.disconnect(target)));
         notRequired.values().forEach(executor::clearNotRequired);
         admissionExpectations.values().forEach(executor::forgetAdmissionExpectation);
         active.clear();
@@ -147,7 +166,6 @@ final class ZLinkAutoConnectReconciler {
                     ZLinkAutoConnectPlanner.trackableTarget(local, row);
             if (target == null || !executor.isManual(target) || desired.containsKey(target.key()))
                 continue;
-            manualSnapshot.put(target.key(), target);
             ZLinkAutoConnectPlanner.Target previous =
                     observedManual.values().stream()
                             .filter(candidate -> samePeerIdentity(candidate, target))
@@ -157,9 +175,10 @@ final class ZLinkAutoConnectReconciler {
                     && (!previous.key().equals(target.key())
                             || !previous.endpoint().equals(target.endpoint())
                             || !Objects.equals(previous.ownerId(), target.ownerId()))) {
-                executor.replace(previous, target);
+                if (!attemptConnection(() -> executor.replace(previous, target))) continue;
                 observedManual.remove(previous.key());
             }
+            manualSnapshot.put(target.key(), target);
         }
         observedManual.putAll(manualSnapshot);
         List<String> toRemove = new ArrayList<>();
@@ -167,10 +186,11 @@ final class ZLinkAutoConnectReconciler {
             ZLinkAutoConnectPlanner.Target current = active.get(entry.getKey());
             ZLinkAutoConnectPlanner.Target target = entry.getValue();
             if (current == null) {
-                if (executor.connect(target)) active.put(entry.getKey(), target);
+                if (attemptConnection(() -> executor.connect(target)))
+                    active.put(entry.getKey(), target);
             } else if ((!current.endpoint().equals(target.endpoint())
                             || !Objects.equals(current.ownerId(), target.ownerId()))
-                    && executor.replace(current, target)) {
+                    && attemptConnection(() -> executor.replace(current, target))) {
                 active.put(entry.getKey(), target);
             }
         }
@@ -178,8 +198,17 @@ final class ZLinkAutoConnectReconciler {
         toRemove.forEach(
                 key -> {
                     ZLinkAutoConnectPlanner.Target target = active.get(key);
-                    if (executor.disconnect(target)) active.remove(key);
+                    if (attemptConnection(() -> executor.disconnect(target))) active.remove(key);
                 });
+    }
+
+    private boolean attemptConnection(BooleanSupplier operation) {
+        try {
+            return operation.getAsBoolean();
+        } catch (ZlinkConnectException failure) {
+            runtimeErrorSink.accept(failure);
+            return false;
+        }
     }
 
     private static boolean samePeerIdentity(
@@ -198,7 +227,8 @@ final class ZLinkAutoConnectReconciler {
                         > options.storeFailureGrace().toNanos()) return;
         lastDesired.forEach(
                 (key, target) -> {
-                    if (!active.containsKey(key) && executor.connect(target))
+                    if (!active.containsKey(key)
+                            && attemptConnection(() -> executor.connect(target)))
                         active.put(key, target);
                 });
     }

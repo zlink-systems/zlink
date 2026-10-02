@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntim
 import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeerResolver;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.spots.SpotNodeRegistration;
@@ -29,17 +30,13 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
-    private static final Logger LOGGER =
-            Logger.getLogger(ZLinkLocationAutoConnectHost.class.getName());
     public static final String SPOT_PUB_ENDPOINT_METADATA_KEY = "pub-endpoint";
 
     private final ZLinkLocationRuntime runtime;
+    private final ZLinkRuntimeEventDispatcher runtimeEvents;
     private final ZLinkAutoConnectPeerResolver peers;
     private final ZLinkLocationOptions options;
     private final ZLinkClientServerRuntimeConfiguration clientServers;
@@ -69,6 +66,17 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             ZLinkLocationOptions options,
             ZLinkClientServerRuntimeConfiguration clientServers,
             ZLinkFanoutRuntimeConfiguration fanout) {
+        this(runtime, peers, options, clientServers, fanout, new ZLinkRuntimeEventDispatcher());
+    }
+
+    public ZLinkLocationAutoConnectHost(
+            ZLinkLocationRuntime runtime,
+            ZLinkAutoConnectPeerResolver peers,
+            ZLinkLocationOptions options,
+            ZLinkClientServerRuntimeConfiguration clientServers,
+            ZLinkFanoutRuntimeConfiguration fanout,
+            ZLinkRuntimeEventDispatcher runtimeEvents) {
+        this.runtimeEvents = Objects.requireNonNull(runtimeEvents, "runtimeEvents");
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.peers = Objects.requireNonNull(peers, "peers");
         this.options = Objects.requireNonNull(options, "options");
@@ -308,7 +316,14 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                         objectRole,
                         hasRouteMeshServerChannel);
         ZLinkAutoConnectReconciler reconciler =
-                new ZLinkAutoConnectReconciler(local, null, runtime, peers, executor, options);
+                new ZLinkAutoConnectReconciler(
+                        local,
+                        peers,
+                        executor,
+                        options,
+                        System::nanoTime,
+                        failure ->
+                                runtimeEvents.publishRuntimeTaskFailure("auto-connect", failure));
         loops.add(new ZLinkAutoConnectLoop(reconciler, options));
     }
 
@@ -340,12 +355,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         @Override
         public boolean connect(ZLinkAutoConnectPlanner.Target target) {
             if (!manualEndpoints.contains(target.endpoint())) {
-                try {
-                    socket.connect(target.endpoint());
-                } catch (RuntimeException failure) {
-                    LOGGER.log(Level.WARNING, "Location connection operation failed", failure);
-                    return false;
-                }
+                socket.connect(target.endpoint());
             }
             return true;
         }
@@ -353,12 +363,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         @Override
         public boolean disconnect(ZLinkAutoConnectPlanner.Target target) {
             if (!manualEndpoints.contains(target.endpoint())) {
-                try {
-                    socket.disconnect(target.endpoint());
-                } catch (RuntimeException failure) {
-                    LOGGER.log(Level.WARNING, "Location connection operation failed", failure);
-                    return false;
-                }
+                socket.disconnect(target.endpoint());
             }
             return true;
         }
@@ -367,7 +372,6 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     private static final class RouteSocketExecutor implements ZLinkAutoConnectExecutor {
         private final ZLinkBackendRouterSocket socket;
         private final Set<String> manualEndpoints;
-        private final Object connectGate = new Object();
 
         RouteSocketExecutor(ZLinkBackendRouterSocket socket, Set<String> manualEndpoints) {
             this.socket = socket;
@@ -384,32 +388,20 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             if (manualEndpoints.contains(target.endpoint())) {
                 return true;
             }
-            try {
-                if (ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
-                    synchronized (connectGate) {
-                        socket.setConnectRoutingId(target.nodeRid());
-                        socket.setProbe(true);
-                        socket.connect(target.endpoint());
-                    }
-                    return true;
-                }
+            if (ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
+                socket.setConnectRoutingId(target.nodeRid());
+                socket.setProbe(true);
                 socket.connect(target.endpoint());
                 return true;
-            } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "Location connection operation failed", failure);
-                return false;
             }
+            socket.connect(target.endpoint());
+            return true;
         }
 
         @Override
         public boolean disconnect(ZLinkAutoConnectPlanner.Target target) {
             if (!manualEndpoints.contains(target.endpoint())) {
-                try {
-                    socket.disconnect(target.endpoint());
-                } catch (RuntimeException failure) {
-                    LOGGER.log(Level.WARNING, "Location connection operation failed", failure);
-                    return false;
-                }
+                socket.disconnect(target.endpoint());
             }
             return true;
         }
@@ -418,23 +410,16 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         public boolean replace(
                 ZLinkAutoConnectPlanner.Target current,
                 ZLinkAutoConnectPlanner.Target replacement) {
-            try {
-                socket.disconnect(current.endpoint());
-                connectReplacement(replacement);
-                return true;
-            } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "Location connection operation failed", failure);
-                return false;
-            }
+            socket.disconnect(current.endpoint());
+            connectReplacement(replacement);
+            return true;
         }
 
         private void connectReplacement(ZLinkAutoConnectPlanner.Target target) {
             if (ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
-                synchronized (connectGate) {
-                    socket.setConnectRoutingId(target.nodeRid());
-                    socket.setProbe(true);
-                    socket.connect(target.endpoint());
-                }
+                socket.setConnectRoutingId(target.nodeRid());
+                socket.setProbe(true);
+                socket.connect(target.endpoint());
                 return;
             }
             socket.connect(target.endpoint());
@@ -459,7 +444,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         private final ZLinkInternalMeshNode node;
         private final Set<String> manualEndpoints;
         private final Map<String, RoutingId> manualExpectedRids;
-        private final Map<String, ConnectionIntent> connectionIntents = new ConcurrentHashMap<>();
+        private final Map<String, ConnectionIntent> connectionIntents = new HashMap<>();
 
         MeshNodeExecutor(
                 ZLinkInternalMeshNode node,
@@ -491,26 +476,20 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
 
         @Override
         public boolean connect(ZLinkAutoConnectPlanner.Target target) {
-            try {
-                boolean manual = manualEndpoints.contains(target.endpoint());
-                if (manual && !ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
-                    return true;
-                }
-                long intent =
-                        ZLinkAutoConnectPlanner.hasRid(target.nodeRid())
-                                ? node.replacePeerConnection(
-                                        target.endpoint(),
-                                        target.nodeRid(),
-                                        target.lifecycleGeneration(),
-                                        admissionSecurityIdentity(target))
-                                : node.connectPeer(target.endpoint());
-                connectionIntents.put(
-                        target.endpoint(), new ConnectionIntent(target.key(), intent));
+            boolean manual = manualEndpoints.contains(target.endpoint());
+            if (manual && !ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
                 return true;
-            } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "Location connection operation failed", failure);
-                return false;
             }
+            long intent =
+                    ZLinkAutoConnectPlanner.hasRid(target.nodeRid())
+                            ? node.replacePeerConnection(
+                                    target.endpoint(),
+                                    target.nodeRid(),
+                                    target.lifecycleGeneration(),
+                                    admissionSecurityIdentity(target))
+                            : node.connectPeer(target.endpoint());
+            connectionIntents.put(target.endpoint(), new ConnectionIntent(target.key(), intent));
+            return true;
         }
 
         @Override
@@ -519,26 +498,18 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             if (current == null || !current.targetKey().equals(target.key())) {
                 return true;
             }
-            if (!connectionIntents.remove(target.endpoint(), current)) {
-                return true;
+            if (manualEndpoints.contains(target.endpoint())) {
+                RoutingId fallbackRid = manualExpectedRids.get(target.endpoint());
+                node.replacePeerConnection(
+                        target.endpoint(),
+                        fallbackRid,
+                        0,
+                        fallbackRid == null ? null : fallbackRid.toString());
+            } else {
+                node.removePeerConnection(current.intentId());
             }
-            try {
-                if (manualEndpoints.contains(target.endpoint())) {
-                    RoutingId fallbackRid = manualExpectedRids.get(target.endpoint());
-                    node.replacePeerConnection(
-                            target.endpoint(),
-                            fallbackRid,
-                            0,
-                            fallbackRid == null ? null : fallbackRid.toString());
-                } else {
-                    node.removePeerConnection(current.intentId());
-                }
-                return true;
-            } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "Location connection operation failed", failure);
-                connectionIntents.putIfAbsent(target.endpoint(), current);
-                return false;
-            }
+            connectionIntents.remove(target.endpoint(), current);
+            return true;
         }
 
         @Override
@@ -573,21 +544,16 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             if (manualEndpoints.contains(target.endpoint())) {
                 return true;
             }
-            try {
-                if (ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
-                    node.connectPeer(target.nodeRid(), target.endpoint());
-                } else {
-                    node.connectPeer(target.endpoint());
-                }
-                String pubEndpoint = pubEndpointOf(target);
-                if (pubEndpoint != null) {
-                    node.connectPeer(pubEndpoint);
-                }
-                return true;
-            } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "Location connection operation failed", failure);
-                return false;
+            if (ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
+                node.connectPeer(target.nodeRid(), target.endpoint());
+            } else {
+                node.connectPeer(target.endpoint());
             }
+            String pubEndpoint = pubEndpointOf(target);
+            if (pubEndpoint != null) {
+                node.connectPeer(pubEndpoint);
+            }
+            return true;
         }
 
         @Override
@@ -595,21 +561,16 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             if (manualEndpoints.contains(target.endpoint())) {
                 return true;
             }
-            try {
-                if (ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
-                    node.disconnectPeer(target.nodeRid());
-                } else {
-                    node.disconnectPeer(target.endpoint());
-                }
-                String pubEndpoint = pubEndpointOf(target);
-                if (pubEndpoint != null) {
-                    node.disconnectPeer(pubEndpoint);
-                }
-                return true;
-            } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "Location connection operation failed", failure);
-                return false;
+            if (ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
+                node.disconnectPeer(target.nodeRid());
+            } else {
+                node.disconnectPeer(target.endpoint());
             }
+            String pubEndpoint = pubEndpointOf(target);
+            if (pubEndpoint != null) {
+                node.disconnectPeer(pubEndpoint);
+            }
+            return true;
         }
 
         private static String pubEndpointOf(ZLinkAutoConnectPlanner.Target target) {
