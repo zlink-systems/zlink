@@ -541,6 +541,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         try
         {
             durableEnvelope = await new ZLinkRelocationPublicationCoordinator(
+                ErrorSink,
                 resolvedAuthorityStore,
                 relocationStore
             )
@@ -1493,6 +1494,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             if (!canonicalMaintenance)
                 actorState.Handoff.PrepareImportedReplay(request.Frames);
             var released = await new ZLinkRelocationPublicationCoordinator(
+                ErrorSink,
                 authorityStore,
                 relocationStore
             )
@@ -1806,6 +1808,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                                             "Actor relocation recovery requires a Relocation Store."
                                         );
                                     var candidate = await new ZLinkRelocationStartupRecovery(
+                                        ErrorSink,
                                         locationStore,
                                         relocationStore
                                     )

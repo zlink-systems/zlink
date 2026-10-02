@@ -160,6 +160,7 @@ internal static class ZLinkFrameworkServiceRegistrar
         );
         services.TryAddSingleton<ZLinkFrameworkMaintenanceRuntime>(
             provider => new ZLinkFrameworkMaintenanceRuntime(
+                provider.GetRequiredService<ZLinkFrameworkRuntime>().ErrorSink,
                 provider.GetRequiredService<ZLinkDrainCoordinator>(),
                 provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>(),
                 provider.GetRequiredService<ZLinkFrameworkRuntime>().PreflightRetireAsync,

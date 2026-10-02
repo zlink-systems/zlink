@@ -25,6 +25,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     {
         var probe = new DrainExecutionProbe();
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations,
             new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(1) }
         );
@@ -57,6 +58,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     {
         var probe = new DrainExecutionProbe();
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations,
             new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(1) }
         );
@@ -209,6 +211,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             },
         };
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             operations,
             new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(1) }
         );
@@ -251,7 +254,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         };
         using var coordinator = new ZLinkDrainCoordinator(
             admission,
-            new ZLinkFrameworkDrainExecutor(operations, new ZLinkLocationOptions())
+            new ZLinkFrameworkDrainExecutor(
+                new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+                operations,
+                new ZLinkLocationOptions()
+            )
         );
 
         var result = await coordinator.DrainAsync(
@@ -287,7 +294,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                     )
                 ),
         };
-        var executor = new ZLinkFrameworkDrainExecutor(operations, new ZLinkLocationOptions());
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            operations,
+            new ZLinkLocationOptions()
+        );
 
         var forceReason = await executor.ExecuteAsync(
             ZLinkFrameworkLifecycleIntent.Relocate,
@@ -297,6 +308,40 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 
         Assert.Equal(ZLinkDrainForceReason.TeardownFailed, forceReason);
         Assert.DoesNotContain("restore-serving", probe.Events);
+    }
+
+    [Fact]
+    public async Task ServingRollbackFailureReportsCauseWithoutLogger()
+    {
+        var failures = new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter();
+        var expected = new IOException("serving rollback failed");
+        var probe = new DrainExecutionProbe();
+        var operations = probe.Operations with
+        {
+            RestoreServing = _ => ValueTask.FromException<bool>(expected),
+            DrainRelocationWorkloads = _ =>
+                ValueTask.FromResult(
+                    new ZLinkRelocationWorkloadDrainResult(
+                        false,
+                        ZLinkFrameworkRelocationReason.RelocationFailed,
+                        0
+                    )
+                ),
+        };
+        var executor = new ZLinkFrameworkDrainExecutor(
+            failures,
+            operations,
+            new ZLinkLocationOptions()
+        );
+
+        var forceReason = await executor.ExecuteAsync(
+            ZLinkFrameworkLifecycleIntent.Relocate,
+            TimeSpan.FromSeconds(1),
+            CancellationToken.None
+        );
+
+        Assert.Equal(ZLinkDrainForceReason.TeardownFailed, forceReason);
+        Assert.Same(expected, Assert.Single(failures.Failures));
     }
 
     [Fact]
@@ -326,7 +371,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                     )
                 ),
         };
-        var executor = new ZLinkFrameworkDrainExecutor(operations, new ZLinkLocationOptions());
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            operations,
+            new ZLinkLocationOptions()
+        );
 
         var forceReason = await executor.ExecuteAsync(
             ZLinkFrameworkLifecycleIntent.Relocate,
@@ -366,7 +415,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                     )
                 ),
         };
-        executor = new ZLinkFrameworkDrainExecutor(operations, new ZLinkLocationOptions());
+        executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            operations,
+            new ZLinkLocationOptions()
+        );
 
         var result = await executor.ExecuteWithProgressAsync(
             ZLinkFrameworkLifecycleIntent.Relocate,
@@ -409,7 +462,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         };
         using var coordinator = new ZLinkDrainCoordinator(
             admission,
-            new ZLinkFrameworkDrainExecutor(operations, new ZLinkLocationOptions())
+            new ZLinkFrameworkDrainExecutor(
+                new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+                operations,
+                new ZLinkLocationOptions()
+            )
         );
 
         var result = await coordinator.DrainAsync(
@@ -446,7 +503,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                     )
                 ),
         };
-        var executor = new ZLinkFrameworkDrainExecutor(operations, new ZLinkLocationOptions());
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            operations,
+            new ZLinkLocationOptions()
+        );
 
         var result = await executor.ExecuteWithProgressAsync(
             ZLinkFrameworkLifecycleIntent.Relocate,
@@ -476,7 +537,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                 return ValueTask.FromResult(false);
             },
         };
-        var executor = new ZLinkFrameworkDrainExecutor(operations, new ZLinkLocationOptions());
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            operations,
+            new ZLinkLocationOptions()
+        );
 
         var result = await executor.ExecuteWithProgressAsync(
             ZLinkFrameworkLifecycleIntent.Shutdown,
@@ -499,7 +564,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             HasLocationRuntime = false,
             DrainStreamSessions = _ => ValueTask.FromResult(false),
         };
-        var executor = new ZLinkFrameworkDrainExecutor(operations, new ZLinkLocationOptions());
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            operations,
+            new ZLinkLocationOptions()
+        );
 
         var result = await executor.ExecuteWithProgressAsync(
             ZLinkFrameworkLifecycleIntent.Shutdown,
@@ -542,7 +611,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                     )
                 ),
         };
-        executor = new ZLinkFrameworkDrainExecutor(operations, new ZLinkLocationOptions());
+        executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            operations,
+            new ZLinkLocationOptions()
+        );
 
         var result = await executor.ExecuteWithProgressAsync(
             ZLinkFrameworkLifecycleIntent.Relocate,
@@ -580,6 +653,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             },
         };
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             operations,
             new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(1) }
         );
@@ -619,7 +693,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                 return new ZLinkRelocationWorkloadDrainResult(false, null, 0);
             },
         };
-        var executor = new ZLinkFrameworkDrainExecutor(operations, new ZLinkLocationOptions());
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            operations,
+            new ZLinkLocationOptions()
+        );
 
         var relocation = executor
             .ExecuteAsync(
@@ -643,6 +721,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     {
         var probe = new DrainExecutionProbe();
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations,
             new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(1) }
         );
@@ -662,6 +741,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     {
         var probe = new DrainExecutionProbe();
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations,
             new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(1) }
         );
@@ -689,6 +769,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     {
         var probe = new DrainExecutionProbe();
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations,
             new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(1) }
         );
@@ -720,6 +801,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                 MarkDraining = _ => new(publication.Task),
             };
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             operations,
             new ZLinkLocationOptions { PollingInterval = TimeSpan.FromSeconds(2) }
         );
@@ -743,6 +825,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     {
         var probe = new DrainExecutionProbe { HoldAcceptedOperations = true };
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations,
             new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(1) }
         );
@@ -764,6 +847,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     {
         var probe = new DrainExecutionProbe { WeightAlwaysFails = true };
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations with
             {
                 HasAutoConnect = false,
@@ -786,6 +870,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     {
         var probe = new DrainExecutionProbe { MarkerAlwaysFails = true };
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations,
             new ZLinkLocationOptions { PollingInterval = TimeSpan.FromSeconds(2) }
         );
@@ -834,6 +919,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                 MarkDraining = Publish,
             };
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             operations,
             new ZLinkLocationOptions { PollingInterval = pollingInterval },
             logger
@@ -870,11 +956,13 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         var probe = new DrainExecutionProbe();
         var pollingInterval = TimeSpan.FromSeconds(2);
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations,
             new ZLinkLocationOptions { PollingInterval = pollingInterval }
         );
         using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
         using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             coordinator,
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
@@ -917,6 +1005,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         var storeFailure = new InvalidOperationException("owner cleanup failed once");
         var attempts = 0;
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations with
             {
                 CleanupOwner = _ =>
@@ -934,6 +1023,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         );
         using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
         using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             coordinator,
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
@@ -969,6 +1059,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     {
         var probe = new DrainExecutionProbe();
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations,
             new ZLinkLocationOptions(),
             stopMeshMonitoring: () =>
@@ -1003,6 +1094,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             probe.Operations,
             new ZLinkLocationOptions(),
             stopMeshMonitoring: async () =>

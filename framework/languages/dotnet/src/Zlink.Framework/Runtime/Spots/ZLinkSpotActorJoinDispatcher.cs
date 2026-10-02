@@ -239,20 +239,17 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                     null
                 );
             }
-            catch { }
-
-            return new JoinPayload(
-                false,
-                typeof(Message).Name,
-                ZLinkMessage.FromEnvelopePayload(
-                    ZLinkEnvelopeCodec.DefaultContentType,
-                    joinRequest.Parts[0],
-                    runtime.Registration.Codecs
-                ),
-                null,
-                null,
-                null
-            );
+            catch (Exception ex)
+            {
+                return new JoinPayload(
+                    true,
+                    typeof(ZLinkMessage).Name,
+                    ZLinkMessage.Empty,
+                    ex,
+                    null,
+                    null
+                );
+            }
         }
 
         ZLinkEnvelopeHeader? header = null;

@@ -1586,10 +1586,14 @@ internal sealed class ZLinkActorRemoteJoiner(
                 .ConfigureAwait(false);
             actorState.ForgetSourceSessionRelocation(handoffId);
         }
-        catch
+        catch (Exception exception)
         {
             // The session connection or exact binding may already be gone.
             // Its physical cleanup owns the remaining tombstone.
+            runtime.ErrorSink.ReportRuntimeTaskException(
+                nameof(AbortBoundSessionRouteSealBestEffortAsync),
+                exception
+            );
         }
     }
 

@@ -4,6 +4,7 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
 {
+    private readonly IZLinkRuntimeFailureReporter _failureReporter;
     private readonly ZLinkDrainExecutionOperations _operations;
     private readonly ZLinkLocationOptions _locationOptions;
     private readonly ILogger<ZLinkFrameworkDrainExecutor>? _logger;
@@ -20,6 +21,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         ILogger<ZLinkFrameworkDrainExecutor>? logger = null
     )
         : this(
+            runtime.ErrorSink,
             ZLinkDrainExecutionOperations.Create(runtime, autoConnect, locationRuntime),
             locationOptions,
             logger,
@@ -27,12 +29,14 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         ) { }
 
     internal ZLinkFrameworkDrainExecutor(
+        IZLinkRuntimeFailureReporter failureReporter,
         ZLinkDrainExecutionOperations operations,
         ZLinkLocationOptions locationOptions,
         ILogger<ZLinkFrameworkDrainExecutor>? logger = null,
         Func<Task>? stopMeshMonitoring = null
     )
     {
+        _failureReporter = failureReporter;
         _operations = operations;
         _locationOptions = locationOptions;
         _logger = logger;
@@ -384,8 +388,9 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                 ZLinkFrameworkRelocationReason.ShutdownRequested
             );
         }
-        catch
+        catch (Exception error)
         {
+            _failureReporter.ReportRuntimeTaskException(nameof(RollBackBlockedRetireAsync), error);
             return OwnershipLostResult();
         }
 
@@ -466,8 +471,12 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                     committedUnitCount
                 );
             }
-            catch
+            catch (Exception error)
             {
+                _failureReporter.ReportRuntimeTaskException(
+                    nameof(RestorePartialRelocationAsync),
+                    error
+                );
                 return ZLinkDrainExecutionResult.ForceStop(
                     ZLinkDrainForceReason.TeardownFailed,
                     committedUnitCount

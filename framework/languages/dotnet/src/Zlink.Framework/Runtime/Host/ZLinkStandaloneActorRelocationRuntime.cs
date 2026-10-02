@@ -171,6 +171,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         async ValueTask RestoreSourceAsync()
         {
             var cleanup = new ZLinkRelocationPublicationCoordinator(
+                runtime.ErrorSink,
                 authorityStore,
                 relocationStore
             );
@@ -1180,9 +1181,13 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 )
                 .ConfigureAwait(false);
         }
-        catch
+        catch (Exception exception)
         {
             // A disconnected or replaced exact binding owns its own cleanup.
+            runtime.ErrorSink.ReportRuntimeTaskException(
+                nameof(AbortSessionRouteBestEffortAsync),
+                exception
+            );
         }
     }
 
@@ -4511,31 +4516,19 @@ internal sealed partial class ZLinkFrameworkRuntime
             completion.TerminalResult,
             (ServiceWireConstants.FrameworkErrorCode)completion.ErrorCode
         );
-        ZLinkRelocationReplyAckState acknowledgement;
-        try
-        {
-            acknowledgement = await RelayRelocationReplyAsync(
+        var acknowledgement = await RelayRelocationReplyAsync(
+                RoutingId.FromHex(completion.SourceNodeRid),
+                relay,
+                new ZLinkServiceWireCodec.RequestSourceFence(
+                    completion.SourceOwnerId,
+                    completion.SourceOwnerLeaseGeneration,
                     RoutingId.FromHex(completion.SourceNodeRid),
-                    relay,
-                    new ZLinkServiceWireCodec.RequestSourceFence(
-                        completion.SourceOwnerId,
-                        completion.SourceOwnerLeaseGeneration,
-                        RoutingId.FromHex(completion.SourceNodeRid),
-                        completion.SourceNodeGeneration
-                    ),
-                    [replyFrame],
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            acknowledgement = ZLinkRelocationReplyAckState.NotAcknowledged;
-        }
+                    completion.SourceNodeGeneration
+                ),
+                [replyFrame],
+                cancellationToken
+            )
+            .ConfigureAwait(false);
 
         if (
             acknowledgement

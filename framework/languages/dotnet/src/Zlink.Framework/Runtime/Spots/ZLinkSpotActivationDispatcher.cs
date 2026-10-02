@@ -420,8 +420,7 @@ internal sealed class ZLinkSpotActivationDispatcher
         ZLinkBackendRouteReceived received,
         string channelName,
         ZLinkAcceptedWorkAdmission admission,
-        bool localTarget,
-        bool validateFlow
+        ZLinkFrameworkRuntime runtime
     )
     {
         using (received)
@@ -430,7 +429,11 @@ internal sealed class ZLinkSpotActivationDispatcher
                 return;
             try
             {
-                var header = DecodeRejectionHeader(received, channelName, validateFlow);
+                var header = DecodeRejectionHeader(
+                    received,
+                    channelName,
+                    runtime.Flow.CaptureEnabled
+                );
                 if (header is null)
                     return;
                 var errorKind = admission.ErrorKind();
@@ -457,14 +460,17 @@ internal sealed class ZLinkSpotActivationDispatcher
                 );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
-            catch { }
+            catch (Exception exception)
+            {
+                ReportRejectionReplyFailure(runtime, exception);
+            }
         }
     }
 
     internal static void RejectApplicationRouteForRelocation(
         ZLinkBackendRouteReceived received,
         string channelName,
-        bool validateFlow
+        ZLinkFrameworkRuntime runtime
     )
     {
         using (received)
@@ -473,7 +479,11 @@ internal sealed class ZLinkSpotActivationDispatcher
                 return;
             try
             {
-                var header = DecodeRejectionHeader(received, channelName, validateFlow);
+                var header = DecodeRejectionHeader(
+                    received,
+                    channelName,
+                    runtime.Flow.CaptureEnabled
+                );
                 if (header is null)
                     return;
                 //  Relocation ingress refusal is framework-generated
@@ -493,14 +503,17 @@ internal sealed class ZLinkSpotActivationDispatcher
                 );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
-            catch { }
+            catch (Exception exception)
+            {
+                ReportRejectionReplyFailure(runtime, exception);
+            }
         }
     }
 
     internal static void RejectApplicationRouteForStaleMessageFollow(
         ZLinkBackendRouteReceived received,
         string channelName,
-        bool validateFlow
+        ZLinkFrameworkRuntime runtime
     )
     {
         using (received)
@@ -509,7 +522,11 @@ internal sealed class ZLinkSpotActivationDispatcher
                 return;
             try
             {
-                var header = DecodeRejectionHeader(received, channelName, validateFlow);
+                var header = DecodeRejectionHeader(
+                    received,
+                    channelName,
+                    runtime.Flow.CaptureEnabled
+                );
                 if (header is null)
                     return;
                 //  Stale route fence refusal is framework-generated
@@ -528,9 +545,21 @@ internal sealed class ZLinkSpotActivationDispatcher
                 );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
-            catch { }
+            catch (Exception exception)
+            {
+                ReportRejectionReplyFailure(runtime, exception);
+            }
         }
     }
+
+    private static void ReportRejectionReplyFailure(
+        ZLinkFrameworkRuntime runtime,
+        Exception exception
+    ) =>
+        runtime.ErrorSink.ReportRuntimeTaskException(
+            nameof(ReportRejectionReplyFailure),
+            exception
+        );
 
     //  Shared decode step for the rejection replies above. Returns null when the
     //  operation was already completed (as ProtocolError) or cannot be decoded.

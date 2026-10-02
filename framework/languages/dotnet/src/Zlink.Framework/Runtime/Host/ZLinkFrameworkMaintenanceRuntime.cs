@@ -11,6 +11,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         IZLinkRuntimeTerminalFailureSink,
         IDisposable
 {
+    private readonly IZLinkRuntimeFailureReporter _failureReporter;
     private static readonly TimeSpan DefaultDeadline = TimeSpan.FromSeconds(30);
 
     private readonly ZLinkDrainCoordinator _lifecycle;
@@ -47,6 +48,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
     private int _disposed;
 
     internal ZLinkFrameworkMaintenanceRuntime(
+        IZLinkRuntimeFailureReporter failureReporter,
         ZLinkDrainCoordinator lifecycle,
         ZLinkFrameworkHostLifecycleState hostLifecycle,
         Func<
@@ -66,6 +68,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         Action<Action>? subscribeSafeToShutdownChanged = null
     )
     {
+        _failureReporter = failureReporter;
         _lifecycle = lifecycle;
         _hostLifecycle = hostLifecycle;
         _relocationPreflight = relocationPreflight;
@@ -357,9 +360,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         }
         catch (Exception error)
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"relocation_preflight_blocked path=store error={error}"
-            );
+            _failureReporter.ReportRuntimeTaskException(nameof(ExecuteRelocationAsync), error);
             blocker = ZLinkFrameworkRelocationReason.StoreUnavailable;
         }
         if (blocker is { } preflightBlocker)
@@ -388,19 +389,24 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
                 metricStarted
             );
         }
-        catch (ZLinkRetiringPublicationRollbackException)
+        catch (ZLinkRetiringPublicationRollbackException publicationFailure)
         {
+            _failureReporter.ReportRuntimeTaskException(
+                nameof(ExecuteRelocationAsync),
+                publicationFailure
+            );
             try
             {
                 await _lifecycle
                     .ForceStopAsync(ZLinkDrainForceReason.TeardownFailed, TimeSpan.FromSeconds(2))
                     .ConfigureAwait(false);
             }
-            catch
+            catch (Exception cleanupFailure)
             {
-                //  Partial descriptor rollback already failed. The terminal
-                //  result remains TeardownFailed even if force-stop reports a
-                //  second cleanup error.
+                _failureReporter.ReportRuntimeTaskException(
+                    nameof(ExecuteRelocationAsync),
+                    cleanupFailure
+                );
             }
             return CompleteForceStoppedRelocation(
                 mode,
@@ -409,8 +415,9 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
                 metricStarted
             );
         }
-        catch
+        catch (Exception error)
         {
+            _failureReporter.ReportRuntimeTaskException(nameof(ExecuteRelocationAsync), error);
             return CompleteBlocked(
                 mode,
                 targetApplicationVersion,
@@ -443,8 +450,9 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
                 )
                 .ConfigureAwait(false);
         }
-        catch
+        catch (Exception error)
         {
+            _failureReporter.ReportRuntimeTaskException(nameof(ExecuteRelocationAsync), error);
             result = new ForceStopped(ZLinkDrainForceReason.RelocationFailed);
         }
 
@@ -517,10 +525,9 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
                 .ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, teardownBound)
                 .ConfigureAwait(false);
         }
-        catch
+        catch (Exception error)
         {
-            //  A swallowed teardown failure leaves only the reason enum, which
-            //  cannot tell one throw site from another.
+            _failureReporter.ReportRuntimeTaskException(nameof(ExecuteShutdownAsync), error);
             drained = new ForceStopped(ZLinkDrainForceReason.TeardownFailed);
         }
 
@@ -738,7 +745,10 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
                 result.Reason
             );
         }
-        catch { }
+        catch (Exception error)
+        {
+            _failureReporter.ReportRuntimeTaskException(nameof(LogRelocationChanged), error);
+        }
     }
 
     private void LogTerminationChanged(ZLinkFrameworkTerminationResult result)
@@ -752,7 +762,10 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
                 result.Reason
             );
         }
-        catch { }
+        catch (Exception error)
+        {
+            _failureReporter.ReportRuntimeTaskException(nameof(LogTerminationChanged), error);
+        }
     }
 
     private static void RecordRelocationCompletion(

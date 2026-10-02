@@ -8258,6 +8258,83 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActorJoinDispatcher_SinglePartRequiresTypedWrapper(bool validWrapper)
+    {
+        var node = new CapturingSpotNode();
+        using var observer = new CapturingMessageFlowObserver();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowObserver: observer,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var spot = new ActorJoinFlowProbeSpot();
+            var actorJoins = new ZLinkSpotActorJoinRegistry();
+            actorJoins.Bind(spot);
+            var actors = new ZLinkSpotActorMembership();
+            actors.Add(actor);
+            await using var handlerInstances = new ZLinkScopedHandlerInstanceOwner(
+                runtime.Services
+            );
+            var invoker = new ZLinkSpotHandlerInvoker(
+                handlerInstances,
+                spot,
+                runtime.Registration.Codecs,
+                ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec()
+            );
+            var nativeSpot = new CapturingSpot();
+            var dispatcher = new ZLinkSpotActorJoinDispatcher(
+                runtime,
+                nativeSpot,
+                "join-channel",
+                actorJoins,
+                actors,
+                () => invoker
+            );
+            byte[] payload = [0, 127, 255];
+            using var part = validWrapper
+                ? ZLinkEnvelopeCodec.EncodePart(
+                    new ZLinkActorJoinSinglePartEnvelope(
+                        ActorJoinFlowProbeSpot.RawContentType,
+                        payload
+                    )
+                )
+                : Message.From("\"unwrapped-join-request\"");
+            var request = new ZLinkBackendActorJoinRequest(
+                actorRef,
+                actorRef,
+                RoutingId.From("source-node"),
+                "target-spot",
+                1,
+                part,
+                [part]
+            );
+            await dispatcher.DispatchAsync(request, CancellationToken.None);
+            if (validWrapper)
+            {
+                Assert.Equal(0, nativeSpot.ActorJoinResultCode);
+                Assert.Equal(1, spot.JoinCalls);
+                Assert.Equal(payload, spot.ObservedRawRequest);
+            }
+            else
+            {
+                Assert.Equal(1, nativeSpot.ActorJoinResultCode);
+                Assert.Equal(0, spot.JoinCalls);
+                var observed = await observer.WaitAsync("failed", TimeSpan.FromSeconds(2));
+                Assert.Equal("decode_error", observed.Reason);
+            }
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task ActorJoinDispatcher_Preserves_Wire_Flow_Through_Handler_And_Reply()
     {
@@ -10724,7 +10801,11 @@ public sealed partial class EntrySpotActorDispatchTests
                 relocation.Envelope
             );
             var store = authorityStore();
-            var coordinator = new ZLinkAggregateRelocationCoordinator(store, relocationStore);
+            var coordinator = new ZLinkAggregateRelocationCoordinator(
+                new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+                store,
+                relocationStore
+            );
             _ = await coordinator
                 .PublishAsync(request, CancellationToken.None, relocation.Relocation)
                 .ConfigureAwait(false);
@@ -11222,6 +11303,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
     private sealed class ActorJoinFlowProbeSpot : IZLinkSpot<ProbeActor>
     {
+        public const string RawContentType = "application/octet-stream";
+
         public IZLinkSpotContext Context => throw new NotSupportedException();
 
         public string? ObservedFlowId { get; private set; }
@@ -11229,6 +11312,10 @@ public sealed partial class EntrySpotActorDispatchTests
         public ZLinkFlowOrigin? ObservedFlowOrigin { get; private set; }
 
         public string? ObservedRequest { get; private set; }
+
+        public byte[]? ObservedRawRequest { get; private set; }
+
+        public int JoinCalls { get; private set; }
 
         public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
             string actorId,
@@ -11238,10 +11325,14 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             _ = actorId;
             _ = cancellationToken;
+            JoinCalls++;
             var flow = ZLinkFlowContext.Current;
             ObservedFlowId = flow?.FlowId;
             ObservedFlowOrigin = flow?.Origin;
-            ObservedRequest = request.Decode<string>();
+            if (request.ContentType == RawContentType)
+                ObservedRawRequest = request.Decode<byte[]>();
+            else
+                ObservedRequest = request.Decode<string>();
             return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept("join-reply"));
         }
 
