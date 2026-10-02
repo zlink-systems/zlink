@@ -4008,8 +4008,7 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     bool resolve_first_route = true;
     source.configure_bound_session_relocation_resolver (
       [&bound_session_route, &observed_session_sequence, &first_route_resolution,
-       &first_route_started, &resolve_first_route,
-       resolver_failure] (const object_ref_t &candidate)
+       &first_route_started, &resolve_first_route, resolver_failure] (const object_ref_t &candidate)
         -> framework::task_t<std::optional<detail::bound_session_relocation_route_t>> {
           using route_t = std::optional<detail::bound_session_relocation_route_t>;
           if (!bound_session_route || candidate.key != "production-remote-actor"
@@ -4187,8 +4186,9 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     });
     const bool relocation_suspended = submitted.get ();
     if (!resolver_failure) {
-        test.require (relocation_suspended,
-                      "production relocation must suspend while Session route resolution is pending");
+        test.require (
+          relocation_suspended,
+          "production relocation must suspend while Session route resolution is pending");
         route_started.get ();
         auto resolved_route = *bound_session_route;
         resolved_route.observed_sequence =
