@@ -901,3 +901,26 @@ test('actor native deadline preserves one terminal and releases the lower comple
   assert.equal(table.pendingCount, 0);
   table.dispose();
 });
+
+for (const [phase, expectedKind] of [
+  ['submit', framework.ZLinkFrameworkErrorKind.Unavailable],
+  ['completion', framework.ZLinkFrameworkErrorKind.DeadlineExceeded]
+]) {
+  test(`Actor capacity ${phase} preserves its public error kind`, async () => {
+    const { SubmitResult } = require('@zlink-systems/zlink');
+    const { ZLinkBackendResultError } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+    const client = createActorClient({
+      nodeProvider: () => ({
+        sendToActor() {
+          throw new ZLinkBackendResultError('submit', SubmitResult.Backpressured, undefined, { phase });
+        }
+      }),
+      completionTableProvider: () => undefined,
+      locationResolver: () => createResolver()
+    });
+    await assert.rejects(
+      () => client.sendToActor('actor-1', new ActorNotify('ping')).submit(),
+      (error) => error.kind === expectedKind
+    );
+  });
+}

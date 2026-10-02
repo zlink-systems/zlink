@@ -1239,7 +1239,8 @@ export function createFrameworkEntrySpotId(prefix: string): string {
 
 function mapPublishSubmitStatus(result: number): ZLinkSubmitStatus {
   // Source publication preserves its local admission status before commit.
-  if (result === SubmitResult.NotAdmitted) return ZLinkSubmitStatus.Backpressured;
+  if (result === SubmitResult.NotAdmitted || result === SubmitResult.Backpressured)
+    return ZLinkSubmitStatus.Backpressured;
   // A publish with no matching subscriber succeeds with zero recipients.
   if (result === SubmitResult.NotFound) return ZLinkSubmitStatus.Submitted;
   return classifySubmitResult(result, 'Logical Multicast').status;

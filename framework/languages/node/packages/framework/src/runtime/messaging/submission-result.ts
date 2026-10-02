@@ -24,7 +24,7 @@ export function submitToRequestResult(result: number, phase: 'submit' | 'complet
     case SubmitResult.Ok:
       return RequestResult.Ok;
     case SubmitResult.Backpressured:
-      return phase === 'submit' ? RequestResult.NotConnected : RequestResult.Backpressured;
+      return phase === 'submit' ? RequestResult.NotConnected : RequestResult.TimedOut;
     case SubmitResult.NotConnected:
       return RequestResult.NotConnected;
     case SubmitResult.NotFound:
@@ -46,13 +46,17 @@ export function submitToRequestResult(result: number, phase: 'submit' | 'complet
   }
 }
 
-export function classifySubmitResult(result: number, operation: string): ZLinkSubmitResult {
-  const terminal = submitToRequestResult(result, 'completion');
+export function classifySubmitResult(
+  result: number,
+  operation: string,
+  phase: 'submit' | 'completion' = 'completion'
+): ZLinkSubmitResult {
+  const terminal = submitToRequestResult(result, phase);
   switch (terminal) {
     case RequestResult.Ok:
       return { status: ZLinkSubmitStatus.Submitted };
-    case RequestResult.Backpressured:
-      return { status: ZLinkSubmitStatus.Backpressured };
+    case RequestResult.TimedOut:
+      return { status: ZLinkSubmitStatus.TimedOut };
     case RequestResult.NotFound:
       return { status: ZLinkSubmitStatus.TargetNotFound };
     case RequestResult.NotConnected:
