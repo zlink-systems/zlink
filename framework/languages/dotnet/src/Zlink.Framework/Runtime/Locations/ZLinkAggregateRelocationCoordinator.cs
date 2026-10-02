@@ -47,7 +47,6 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         ReadOnlyMemory<byte> InventoryDigest
     );
 
-    private const int MaxConflictRetries = 8;
     private const int MaxPublicationProbeConcurrency = 64;
     private static readonly TimeSpan Retention = TimeSpan.FromHours(24);
 
@@ -403,8 +402,9 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         CancellationToken cancellationToken
     )
     {
-        for (var attempt = 0; attempt < MaxConflictRetries; attempt++)
+        while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             ZLinkCanonicalRelocationAuthorityProjection? shared = null;
             ZLinkAuthorityKey? sharedKey = null;
             (
@@ -532,12 +532,6 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
             };
             return new CanonicalProgress(root, currentProjection);
         }
-
-        throw new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.Unavailable,
-            "Canonical replay progress changed throughout the bounded read window.",
-            ZLinkRetryAdvice.RetryAfterBackoff
-        );
     }
 
     private static bool SameCanonicalProgress(
