@@ -577,7 +577,10 @@ capacity usage (§3.3). When a creation's reserve, completion, or cancellation, 
 relocation changes the usage, the Store write that
 carries that change also writes the capacity counter of each host whose usage changes. The condition is
 the version that was read; if the record is missing, the condition is its absence and the usage reads
-as 0. The descriptor's `capacity` (§4) is a copy of this record. The value carries the fields below in
+as 0. When a write computes a usage below 0, it rereads the authority and aggregate records it
+conditions on. If they still have their first-read versions, the Store usage disagrees with the authority, a
+corruption, so nothing is written and it ends with `InternalFailure`; if they changed, it follows the
+`Conflict` handling of [§6.1](#61-read-and-cas). The descriptor's `capacity` (§4) is a copy of this record. The value carries the fields below in
 this order, and its bytes follow the Canonical JSON rule of
 [§3.5](#35-progress-records-of-a-spotwide-relocation).
 
