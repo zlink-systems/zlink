@@ -29,6 +29,12 @@ zlink::own_t::own_t (io_thread_t *io_thread_, const options_t &options_) :
 
 zlink::own_t::~own_t ()
 {
+    //  The termination ack lets the owner release its resources, and derived
+    //  destructors (e.g. a session closing its engine) still use them. Send it
+    //  only here, after they have finished. The root object has no owner to
+    //  confirm the termination to.
+    if (_owner)
+        send_term_ack (_owner);
 }
 
 void zlink::own_t::set_owner (own_t *owner_)
@@ -176,11 +182,6 @@ void zlink::own_t::check_term_acks ()
     if (_terminating && _processed_seqnum == _sent_seqnum.get () && _term_acks == 0) {
         //  Sanity check. There should be no active children at this point.
         zlink_assert (_owned.empty ());
-
-        //  The root object has nobody to confirm the termination to.
-        //  Other nodes will confirm the termination to the owner.
-        if (_owner)
-            send_term_ack (_owner);
 
         //  Deallocate the resources.
         process_destroy ();

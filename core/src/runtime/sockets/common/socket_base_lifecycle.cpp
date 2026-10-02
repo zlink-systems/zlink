@@ -1802,20 +1802,20 @@ void zlink::socket_base_t::timer_event (int)
 
 void zlink::socket_base_t::check_destroy ()
 {
-    //  If the object was already marked as destroyed, finish the deallocation.
-    if (lifecycle_coordinator ().is_destroyed ()) {
-        lifecycle_coordinator ().mark_destroy_pending ();
-        // Seal and observe the last lifetime reference in one atomic step.
-        // Context snapshots may otherwise acquire a new pin after the zero
-        // check but before the posted finalizer runs.
-        if (!lifecycle_coordinator ().seal_mailbox_refs_if_zero ())
-            return;
+    //  If the object was already marked as destroyed, request the deallocation.
+    //  The request seals the lifetime pins only when none is left; otherwise
+    //  the release of the last pin seals them (dec_mailbox_ref).
+    if (lifecycle_coordinator ().is_destroyed ()
+        && lifecycle_coordinator ().request_destroy ())
+        finish_destroy ();
+}
 
-        if (_public_handle && !_public_handle->request_destroy ())
-            return;
+void zlink::socket_base_t::finish_destroy ()
+{
+    if (_public_handle && !_public_handle->request_destroy ())
+        return;
 
-        schedule_finalize_destroy ();
-    }
+    schedule_finalize_destroy ();
 }
 
 bool zlink::socket_base_t::try_inc_mailbox_ref ()
@@ -1830,11 +1830,10 @@ void zlink::socket_base_t::inc_mailbox_ref ()
 
 void zlink::socket_base_t::dec_mailbox_ref ()
 {
-    if (lifecycle_coordinator ().dec_mailbox_ref ()
-        || !lifecycle_coordinator ().is_destroy_pending ())
-        return;
-
-    check_destroy ();
+    //  After the release this caller holds no pin, so it may touch the socket
+    //  only when the same atomic step sealed the pins for it.
+    if (lifecycle_coordinator ().release_mailbox_ref ())
+        finish_destroy ();
 }
 
 void zlink::socket_base_t::schedule_finalize_destroy ()
@@ -1853,8 +1852,6 @@ void zlink::socket_base_t::schedule_finalize_destroy ()
 
 void zlink::socket_base_t::finalize_destroy ()
 {
-    lifecycle_coordinator ().clear_destroy_pending ();
-
     //  Notify the reaper before removing the last socket from the context.
     //  destroy_socket() may ask the reaper to stop when the registry becomes
     //  empty; queuing the reaped notification first keeps the reaper's internal
