@@ -3485,10 +3485,11 @@ assert.deepEqual(placement.rules, {
   activationAdmissionExcludes: ['entrySpot', 'actorJoin']
 });
 {
-  // Location runtime §5: renew interval + renew timeout < owner lease TTL - fencing margin.
+  // Location runtime §5: max(renew interval, renew timeout) + timeout < TTL - fencing margin.
   const lease = placement.ownerLease;
   for (const value of Object.values(lease)) assert.ok(Number.isInteger(value) && value > 0);
-  assert.ok(lease.renewIntervalMs + lease.renewTimeoutMs < lease.ttlMs - lease.fencingMarginMs);
+  assert.ok(Math.max(lease.renewIntervalMs, lease.renewTimeoutMs) + lease.renewTimeoutMs
+    < lease.ttlMs - lease.fencingMarginMs);
 }
 uniqueNames(placement.scenarios, 'name');
 const placementHeadroom = (active, limit) => limit === 0 || active < limit;

@@ -13,6 +13,8 @@ use zlink::{
     StreamPacket, StreamRecvMode, SubscriptionEvent, TopicMessage,
 };
 
+const RECEIVE_TIMEOUT_MS: i32 = 5_000;
+
 fn await_send(
     submission: Result<zlink::SendSubmission, zlink::SubmitError>,
 ) -> Result<(), zlink::SubmitError> {
@@ -497,7 +499,7 @@ fn stream_backpressure_retries_the_retained_packet_after_writable() {
         .unwrap();
     stream
         .common_options()
-        .set_receive_timeout(Duration::from_secs(5))
+        .set_receive_timeout(RECEIVE_TIMEOUT_MS)
         .unwrap();
     stream.bind(&endpoint).unwrap();
     let endpoint = stream.last_endpoint().unwrap();
@@ -595,7 +597,7 @@ fn dealer_router_pull_receive_then_send() {
     // Dealer receives the reply sent from the router handle.
     dealer
         .common_options()
-        .set_receive_timeout(Duration::from_secs(5))
+        .set_receive_timeout(RECEIVE_TIMEOUT_MS)
         .unwrap();
     let mut response = Received::empty();
     dealer.recv(&mut response, RecvFlags::NONE).unwrap();
@@ -637,7 +639,7 @@ fn pair_pull_receive_then_send() {
     await_send(server.send().message(reply).submit()).unwrap();
     client
         .common_options()
-        .set_receive_timeout(Duration::from_secs(5))
+        .set_receive_timeout(RECEIVE_TIMEOUT_MS)
         .unwrap();
     let mut response = Received::empty();
     client.recv(&mut response, RecvFlags::NONE).unwrap();

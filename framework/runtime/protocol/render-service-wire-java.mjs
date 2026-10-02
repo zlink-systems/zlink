@@ -380,12 +380,20 @@ function encodeFields(
   const lines = [];
   for (const field of fields) {
     const value = values.get(field.name);
+    const target = typeByName.get(field.type.$ref ?? field.$ref);
+    const targetOp = primaryOperation(target);
+    const validation =
+      targetOp.op === "integer" &&
+      (field.minimum !== undefined || field.maximum !== undefined)
+        ? `requireUnsigned(${value}.value(), ${targetOp.width}, ${field.minimum === undefined ? "null" : javaString(field.minimum)}, ${field.maximum === undefined ? "null" : javaString(field.maximum)}, ${javaString(field.name)}); `
+        : "";
     if (field.when) {
       const present = conditionExpression(field.when, values, flags, flagBits);
       lines.push(
-        `${indent}if (${present}) { require(${value} != null, ${javaString(field.name + " required")}); ${encoderCall(field, value, writer, context, flags, values, typeByName)}; } else require(${value} == null, ${javaString(field.name + " forbidden")});`,
+        `${indent}if (${present}) { require(${value} != null, ${javaString(field.name + " required")}); ${validation}${encoderCall(field, value, writer, context, flags, values, typeByName)}; } else require(${value} == null, ${javaString(field.name + " forbidden")});`,
       );
     } else {
+      if (validation) lines.push(`${indent}${validation.trimEnd()}`);
       lines.push(
         `${indent}${encoderCall(field, value, writer, context, flags, values, typeByName)};`,
       );

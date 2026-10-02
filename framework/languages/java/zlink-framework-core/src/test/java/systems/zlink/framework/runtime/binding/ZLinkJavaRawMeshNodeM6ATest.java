@@ -100,7 +100,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
-    void oneWayAdapterUsesTypedRejectionRegardlessOfNativeErrno() {
+    void oneWayAdapterPreservesTypedRejectionAcrossErrnos() {
         // 01-execution/01-submit-and-completion.ko.md:193: NOT_ADMITTED maps to Rejected; errno is
         // binding-owned.
         var routeLoss =
@@ -1785,8 +1785,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         return node;
     }
 
-    private static MeshPeerEntry awaitAdmitted(ZLinkJavaRawMeshNode node)
-            throws InterruptedException {
+    static MeshPeerEntry awaitAdmitted(ZLinkJavaRawMeshNode node) throws InterruptedException {
         return awaitState(node, MeshPeerState.ADMITTED);
     }
 

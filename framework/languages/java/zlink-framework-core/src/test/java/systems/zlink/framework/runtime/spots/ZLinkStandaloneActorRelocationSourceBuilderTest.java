@@ -143,14 +143,19 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     },
                     CompletableFuture::failedFuture,
                     () -> {});
-            runtime.actorSessions()
-                    .actorRelocationLane("actor-a")
-                    .enqueueRelocatable(
-                            acceptedRecord,
-                            () -> fail("source must not execute transferred ingress"),
-                            () -> {},
-                            null)
-                    .toCompletableFuture();
+            AtomicInteger sourceExecutions = new AtomicInteger();
+            var sourceOperation =
+                    runtime.actorSessions()
+                            .actorRelocationLane("actor-a")
+                            .enqueueRelocatable(
+                                    acceptedRecord,
+                                    () -> {
+                                        sourceExecutions.incrementAndGet();
+                                        return CompletableFuture.completedFuture(null);
+                                    },
+                                    () -> {},
+                                    null)
+                            .toCompletableFuture();
             AtomicInteger relays = new AtomicInteger();
             AtomicInteger acceptedRelays = new AtomicInteger();
             ZLinkRelocationTransitionClient relayClient =
@@ -199,8 +204,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             .toCompletableFuture()
                             .get());
             assertEquals(1, replies.get());
+            assertEquals(0, sourceExecutions.get());
+            assertFalse(sourceOperation.isDone());
 
             prepared.abort().toCompletableFuture().get();
+            sourceOperation.get();
+            assertEquals(1, sourceExecutions.get());
 
             assertTrue(runtime.actorSessions().localActor("actor-a").isPresent());
         }

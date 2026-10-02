@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/streams/session_liveness.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
@@ -843,7 +844,8 @@ class stream_host_service_t::listener_t
                 std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring,
                 std::shared_ptr<detail::mesh_node_runtime_t> mesh_node,
                 std::shared_ptr<application_job_queue_t> application_jobs,
-                std::chrono::milliseconds session_replacement_callback_timeout) :
+                std::chrono::milliseconds session_replacement_callback_timeout,
+                std::function<void ()> deadline_changed) :
         _runtime (std::move (runtime)),
         _stream (std::move (stream)),
         _advertise_host (std::move (advertise_host)),
@@ -855,96 +857,20 @@ class stream_host_service_t::listener_t
         _mesh_node (std::move (mesh_node)),
         _application_jobs (std::move (application_jobs)),
         _session_replacement_callback_timeout (session_replacement_callback_timeout),
+        _deadline_changed (std::move (deadline_changed)),
         _acceptor (_io),
         _accept_retry_timer (_io)
     {
     }
 
-    /* Server liveness policy (graceful-drain-handoff §7.2): fixed 1s ping /
-     * 5s pong / 30s application idle — the owning service drives ONE sweep
-     * loop per node across all listeners, no per-session timers. Control
-     * packets never refresh the application idle clock; a same-cycle double
-     * expiry resolves to heartbeat_timeout. */
-    struct session_liveness_t
-    {
-        std::mutex gate;
-        std::chrono::steady_clock::time_point last_application_inbound =
-          std::chrono::steady_clock::now ();
-        std::chrono::steady_clock::time_point last_ping = std::chrono::steady_clock::now ();
-        bool heartbeat_outstanding = false;
-        bool terminated = false;
-        std::optional<stream_close_reason_t> forced_reason;
-
-        enum class decision_t
-        {
-            none,
-            send_heartbeat,
-            idle_timeout,
-            heartbeat_timeout
-        };
-
-        void record_application_inbound ()
-        {
-            const std::lock_guard<std::mutex> lock (gate);
-            last_application_inbound = std::chrono::steady_clock::now ();
-        }
-
-        void record_pong ()
-        {
-            const std::lock_guard<std::mutex> lock (gate);
-            heartbeat_outstanding = false;
-        }
-
-        void record_ping ()
-        {
-            const std::lock_guard<std::mutex> lock (gate);
-            last_ping = std::chrono::steady_clock::now ();
-            heartbeat_outstanding = true;
-        }
-
-        decision_t evaluate ()
-        {
-            const std::lock_guard<std::mutex> lock (gate);
-            if (terminated) {
-                return decision_t::none;
-            }
-            const auto now = std::chrono::steady_clock::now ();
-            if (heartbeat_outstanding && now - last_ping >= std::chrono::seconds (5)) {
-                return decision_t::heartbeat_timeout;
-            }
-            if (now - last_application_inbound >= std::chrono::seconds (30)) {
-                return decision_t::idle_timeout;
-            }
-            if (!heartbeat_outstanding && now - last_ping >= std::chrono::seconds (1)) {
-                return decision_t::send_heartbeat;
-            }
-            return decision_t::none;
-        }
-
-        // The terminal close runs once even when sweeps race the reader exit.
-        bool try_terminate (stream_close_reason_t reason)
-        {
-            const std::lock_guard<std::mutex> lock (gate);
-            if (terminated) {
-                return false;
-            }
-            terminated = true;
-            forced_reason = reason;
-            return true;
-        }
-
-        std::optional<stream_close_reason_t> forced ()
-        {
-            const std::lock_guard<std::mutex> lock (gate);
-            return forced_reason;
-        }
-    };
+    using session_liveness_t = runtime::session_liveness_t;
 
     struct active_session_t
     {
         stream_t stream;
-        std::shared_ptr<session_liveness_t> liveness;
-        std::function<void ()> force_close;
+        std::function<void ()> request_evaluate;
+        std::function<void (stream_close_reason_t, std::string)> request_terminate;
+        session_liveness_t::clock_t::time_point next_due;
     };
 
     struct replacement_session_state_t
@@ -1073,15 +999,45 @@ class stream_host_service_t::listener_t
 
     /* zlink.stream.connections.* (runtime-metrics §4.1): session accept and
      * close on the server edge; reconnect attempts belong to the connector. */
-    void register_active_stream (const stream_t &stream,
-                                 std::shared_ptr<session_liveness_t> liveness,
-                                 std::function<void ()> force_close)
+    void register_active_stream (
+      const stream_t &stream,
+      std::function<void ()> request_evaluate,
+      std::function<void (stream_close_reason_t, std::string)> request_terminate,
+      session_liveness_t::clock_t::time_point next_due)
     {
         _active_streams_lane
-          .run ([this, stream, liveness = std::move (liveness),
-                 force_close = std::move (force_close)] () mutable {
+          .run ([this, stream, request_evaluate = std::move (request_evaluate),
+                 request_terminate = std::move (request_terminate), next_due] () mutable {
               _active_streams.push_back (
-                active_session_t{stream, std::move (liveness), std::move (force_close)});
+                {stream, std::move (request_evaluate), std::move (request_terminate), next_due});
+          })
+          .get ();
+        _deadline_changed ();
+    }
+
+    void publish_liveness_due (const stream_t &stream, session_liveness_t::clock_t::time_point due)
+    {
+        if (!_active_streams_lane.try_post ([this, session_id = stream.session_id (), due] {
+                for (auto &entry : _active_streams) {
+                    if (entry.stream.session_id () == session_id) {
+                        entry.next_due = due;
+                        _deadline_changed ();
+                        break;
+                    }
+                }
+            }))
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "STREAM heartbeat deadline publication rejected");
+    }
+
+    session_liveness_t::clock_t::time_point next_liveness_due ()
+    {
+        return _active_streams_lane
+          .run ([this] {
+              auto due = session_liveness_t::clock_t::time_point::max ();
+              for (const auto &entry : _active_streams)
+                  due = std::min (due, entry.next_due);
+              return due;
           })
           .get ();
     }
@@ -1098,6 +1054,7 @@ class stream_host_service_t::listener_t
               }
           })
           .get ();
+        _deadline_changed ();
     }
 
     std::size_t active_session_count ()
@@ -1105,13 +1062,12 @@ class stream_host_service_t::listener_t
         const auto active =
           _active_streams_lane.run ([this] { return _active_streams.size (); }).get ();
         const std::lock_guard lock (_core_sessions_mutex);
-        return active + _core_sessions.size () + _retired_core_sessions.size ();
+        return active + _retired_core_sessions.size ();
     }
 
     void begin_drain_sessions ()
     {
         force_close_sessions (stream_close_reason_t::server_drain, "server drain");
-        close_core_sessions ("server_drain", stream_close_reason_t::server_drain, "server drain");
     }
 
     void notify_sessions_closing (stream_close_reason_t reason, std::string_view diagnostic)
@@ -1128,52 +1084,69 @@ class stream_host_service_t::listener_t
     void force_close_sessions (stream_close_reason_t reason, std::string_view diagnostic)
     {
         auto sessions = _active_streams_lane.run ([this] { return _active_streams; }).get ();
-        for (auto &entry : sessions) {
-            terminate_session (entry, reason, diagnostic);
-        }
+        for (auto &entry : sessions)
+            entry.request_terminate (reason, std::string (diagnostic));
     }
 
-    void terminate_session (active_session_t &entry,
+    template <typename Close>
+    void terminate_session (stream_t &stream,
+                            const std::shared_ptr<session_liveness_t> &liveness,
+                            const Close &close,
                             stream_close_reason_t reason,
                             std::string_view diagnostic)
     {
-        if (!entry.liveness->try_terminate (reason)) {
+        if (!liveness->try_terminate (reason))
             return;
-        }
-        _runtime.send_session_closing (entry.stream, reason, diagnostic);
-        if (entry.force_close) {
-            entry.force_close ();
-        }
+        publish_liveness_due (stream, liveness->next_due ());
+        _runtime.send_session_closing (stream, reason, diagnostic,
+                                       [close, reason] { close (reason); });
     }
 
-    /* One liveness pass over this listener's sessions; the owning service
-     * drives all listeners from a single per-node sweep loop (§7.2: no
-     * per-session timers, one loop per node). */
+    template <typename Close>
+    void evaluate_liveness (stream_t &stream,
+                            const std::shared_ptr<session_liveness_t> &liveness,
+                            const Close &close)
+    {
+        switch (liveness->evaluate ()) {
+            case session_liveness_t::decision_t::none:
+                break;
+            case session_liveness_t::decision_t::send_heartbeat:
+                _runtime.send_heartbeat_ping (stream);
+                break;
+            case session_liveness_t::decision_t::idle_timeout:
+                terminate_session (stream, liveness, close, stream_close_reason_t::idle_timeout,
+                                   "application idle timeout");
+                return;
+            case session_liveness_t::decision_t::heartbeat_timeout:
+                terminate_session (stream, liveness, close,
+                                   stream_close_reason_t::heartbeat_timeout,
+                                   "heartbeat inbound timeout");
+                return;
+        }
+        publish_liveness_due (stream, liveness->next_due ());
+    }
+
     void sweep_liveness_once ()
     {
-        auto sessions = _active_streams_lane.run ([this] { return _active_streams; }).get ();
-        for (auto &entry : sessions) {
-            switch (entry.liveness->evaluate ()) {
-                case session_liveness_t::decision_t::none:
-                    break;
-                case session_liveness_t::decision_t::send_heartbeat:
-                    /* Stamp before writing: a same-instant pong then clears
-                     * the outstanding flag instead of racing the stamp and
-                     * being treated as stale. A failed write leaves the stamp
-                     * in place — the transport is broken and the 5s pong
-                     * timeout closes the session. */
-                    entry.liveness->record_ping ();
-                    _runtime.send_heartbeat_ping (entry.stream);
-                    break;
-                case session_liveness_t::decision_t::idle_timeout:
-                    terminate_session (entry, stream_close_reason_t::idle_timeout,
-                                       "application idle timeout");
-                    break;
-                case session_liveness_t::decision_t::heartbeat_timeout:
-                    terminate_session (entry, stream_close_reason_t::heartbeat_timeout,
-                                       "heartbeat pong timeout");
-                    break;
-            }
+        if (!_active_streams_lane.try_post ([this] {
+                for (auto &entry : _active_streams) {
+                    entry.next_due = session_liveness_t::clock_t::time_point::max ();
+                    entry.request_evaluate ();
+                }
+            }))
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "STREAM heartbeat sweep submission rejected");
+    }
+
+    void evaluate_core_liveness ()
+    {
+        // Only this listener loop accesses the active Core session map.
+        for (auto &[_, current] : _core_sessions) {
+            const auto rid = current->stream.routing_id ().value ();
+            evaluate_liveness (
+              current->stream, current->liveness, [this, rid] (stream_close_reason_t reason) {
+                  request_core_peer_disconnect (rid, liveness_close_label (reason));
+              });
         }
     }
 
@@ -1248,6 +1221,20 @@ class stream_host_service_t::listener_t
                 event.flow_origin = header.flow_origin ();
             }
             return event;
+        });
+    }
+
+    template <typename ExceptionFactory>
+    void report_control_failure (const ExceptionFactory &exception_factory) const
+    {
+        detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
+            message_dispatch_error_event_t error{};
+            error.surface = dispatch_error_surface_t::stream_session;
+            error.message_kind = dispatch_message_kind_t::control;
+            error.reason = dispatch_error_reason_t::handler_exception;
+            error.action = dispatch_error_action_t::drop;
+            error.exception = exception_factory ();
+            return error;
         });
     }
 
@@ -1392,6 +1379,7 @@ class stream_host_service_t::listener_t
         stream_t stream;
         runtime::stateful::stream_connection_t transport_connection;
         std::shared_ptr<replacement_session_state_t> replacement;
+        std::shared_ptr<session_liveness_t> liveness;
         std::mutex gate;
         bool connected = false;
         bool closing = false;
@@ -1401,12 +1389,15 @@ class stream_host_service_t::listener_t
                         packet_stream_session_t &session_,
                         session_actor_manager_t &actors_,
                         stream_t stream_,
-                        runtime::stateful::stream_connection_t transport_connection_) :
+                        runtime::stateful::stream_connection_t transport_connection_,
+                        session_liveness_t::clock_t::time_point established) :
             scope (std::move (scope_)),
             session (&session_),
             actors (&actors_),
             stream (std::move (stream_)),
-            transport_connection (std::move (transport_connection_))
+            transport_connection (std::move (transport_connection_)),
+            liveness (std::make_shared<session_liveness_t> (established,
+                                                            session_liveness_t::clock_t::now ()))
         {
         }
     };
@@ -1520,8 +1511,8 @@ class stream_host_service_t::listener_t
             _core_socket->options ().max_message_size (zlink::byte_size_t::bytes (
               _stream.max_message_size > 0 ? _stream.max_message_size : -1));
             _core_socket->options ().recv_mode (zlink::stream_recv_mode_t::packet);
-            _core_monitor = std::make_unique<zlink::socket_monitor_t> (
-              _core_socket->monitor_open (zlink::monitor_event::disconnected));
+            _core_monitor = std::make_unique<zlink::socket_monitor_t> (_core_socket->monitor_open (
+              zlink::monitor_event::disconnected | zlink::monitor_event::connection_ready));
             _core_socket->bind (_stream.bind_endpoint);
             _bound_endpoint = _core_socket->options ().last_endpoint ();
             mark_started ();
@@ -1555,6 +1546,8 @@ class stream_host_service_t::listener_t
                         continue;
                     if (_core_wake_timer.is_event (event)) {
                         _core_wake_timer.consume ();
+                        drain_pending_core_disconnects ();
+                        evaluate_core_liveness ();
                         continue;
                     }
 
@@ -1565,16 +1558,7 @@ class stream_host_service_t::listener_t
                         break;
 
                     if (event.slot == 2) {
-                        for (;;) {
-                            auto monitor_event =
-                              _core_monitor->recv (zlink::recv_flags_t::dontwait);
-                            if (!monitor_event)
-                                break;
-                            if (monitor_event->event == zlink::monitor_event::disconnected
-                                && monitor_event->routing_id) {
-                                close_core_session (*monitor_event->routing_id, "client_close");
-                            }
-                        }
+                        drain_core_monitor_events ();
                         continue;
                     }
                     if (event.slot != 1 || (revents & pollin) == 0)
@@ -1610,10 +1594,12 @@ class stream_host_service_t::listener_t
                         }
                         throw;
                     }
+                    const auto received_at = session_liveness_t::clock_t::now ();
+                    drain_core_monitor_events ();
                     const auto routing_id = packet.routing_id ();
                     const auto header_bytes = packet.header ().size ();
                     const auto payload_bytes = packet.body ().size ();
-                    process_core_packet (packet, std::move (*reserved), batch);
+                    process_core_packet (packet, std::move (*reserved), batch, received_at);
                     if (routing_id) {
                         trace_stream_host ("core-recv", _stream, std::nullopt,
                                            "rid=" + routing_id->to_hex ()
@@ -2145,7 +2131,40 @@ class stream_host_service_t::listener_t
           });
     }
 
-    std::shared_ptr<core_session_t> get_or_create_core_session (const zlink::routing_id_t &rid)
+    void drain_core_monitor_events ()
+    {
+        for (;;) {
+            auto monitor_event = _core_monitor->recv (zlink::recv_flags_t::dontwait);
+            if (!monitor_event)
+                break;
+            if (stream_host_connection_ready (*monitor_event)) {
+                try {
+                    get_or_create_core_session (*monitor_event->routing_id);
+                }
+                catch (const std::exception &) {
+                    detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
+                      .report_lazy ([] {
+                          message_dispatch_error_event_t error{};
+                          error.surface = dispatch_error_surface_t::stream_session;
+                          error.message_kind = dispatch_message_kind_t::control;
+                          error.reason = dispatch_error_reason_t::handler_exception;
+                          error.action = dispatch_error_action_t::drop;
+                          error.exception = std::current_exception ();
+                          return error;
+                      });
+                    disconnect_core_peer (*monitor_event->routing_id, "connected_dispatch_error");
+                }
+            }
+            if (monitor_event->event == zlink::monitor_event::disconnected
+                && monitor_event->routing_id) {
+                close_core_session (*monitor_event->routing_id, "client_close");
+            }
+        }
+    }
+
+    std::shared_ptr<core_session_t> get_or_create_core_session (
+      const zlink::routing_id_t &rid,
+      session_liveness_t::clock_t::time_point established = session_liveness_t::clock_t::now ())
     {
         const auto key = core_session_key (rid);
         std::lock_guard lock (_core_sessions_mutex);
@@ -2166,11 +2185,12 @@ class stream_host_service_t::listener_t
             request_core_peer_disconnect (rid, "session_relocation_seal_timeout");
         });
         detail::session_actor_manager_access_t::attach (actors, stream);
-        auto created = std::make_shared<core_session_t> (
-          std::move (scope), session, actors, std::move (stream), std::move (transport_connection));
+        auto created =
+          std::make_shared<core_session_t> (std::move (scope), session, actors, std::move (stream),
+                                            std::move (transport_connection), established);
         auto replacement = register_replacement_session (
           rid, created->stream,
-          [this, rid] { disconnect_core_peer (rid, "actor_binding_replaced"); },
+          [this, rid] { request_core_peer_disconnect (rid, "actor_binding_replaced"); },
           [weak = std::weak_ptr<core_session_t> (created)] (stream_t &dispatch_stream,
                                                             std::string actor_id) {
               const auto owner = weak.lock ();
@@ -2204,13 +2224,9 @@ class stream_host_service_t::listener_t
         auto connected = _runtime.dispatch_connected_async (
           *created->session, created->stream, [this, created, rid] (const result_t<void> &result) {
               if (!result) {
-                  //  The client is still connected here: only the server's connect dispatch
-                  //  failed. `close_core_session` retires the server-side session and tombstones
-                  //  the bound-session routes but neither notifies nor drops the physical
-                  //  connection, so the client sees nothing and waits out its own deadline.
-                  //  Spec 2.2 requires an observable disconnect, which is what
-                  //  `disconnect_core_peer` produces.
-                  disconnect_core_peer (rid, "connected_dispatch_error");
+                  // Completion can run while the creator holds the registry
+                  // mutex. The Core loop owns the actual disconnect.
+                  request_core_peer_disconnect (rid, "connected_dispatch_error");
               }
           });
         if (!connected) {
@@ -2221,6 +2237,13 @@ class stream_host_service_t::listener_t
         created->connected = true;
         record_connection_opened ();
         _core_sessions.emplace (key, created);
+        register_active_stream (
+          created->stream, [this] { _core_wake_timer.signal (); },
+          [this, rid] (stream_close_reason_t reason, std::string diagnostic) {
+              request_core_peer_disconnect (rid, liveness_close_label (reason), reason,
+                                            std::move (diagnostic));
+          },
+          created->liveness->next_due ());
         return created;
     }
 
@@ -2237,7 +2260,6 @@ class stream_host_service_t::listener_t
             current = std::move (found->second);
             if (current) {
                 retirement_id = current->stream.session_id ();
-                _retired_core_sessions.emplace (retirement_id, current);
             }
             _core_sessions.erase (found);
             ++_core_sessions_revision;
@@ -2245,6 +2267,7 @@ class stream_host_service_t::listener_t
         _core_sessions_changed.notify_all ();
         if (!current)
             return;
+        unregister_active_stream (current->stream);
 
         begin_core_session_close (std::move (retirement_id), std::move (current), close_reason);
     }
@@ -2292,7 +2315,6 @@ class stream_host_service_t::listener_t
                               std::optional<stream_close_reason_t> notify_reason = std::nullopt,
                               std::string_view diagnostic = {}) noexcept
     {
-        bool dispatch_disconnected = false;
         {
             const std::lock_guard session_lock (current->gate);
             if (current->closing) {
@@ -2302,39 +2324,55 @@ class stream_host_service_t::listener_t
             if (current->replacement) {
                 current->replacement->deactivate ();
             }
-            if (notify_reason) {
-                _runtime.send_session_closing (current->stream, *notify_reason, diagnostic);
-            }
-            if (current->connected) {
-                _runtime.mark_disconnected (current->stream);
-                current->connected = false;
-                dispatch_disconnected = true;
-            }
-        }
-
-        auto finalize = [this, retirement_id, current] (const result_t<void> &) {
-            const auto session_rid = current->stream.routing_id ().value_or (
-              zlink::routing_id_t::from (current->stream.session_id ()));
-            retire_actor_session_bindings_async (
-              current->transport_connection, session_rid,
-              [this, retirement_id, current] { finalize_core_session (retirement_id, current); });
-        };
-        if (dispatch_disconnected) {
-            auto submitted =
-              _runtime.dispatch_disconnected_async (*current->session, current->stream, finalize);
-            if (!submitted) {
-                finalize (submitted);
-            } else {
-                record_connection_closed (close_reason);
-            }
-        } else {
-            finalize (result_t<void>::success ());
         }
         {
             const std::lock_guard lock (_core_sessions_mutex);
+            _retired_core_sessions.emplace (retirement_id, current);
             ++_core_sessions_revision;
         }
         _core_sessions_changed.notify_all ();
+        auto complete_close = [this, retirement_id, current, close_reason] {
+            bool dispatch_disconnected = false;
+            {
+                const std::lock_guard session_lock (current->gate);
+                if (current->connected) {
+                    _runtime.mark_disconnected (current->stream);
+                    current->connected = false;
+                    dispatch_disconnected = true;
+                }
+            }
+
+            auto finalize = [this, retirement_id, current] (const result_t<void> &) {
+                const auto session_rid = current->stream.routing_id ().value_or (
+                  zlink::routing_id_t::from (current->stream.session_id ()));
+                retire_actor_session_bindings_async (
+                  current->transport_connection, session_rid, [this, retirement_id, current] {
+                      finalize_core_session (retirement_id, current);
+                  });
+            };
+            if (dispatch_disconnected) {
+                auto submitted = _runtime.dispatch_disconnected_async (*current->session,
+                                                                       current->stream, finalize);
+                if (!submitted) {
+                    finalize (submitted);
+                } else {
+                    record_connection_closed (close_reason);
+                }
+            } else {
+                finalize (result_t<void>::success ());
+            }
+            {
+                const std::lock_guard lock (_core_sessions_mutex);
+                ++_core_sessions_revision;
+            }
+            _core_sessions_changed.notify_all ();
+        };
+        if (notify_reason && !current->liveness->forced ()) {
+            _runtime.send_session_closing (current->stream, *notify_reason, diagnostic,
+                                           std::move (complete_close));
+        } else {
+            complete_close ();
+        }
     }
 
     void wait_for_retired_core_sessions () noexcept
@@ -2372,12 +2410,31 @@ class stream_host_service_t::listener_t
     void disconnect_core_peer (const zlink::routing_id_t &rid, const char *close_reason) noexcept
     {
         try {
-            close_core_session (rid, close_reason);
+            std::shared_ptr<core_session_t> current;
+            {
+                const std::lock_guard lock (_core_sessions_mutex);
+                const auto found = _core_sessions.find (core_session_key (rid));
+                if (found != _core_sessions.end ())
+                    current = found->second;
+            }
+            if (current) {
+                unregister_active_stream (current->stream);
+                begin_core_session_close (current->stream.session_id (), current, close_reason);
+            }
             if (_core_socket) {
                 _core_socket->disconnect_rid (rid);
             }
         }
         catch (...) {
+            detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([] {
+                message_dispatch_error_event_t error{};
+                error.surface = dispatch_error_surface_t::stream_session;
+                error.message_kind = dispatch_message_kind_t::control;
+                error.reason = dispatch_error_reason_t::handler_exception;
+                error.action = dispatch_error_action_t::drop;
+                error.exception = std::current_exception ();
+                return error;
+            });
         }
     }
 
@@ -2387,23 +2444,36 @@ class stream_host_service_t::listener_t
      * no session lock held. This removes the shape where an eagerly
      * completed task could re-enter begin_core_session_close while
      * current->gate (a non-recursive mutex) is still held. */
-    void request_core_peer_disconnect (const zlink::routing_id_t &rid,
-                                       const char *close_reason) noexcept
+    void
+    request_core_peer_disconnect (const zlink::routing_id_t &rid,
+                                  const char *close_reason,
+                                  std::optional<stream_close_reason_t> notify_reason = std::nullopt,
+                                  std::string diagnostic = {}) noexcept
     {
         try {
             {
                 const std::lock_guard lock (_core_pending_disconnects_mutex);
-                _core_pending_disconnects.emplace_back (rid, close_reason);
+                _core_pending_disconnects.push_back (
+                  {rid, close_reason, notify_reason, std::move (diagnostic)});
             }
             _core_wake_timer.signal ();
         }
         catch (...) {
+            detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([] {
+                message_dispatch_error_event_t error{};
+                error.surface = dispatch_error_surface_t::stream_session;
+                error.message_kind = dispatch_message_kind_t::control;
+                error.reason = dispatch_error_reason_t::handler_exception;
+                error.action = dispatch_error_action_t::drop;
+                error.exception = std::current_exception ();
+                return error;
+            });
         }
     }
 
     void drain_pending_core_disconnects () noexcept
     {
-        std::vector<std::pair<zlink::routing_id_t, const char *>> pending;
+        std::vector<core_close_intent_t> pending;
         {
             const std::lock_guard lock (_core_pending_disconnects_mutex);
             if (_core_pending_disconnects.empty ()) {
@@ -2411,8 +2481,25 @@ class stream_host_service_t::listener_t
             }
             pending.swap (_core_pending_disconnects);
         }
-        for (const auto &[rid, reason] : pending) {
-            disconnect_core_peer (rid, reason);
+        for (auto &intent : pending) {
+            if (intent.notify_reason) {
+                std::shared_ptr<core_session_t> current;
+                {
+                    const std::lock_guard lock (_core_sessions_mutex);
+                    const auto found = _core_sessions.find (core_session_key (intent.rid));
+                    if (found != _core_sessions.end ())
+                        current = found->second;
+                }
+                if (current)
+                    terminate_session (
+                      current->stream, current->liveness,
+                      [this, rid = intent.rid] (stream_close_reason_t reason) {
+                          request_core_peer_disconnect (rid, liveness_close_label (reason));
+                      },
+                      *intent.notify_reason, intent.diagnostic);
+            } else {
+                disconnect_core_peer (intent.rid, intent.close_reason);
+            }
         }
     }
 
@@ -2420,28 +2507,30 @@ class stream_host_service_t::listener_t
     dispatch_core_packet (const zlink::routing_id_t &rid,
                           zlink::message_t payload,
                           stream_header_t header,
-                          std::shared_ptr<application_job_queue_t::permit_t> application_permit)
+                          std::shared_ptr<application_job_queue_t::permit_t> application_permit,
+                          session_liveness_t::clock_t::time_point received_at)
     {
         std::shared_ptr<core_session_t> current;
         try {
-            current = get_or_create_core_session (rid);
+            current = get_or_create_core_session (rid, received_at);
         }
         catch (...) {
+            report_control_failure ([] { return std::current_exception (); });
             disconnect_core_peer (rid, "protocol_error");
             return false;
         }
 
+        current->liveness->record_inbound (received_at,
+                                           header.kind () != stream_message_kind_t::control);
         trace_stream_host ("core-frame", _stream, header,
                            "rid=" + rid.to_hex ()
                              + " payload_bytes=" + std::to_string (payload.size ()));
         if (header.kind () == stream_message_kind_t::control) {
             std::lock_guard session_lock (current->gate);
-            if (current->connected) {
+            if (current->connected && !current->closing) {
                 detail::session_actor_manager_access_t::set_codec (*current->actors,
                                                                    header.codec ());
-                if (header.packet_name () == "$zlink.heartbeat.ping") {
-                    _runtime.send_heartbeat_pong (current->stream);
-                }
+                _runtime.dispatch_control_frame (current->stream, header);
             }
             return true;
         }
@@ -2455,7 +2544,7 @@ class stream_host_service_t::listener_t
         std::optional<result_t<void>> rejected;
         try {
             std::lock_guard session_lock (current->gate);
-            if (current->connected) {
+            if (current->connected && !current->closing) {
                 trace_stream_host ("core-dispatch-submit", _stream, header, "rid=" + rid.to_hex ());
                 detail::session_actor_manager_access_t::set_codec (*current->actors,
                                                                    header.codec ());
@@ -2528,7 +2617,8 @@ class stream_host_service_t::listener_t
 
     bool process_core_packet (zlink::stream_packet_t &packet,
                               application_job_queue_t::permit_t permit,
-                              receive_batch_budget_t &budget)
+                              receive_batch_budget_t &budget,
+                              session_liveness_t::clock_t::time_point received_at)
     {
         if (!packet.routing_id ()) {
             return false;
@@ -2550,8 +2640,9 @@ class stream_host_service_t::listener_t
               std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
         }
         auto payload = std::move (packet.body ());
-        const bool dispatched = dispatch_core_packet (
-          rid, std::move (payload), std::move (decoded.value ()), std::move (application_permit));
+        const bool dispatched =
+          dispatch_core_packet (rid, std::move (payload), std::move (decoded.value ()),
+                                std::move (application_permit), received_at);
         budget.account (frame_bytes);
         return dispatched;
     }
@@ -2574,7 +2665,6 @@ class stream_host_service_t::listener_t
                     continue;
                 }
                 auto retirement_id = current->stream.session_id ();
-                _retired_core_sessions.emplace (retirement_id, current);
                 sessions.push_back (retiring_core_session_t{std::move (retirement_id), current});
             }
             _core_sessions.clear ();
@@ -2582,6 +2672,7 @@ class stream_host_service_t::listener_t
         }
         _core_sessions_changed.notify_all ();
         for (auto &retiring : sessions) {
+            unregister_active_stream (retiring.session->stream);
             begin_core_session_close (std::move (retiring.retirement_id),
                                       std::move (retiring.session), close_reason, notify_reason,
                                       diagnostic);
@@ -3109,6 +3200,7 @@ class stream_host_service_t::listener_t
                                    tcp::socket *tracked_socket,
                                    asio::io_context &io)
     {
+        const auto established = session_liveness_t::clock_t::now ();
         auto cleanup = std::unique_ptr<tcp::socket, std::function<void (tcp::socket *)>> (
           tracked_socket, [this] (tcp::socket *socket) {
               const std::lock_guard<std::mutex> lock (_sockets_mutex);
@@ -3206,7 +3298,8 @@ class stream_host_service_t::listener_t
           });
         bool connected_session = false;
         std::optional<stream_error_t> session_transport_error;
-        auto liveness = std::make_shared<session_liveness_t> ();
+        auto liveness =
+          std::make_shared<session_liveness_t> (established, session_liveness_t::clock_t::now ());
         try {
             if (auto connected = _runtime.dispatch_connected_async (
                   session, stream,
@@ -3215,12 +3308,32 @@ class stream_host_service_t::listener_t
                           request_close (*connection);
                   });
                 !connected) {
+                owner->request_close ();
+                asio::post (_io, [connection] { close_stream (*connection); });
                 return;
             }
             connected_session = true;
             record_connection_opened ();
-            register_active_stream (stream, liveness,
-                                    [this, connection] { request_close (*connection); });
+            const auto close = [this, connection] (stream_close_reason_t) {
+                request_close (*connection);
+            };
+            register_active_stream (
+              stream,
+              [this, weak = std::weak_ptr<tcp_connection_t> (owner), stream, liveness, close] {
+                  if (const auto owner = weak.lock ())
+                      asio::post (owner->io, [this, stream, liveness, close] () mutable {
+                          evaluate_liveness (stream, liveness, close);
+                      });
+              },
+              [this, weak = std::weak_ptr<tcp_connection_t> (owner), stream, liveness,
+               close] (stream_close_reason_t reason, std::string diagnostic) {
+                  if (const auto owner = weak.lock ())
+                      asio::post (owner->io, [this, stream, liveness, close, reason,
+                                              diagnostic = std::move (diagnostic)] () mutable {
+                          terminate_session (stream, liveness, close, reason, diagnostic);
+                      });
+              },
+              liveness->next_due ());
             auto receive_lease = _receive_scheduler.register_connection ();
             while (
               !_stop->load (std::memory_order_acquire)
@@ -3253,20 +3366,12 @@ class stream_host_service_t::listener_t
                         break;
                     }
                     auto received_frame = std::move (*frame);
+                    liveness->record_inbound (session_liveness_t::clock_t::now (),
+                                              received_frame.header.kind ()
+                                                != stream_message_kind_t::control);
                     batch.account (received_frame.payload.size ());
                     if (received_frame.header.kind () == stream_message_kind_t::control) {
-                        if (received_frame.header.packet_name () == "$zlink.heartbeat.pong") {
-                            liveness->record_pong ();
-                        } else if (received_frame.header.packet_name ()
-                                   == "$zlink.heartbeat.ping") {
-                            detail::stream_header_t pong (stream_message_kind_t::control,
-                                                          stream_codec_t::raw,
-                                                          stream_header_flags_t::none, std::nullopt,
-                                                          "$zlink.heartbeat.pong", {});
-                            // The reply is queued, not awaited: this reader keeps
-                            // running the connection io that completes it.
-                            (void) queue_frame (owner, connection, pong, zlink::message_t{});
-                        }
+                        _runtime.dispatch_control_frame (stream, received_frame.header);
                         continue;
                     }
                     std::shared_ptr<application_job_queue_t::permit_t> application_permit;
@@ -3321,12 +3426,11 @@ class stream_host_service_t::listener_t
                           (void) connection_state;
                           (void) liveness;
                       },
-                      [liveness, permit = std::move (application_permit)] () mutable {
+                      [permit = std::move (application_permit)] () mutable {
                           if (permit) {
                               permit->release_for_handler_entry ();
                               permit.reset ();
                           }
-                          liveness->record_application_inbound ();
                       },
                       [this] { return _stop->load (std::memory_order_acquire); });
                     if (!dispatched) {
@@ -3364,6 +3468,7 @@ class stream_host_service_t::listener_t
                                  + " payload_bytes=" + std::to_string (error.payload_size ()));
         }
         catch (const framework_exception_t &error) {
+            report_control_failure ([] { return std::current_exception (); });
             if (stream_trace_enabled ()) {
                 std::cerr << "zlink-cpp-stream-trace side=server stage=connection-error stream="
                           << _stream.name << " endpoint=" << _stream.bind_endpoint << " error=\""
@@ -3371,6 +3476,7 @@ class stream_host_service_t::listener_t
             }
         }
         catch (const std::exception &error) {
+            report_control_failure ([] { return std::current_exception (); });
             if (stream_trace_enabled ()) {
                 std::cerr << "zlink-cpp-stream-trace side=server stage=connection-error stream="
                           << _stream.name << " endpoint=" << _stream.bind_endpoint << " error=\""
@@ -3378,19 +3484,28 @@ class stream_host_service_t::listener_t
             }
         }
         catch (...) {
+            report_control_failure ([] { return std::current_exception (); });
             if (stream_trace_enabled ()) {
                 std::cerr << "zlink-cpp-stream-trace side=server stage=connection-error stream="
                           << _stream.name << " endpoint=" << _stream.bind_endpoint
                           << " error=\"unknown\"" << std::endl;
             }
         }
+        owner->request_close ();
+        asio::post (_io, [connection] { close_stream (*connection); });
+        // Only the reader progresses connection io, including queued liveness work.
+        owner->io.restart ();
+        owner->io.run ();
         if (connected_session) {
-            owner->request_close ();
-            asio::post (_io, [connection] { close_stream (*connection); });
             if (connection_state->replacement) {
                 connection_state->replacement->deactivate ();
             }
             _runtime.mark_disconnected (stream);
+            unregister_active_stream (stream);
+            // The registry lane barrier prevents further sweep submissions.
+            // Settle owner work queued before it before reading the close reason.
+            owner->io.restart ();
+            owner->io.run ();
             auto dispatch_disconnect = [this, &session, &stream, connection_state] {
                 auto completed = [this, connection_state] (const result_t<void> &) {
                     trace_stream_host ("dispatch-disconnected-end", _stream);
@@ -3411,7 +3526,6 @@ class stream_host_service_t::listener_t
                 dispatch_disconnect ();
             } else {
                 trace_stream_host ("dispatch-disconnected-begin", _stream);
-                unregister_active_stream (stream);
                 const auto forced = liveness->forced ();
                 record_connection_closed (forced                    ? liveness_close_label (*forced)
                                           : session_transport_error ? "transport_error"
@@ -3422,8 +3536,11 @@ class stream_host_service_t::listener_t
                 dispatch_disconnect ();
             }
             _runtime.drain_async_dispatch (stream);
+            // Connected/packet/disconnected callbacks have settled, and the
+            // active entry is gone. Release their final IO posts on this owner.
+            owner->io.restart ();
+            owner->io.run ();
         }
-        asio::post (_io, [connection] { close_stream (*connection); });
     }
 
 #ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL
@@ -3503,6 +3620,7 @@ class stream_host_service_t::listener_t
     runtime::offload_executor_t _active_streams_lane_executor;
     runtime::state_lane_t _active_streams_lane{_active_streams_lane_executor};
     std::vector<active_session_t> _active_streams;
+    std::function<void ()> _deadline_changed;
     asio::io_context _io;
     tcp::acceptor _acceptor;
     asio::steady_timer _accept_retry_timer;
@@ -3517,7 +3635,14 @@ class stream_host_service_t::listener_t
     eventing::runtime_wake_timer_t _core_wake_timer;
     std::unique_ptr<application_supply_slot_t> _core_application_supply;
     std::mutex _core_pending_disconnects_mutex;
-    std::vector<std::pair<zlink::routing_id_t, const char *>> _core_pending_disconnects;
+    struct core_close_intent_t
+    {
+        zlink::routing_id_t rid;
+        const char *close_reason;
+        std::optional<stream_close_reason_t> notify_reason;
+        std::string diagnostic;
+    };
+    std::vector<core_close_intent_t> _core_pending_disconnects;
     std::mutex _core_sessions_mutex;
     std::map<std::string, std::shared_ptr<core_session_t>> _core_sessions;
     std::map<std::string, std::shared_ptr<core_session_t>> _retired_core_sessions;
@@ -3582,7 +3707,8 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
             validate_stream_listener_identity (stream, advertise_host);
             auto listener = std::make_unique<listener_t> (
               _runtime, stream, advertise_host, factory->second, services, _stop, _drain_flag,
-              _monitoring, _mesh_node, _application_jobs, _session_replacement_callback_timeout);
+              _monitoring, _mesh_node, _application_jobs, _session_replacement_callback_timeout,
+              [this] { asio::post (_liveness_io, [this] { refresh_heartbeat_deadline (); }); });
             auto *raw = listener.get ();
             _listeners.push_back (std::move (listener));
             _threads.emplace_back ([raw] { raw->run_guarded (); });
@@ -3592,23 +3718,25 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
                                             raw->listener_endpoint ());
         }
         if (!_listeners.empty ()) {
-            /* One liveness sweep loop per node (graceful-drain-handoff §7.2):
-         * the service drives every listener's sessions from a single
-         * thread; no per-session timers exist. */
+            _liveness_io.restart ();
+            _heartbeat_deadline.expires_at (session_liveness_t::clock_t::time_point::max ());
             _liveness_thread = std::thread ([this] {
-                auto last_sweep = std::chrono::steady_clock::now ();
-                while (!_stop.load (std::memory_order_acquire)) {
-                    std::this_thread::sleep_for (std::chrono::milliseconds (100));
-                    const auto now = std::chrono::steady_clock::now ();
-                    if (now - last_sweep < std::chrono::seconds (1)) {
-                        continue;
-                    }
-                    last_sweep = now;
-                    for (const auto &listener : _listeners) {
-                        if (listener) {
-                            listener->sweep_liveness_once ();
-                        }
-                    }
+                const auto keep_alive = asio::make_work_guard (_liveness_io);
+                try {
+                    _liveness_io.run ();
+                }
+                catch (...) {
+                    detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
+                      .report_lazy ([] {
+                          message_dispatch_error_event_t error{};
+                          error.surface = dispatch_error_surface_t::stream_session;
+                          error.message_kind = dispatch_message_kind_t::control;
+                          error.reason = dispatch_error_reason_t::handler_exception;
+                          error.action = dispatch_error_action_t::drop;
+                          error.exception = std::current_exception ();
+                          return error;
+                      });
+                    request_stop ();
                 }
             });
         }
@@ -3678,9 +3806,31 @@ bool stream_host_service_t::drain_sessions_until (
     });
 }
 
+void stream_host_service_t::refresh_heartbeat_deadline ()
+{
+    if (_stop.load (std::memory_order_acquire))
+        return;
+    auto due = session_liveness_t::clock_t::time_point::max ();
+    for (const auto &listener : _listeners)
+        due = std::min (due, listener->next_liveness_due ());
+    if (due == _heartbeat_deadline.expiry ())
+        return;
+    _heartbeat_deadline.expires_at (due);
+    if (due == session_liveness_t::clock_t::time_point::max ())
+        return;
+    _heartbeat_deadline.async_wait ([this] (const boost::system::error_code &error) {
+        if (error || _stop.load (std::memory_order_acquire))
+            return;
+        _heartbeat_deadline.expires_at (session_liveness_t::clock_t::time_point::max ());
+        for (const auto &listener : _listeners)
+            listener->sweep_liveness_once ();
+    });
+}
+
 void stream_host_service_t::request_stop () noexcept
 {
     _stop.store (true, std::memory_order_release);
+    _liveness_io.stop ();
     if (_application_jobs)
         _application_jobs->stop ();
     for (auto &listener : _listeners) {

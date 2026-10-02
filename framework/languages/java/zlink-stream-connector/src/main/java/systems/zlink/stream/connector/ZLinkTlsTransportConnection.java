@@ -23,7 +23,6 @@ import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 
 import java.io.EOFException;
 import java.net.URI;
-import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Queue;
@@ -35,6 +34,7 @@ import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLParameters;
 
 final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnection {
+    private static final int LIFECYCLE_OWNS_CONNECT_DEADLINE = 0;
     private static final EventLoopGroup EVENT_LOOP =
             new NioEventLoopGroup(0, new DaemonThreadFactory());
 
@@ -47,10 +47,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
     private ZLinkTlsTransportConnection() {}
 
     static CompletionStage<ZLinkTlsTransportConnection> connectStage(
-            URI endpoint,
-            Duration connectTimeout,
-            int maxReceivePayloadSize,
-            boolean skipServerCertificateValidation) {
+            URI endpoint, int maxReceivePayloadSize, boolean skipServerCertificateValidation) {
         CompletableFuture<ZLinkTlsTransportConnection> result = new CompletableFuture<>();
         ZLinkTlsTransportConnection connection = new ZLinkTlsTransportConnection();
         SslContext sslContext;
@@ -72,7 +69,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
                         .option(ChannelOption.SO_KEEPALIVE, true)
                         .option(
                                 ChannelOption.CONNECT_TIMEOUT_MILLIS,
-                                Math.toIntExact(connectTimeout.toMillis()))
+                                LIFECYCLE_OWNS_CONNECT_DEADLINE)
                         .handler(
                                 new ChannelInitializer<SocketChannel>() {
                                     @Override
@@ -91,32 +88,35 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
                                     }
                                 });
 
-        bootstrap
-                .connect(endpoint.getHost(), port)
-                .addListener(
-                        connect -> {
-                            if (!connect.isSuccess()) {
-                                connection.fail(connect.cause());
-                                result.completeExceptionally(connect.cause());
-                                return;
-                            }
-                            Channel connected = ((ChannelFuture) connect).channel();
-                            connection.channel = connected;
-                            connected
-                                    .pipeline()
-                                    .get(SslHandler.class)
-                                    .handshakeFuture()
-                                    .addListener(
-                                            handshake -> {
-                                                if (handshake.isSuccess()) {
-                                                    result.complete(connection);
-                                                } else {
-                                                    connection.fail(handshake.cause());
-                                                    connected.close();
-                                                    result.completeExceptionally(handshake.cause());
-                                                }
-                                            });
-                        });
+        ChannelFuture connecting = bootstrap.connect(endpoint.getHost(), port);
+        connection.channel = connecting.channel();
+        result.whenComplete(
+                (opened, failure) -> {
+                    if (failure != null) connection.close();
+                });
+        connecting.addListener(
+                connect -> {
+                    if (!connect.isSuccess()) {
+                        connection.fail(connect.cause());
+                        result.completeExceptionally(connect.cause());
+                        return;
+                    }
+                    Channel connected = ((ChannelFuture) connect).channel();
+                    connected
+                            .pipeline()
+                            .get(SslHandler.class)
+                            .handshakeFuture()
+                            .addListener(
+                                    handshake -> {
+                                        if (handshake.isSuccess()) {
+                                            if (!result.complete(connection)) connection.close();
+                                        } else {
+                                            connection.fail(handshake.cause());
+                                            connected.close();
+                                            result.completeExceptionally(handshake.cause());
+                                        }
+                                    });
+                });
         return result;
     }
 
@@ -127,6 +127,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
             int port,
             boolean skipServerCertificateValidation) {
         SslHandler handler = sslContext.newHandler(allocator, host, port);
+        handler.setHandshakeTimeoutMillis(LIFECYCLE_OWNS_CONNECT_DEADLINE);
         if (!skipServerCertificateValidation) {
             SSLParameters parameters = handler.engine().getSSLParameters();
             parameters.setEndpointIdentificationAlgorithm("HTTPS");
@@ -181,7 +182,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
      * pass through the {@link SslHandler}, which queues close_notify behind the frames not yet
      * flushed and keeps the socket open until the peer reads them or its flush timeout ends. The
      * close starts at the SslHandler's own context instead, which hands it to the socket below that
-     * handler. A channel whose pipeline no longer has the handler is already closed.
+     * handler. A pending channel without that handler closes directly.
      */
     @Override
     public void close() {
@@ -190,6 +191,8 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
                 current == null ? null : current.pipeline().context(SslHandler.class);
         if (tls != null) {
             tls.close();
+        } else if (current != null) {
+            current.close();
         }
         fail(new EOFException("tls transport closed"));
     }

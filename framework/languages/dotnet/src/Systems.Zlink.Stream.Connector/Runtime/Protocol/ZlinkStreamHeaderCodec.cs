@@ -17,6 +17,10 @@ internal sealed class ZlinkStreamHeaderCodec
     private const int FlagsOffset = CodecOffset + sizeof(byte);
     private const int MaxMetadataPayloadSize = 1024;
 
+    internal static bool IsApplicationHeader(ReadOnlySpan<byte> header) =>
+        header.Length > KindOffset
+        && (ZlinkStreamMessageKind)header[KindOffset] != ZlinkStreamMessageKind.Control;
+
     private const ZlinkStreamHeaderFlags KnownFlags =
         ZlinkStreamHeaderFlags.HasRequestSeq
         | ZlinkStreamHeaderFlags.HasMetadata

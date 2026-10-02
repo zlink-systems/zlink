@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Locations;
 
@@ -25,41 +24,92 @@ public sealed class ProviderRelocationRepositoryTests
     }
 
     [Fact]
-    public async Task FailedPutWithoutStoredBytes_DoesNotReportSuccess()
+    public async Task FailedPutWithoutStoredBytes_StoresAgainAtTheSameReference()
     {
         var provider = new AmbiguousRelocationStore(commitBeforeFailure: false);
         var repository = new ZLinkProviderRelocationRepository(provider);
 
-        var failure = await Assert.ThrowsAsync<IOException>(() =>
-            repository.PutRelocationAsync(new byte[] { 9 }, TimeSpan.FromMinutes(5)).AsTask()
-        );
-
-        Assert.Equal("put response lost", failure.Message);
-        Assert.Equal(1, provider.PutCalls);
-        Assert.Equal(0, provider.StoredCount);
+        var stored = await repository.PutRelocationAsync(new byte[] { 9 }, TimeSpan.FromMinutes(5));
+        Assert.Equal(2, provider.PutCalls);
+        Assert.Equal(provider.PutReferences[0], provider.PutReferences[1]);
+        Assert.Equal(provider.PutReferences[0], stored.Reference);
+        Assert.Equal(1, provider.StoredCount);
     }
 
     [Fact]
-    public async Task LostPutResponse_WithHangingProviderRead_IsBounded()
+    public async Task LostPutResponse_WithDifferentBytes_AllocatesAnotherReference()
     {
+        var provider = new AmbiguousRelocationStore(
+            commitBeforeFailure: true,
+            readBytes: new byte[] { 2 }
+        );
+        var repository = new ZLinkProviderRelocationRepository(provider);
+        var stored = await repository.PutRelocationAsync(new byte[] { 1 }, TimeSpan.FromMinutes(5));
+        Assert.Equal(2, provider.PutCalls);
+        Assert.NotEqual(provider.PutReferences[0], stored.Reference);
+        Assert.Equal(provider.PutReferences[1], stored.Reference);
+    }
+
+    [Fact]
+    public async Task Cancellation_EndsPendingPutWaiter_WhenProviderDoesNotComplete()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var provider = new AmbiguousRelocationStore(commitBeforeFailure: false, hangPut: true);
+        var repository = new ZLinkProviderRelocationRepository(provider);
+        var operation = repository
+            .PutRelocationAsync(new byte[] { 1 }, TimeSpan.FromMinutes(5), cancellation.Token)
+            .AsTask();
+        await provider.PutEntered.Task;
+        cancellation.Cancel();
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                operation.WaitAsync(TimeSpan.FromSeconds(1))
+            );
+        }
+        finally
+        {
+            provider.PutRelease.TrySetResult(
+                new ZLinkBlobPutResult.Stored(
+                    DateTimeOffset.UnixEpoch.AddMinutes(5),
+                    DateTimeOffset.UnixEpoch
+                )
+            );
+            try
+            {
+                await operation;
+            }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    [Fact]
+    public async Task LostPutResponse_ReadbackUsesOperationCancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
         var provider = new AmbiguousRelocationStore(commitBeforeFailure: true, hangRead: true);
         var repository = new ZLinkProviderRelocationRepository(provider);
-        var started = Stopwatch.GetTimestamp();
+        var operation = repository
+            .PutRelocationAsync(new byte[] { 7, 8 }, TimeSpan.FromMinutes(5), cancellation.Token)
+            .AsTask();
 
-        var failure = await Assert.ThrowsAsync<IOException>(() =>
-            repository.PutRelocationAsync(new byte[] { 7, 8 }, TimeSpan.FromMinutes(5)).AsTask()
-        );
-
-        Assert.Equal("put response lost", failure.Message);
-        Assert.InRange(
-            Stopwatch.GetElapsedTime(started),
-            TimeSpan.FromSeconds(4.5),
-            TimeSpan.FromSeconds(7)
-        );
+        await provider.ReadEntered.Task;
+        try
+        {
+            Assert.Equal(cancellation.Token, provider.ReadCancellation);
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+        }
+        finally
+        {
+            provider.ReadRelease.TrySetResult();
+            if (!operation.IsCompleted)
+                await operation;
+        }
     }
 
     [Fact]
-    public async Task DeterministicReference_AllowsExactRetryAndRejectsChange()
+    public async Task SuppliedReference_AllowsExactRetryAndAllocatesNewReferenceOnConflict()
     {
         var provider = new AmbiguousRelocationStore(commitBeforeFailure: false, failNextPut: false);
         var repository = new ZLinkProviderRelocationRepository(provider);
@@ -78,24 +128,37 @@ public sealed class ProviderRelocationRepositoryTests
 
         Assert.Equal(reference, first.Reference);
         Assert.Equal(reference, retry.Reference);
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            repository
-                .PutRelocationAtAsync(reference, new byte[] { 2, 1 }, TimeSpan.FromHours(24))
-                .AsTask()
+        var changed = await repository.PutRelocationAtAsync(
+            reference,
+            new byte[] { 2, 1 },
+            TimeSpan.FromHours(24)
         );
+        Assert.NotEqual(reference, changed.Reference);
+        Assert.Equal(2, provider.StoredCount);
     }
 
     private sealed class AmbiguousRelocationStore(
         bool commitBeforeFailure,
         bool hangRead = false,
-        bool failNextPut = true
+        bool failNextPut = true,
+        byte[]? readBytes = null,
+        bool hangPut = false
     ) : IZLinkRelocationStore
     {
         private readonly Dictionary<string, StoredBlob> _stored = new(StringComparer.Ordinal);
         private readonly List<string> _putReferences = [];
         private readonly List<string> _readReferences = [];
         private bool _failNextPut = failNextPut;
+        internal TaskCompletionSource PutEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<ZLinkBlobPutResult> PutRelease { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        internal TaskCompletionSource ReadEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReadRelease { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal CancellationToken ReadCancellation { get; private set; }
         internal int PutCalls { get; private set; }
         internal int StoredCount => _stored.Count;
         internal IReadOnlyList<string> PutReferences => _putReferences;
@@ -111,6 +174,11 @@ public sealed class ProviderRelocationRepositoryTests
             cancellationToken.ThrowIfCancellationRequested();
             PutCalls++;
             _putReferences.Add(reference.Value);
+            if (hangPut)
+            {
+                PutEntered.TrySetResult();
+                return new ValueTask<ZLinkBlobPutResult>(PutRelease.Task);
+            }
             var now = DateTimeOffset.UtcNow;
             var expiresAt = now + retention;
             if (_failNextPut)
@@ -147,9 +215,17 @@ public sealed class ProviderRelocationRepositoryTests
             cancellationToken.ThrowIfCancellationRequested();
             _readReferences.Add(reference.Value);
             if (hangRead)
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            {
+                ReadCancellation = cancellationToken;
+                ReadEntered.TrySetResult();
+                await ReadRelease.Task.WaitAsync(cancellationToken);
+            }
             return _stored.TryGetValue(reference.Value, out var stored)
-                ? new ZLinkBlobReadResult.Found(stored.Bytes, stored.ExpiresAt, stored.StoreNow)
+                ? new ZLinkBlobReadResult.Found(
+                    readBytes ?? stored.Bytes,
+                    stored.ExpiresAt,
+                    stored.StoreNow
+                )
                 : new ZLinkBlobReadResult.Missing(DateTimeOffset.UtcNow);
         }
 

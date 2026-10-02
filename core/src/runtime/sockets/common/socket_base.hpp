@@ -1301,6 +1301,7 @@ class socket_base_t : public own_t,
     bool try_inc_mailbox_ref ();
     void inc_mailbox_ref ();
     void dec_mailbox_ref ();
+    void finish_destroy ();
     void schedule_finalize_destroy ();
     void finalize_destroy ();
     void finish_close_reap ();

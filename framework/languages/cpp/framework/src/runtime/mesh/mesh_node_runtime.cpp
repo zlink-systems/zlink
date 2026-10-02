@@ -1096,7 +1096,7 @@ void mesh_node_runtime_t::configure_relocation_runtime (
 }
 
 void mesh_node_runtime_t::configure_bound_session_relocation_resolver (
-  std::function<std::optional<bound_session_relocation_route_t> (
+  std::function<task_t<std::optional<bound_session_relocation_route_t>> (
     const runtime::stateful::object_ref_t &)> resolver)
 {
     if (!resolver)
@@ -1112,7 +1112,8 @@ mesh_node_runtime_t::seal_bound_sessions (
   std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
   runtime::protocol::relocation_id_t relocation,
   runtime::protocol::relocation_coordinator_fence_t coordinator,
-  std::chrono::milliseconds timeout)
+  std::chrono::milliseconds timeout,
+  std::chrono::steady_clock::time_point operation_deadline)
 {
     using runtime::foundation::operation_terminal_t;
     session_relocation_seal_outcome_t outcome;
@@ -1137,7 +1138,7 @@ mesh_node_runtime_t::seal_bound_sessions (
         std::optional<bound_session_relocation_route_t> session;
         bool resolver_failed = false;
         try {
-            session = _bound_session_relocation_resolver (source);
+            session = co_await _bound_session_relocation_resolver (source);
         }
         catch (const std::exception &) {
             resolver_failed = true;
@@ -1188,7 +1189,7 @@ mesh_node_runtime_t::seal_bound_sessions (
         bool submitted = false;
         try {
             submitted = co_await _node->seal_session_remote (
-              session->session_owner_node, seal, timeout,
+              session->session_owner_node, seal, timeout, operation_deadline,
               [seal] {
                   // The durable record keeps the exact seal request so
                   // recovery can reject a different binding or coordinator.
@@ -1219,7 +1220,7 @@ mesh_node_runtime_t::seal_bound_sessions (
         bool converged = false;
         std::optional<bound_session_relocation_route_t> current;
         try {
-            current = _bound_session_relocation_resolver (source);
+            current = co_await _bound_session_relocation_resolver (source);
         }
         catch (...) {
             current.reset ();
@@ -1244,11 +1245,12 @@ mesh_node_runtime_t::capture_session_routes (
   runtime::protocol::relocation_coordinator_fence_t coordinator,
   mesh_node_descriptor_t target,
   std::shared_ptr<session_relocation_seal_outcome_t> outcome,
-  std::shared_ptr<bool> attempted)
+  std::shared_ptr<bool> attempted,
+  std::chrono::steady_clock::time_point operation_deadline)
 {
     *attempted = true;
     *outcome = co_await seal_bound_sessions (participants, relocation, coordinator,
-                                             std::chrono::seconds (5));
+                                             _session_relocation_seal_timeout, operation_deadline);
     if (!outcome->completed)
         co_return std::nullopt;
     std::vector<runtime::protocol::session_relocation_route_t> routes;
@@ -1360,9 +1362,10 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
         static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version)),
       .capture_session_routes =
         [this, source = *source, authority, relocation, coordinator, target, session_seal,
-         session_checkpoint_attempted] () {
+         session_checkpoint_attempted, restore_deadline] () {
             return capture_session_routes ({{source, authority}}, relocation, coordinator, target,
-                                           session_seal, session_checkpoint_attempted);
+                                           session_seal, session_checkpoint_attempted,
+                                           restore_deadline);
         },
       .prepare_target =
         [this, target, source_status = status, source = *source,
@@ -1610,9 +1613,10 @@ mesh_node_runtime_t::relocate_application_unit (
         static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version)),
       .capture_session_routes =
         [this, session_participants, relocation, coordinator, target, session_seal,
-         session_checkpoint_attempted] () {
+         session_checkpoint_attempted, restore_deadline] () {
             return capture_session_routes (session_participants, relocation, coordinator, target,
-                                           session_seal, session_checkpoint_attempted);
+                                           session_seal, session_checkpoint_attempted,
+                                           restore_deadline);
         },
       .prepare_target =
         [this, target, status, sources, stable_types, principal_index, relocation, coordinator] (
@@ -3136,8 +3140,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::seal_remote_application_actor_jo
         auto completion =
           std::make_shared<task_completion_source_t<session_relocation_seal_outcome_t>> ();
         auto output = completion->task ();
-        auto attempt = std::make_shared<task_t<session_relocation_seal_outcome_t>> (
-          seal_bound_sessions ({{s->source_actor, authority}}, relocation, coordinator, remaining));
+        auto attempt =
+          std::make_shared<task_t<session_relocation_seal_outcome_t>> (seal_bound_sessions (
+            {{s->source_actor, authority}}, relocation, coordinator, remaining, s->deadline));
         detail::observe_task_completion (
           *attempt,
           [completion, attempt] (const result_t<session_relocation_seal_outcome_t> &settled) {

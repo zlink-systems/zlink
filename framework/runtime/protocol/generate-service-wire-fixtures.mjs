@@ -483,6 +483,9 @@ function buildOperationCases(schema) {
   const unordered = structuredClone(logicalFixture.decoded);
   unordered.applicationStates.reverse();
   const tlv = typeByName(schema, "descriptor-extension");
+  const placementWeightMaximum = schema.bounds.find(
+    (bound) => bound.name === tlv.fields.find((field) => field.name === "placementWeight").maximum.$bound,
+  ).value;
   const requiredValues = new Map([
     ["runtimeState", "serving"],
     ["applicationVersion", 0],
@@ -1524,7 +1527,7 @@ function buildOperationCases(schema) {
       encodedDescriptor,
       {
         directions: ["encode"],
-        input: { ...descriptorValue, placementWeight: 101 },
+        input: { ...descriptorValue, placementWeight: placementWeightMaximum + 1 },
       },
     ),
     operationCase(

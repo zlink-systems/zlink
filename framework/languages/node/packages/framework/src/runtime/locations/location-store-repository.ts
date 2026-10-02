@@ -1,5 +1,6 @@
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { createHash, randomUUID } from 'node:crypto';
+import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
 import {
   type ZLinkClientServerServerDescriptor,
   type ZLinkClientServerServerDescriptorKey,
@@ -94,7 +95,6 @@ import {
   routingIdHexSegment
 } from './opaque-record-key';
 const LOCATION_STORE_WRITE_CONCURRENCY = 64;
-const DEFAULT_REPOSITORY_PAGE_SIZE = 100;
 
 const LOCATION_RECORD_VERSION = 1;
 
@@ -1060,11 +1060,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   override async reserve(
     request: ZLinkObjectReserveRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ZLinkObjectReserveResult> {
     const encodedAuthorityKey = encodeAuthorityKey(request.key.kind, request.key.globalId);
+    const reservationId = randomUUID();
     for (;;) {
-      signal?.throwIfAborted();
+      throwIfOperationExpired(signal, deadlineUnixMs);
       const rowKey = authorityKey(encodedAuthorityKey.value);
       const descriptorKey = meshKey(request.target.meshName, request.target.nodeRid);
       const leaseKey = ownerKey(request.target.owner.ownerId);
@@ -1178,7 +1180,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (generation >= MAX_GENERATION || authorityOwnerGeneration >= MAX_GENERATION) {
         return { kind: 'generationExhausted' };
       }
-      const reservationId = randomUUID();
       const allocation: ZLinkPlacementAllocation = {
         state: 'reserved',
         objectKind: request.key.kind,
@@ -1253,12 +1254,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   override async commit(
     request: ZLinkObjectCommitRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ZLinkObjectCommitResult> {
     const key = encodeAuthorityKey(request.key.kind, request.key.globalId);
     const rowKey = authorityKey(key.value);
     for (;;) {
-      signal?.throwIfAborted();
+      throwIfOperationExpired(signal, deadlineUnixMs);
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') return { kind: 'stale' };
       const record = decodeAuthorityRecord(current.value.bytes);
@@ -1338,12 +1340,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   override async abort(
     request: ZLinkObjectAbortRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ZLinkObjectAbortResult> {
     const key = encodeAuthorityKey(request.key.kind, request.key.globalId);
     const rowKey = authorityKey(key.value);
     for (;;) {
-      signal?.throwIfAborted();
+      throwIfOperationExpired(signal, deadlineUnixMs);
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') return { kind: 'stale' };
       const record = decodeAuthorityRecord(current.value.bytes);
@@ -1412,7 +1415,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const rowKey = authorityKey(encodeAuthorityKey(request.key.kind, request.key.globalId).value);
     const terminalRowKey = creationTerminalKey(terminal.operation);
     for (;;) {
-      signal?.throwIfAborted();
+      throwIfOperationExpired(
+        signal,
+        BigInt(request.completion.terminal.operationDeadline.getTime())
+      );
       const [current, existingTerminal] = await Promise.all([
         this.provider.read(rowKey, signal),
         this.provider.read(terminalRowKey, signal)
@@ -1742,7 +1748,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           page.continuationToken === undefined
             ? undefined
             : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
-        limit: page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE
+        limit: page.pageSize ?? zlinkRuntimeDefaultLocationOptions.listPageSize
       },
       signal
     );
@@ -2462,7 +2468,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           page.continuationToken === undefined
             ? undefined
             : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
-        limit: page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE
+        limit: page.pageSize ?? zlinkRuntimeDefaultLocationOptions.listPageSize
       },
       signal
     );
@@ -2605,7 +2611,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     matches: (value: T) => boolean,
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<T>> {
-    const requested = page.pageSize ?? DEFAULT_REPOSITORY_PAGE_SIZE;
+    const requested = page.pageSize ?? zlinkRuntimeDefaultLocationOptions.listPageSize;
     let cursor =
       page.continuationToken === undefined
         ? undefined
@@ -3368,21 +3374,23 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
+const GENERATION_KEYS = new Set([
+  'generation',
+  'leaseGeneration',
+  'ownerLeaseGeneration',
+  'objectGeneration',
+  'authorityOwnerGeneration',
+  'targetAuthorityOwnerGeneration',
+  'aggregateGeneration',
+  'lifecycleGeneration',
+  'descriptorRevision',
+  'nodeGeneration',
+  'applicationVersion',
+  'requestEncodedSize'
+]);
+
 function reviveCanonical(value: unknown, key = ''): unknown {
-  const generationKeys = new Set([
-    'generation',
-    'leaseGeneration',
-    'ownerLeaseGeneration',
-    'objectGeneration',
-    'authorityOwnerGeneration',
-    'aggregateGeneration',
-    'lifecycleGeneration',
-    'descriptorRevision',
-    'nodeGeneration',
-    'applicationVersion',
-    'requestEncodedSize'
-  ]);
-  if (typeof value === 'string' && generationKeys.has(key)) return BigInt(value);
+  if (typeof value === 'string' && GENERATION_KEYS.has(key)) return BigInt(value);
   if (Array.isArray(value)) return value.map((item) => reviveCanonical(item));
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
@@ -4387,5 +4395,12 @@ function requireOwnerInput(ownerId: string, leaseTtlMs: number): void {
   }
   if (!Number.isSafeInteger(leaseTtlMs) || leaseTtlMs < 1) {
     throw new RangeError('Owner lease TTL must be a positive safe integer.');
+  }
+}
+
+function throwIfOperationExpired(signal?: AbortSignal, deadlineUnixMs?: bigint): void {
+  signal?.throwIfAborted();
+  if (deadlineUnixMs !== undefined && Date.now() >= Number(deadlineUnixMs)) {
+    throw new DOMException('Operation deadline exceeded.', 'TimeoutError');
   }
 }

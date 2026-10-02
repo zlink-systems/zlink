@@ -232,11 +232,12 @@ durable_session_journal_store_t::durable_session_journal_store_t (
 }
 
 durable_session_journal_root_t
-durable_session_journal_store_t::prepare (const durable_session_journal_record_t &record)
+durable_session_journal_store_t::prepare (const durable_session_journal_record_t &record,
+                                          std::chrono::steady_clock::time_point operation_deadline)
 {
     const auto payload = encode_session_journal (record);
     const auto checksum = maintenance_runtime_t::crc32c (payload);
-    const auto stored = _store->put (payload, relocation_retention);
+    const auto stored = _store->put (payload, relocation_retention, operation_deadline);
     if (stored.reference.empty () || stored.checksum_crc32c != checksum)
         throw std::runtime_error ("durable Session journal store write failed");
     return {stored.reference, checksum};
@@ -611,10 +612,13 @@ maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_st
     const auto &primary = relocation_primary (participants);
     const auto &coordinator = state->context.coordinator;
     const relocation_authority_fence_t fence{
-      primary.kind, primary.key, coordinator.expected_authority_store_version,
+      primary.kind,
+      primary.key,
+      coordinator.expected_authority_store_version,
       location_owner_token_t{coordinator.owner_id,
                              static_cast<std::int64_t> (coordinator.lease_generation)},
-      state->target_owner};
+      state->target_owner,
+      state->context.relocation};
     bool connected = true;
     for (;;) {
         if (state->context.source_stopped && state->context.source_stopped ())

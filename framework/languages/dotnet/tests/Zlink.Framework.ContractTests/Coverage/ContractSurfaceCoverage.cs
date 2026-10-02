@@ -315,6 +315,30 @@ public sealed class ContractSurfaceCoverage
     }
 
     [Fact]
+    public void ExactDefaultCanonicalization_MatchesNumericConstants_AndRejectsChangedValues()
+    {
+        static string Constructor(string body) =>
+            ExtractSyntaxDeclarations(
+                    [("fixture.cs", body, "Zlink.Framework")],
+                    includeOnlyPublic: true,
+                    exactInterfaceDocuments: false
+                )
+                .Single(declaration => declaration.Kind == DeclarationKind.Constructor)
+                .Signature;
+
+        const string literal =
+            "namespace Defaults; public readonly record struct Request(int PageSize = 100);";
+        const string matching =
+            "namespace Defaults; public readonly record struct Request(int PageSize = Request.DefaultSize)"
+            + " { internal const int DefaultSize = 100; }";
+        const string changed =
+            "namespace Defaults; public readonly record struct Request(int PageSize = Request.DefaultSize)"
+            + " { internal const int DefaultSize = 101; }";
+        Assert.Equal(Constructor(literal), Constructor(matching));
+        Assert.NotEqual(Constructor(literal), Constructor(changed));
+    }
+
+    [Fact]
     public void DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -1659,6 +1683,17 @@ public sealed class ContractSurfaceCoverage
             return string.Empty;
 
         var text = node.ToFullString();
+        var numericDefaults = node.DescendantNodesAndSelf()
+            .OfType<ParameterSyntax>()
+            .Where(static parameter => parameter.Default is not null)
+            .Select(parameter =>
+                (
+                    Node: parameter.Default!.Value,
+                    Text: resolver.ResolveNumericDefault(parameter.Default.Value)
+                )
+            )
+            .Where(static replacement => replacement.Text is not null)
+            .ToArray();
         var replacements = node.DescendantNodesAndSelf()
             .OfType<TypeSyntax>()
             // `notnull` is a constraint keyword, not a type symbol. Roslyn
@@ -1668,13 +1703,20 @@ public sealed class ContractSurfaceCoverage
             .Where(type =>
                 !string.Equals(type.ToString(), "notnull", StringComparison.Ordinal)
                 && !type.Ancestors().Any(static ancestor => ancestor is TypeSyntax)
+                && !numericDefaults.Any(replacement => replacement.Node.Span.Contains(type.Span))
             )
-            .OrderByDescending(static type => type.SpanStart)
+            .Select(type => (Node: (SyntaxNode)type, Text: resolver.Resolve(type)))
+            .Concat(
+                numericDefaults.Select(replacement =>
+                    (Node: (SyntaxNode)replacement.Node, Text: replacement.Text!)
+                )
+            )
+            .OrderByDescending(static replacement => replacement.Node.SpanStart)
             .ToArray();
-        foreach (var type in replacements)
+        foreach (var replacement in replacements)
         {
-            var start = type.SpanStart - node.FullSpan.Start;
-            text = text.Remove(start, type.Span.Length).Insert(start, resolver.Resolve(type));
+            var start = replacement.Node.SpanStart - node.FullSpan.Start;
+            text = text.Remove(start, replacement.Node.Span.Length).Insert(start, replacement.Text);
         }
 
         return text;
@@ -1856,6 +1898,36 @@ public sealed class ContractSurfaceCoverage
             var (assemblyName, displayName) = ResolveIdentity(symbol);
 
             return $"{assemblyName}::{displayName}";
+        }
+
+        public string? ResolveNumericDefault(ExpressionSyntax expression)
+        {
+            var type = _model.GetTypeInfo(expression).ConvertedType;
+            if (
+                type?.SpecialType
+                is not (
+                    SpecialType.System_SByte
+                    or SpecialType.System_Byte
+                    or SpecialType.System_Int16
+                    or SpecialType.System_UInt16
+                    or SpecialType.System_Int32
+                    or SpecialType.System_UInt32
+                    or SpecialType.System_Int64
+                    or SpecialType.System_UInt64
+                    or SpecialType.System_Single
+                    or SpecialType.System_Double
+                    or SpecialType.System_Decimal
+                )
+            )
+                return null;
+            var value = _model.GetConstantValue(expression);
+            return value.HasValue && value.Value is not null
+                ? Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatPrimitive(
+                    value.Value,
+                    quoteStrings: false,
+                    useHexadecimalNumbers: false
+                )
+                : null;
         }
 
         private (string AssemblyName, string DisplayName) ResolveIdentity(ITypeSymbol symbol)

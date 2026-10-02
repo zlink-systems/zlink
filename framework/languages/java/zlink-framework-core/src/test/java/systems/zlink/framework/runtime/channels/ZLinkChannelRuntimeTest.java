@@ -11,6 +11,8 @@ import static systems.zlink.framework.runtime.channels.ZLinkChannelSubmissionAss
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRecvException;
@@ -1189,13 +1191,16 @@ final class ZLinkChannelRuntimeTest {
         }
     }
 
-    @Test
-    void instanceSpotSendMapsLostReadyOwnerRouteWithoutColdActivation() {
+    @ParameterizedTest
+    // 01-execution/01-submit-and-completion.ko.md:193: the NOT_ADMITTED case maps to Rejected.
+    @CsvSource({"NOT_CONNECTED, UNAVAILABLE", "NOT_ADMITTED, REJECTED"})
+    void instanceSpotSendPreservesTypedAdmissionFailureWithoutColdActivation(
+            SubmitResult submitResult, ZLinkFrameworkErrorKind expectedKind) {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.spotNode.entrySpot.sendFailuresRemaining = 1;
-        backend.spotNode.entrySpot.sendFailureResult = SubmitResult.NOT_ADMITTED;
+        backend.spotNode.entrySpot.sendFailureResult = submitResult;
         backend.spotNode.entrySpot.sendFailureErrno = 113;
         AtomicInteger activationAttempts = new AtomicInteger();
         SpotTransportAddressResolver resolver =
@@ -1258,9 +1263,8 @@ final class ZLinkChannelRuntimeTest {
                                             .toCompletableFuture()
                                             .join());
 
-            // 01-execution/01-submit-and-completion.ko.md:193: NOT_ADMITTED maps to Rejected.
             assertEquals(
-                    ZLinkFrameworkErrorKind.REJECTED,
+                    expectedKind,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             assertEquals(1, backend.spotNode.entrySpot.sendAttempts);
             assertEquals(0, activationAttempts.get());
@@ -2021,9 +2025,8 @@ final class ZLinkChannelRuntimeTest {
                         @Override
                         public boolean waitForReadable(Duration timeout) {
                             try {
-                                return readable.tryAcquire(
-                                                timeout.toMillis(), TimeUnit.MILLISECONDS)
-                                        && !closed;
+                                readable.acquire();
+                                return !closed;
                             } catch (InterruptedException interrupted) {
                                 Thread.currentThread().interrupt();
                                 return false;

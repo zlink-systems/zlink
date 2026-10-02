@@ -1552,7 +1552,8 @@ class memory_relocation_repository_t final : public stateful::relocation_store_p
 {
   public:
     stateful::relocation_stored_t put (const std::vector<std::uint8_t> &payload,
-                                       std::chrono::hours) override
+                                       std::chrono::hours,
+                                       std::chrono::steady_clock::time_point) override
     {
         std::lock_guard lock (_mutex);
         const auto reference = "instance-root-" + std::to_string (++_sequence);
@@ -3925,7 +3926,7 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     auto completed = completion.get_future ();
     assert (local
               ->seal_session_remote (
-                status.routing_id (), seal, 2s,
+                status.routing_id (), seal, 2s, std::chrono::steady_clock::now () + 2s,
                 [&journal_capture_count] {
                     ++journal_capture_count;
                     return std::vector<std::uint8_t>{0x41};
@@ -4049,7 +4050,7 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
     std::atomic_bool completion_has_result{false};
     assert (local
               ->seal_session_remote (
-                status.routing_id (), seal, 2s,
+                status.routing_id (), seal, 2s, std::chrono::steady_clock::now () + 2s,
                 [&journal_capture_count] {
                     journal_capture_count.fetch_add (1, std::memory_order_acq_rel);
                     return std::vector<std::uint8_t>{0x51};

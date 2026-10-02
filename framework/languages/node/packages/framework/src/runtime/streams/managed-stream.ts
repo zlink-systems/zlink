@@ -141,7 +141,7 @@ export class ZLinkManagedStream implements ZLinkStream {
       return { status: ZLinkSubmitStatus.Submitted };
     } catch (error) {
       if (isZLinkBackendResultError(error) && error.operation === 'submit') {
-        return classifySubmitResult(error.result, 'STREAM submit');
+        return classifySubmitResult(error.result, 'STREAM submit', error.phase);
       }
       throw error;
     }

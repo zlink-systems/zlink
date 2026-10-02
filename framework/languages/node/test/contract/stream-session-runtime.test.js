@@ -50,6 +50,60 @@ test('node monitor adapter preserves the opaque native session routing id', () =
   assert.equal(observed.routingId, routingId);
 });
 
+test('STREAM monitor ready snapshots do not create phantom sessions', async (t) => {
+  const nativeEvents = [];
+  const monitor = nodeMonitorBackend.wrapMonitorSocket({
+    close() {},
+    recv() { return nativeEvents.shift() ?? null; }
+  });
+  const clock = new FakeLivenessClock();
+  const sessions = [];
+  const runtime = createStreamRuntime({
+    socket: new FakeStreamSocket(),
+    monitor,
+    livenessClock: clock,
+    sessionFactory(context) {
+      sessions.push(context.sessionId);
+      return { context };
+    }
+  });
+  t.after(() => runtime.dispose());
+  runtime.start();
+  const emitReady = (routingId, flags) => {
+    nativeEvents.push({
+      event: zlink.MonitorEventType.ConnectionReady,
+      routingId,
+      flags,
+      value: 1n,
+      localAddr: 'tcp://local',
+      remoteAddr: 'tcp://remote'
+    });
+    monitor.drain();
+  };
+  emitReady('snapshot-only', 0);
+  await clock.flush();
+  assert.deepEqual(sessions, []);
+  emitReady('edge-session', zlink.MonitorEventFlag.ConnectionReadyEdge);
+  await clock.flush();
+  assert.deepEqual(sessions, ['edge-session']);
+  emitReady('another-snapshot', 0);
+  await clock.flush();
+  assert.deepEqual(sessions, ['edge-session']);
+  nativeEvents.push({
+    event: zlink.MonitorEventType.Disconnected,
+    routingId: 'edge-session',
+    flags: 0,
+    value: 0n,
+    localAddr: 'tcp://local',
+    remoteAddr: 'tcp://remote'
+  });
+  monitor.drain();
+  await clock.flush();
+  emitReady('replacement-edge', zlink.MonitorEventFlag.ConnectionReadyEdge);
+  await clock.flush();
+  assert.deepEqual(sessions, ['edge-session', 'replacement-edge']);
+});
+
 test('STREAM runtime registers its monitor handler once across repeated starts', async () => {
   let monitorRegistrations = 0;
   const runtime = createStreamRuntime({
@@ -113,6 +167,7 @@ test('ConnectionReady before the first packet keeps the native routing id for re
     runtime.start();
     monitorHandler({
       nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+      readyEdge: true,
       routingId,
       localAddr: 'tcp://local',
       remoteAddr: 'tcp://remote',
@@ -843,7 +898,7 @@ test('stream request dispatch emits exactly one replied terminal record (spec 26
   await runtime.dispose();
 });
 
-test('stream heartbeat control bypasses a blocked application handler', async () => {
+test('stream heartbeat control bypasses a blocked application handler', async (t) => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
   let handlerStarted;
@@ -864,6 +919,7 @@ test('stream heartbeat control bypasses a blocked application handler', async ()
     }
   });
 
+  t.after(() => runtime.dispose());
   runtime.start();
   runtime.markConnected('heartbeat-blocked-handler');
   await clock.flush();
@@ -887,7 +943,7 @@ test('stream heartbeat control bypasses a blocked application handler', async ()
   }), fakeMessage(''));
   await waitForReceive(socket);
   assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.pong');
-  await clock.advance(5000);
+  await clock.advance(4999);
   releaseHandler();
   await clock.flush();
   await waitForCondition(
@@ -897,10 +953,14 @@ test('stream heartbeat control bypasses a blocked application handler', async ()
 
   assert.deepEqual(socket.disconnects, []);
   assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.ping');
+  await clock.advance(1);
+  await runtime.findSession('heartbeat-blocked-handler').runLivenessCheck();
+  assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1], streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
+  assert.deepEqual(socket.disconnects, ['heartbeat-blocked-handler']);
   await runtime.dispose();
 });
 
-test('stream session runtime closes an unanswered heartbeat with heartbeat_timeout', async () => {
+test('stream session runtime closes without a first inbound frame at the heartbeat deadline', async (t) => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
   const runtime = createStreamRuntime({
@@ -909,15 +969,83 @@ test('stream session runtime closes an unanswered heartbeat with heartbeat_timeo
     sessionFactory(context) { return { context }; }
   });
 
+  t.after(() => runtime.dispose());
   runtime.start();
   runtime.markConnected('heartbeat-timeout-session');
   await clock.flush();
-  await clock.advance(6000);
+  await clock.advance(4999);
+  assert.deepEqual(socket.disconnects, []);
+  await clock.advance(1);
 
   const closing = decodeSessionClosing(socket.sent.at(-1));
   assert.equal(closing.header.name, 'session-closing');
-  assert.equal(closing.payload[1], 3);
+  assert.equal(closing.payload[1], streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
   assert.deepEqual(socket.disconnects, ['heartbeat-timeout-session']);
+  await runtime.dispose();
+});
+
+for (const inboundKind of ['data', 'pong']) {
+  test(`stream heartbeat stays connected with inbound ${inboundKind} before each timeout`, async (t) => {
+    const socket = new FakeStreamSocket();
+    const clock = new FakeLivenessClock();
+    const runtime = createStreamRuntime({
+      socket,
+      livenessClock: clock,
+      sessionFactory(context) { return { context, async onDispatch() {} }; }
+    });
+    t.after(() => runtime.dispose());
+    runtime.start();
+    runtime.markConnected('active-heartbeat-session');
+    await clock.flush();
+    for (let frame = 0; frame < 3; frame += 1) {
+      await clock.advance(4999);
+      socket.emitPacket('active-heartbeat-session', fakeHeader(
+        inboundKind === 'data'
+          ? { name: 'Work' }
+          : {
+            kind: connector.ZlinkStreamMessageKind.Control,
+            codec: connector.ZlinkStreamCodec.Raw,
+            flags: connector.ZlinkStreamHeaderFlags.None,
+            name: '$zlink.heartbeat.pong'
+          }
+      ), fakeMessage(''));
+      await clock.flush();
+      assert.deepEqual(socket.disconnects, []);
+    }
+    await clock.advance(4999);
+    assert.deepEqual(socket.disconnects, []);
+    await clock.advance(1);
+    await runtime.findSession('active-heartbeat-session').runLivenessCheck();
+    assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1], streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
+    assert.deepEqual(socket.disconnects, ['active-heartbeat-session']);
+    await runtime.dispose();
+  });
+}
+
+test('stream session replies to ping while active heartbeat checks are stopped', async (t) => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    sessionFactory(context) { return { context }; }
+  });
+  t.after(() => runtime.dispose());
+  runtime.start();
+  runtime.markConnected('passive-heartbeat-session');
+  await clock.flush();
+  runtime.findSession('passive-heartbeat-session').stopLivenessChecks();
+  await clock.advance(6000);
+  assert.equal(socket.sent.length, 0);
+  socket.emitPacket('passive-heartbeat-session', fakeHeader({
+    kind: connector.ZlinkStreamMessageKind.Control,
+    codec: connector.ZlinkStreamCodec.Raw,
+    flags: connector.ZlinkStreamHeaderFlags.None,
+    name: '$zlink.heartbeat.ping'
+  }), fakeMessage(''));
+  await clock.flush();
+  assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.pong');
+  assert.deepEqual(socket.disconnects, []);
   await runtime.dispose();
 });
 
@@ -941,12 +1069,12 @@ for (const wallJumpMs of [60_000, -60_000]) {
     assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.ping');
 
     t.mock.method(Date, 'now', () => wallNow + wallJumpMs);
-    elapsedMs = 5999;
+    elapsedMs = 4999;
     await session.runLivenessCheck();
     assert.deepEqual(socket.disconnects, []);
-    elapsedMs = 6000;
+    elapsedMs = 5000;
     await session.runLivenessCheck();
-    assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1], 3);
+    assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1], streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
     assert.deepEqual(socket.disconnects, ['monotonic-heartbeat']);
   });
 }
@@ -1235,6 +1363,7 @@ test('stream session node runtime observes connect and disconnect while the data
 
   queued.push({
     nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+    readyEdge: true,
     value: 0,
     localAddr: 'tcp://local',
     remoteAddr: 'tcp://remote-idle',
@@ -1278,6 +1407,7 @@ test('stream session node runtime consumes a removed session tombstone before a 
   runtime.start();
   monitorHandler({
     nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+    readyEdge: true,
     value: 0,
     localAddr: 'tcp://local',
     remoteAddr: 'tcp://old',
@@ -1296,6 +1426,7 @@ test('stream session node runtime consumes a removed session tombstone before a 
 
   monitorHandler({
     nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+    readyEdge: true,
     value: 0,
     localAddr: 'tcp://local',
     remoteAddr: 'tcp://fresh',
@@ -1359,6 +1490,7 @@ test('stream session node runtime cancels endpointless disconnect when connectio
   });
   monitorHandler({
     nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+    readyEdge: true,
     value: 0,
     localAddr: undefined,
     remoteAddr: undefined,

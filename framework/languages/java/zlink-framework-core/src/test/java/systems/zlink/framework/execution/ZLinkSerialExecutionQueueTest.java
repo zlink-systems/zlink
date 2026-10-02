@@ -37,6 +37,34 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSerialExecutionQueueTest {
     @Test
+    void abruptErrorCompletesTheOperationAndReleasesItsExecutionGate() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
+        AssertionError failure = new AssertionError("abrupt handler failure");
+        CompletableFuture<Void> failed =
+                queue.enqueue(
+                                () -> {
+                                    throw failure;
+                                },
+                                null)
+                        .toCompletableFuture();
+        try {
+            executor.take().run();
+        } catch (AssertionError abrupt) {
+            assertSame(failure, abrupt);
+        }
+        assertTrue(failed.isCompletedExceptionally());
+        assertSame(failure, assertThrows(ExecutionException.class, failed::get).getCause());
+        CompletableFuture<Void> cleanup =
+                queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                        .toCompletableFuture();
+        executor.take().run();
+        cleanup.get(3, TimeUnit.SECONDS);
+        queue.close();
+    }
+
+    @Test
     void closeDetectsActiveAndSuspendedRelocationBoundaryUntilFinished() throws Exception {
         CountingExecutor executor = new CountingExecutor();
         ZLinkSerialExecutionQueue queue =

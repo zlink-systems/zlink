@@ -1,5 +1,4 @@
 using System.Runtime.ExceptionServices;
-using System.Security.Authentication;
 
 namespace Systems.Zlink.Stream.Connector.Runtime;
 
@@ -311,9 +310,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         }
         catch (Exception ex)
         {
-            var error = ex is ZlinkStreamException streamException
-                ? streamException.Error
-                : MapConnectException(ex, cancellationToken);
+            var error = MapConnectException(ex, cancellationToken);
             if (
                 error.Code
                 is ZlinkStreamErrorCode.ConfigurationError
@@ -327,6 +324,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                         cancellationToken
                     )
                     .ConfigureAwait(false);
+            if (ex is ZlinkStreamException)
+                throw;
             throw new ZlinkStreamException(error);
         }
     }
@@ -364,9 +363,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                 }
                 catch (Exception ex) when (!_closeCts.IsCancellationRequested)
                 {
-                    lastError = ex is ZlinkStreamException streamException
-                        ? streamException.Error
-                        : MapConnectException(ex, _closeCts.Token);
+                    lastError = MapConnectException(ex, _closeCts.Token);
                     await callbacks
                         .PublishErrorAsync(lastError, CancellationToken.None)
                         .ConfigureAwait(false);
@@ -409,22 +406,11 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         {
             return await connectTransport(timeoutCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException ex)
-            when (!cancellationToken.IsCancellationRequested && !_closeCts.IsCancellationRequested)
+        catch (Exception ex)
+            when (ex is not OperationCanceledException
+                || (!cancellationToken.IsCancellationRequested && !_closeCts.IsCancellationRequested))
         {
-            throw ZlinkStreamConnector.Error(
-                ZlinkStreamErrorCode.ConnectTimeout,
-                "Connect timed out.",
-                ex
-            );
-        }
-        catch (AuthenticationException ex)
-        {
-            throw ZlinkStreamConnector.Error(
-                ZlinkStreamErrorCode.TlsValidationFailed,
-                "TLS validation failed.",
-                ex
-            );
+            throw new ZlinkStreamException(MapConnectException(ex, cancellationToken));
         }
     }
 
@@ -865,24 +851,31 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         );
     }
 
-    private static ZlinkStreamError MapConnectException(
+    private ZlinkStreamError MapConnectException(
         Exception ex,
         CancellationToken cancellationToken
     )
     {
+        if (ex is ZlinkStreamException stream)
+            return stream.Error;
+        for (Exception? cause = ex; cause is not null; cause = cause.InnerException)
+        {
+            if (cause is ZlinkStreamTransportFactory.CertificateValidationException)
+                return new ZlinkStreamError(
+                    ZlinkStreamErrorCode.TlsValidationFailed,
+                    "TLS validation failed.",
+                    ex
+                );
+        }
         return ex switch
         {
-            OperationCanceledException canceled when !cancellationToken.IsCancellationRequested =>
+            OperationCanceledException canceled when !cancellationToken.IsCancellationRequested
+                && !_closeCts.IsCancellationRequested =>
                 new ZlinkStreamError(
                     ZlinkStreamErrorCode.ConnectTimeout,
                     "Connect timed out.",
                     canceled
                 ),
-            AuthenticationException authentication => new ZlinkStreamError(
-                ZlinkStreamErrorCode.TlsValidationFailed,
-                "TLS validation failed.",
-                authentication
-            ),
             _ => new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Connect failed.", ex),
         };
     }

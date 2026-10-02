@@ -38,7 +38,9 @@ if (mode === '--contract') {
   const asyncPolicy = read('framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md');
   const frameworkApi = read('framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md');
   const spotMessaging = read('framework/doc/framework/common/spec/server/03-spot-actor/02-spot-messaging.ko.md');
+  const interactionModel = read('framework/doc/framework/common/spec/server/00-foundation/04-interaction-model.ko.md');
   const scenario = read('framework/doc/framework/common/e2e/config-13-submit-admission.ko.md');
+  // #1087 B3·B5가 같은 규칙의 반복 서술을 소유 조항 하나로 줄였다. 각 문장은 그 소유 문서에서 찾는다.
   for (const [source, owner, fragments] of [
     [asyncPolicy, 'async policy', [
       // G1(e98f23b570)에서 `TrySubmit`이라는 이름이 'nonblocking try 계열'로 바뀌었다.
@@ -48,11 +50,12 @@ if (mode === '--contract') {
       '`DeadlineExceeded`',
       '`ShuttingDown`']],
     [frameworkApi, 'Framework API', [
-      'one-way send·publish는 결과값 없이 정상 완료',
       'Target별 수락·실패 결과는 public publish 결과로 반환하거나 publish 전용 monitoring 값으로 집계하지',
       '`ShuttingDown`']],
+    [interactionModel, 'Interaction model', [
+      '결과값 없이 정상 완료한다. 이 완료는 subscriber 수신이나 handler 완료를 뜻하지 않는다.']],
     [spotMessaging, 'Spot messaging', [
-      'Publish 완료는 handler 실행 결과가 아니라 local outbound admission',
+      'Terminal call은 이 시점에 결과값 없이 정상 완료하며 target별',
       'monitoring snapshot, metric 또는 runtime event로 제공하지 않는다']],
     [scenario, 'Config 13', [
       '원격 handler 실행 완료를 뜻하지 않는다',

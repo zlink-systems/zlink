@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { awaitWithAbort, macrotaskBoundary } from '../abort';
 import type {
   ZLinkBlobReference,
+  ZLinkBlobPutResult,
   ZLinkRelocationStore
 } from '../../contracts/Locations/RelocationStore';
-
-const MAX_REFERENCE_GENERATION_ATTEMPTS = 4;
 
 export function relocationBlobReference(value: string): ZLinkBlobReference {
   return { value } as ZLinkBlobReference;
@@ -20,10 +20,21 @@ export async function putNewRelocationBlob(
   readonly expiresAt: Date;
   readonly storeNow: Date;
 }> {
-  for (let attempt = 0; attempt < MAX_REFERENCE_GENERATION_ATTEMPTS; attempt += 1) {
+  let reference = relocationBlobReference(randomUUID());
+  for (; ; await macrotaskBoundary()) {
     signal?.throwIfAborted();
-    const reference = relocationBlobReference(randomUUID());
-    const result = await store.put(reference, payload, retentionMs, signal);
+    let result: ZLinkBlobPutResult;
+    try {
+      result = await awaitWithAbort(store.put(reference, payload, retentionMs, signal), signal);
+    } catch {
+      signal?.throwIfAborted();
+      const read = await awaitWithAbort(store.read(reference, signal), signal);
+      if (read.kind === 'found' && Buffer.compare(read.bytes, payload) === 0) {
+        return { reference, expiresAt: read.expiresAt, storeNow: read.storeNow };
+      }
+      if (read.kind === 'missing') continue;
+      result = { kind: 'conflict', storeNow: read.storeNow };
+    }
     if (result.kind !== 'conflict') {
       return {
         reference,
@@ -31,6 +42,6 @@ export async function putNewRelocationBlob(
         storeNow: result.storeNow
       };
     }
+    reference = relocationBlobReference(randomUUID());
   }
-  throw new Error('Unable to allocate a unique Relocation Store reference.');
 }

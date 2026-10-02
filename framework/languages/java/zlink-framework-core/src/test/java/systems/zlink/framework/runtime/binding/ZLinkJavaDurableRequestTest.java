@@ -285,8 +285,8 @@ final class ZLinkJavaDurableRequestTest {
     }
 
     @Test
-    void permanentBindingFailureIsPreserved() {
-        var failure = new ZlinkSubmitException(SubmitResult.TERMINATED);
+    void unknownBindingFailureIsPreserved() {
+        var failure = new IllegalStateException("unknown binding failure");
         var completion =
                 new Source()
                         .request(
@@ -397,6 +397,37 @@ final class ZLinkJavaDurableRequestTest {
         source.signal();
         assertEquals(1, attempts.get());
         assertNull(source.listener);
+    }
+
+    @Test
+    void typedInternalFailureIsProjectedWithItsOriginalCause() {
+        var failure = new ZlinkSubmitException(SubmitResult.INTERNAL_ERROR);
+        var completion =
+                new Source()
+                        .request(
+                                () -> List.of(new byte[] {1}),
+                                (frames, remaining) -> CompletableFuture.failedFuture(failure),
+                                () -> false,
+                                Duration.ofSeconds(1));
+        assertFailure(
+                completion.toCompletableFuture(),
+                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                failure);
+    }
+
+    @Test
+    void terminatedBindingFailureIsProjectedAsShuttingDownWithOriginalCause() {
+        var failure = new ZlinkSubmitException(SubmitResult.TERMINATED);
+        var completion =
+                new Source()
+                        .request(
+                                () -> List.of(new byte[] {1}),
+                                (frames, remaining) -> CompletableFuture.failedFuture(failure),
+                                () -> false,
+                                Duration.ofSeconds(1));
+        // Spec: 07-framework-error-model.ko.md:84; 01-submit-and-completion.ko.md:191.
+        assertFailure(
+                completion.toCompletableFuture(), ZLinkFrameworkErrorKind.SHUTTING_DOWN, failure);
     }
 
     private static final class Source {

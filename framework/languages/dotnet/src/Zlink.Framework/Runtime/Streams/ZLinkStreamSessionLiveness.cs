@@ -8,50 +8,67 @@ internal enum ZLinkStreamLivenessDecision
     HeartbeatTimeout,
 }
 
-internal sealed class ZLinkStreamSessionLiveness(TimeProvider? timeProvider = null)
+internal sealed class ZLinkStreamSessionLiveness
 {
     public static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(1);
     public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(1);
     public static readonly TimeSpan HeartbeatTimeout = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(30);
 
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
-    private long _lastApplicationInbound = (timeProvider ?? TimeProvider.System).GetTimestamp();
-    private long _lastHeartbeatPing = (timeProvider ?? TimeProvider.System).GetTimestamp();
-    private int _heartbeatOutstanding;
+    private readonly TimeProvider _time;
+    private long _lastApplicationInbound;
+    private long _lastHeartbeatPing;
+    private long _lastInbound;
+
+    public ZLinkStreamSessionLiveness(TimeProvider? timeProvider = null)
+    {
+        _time = timeProvider ?? TimeProvider.System;
+        var connectedAt = _time.GetTimestamp();
+        _lastApplicationInbound = connectedAt;
+        _lastHeartbeatPing = connectedAt;
+        _lastInbound = connectedAt;
+    }
 
     public void RecordApplicationInbound()
     {
         Interlocked.Exchange(ref _lastApplicationInbound, _time.GetTimestamp());
     }
 
-    public void RecordHeartbeatPong()
+    public void RecordInbound()
     {
-        Volatile.Write(ref _heartbeatOutstanding, 0);
+        var timestamp = _time.GetTimestamp();
+        var lastInbound = Volatile.Read(ref _lastInbound);
+        while (timestamp > lastInbound)
+        {
+            var observed = Interlocked.CompareExchange(ref _lastInbound, timestamp, lastInbound);
+            if (observed == lastInbound)
+                return;
+            lastInbound = observed;
+        }
     }
 
     public void RecordHeartbeatPing()
     {
         Interlocked.Exchange(ref _lastHeartbeatPing, _time.GetTimestamp());
-        Volatile.Write(ref _heartbeatOutstanding, 1);
     }
 
-    public ZLinkStreamLivenessDecision Evaluate()
+    public ZLinkStreamLivenessDecision Evaluate(long? connectedAt = null)
     {
         var now = _time.GetTimestamp();
-        if (
-            Volatile.Read(ref _heartbeatOutstanding) != 0
-            && _time.GetElapsedTime(Volatile.Read(ref _lastHeartbeatPing), now) >= HeartbeatTimeout
-        )
+        var inboundBaseline = Volatile.Read(ref _lastInbound);
+        var pingBaseline = Volatile.Read(ref _lastHeartbeatPing);
+        if (connectedAt is { } connectedTimestamp)
+        {
+            inboundBaseline = Math.Max(inboundBaseline, connectedTimestamp);
+            pingBaseline = Math.Max(pingBaseline, connectedTimestamp);
+        }
+        if (_time.GetElapsedTime(inboundBaseline, now) >= HeartbeatTimeout)
             return ZLinkStreamLivenessDecision.HeartbeatTimeout;
 
         if (_time.GetElapsedTime(Volatile.Read(ref _lastApplicationInbound), now) >= IdleTimeout)
             return ZLinkStreamLivenessDecision.IdleTimeout;
 
-        if (
-            Volatile.Read(ref _heartbeatOutstanding) == 0
-            && _time.GetElapsedTime(Volatile.Read(ref _lastHeartbeatPing), now) >= HeartbeatInterval
-        )
+        if (_time.GetElapsedTime(pingBaseline, now) >= HeartbeatInterval)
             return ZLinkStreamLivenessDecision.SendHeartbeat;
 
         return ZLinkStreamLivenessDecision.None;
