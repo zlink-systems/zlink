@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace Zlink.Framework.Runtime.Streams;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -465,31 +463,17 @@ internal sealed class ZLinkSessionActorCoordinator(
             SessionOwnerId: sessionOwnerId,
             SessionOwnerLeaseGeneration: sessionOwnerLeaseGeneration
         );
-        // The bind confirm can race auto-discovery admission of the actor's
-        // node at startup; retriable route failures retry within the request
-        // timeout instead of failing the session's first authenticate.
-        var deadline = Stopwatch.GetElapsedTime(0) + runtime.Registration.DefaultRequestTimeout;
-        var response = await ConfirmBindingWithRetryAsync(
-                actor.ActorId,
-                deadline,
-                async attemptCancellation =>
-                    actor.NodeRid == sessionNodeRid
-                        ? await runtime
-                            .BindRemoteBoundSessionRouteAsync(
-                                request,
-                                sessionNodeRid,
-                                attemptCancellation
-                            )
-                            .ConfigureAwait(false)
-                        : await runtime
-                            .Services.GetRequiredService<IZLinkRouteClient>()
-                            .RequestToNode(actor.MeshName, actor.NodeRid, request)
-                            .Timeout(runtime.Registration.DefaultRequestTimeout)
-                            .Async<ZLinkRemoteSessionBindResponse>(attemptCancellation)
-                            .ConfigureAwait(false),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        var response =
+            actor.NodeRid == sessionNodeRid
+                ? await runtime
+                    .BindRemoteBoundSessionRouteAsync(request, sessionNodeRid, cancellationToken)
+                    .ConfigureAwait(false)
+                : await runtime
+                    .Services.GetRequiredService<IZLinkRouteClient>()
+                    .RequestToNode(actor.MeshName, actor.NodeRid, request)
+                    .Timeout(runtime.Registration.DefaultRequestTimeout)
+                    .Async<ZLinkRemoteSessionBindResponse>(cancellationToken)
+                    .ConfigureAwait(false);
 
         if (!response.Acknowledged)
             throw new ZLinkFrameworkException(
@@ -521,43 +505,6 @@ internal sealed class ZLinkSessionActorCoordinator(
             sessionOwnerId,
             sessionOwnerLeaseGeneration
         );
-    }
-
-    // Deadline-bounded bind-confirm retry (spec 32): exhausting the
-    // deadline window on retryable failures surfaces DeadlineExceeded with
-    // the last attempt preserved as the cause — cpp/java/node already map
-    // bind exhaustion this way. Non-retryable failures propagate unmapped.
-    // The bounds are unchanged: retries stop at the same deadline the old
-    // inline loop used, only the exhausted-window error kind differs.
-    internal static async ValueTask<TResponse> ConfirmBindingWithRetryAsync<TResponse>(
-        string actorId,
-        TimeSpan deadline,
-        Func<CancellationToken, ValueTask<TResponse>> attemptAsync,
-        CancellationToken cancellationToken
-    )
-    {
-        while (true)
-        {
-            try
-            {
-                return await attemptAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (ZLinkFrameworkException failure)
-                when (failure.RetryAdvice != ZLinkRetryAdvice.DoNotRetry
-                    || failure.Kind == ZLinkFrameworkErrorKind.NotFound
-                )
-            {
-                if (Stopwatch.GetElapsedTime(0) >= deadline)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.DeadlineExceeded,
-                        $"Actor '{actorId}' session bind retries exhausted"
-                            + " the request timeout.",
-                        innerException: failure
-                    );
-                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken)
-                    .ConfigureAwait(false);
-            }
-        }
     }
 
     public IZLinkSessionActor? FindActor(string actorId)

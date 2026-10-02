@@ -33,7 +33,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan TransportShutdownGrace = PollInterval + PollInterval;
     private static readonly TimeSpan RelocationAckRetryInterval = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan NativeReplySubmissionTimeout = TimeSpan.FromSeconds(5);
 
     private readonly IContext _context;
     private readonly string _meshName;
@@ -127,8 +126,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ObservedActorAuthorityKey,
         ObservedAuthority
     > _observedActorAuthorities = new();
-    private readonly ConcurrentQueue<PendingNativeTerminalReply> _pendingNativeTerminalReplies =
-        new();
 
     // This is the sole storage for node state and monitor membership. The lane
     // replaces the immutable pair; event publication only observes that pair.
@@ -3372,8 +3369,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Interlocked.Exchange(ref _reservedRawApplicationAdmission, null)?.Dispose();
         RunState(_selectedRoutes.Clear);
         RunInboundOperationState(_controlSends.Clear);
-        while (_pendingNativeTerminalReplies.TryDequeue(out var pendingReply))
-            pendingReply.Dispose();
         foreach (var spot in _spots.Values)
             await spot.DisposeAsync().ConfigureAwait(false);
         _spots.Clear();
@@ -5195,7 +5190,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
     }
 
-    private static async Task DeliverRequestCompletionAsync(
+    private async Task DeliverRequestCompletionAsync(
         Task<ManagedRequestCompletion> completionTask,
         ZLinkBackendRequestCallback callback
     )
@@ -5205,9 +5200,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             callback(completion.Result, completion.Parts);
         }
-        catch
+        catch (Exception exception)
         {
             DisposeParts(completion.Parts);
+            var reporter = _logicalMulticastDispatchErrors;
+            if (reporter is null)
+                throw;
+            reporter.ReportRuntimeTaskException(nameof(DeliverRequestCompletionAsync), exception);
         }
     }
 
@@ -6415,31 +6414,27 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (request)
         {
             var nativeReply = received.Reply();
-            ReplySubmitOperation? preparedReply = null;
-            Message[]? preparedReplyWire = null;
             var replied = 0;
             replyHandler = replyParts =>
             {
                 if (Interlocked.CompareExchange(ref replied, 1, 0) != 0)
                     return SubmitResult.InvalidState;
-                if (preparedReply is null)
-                    (preparedReply, preparedReplyWire) = PrepareNativeTerminalReply(
-                        sourceRid,
-                        nativeReply,
-                        application.Correlation,
-                        RequestResult.Ok,
-                        0,
-                        replyParts
-                    );
-                var result = SubmitNativeTerminalReply(preparedReply);
-                if (result == SubmitResult.Backpressured)
-                    Volatile.Write(ref replied, 0);
-                else if (preparedReplyWire is not null)
+                var (preparedReply, wire) = PrepareNativeTerminalReply(
+                    sourceRid,
+                    nativeReply,
+                    application.Correlation,
+                    RequestResult.Ok,
+                    0,
+                    replyParts
+                );
+                try
                 {
-                    ZLinkMessageParts.DisposeAll(preparedReplyWire);
-                    preparedReplyWire = null;
+                    return SubmitNativeTerminalReply(preparedReply);
                 }
-                return result;
+                finally
+                {
+                    ZLinkMessageParts.DisposeAll(wire);
+                }
             };
         }
         return EnqueueOwned(
@@ -6560,7 +6555,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 wire,
                 _ => Volatile.Write(ref replied, 2)
             );
-            return SubmitOrQueueNativeReply(pending);
+            return SubmitPreparedNativeReply(pending);
         }
 
         SubmitResult ReplyTerminal(RequestResult result, uint failureCode) =>
@@ -6675,7 +6670,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RequestResult result,
         uint failureCode
     ) =>
-        SubmitOrQueueNativeReply(
+        SubmitPreparedNativeReply(
             PrepareNativeReply(
                 sourceRid,
                 nativeReply,
@@ -6687,7 +6682,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId sourceRid,
         ReplyOperation nativeReply,
         IReadOnlyList<ReadOnlyMemory<byte>> wire
-    ) => SubmitOrQueueNativeReply(PrepareNativeReply(sourceRid, nativeReply, wire));
+    ) => SubmitPreparedNativeReply(PrepareNativeReply(sourceRid, nativeReply, wire));
 
     private void ProcessRelocationPrepare(
         RoutingId sourceNodeRid,
@@ -7441,8 +7436,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return;
         }
         var nativeReply = request ? received.Reply() : null;
-        ReplySubmitOperation? preparedReply = null;
-        Message[]? preparedReplyWire = null;
         var replied = 0;
         SubmitResult Reply(
             RequestResult result,
@@ -7452,28 +7445,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             if (!request || Interlocked.CompareExchange(ref replied, 1, 0) != 0)
                 return SubmitResult.InvalidState;
-            if (preparedReply is null)
-                (preparedReply, preparedReplyWire) = PrepareNativeTerminalReply(
-                    sourceRid,
-                    nativeReply!,
-                    operation.ReplyRouteId,
-                    result,
-                    failureCode,
-                    replyParts
-                );
-            var submit = SubmitNativeTerminalReply(preparedReply);
-            if (submit == SubmitResult.Backpressured)
+            var (preparedReply, wire) = PrepareNativeTerminalReply(
+                sourceRid,
+                nativeReply!,
+                operation.ReplyRouteId,
+                result,
+                failureCode,
+                replyParts
+            );
+            try
             {
-                Volatile.Write(ref replied, 0);
-                return submit;
+                return SubmitNativeTerminalReply(preparedReply);
             }
-
-            if (preparedReplyWire is not null)
+            finally
             {
-                ZLinkMessageParts.DisposeAll(preparedReplyWire);
-                preparedReplyWire = null;
+                ZLinkMessageParts.DisposeAll(wire);
             }
-            return submit;
         }
         if (
             peer is null
@@ -7671,7 +7658,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 Volatile.Write(ref replied, 2);
                 return SubmitResult.Terminated;
             }
-            return SubmitOrQueueNativeReply(pending);
+            return SubmitPreparedNativeReply(pending);
         }
         if (
             stateful.TargetNodeRid != _routingId
@@ -8293,18 +8280,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         var stopToken = _stop?.Token ?? CancellationToken.None;
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
-        deadline.CancelAfter(NativeReplySubmissionTimeout);
         var target = RunState(() =>
             _peersByRid.TryGetValue(sourceRid, out var peer) ? peer.PhysicalRoutingId : sourceRid
         );
 
         try
         {
-            await SendRoutedAsync(target, wire, deadline.Token).ConfigureAwait(false);
+            await SendRoutedAsync(target, wire, stopToken).ConfigureAwait(false);
             return true;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (stopToken.IsCancellationRequested)
         {
             return false;
         }
@@ -8312,8 +8297,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             return false;
         }
-        catch (ZlinkException)
+        catch (ZlinkException exception)
         {
+            var reporter = _logicalMulticastDispatchErrors;
+            if (reporter is null)
+                throw;
+            reporter.ReportRuntimeTaskException(nameof(SendServiceTerminalAsync), exception);
             return false;
         }
     }
@@ -9305,7 +9294,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void ProcessInfrastructure(long now)
     {
-        RetryPendingNativeTerminalReplies();
         var (intents, peers) = RunState(() =>
             (_peersByIntent.Values.ToArray(), _peersByRid.Values.ToArray())
         );
@@ -9384,30 +9372,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                 );
             }
-        }
-    }
-
-    private void RetryPendingNativeTerminalReplies()
-    {
-        // ReplySubmitOperation restores its complete Message[] after a failed
-        // submit. Retry that same builder; rebuilding would lose Core's reply
-        // token ownership and could change a multipart terminal.
-        var count = Math.Min(_pendingNativeTerminalReplies.Count, ReceiveBatchSize);
-        for (var index = 0; index < count; index++)
-        {
-            if (!_pendingNativeTerminalReplies.TryDequeue(out var pending))
-                return;
-            var submit = RetryNativeTerminalReply(pending);
-            if (submit == SubmitResult.Backpressured)
-            {
-                if (CanRetryNativeTerminalReply(pending))
-                    _pendingNativeTerminalReplies.Enqueue(pending);
-                else
-                    FinishNativeTerminalReply(pending, SubmitResult.Terminated);
-                continue;
-            }
-
-            FinishNativeTerminalReply(pending, submit);
         }
     }
 
@@ -10779,10 +10743,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             for (; created < parts.Count; created++)
                 wire[created] = Message.From(parts[created]);
-            var deadline = _deadlineClock.Elapsed + NativeReplySubmissionTimeout;
             return new PendingNativeTerminalReply(
                 targetRid,
-                deadline,
                 reply.Messages(wire),
                 wire,
                 onCompleted
@@ -10813,20 +10775,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return SubmitResult.Terminated;
         }
         catch (ZlinkConfigException exception)
+            when (exception.Result == ZlinkConfigException.ErrorCode.InvalidState)
         {
-            return exception.Result == ZlinkConfigException.ErrorCode.InvalidState
-                ? SubmitResult.InvalidState
-                : SubmitResult.Terminated;
+            return SubmitResult.InvalidState;
         }
         catch (ZlinkSubmitException exception)
         {
-            return exception.Result == ZlinkSubmitException.ErrorCode.Backpressured
-                ? SubmitResult.Backpressured
-                : SubmitResult.Terminated;
-        }
-        catch (ZlinkException)
-        {
-            return SubmitResult.Terminated;
+            return (SubmitResult)(int)exception.Result;
         }
     }
 
@@ -10836,43 +10791,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             reply.Submit();
     }
 
-    private SubmitResult SubmitOrQueueNativeReply(PendingNativeTerminalReply pending)
+    private SubmitResult SubmitPreparedNativeReply(PendingNativeTerminalReply pending)
     {
-        // The opaque ReplyOperation is Core's exact reply-route capability.
-        // Core decides both the first submit and later backpressure retries;
-        // monitor delivery cannot replace or invalidate that captured route.
-        var submit = SubmitNativeTerminalReply(pending.Submit);
-        if (submit == SubmitResult.Backpressured)
+        try
         {
-            if (CanRetryNativeTerminalReply(pending))
-            {
-                _pendingNativeTerminalReplies.Enqueue(pending);
-                return submit;
-            }
-            FinishNativeTerminalReply(pending, SubmitResult.Terminated);
-            return SubmitResult.Terminated;
+            var submit = SubmitNativeTerminalReply(pending.Submit);
+            pending.Complete(submit);
+            if (submit != SubmitResult.Ok)
+                Publish(MeshMonitorEventKind.ProtocolError, peerRid: pending.TargetRid);
+            return submit;
         }
-
-        FinishNativeTerminalReply(pending, submit);
-        return submit;
-    }
-
-    private bool CanRetryNativeTerminalReply(PendingNativeTerminalReply pending) =>
-        _deadlineClock.Elapsed < pending.Deadline;
-
-    private SubmitResult RetryNativeTerminalReply(PendingNativeTerminalReply pending)
-    {
-        return CanRetryNativeTerminalReply(pending)
-            ? SubmitNativeTerminalReply(pending.Submit)
-            : SubmitResult.Terminated;
-    }
-
-    private void FinishNativeTerminalReply(PendingNativeTerminalReply pending, SubmitResult submit)
-    {
-        pending.Complete(submit);
-        pending.Dispose();
-        if (submit != SubmitResult.Ok)
-            Publish(MeshMonitorEventKind.ProtocolError, peerRid: pending.TargetRid);
+        finally
+        {
+            pending.Dispose();
+        }
     }
 
     private SubmitResult SendTerminalReply(
@@ -12909,7 +12841,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private sealed class PendingNativeTerminalReply(
         RoutingId targetRid,
-        TimeSpan deadline,
         ReplySubmitOperation submit,
         Message[] wire,
         Action<SubmitResult>? onCompleted
@@ -12919,7 +12850,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         private Action<SubmitResult>? _onCompleted = onCompleted;
 
         internal RoutingId TargetRid { get; } = targetRid;
-        internal TimeSpan Deadline { get; } = deadline;
         internal ReplySubmitOperation Submit { get; } = submit;
 
         internal void Complete(SubmitResult result) =>
