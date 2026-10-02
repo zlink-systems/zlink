@@ -122,7 +122,9 @@ target descriptor, typed capacity bundle, 현재 owner lease와 `StoreVersion`�
 인계와 취소 여부를 결정한다. Actor와 Spot은 이 공통 reservation operation을 함께
 사용한다.
 
-Encoded creation request의 크기 한도는 [Location runtime §7](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다. Request의 content reference·hash, 저장 시점과 수명은 [Location runtime §3.4](../05-location-relocation/01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가 정한다. 생성 권한을 얻은 target만 이 request를
+Encoded creation request는 최대 1 MiB다. Framework는 reservation 전에 변경할 수
+없는 content reference와 hash를 creation intent에 기록하고, object가 Ready가 되거나
+실패한 생성을 정리할 때까지 유지한다. 생성 권한을 얻은 target만 이 request를
 factory에 전달한다. Factory와 initialize는 `(logical key, ObjectGeneration,
 attempt)` 기준으로 한 번 이상 실행될 수 있으므로 같은 입력의 재실행을 안전하게
 처리해야 한다.
@@ -781,7 +783,7 @@ application은 다음 round나 match를 여기서 시작할 수 있다.
 ## 8. 실패 처리 범위
 
 **Relay-ready reply가 accepted 상태가 되기 전 명시적 failure는 `Aborted` CAS, route와 source
-location snapshot 취소 확인, target staging 정리와 source 상태 복원을
+location snapshot 취소 확인, relocation reservation·target staging 정리와 source 상태 복원을
 끝낸 뒤 source admission을 다시 연다. 이 경계 뒤에는 cutover submit 성공·실패와 관계없이
 source 재개는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 `Preserve` fence를 따른다** — 공통 authority 규칙이며 Actor Join, User Spot aggregate relocation(§7) 모두에 적용된다. Cutover 뒤 Location Store 변경 결과가 불명확하면 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 같은 `RelocationId` authority read로 결과를 확정한다. Target CAS 재제출과 staging terminal은 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
 

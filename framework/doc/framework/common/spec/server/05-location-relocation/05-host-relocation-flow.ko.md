@@ -760,7 +760,7 @@ queue를 파괴하기 전에 소유한 transport 실행 문맥에서 cancellatio
 
 | 먼저 확정된 operation | 처리 |
 |---|---|
-| `Shutdown`의 admission seal | Target staging을 정리하고(`SpotWide`는 [Location runtime §3.5](01-location-runtime.ko.md#35-spotwide-이동의-진행-record) Abort로 reserved를 해제한다) 기다리던 Relocate 호출을 `Blocked/ShutdownRequested`로 끝낸다. |
+| `Shutdown`의 admission seal | Target에 확보한 수용 공간을 반환하고 기다리던 Relocate 호출을 `Blocked/ShutdownRequested`로 끝낸다. |
 | `Relocating` publication | 현재 unit만 terminal 상태까지 확정하고 나머지는 시작하지 않는다. Published authority를 보존하며 waiter는 `Blocked/ShutdownRequested`다. |
 
 `Relocated`의 `Shutdown`은 accepted work와 infrastructure만 정리한다. `Serving`에서 바로

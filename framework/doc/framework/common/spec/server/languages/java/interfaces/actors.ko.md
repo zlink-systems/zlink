@@ -93,7 +93,7 @@ User Spot member Actor만 Spot과 current member 전체를 하나의 aggregate�
 `disableRelocation()`을 선택했거나 호환 target을 확보할 수 없을 때만 해당 Actor unit 또는
 `SpotWide` aggregate를 차단한다. Relocation을 비활성화한 participant는
 `BLOCKED/RELOCATION_DISABLED`다. 요청한 application version과 등록 factory/type·state 보존 adapter
-eligibility를 만족하는 target·capacity 부재는 `BLOCKED/TARGET_UNAVAILABLE`이다. Target 선택 뒤
+eligibility를 만족하는 target·capacity·reservation 부재는 `BLOCKED/TARGET_UNAVAILABLE`이다. Target 선택 뒤
 전달한 state schema/type adapter 불일치는 `BLOCKED/STATE_INCOMPATIBLE`다. Actor unit은 target factory와
 restore를 끝내고 accepted journal을
 application handler가 실행하지 않은 staging queue로 준비한 뒤 `NEW_OWNER` CAS를 수행한다. 이 CAS는

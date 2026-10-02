@@ -64,15 +64,31 @@ normalization이나 case folding을 적용하지 않으며 언어 class 이름(n
 
 ### 2.1 Entry Spot ID
 
-Entry Spot ID의 발급·형식·lifecycle과 예약 형식의 거부는 [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이
-정한다. Framework는 Spot ID 문자열로 MeshNode 관계를 계산하지 않고 MeshNode descriptor가 게시한 Entry Spot
-ID mapping을 사용한다.
+Entry Spot ID는 Framework가 발급하며 caller가 create 대상으로 지정하지 않는다.
+`<diagnostic-prefix>-entry-<lowercase-canonical-uuid-v4>` 형식은 Framework가 발급하는 Entry
+Spot ID를 위해 예약한다. UUID 부분은 MeshNode RID와 별도로 만드는 RFC 4122 UUID v4 값이다.
+
+**Caller가 지정한 User·Instance Spot ID가 이 예약 형식과 일치하면 Location Store reservation이나
+factory를 시작하기 전에 `InvalidOperation`으로 거부한다.** User·Instance Spot의 generic
+`Reserve`도 같은 global namespace를 검사하므로, active Entry Spot ID를 caller-created Spot
+authority로 사용할 수 없다. Framework는 Spot ID 문자열로 MeshNode 관계를 계산하지 않고
+MeshNode descriptor가 게시한 Entry Spot ID mapping을 사용한다.
+
+Entry Spot ID는 같은 Object Server lifecycle 동안 유지한다. Endpoint가 같은 replacement
+lifecycle에서도 새 Entry Spot ID를 발급하며, automatic RID이면 MeshNode RID도 새로 발급한다. Framework는 full MeshNode
+RID를 이어 붙여 Entry Spot ID를 만들지 않는다.
+
+Object Server descriptor의 `NewClaim`은 `(MeshName, NodeRid)` descriptor identity와
+`EntrySpotId`의 global Spot identity claim을 owner lease와 lifecycle에 연결하여 하나의
+Location Store transaction에서 생성한다. 둘 중 하나라도 active claim과 충돌하면 descriptor,
+Entry claim과 index를 모두 변경하지 않고 첫 claim에서 startup configuration error를 반환한다.
+두 번째 Entry UUID나 claim은 만들지 않는다.
 
 remote runtime이 endpoint, identity와 상태를 발견할 수 있도록 게시하는 등록 정보인
-[Descriptor](../00-foundation/02-glossary.ko.md#descriptor) remove는 저장된 descriptor의
-owner lease와 lifecycle이 요청과 일치할 때만 descriptor를 지운다. 이전 lifecycle의 stale remove는
-replacement lifecycle의 descriptor를 삭제할 수 없다. Owner cleanup이 회수하는 범위는
-[Location runtime §11](../05-location-relocation/01-location-runtime.ko.md#11-host가-종료될-때-store-record를-정리한다)이 정한다. `EntrySpotId`는
+[Descriptor](../00-foundation/02-glossary.ko.md#descriptor) remove와 owner cleanup은 저장된 descriptor의
+owner lease와 lifecycle이 요청과
+일치할 때만 연결된 Entry claim을 같은 transaction에서 해제한다. 이전 lifecycle의 stale
+cleanup은 replacement lifecycle의 descriptor나 Entry claim을 삭제할 수 없다. `EntrySpotId`는
 descriptor immutable field와 immutable digest에 포함하며 `Renew` 또는 mutable descriptor
 update로 바꿀 수 없다.
 
@@ -157,7 +173,9 @@ ZLinkSpotCreateResult result = await spotManager
 Mesh가 없으면 `NotFound`로 끝난다. Framework는 role, stable type capability, active·pending
 capacity를 먼저 검사하고 남은 후보를 node-wide placement weight로 선택한다.
 
-Encoded creation request의 크기 한도는 [Location runtime §7](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다. Request의 content reference·hash, 저장 시점과 수명은 [Location runtime §3.4](../05-location-relocation/01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가 정한다. 생성 권한을 얻은 target만 request를
+Encoded creation request는 최대 1 MiB다. Framework는 reservation 전에 변경할 수 없는 content
+reference와 hash를 creation intent에 기록하고, Spot이 [Ready](../00-foundation/02-glossary.ko.md#ready)가
+되거나 실패한 생성을 정리할 때까지 유지한다. 생성 권한을 얻은 target만 request를
 [factory](../00-foundation/02-glossary.ko.md#factory)에 전달한다. **Factory는, 같은 ActorId/Spot ID의
 서로 다른 logical incarnation을 구분하는 번호인
 [ObjectGeneration](../00-foundation/02-glossary.ko.md#objectgeneration)을 포함한 `(SpotId,
@@ -523,7 +541,7 @@ Spot shell은 같은 public SpotId와 ObjectGeneration을 유지하지만 Locati
 target으로 바뀌기 전까지 resolver와 application handler에 노출하지 않는다. 임시 public
 SpotId를 만들거나 생성 뒤 SpotId를 바꾸지 않는다.
 
-Source seal, durable capture, target factory·restore, authority commit과 admission
+Source seal, durable capture, target reservation·factory·restore, authority commit과 admission
 순서는 [Spot과 Actor membership](05-spot-actor-membership.ko.md)이 정한다.
 
 - **Relay-ready reply가 accepted 상태가 되기 전 명시적 failure만 source를 유지한다.** 그 뒤 authority 판정은 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. Target commit이면 선택한 같은 target process에서 절차를 계속한다. Target process가 종료되면 다른 target을 선택하거나
@@ -565,8 +583,8 @@ Instance intent·`InMesh`, `SpotRef`, command 47·20·48의 wire tail, 반환값
 **Spot ID와 예약 형식**
 
 - Spot ID가 Store namespace 전체의 global key이고 MeshName별 중복을 허용하지 않는다.
-- 예약 형식의 User·Instance Spot ID 거부가
-  [Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)대로 동작한다.
+- Caller가 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 예약 형식으로 User·Instance Spot ID를
+  지정하면 Store reservation과 factory 실행 전에 `InvalidOperation`으로 거부한다.
 - User Spot `Create`가 lowercase canonical UUID v4 문자열을 발급하고 active conflict에서 두 번째
   UUID를 만들지 않는다.
 - Entry Spot join과 placement가 descriptor의 lifecycle mapping을 사용하고 Spot ID 문자열을

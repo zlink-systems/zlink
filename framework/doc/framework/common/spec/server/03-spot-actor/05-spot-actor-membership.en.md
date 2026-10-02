@@ -147,8 +147,10 @@ target, and cancellation are decided by checking the recorded `Creating`
 state and target owner lease together. Actor and Spot share this common
 reservation operation.
 
-The size limit of an encoded creation request is defined by [Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot). [Location runtime §3.4](../05-location-relocation/01-location-runtime.en.md#34-how-different-languages-read-and-write-the-same-redis-record) defines the request's content reference,
-hash, when it is stored, and its lifetime. Only the target that obtained creation authority
+An encoded creation request is at most 1 MiB. The framework records an
+unchangeable content reference and hash into the creation intent before
+reservation, and keeps it until the object becomes Ready or a failed
+creation is cleaned up. Only the target that obtained creation authority
 passes this request to the factory. Since factory execution and initialization
 can run more than once per `(logical key, ObjectGeneration, attempt)`, they must
 safely handle re-execution with the same input.
@@ -947,7 +949,7 @@ callback can start the next round or match here.
 
 **An explicit failure before relay-ready is accepted finishes an
 `Aborted` CAS, confirms route and source location snapshot cancellation,
-cleans up the target staging, and restores
+cleans up the relocation reservation and target staging, and restores
 source state before reopening source admission. After that boundary,
 source resumption follows the `Preserve` fence in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)** — this is the
 common authority rule, and it applies to both Actor Join and User Spot aggregate

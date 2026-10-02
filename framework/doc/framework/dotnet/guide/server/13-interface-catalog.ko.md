@@ -91,7 +91,7 @@ services.AddZLinkFramework(options =>
 | `IZLinkFanoutChannelBuilder` | classic fanout publisher·subscriber 등록 |
 | `IZLinkStreamNodeBuilder` | STREAM listener와 session 등록 |
 
-Entry SpotId는 Framework가 발급하며 형식은 [Transport RID와 Spot ID 정책 §6.3](../../../common/spec/server/02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다. Application이 Entry Spot의
+Entry SpotId는 Framework가 `<prefix>-entry-<uuid>` 형식으로 발급한다. Application이 Entry Spot의
 RoutingId나 SpotId를 설정하는 API는 없다.
 
 정확한 builder는
