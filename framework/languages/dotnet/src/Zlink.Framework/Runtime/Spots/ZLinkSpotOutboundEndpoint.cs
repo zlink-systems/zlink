@@ -53,7 +53,7 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         using var operation = runtime.EnterOperation(countAsRequest: true);
         var requestTimeout = timeout ?? activation.DefaultRequestTimeout;
         var metric = ZLinkRuntimeMetrics.StartRequest(activation.ChannelName, "channel");
-        var outcome = "completed";
+        var outcome = ZLinkRuntimeMetrics.RequestCompleted;
         try
         {
             // A Spot may target a channel registered on any process-local
@@ -71,17 +71,17 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         }
         catch (TimeoutException)
         {
-            outcome = "timed_out";
+            outcome = ZLinkRuntimeMetrics.RequestTimedOut;
             throw;
         }
         catch (OperationCanceledException)
         {
-            outcome = "cancelled";
+            outcome = ZLinkRuntimeMetrics.RequestCancelled;
             throw;
         }
         catch
         {
-            outcome = "failed";
+            outcome = ZLinkRuntimeMetrics.RequestFailed;
             throw;
         }
         finally

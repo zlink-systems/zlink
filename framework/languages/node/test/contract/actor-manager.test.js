@@ -3459,6 +3459,19 @@ test('same-node Entry Join clears User membership and preserves Actor incarnatio
   assert.deepEqual(f.events, ['store', 'membership', 'joined']);
 });
 
+test('same-node Entry Join obtains its generation from the native Entry Spot', async () => {
+  const f = await localCoordinatorFixture({ entry: true });
+  delete f.target.targetSpotGeneration;
+  f.target.targetNodeGeneration = 19n;
+
+  const result = await submitDeferredActorJoin(f.actor, f.actor.context.joinEntrySpot('entry'));
+
+  assert.equal(result.status, 'accepted');
+  assert.equal(f.location().spotGeneration, 1n);
+  assert.equal(f.location().spotId, 'node-a');
+  assert.deepEqual(f.events, ['store', 'membership', 'joined']);
+});
+
 test('public cross-node Entry Join reuses the Host relocation owner after admission without a commit reply or leave ACK', async () => {
   const events = [];
   const sourceRef = { nodeRid: rid('node-source'), actorId: 'alice', generation: 1n };
@@ -4797,6 +4810,9 @@ async function localCoordinatorFixture({ entry = false, admissionError } = {}) {
   const target = { routerChannelId: 'play', targetNodeRid: 'node-a', spotId: entry ? 'node-a' : 'stage-1', spotKind: entry ? framework.ZLinkSpotKind.Entry : framework.ZLinkSpotKind.User, targetSpotGeneration: 1n, targetNodeGeneration: 1n, authorityOwnerGeneration: 2n, ownerLeaseGeneration: 3n, authorityStoreVersion: 'ready' };
   const node = createMockSpotNode({
     actorLookup() { return location; },
+    entrySpot() {
+      return { routingId: 'node-a', status() { return { lifecycleGeneration: 1n }; } };
+    },
     restoreActorAuthority(_id, _type, _generation, _owner, spotId, spotGeneration, membershipEpoch) {
       events.push('membership');
       location = { actor: actorRef, spotId, spotGeneration, membershipEpoch };

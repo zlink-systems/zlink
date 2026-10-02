@@ -130,6 +130,8 @@ All four calls use the same mesh connection. **Only the first needs a channel re
 <iframe class="zlink-diagram" src="/common/diagrams/20-routemesh-bidirectional-en.html" title="RouteMesh — both sides call each other" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-routemesh-bidirectional-en.html" target="_blank">↗ View larger</a></p>
 
+<p><a href="/common/diagrams/zlink-tour-en.html#meshchannel" target="_blank">▶ Try it in the interactive tour — RouteMesh channel</a></p>
+
 Nodes that joined the same mesh can call each other. When A serves the `profile` channel and B
 serves the `match` channel, A calls B and B calls A. There is one connection per mesh, and the
 two calls share it.
@@ -323,6 +325,8 @@ Writing a handler is the same as for RouteMesh. Only the registration differs.
 <iframe class="zlink-diagram" src="/common/diagrams/20-clientserver-oneway-en.html" title="ClientServer — calls run one way" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-clientserver-oneway-en.html" target="_blank">↗ View larger</a></p>
 
+<p><a href="/common/diagrams/zlink-tour-en.html#clientserver" target="_blank">▶ Try it in the interactive tour — ClientServer</a></p>
+
 Only the server publishes an address, and the client starts the connection too. **A server never
 starts a new call toward a client.** All that goes back to a client is the response to a request
 the client sent first.
@@ -373,6 +377,8 @@ curl -X POST http://127.0.0.1:5080/players/p1/tickets
 
 <iframe class="zlink-diagram" src="/common/diagrams/20-fanout-topic-en.html" title="Fanout — every subscribed node receives it" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/20-fanout-topic-en.html" target="_blank">↗ View larger</a></p>
+
+<p><a href="/common/diagrams/zlink-tour-en.html#fanout" target="_blank">▶ Try it in the interactive tour — Fanout</a></p>
 
 The publishing side does not name the nodes that will receive. One `publish` is delivered to every
 node subscribed to that **topic**. Leave the topic out and the Framework uses the event's packet

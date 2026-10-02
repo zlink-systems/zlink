@@ -31,6 +31,8 @@ title: "Relocation · Java"
 
 호출하는 쪽이 사용하던 것은 바뀌지 않는다.
 
+<p><a href="/common/diagrams/zlink-tour.html#relocate" target="_blank">▶ 둘러보기에서 직접 눌러 보기 — Host Relocation</a></p>
+
 | 유지되는 것 | 뜻 |
 | --- | --- |
 | spot id · actor id와 [generation](22-actor.ko.md#33-참조의-generation) | 호출하는 쪽이 사용하던 논리 id가 그대로다 |

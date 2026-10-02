@@ -2,6 +2,9 @@ namespace Zlink.Framework.Runtime.Configuration;
 
 internal static class ZLinkNetworkEndpointResolver
 {
+    internal static readonly string IPv4LoopbackHost = System.Net.IPAddress.Loopback.ToString();
+    internal static readonly string IPv6LoopbackHost = System.Net.IPAddress.IPv6Loopback.ToString();
+
     public static string Bind(
         string? explicitEndpoint,
         int? port,
@@ -42,8 +45,8 @@ internal static class ZLinkNetworkEndpointResolver
 
         advertiseHost ??= WildcardAddress(bindHost) switch
         {
-            { AddressFamily: System.Net.Sockets.AddressFamily.InterNetwork } => "127.0.0.1",
-            { AddressFamily: System.Net.Sockets.AddressFamily.InterNetworkV6 } => "::1",
+            { AddressFamily: System.Net.Sockets.AddressFamily.InterNetwork } => IPv4LoopbackHost,
+            { AddressFamily: System.Net.Sockets.AddressFamily.InterNetworkV6 } => IPv6LoopbackHost,
             _ => bindHost,
         };
 

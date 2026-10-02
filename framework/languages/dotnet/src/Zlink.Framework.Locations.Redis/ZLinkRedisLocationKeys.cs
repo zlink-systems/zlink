@@ -32,21 +32,24 @@ internal sealed class ZLinkRedisLocationKeys
 
     private string Base => $"{_prefix}:{HashTag}";
 
-    public RedisKey OpaqueRecordKey(string key) => $"{Base}:opaque:{Digest(key)}";
+    private const string OpaqueNamespace = "opaque";
 
-    public RedisKey OpaqueIndexKey() => $"{Base}:opaque:index";
+    public RedisKey OpaqueRecordKey(string key) => $"{Base}:{OpaqueNamespace}:{Digest(key)}";
 
-    public RedisKey OpaqueMapKey() => $"{Base}:opaque:map";
+    public RedisKey OpaqueIndexKey() => $"{Base}:{OpaqueNamespace}:index";
 
-    public RedisKey OpaqueCleanupKey() => $"{Base}:opaque:cleanup";
+    public RedisKey OpaqueMapKey() => $"{Base}:{OpaqueNamespace}:map";
 
-    public RedisKey OpaqueSequenceKey() => $"{Base}:opaque:sequence";
+    public RedisKey OpaqueCleanupKey() => $"{Base}:{OpaqueNamespace}:cleanup";
 
-    public RedisKey OpaqueSnapshotExpiryKey() => $"{Base}:opaque:snapshot-expiry";
+    public RedisKey OpaqueSequenceKey() => $"{Base}:{OpaqueNamespace}:sequence";
 
-    public RedisKey OpaqueSnapshotBoundaryKey() => $"{Base}:opaque:snapshot-boundary";
+    public RedisKey OpaqueSnapshotExpiryKey() => $"{Base}:{OpaqueNamespace}:snapshot-expiry";
 
-    public RedisKey OpaqueScanKey(string scanId) => $"{Base}:opaque:scan:{NormalizeId(scanId)}";
+    public RedisKey OpaqueSnapshotBoundaryKey() => $"{Base}:{OpaqueNamespace}:snapshot-boundary";
+
+    public RedisKey OpaqueScanKey(string scanId) =>
+        $"{Base}:{OpaqueNamespace}:scan:{NormalizeId(scanId)}";
 
     private static string Digest(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();

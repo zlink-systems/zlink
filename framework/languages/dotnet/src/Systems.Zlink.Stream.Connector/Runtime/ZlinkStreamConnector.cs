@@ -6,8 +6,8 @@ namespace Systems.Zlink.Stream.Connector.Runtime;
 internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
 {
     internal const string ReservedPacketNamePrefix = "$zlink.";
-    internal const string HeartbeatPingName = "$zlink.heartbeat.ping";
-    internal const string HeartbeatPongName = "$zlink.heartbeat.pong";
+    internal const string HeartbeatPingName = ZlinkStreamControlProtocol.HeartbeatPingName;
+    internal const string HeartbeatPongName = ZlinkStreamControlProtocol.HeartbeatPongName;
     private readonly ZlinkStreamConnectorCallbacks _callbacks;
     private readonly ZlinkStreamActors _actors;
     private readonly IZlinkStreamCompressionCodec? _compressionCodec;
@@ -643,7 +643,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             throw Error(errorCode, "Message name uses a reserved zlink prefix.");
 
         if (Encoding.UTF8.GetByteCount(name) > byte.MaxValue)
-            throw Error(errorCode, "Message name must not exceed 255 UTF-8 bytes.");
+            throw Error(errorCode, $"Message name must not exceed {byte.MaxValue} UTF-8 bytes.");
     }
 
     private void ThrowIfDisposed()

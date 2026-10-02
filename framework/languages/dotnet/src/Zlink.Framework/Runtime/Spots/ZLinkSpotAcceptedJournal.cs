@@ -1,5 +1,6 @@
 using System.Text;
 using Zlink.Framework.Contracts.Streams;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -118,7 +119,7 @@ internal static class ZLinkSpotAcceptedJournal
             length = checked(length + 4 + part.Size);
         if (length > MaxRecordBytes)
             throw new InvalidOperationException(
-                "An accepted Spot journal record cannot exceed 64 MiB."
+                $"An accepted Spot journal record cannot exceed {MaxRecordBytes} bytes."
             );
         return length;
     }
@@ -187,7 +188,7 @@ internal static class ZLinkSpotAcceptedJournal
         writer.Flush();
         if (stream.Length > MaxRecordBytes)
             throw new InvalidOperationException(
-                "An accepted Spot journal record cannot exceed 64 MiB."
+                $"An accepted Spot journal record cannot exceed {MaxRecordBytes} bytes."
             );
         return stream.ToArray();
     }
@@ -241,7 +242,7 @@ internal static class ZLinkSpotAcceptedJournal
             || ownerLeaseGeneration == 0
             || replyRouteId != 0
                 && (requestSequence != replyRouteId || operationId.Low != replyRouteId)
-            || messageFollowHopCount > 8
+            || messageFollowHopCount > ZLinkServiceWireCodec.MessageFollowMaximumHopCount
         )
             throw new InvalidDataException("The accepted Spot journal authority fence is invalid.");
         var metadataFrame = ReadBytes(reader);

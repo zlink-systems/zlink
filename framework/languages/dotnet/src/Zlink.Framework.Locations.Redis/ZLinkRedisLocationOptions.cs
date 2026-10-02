@@ -8,6 +8,8 @@ namespace Zlink.Framework.Locations.Redis;
 /// </summary>
 public sealed class ZLinkRedisLocationOptions
 {
+    internal static readonly TimeSpan DefaultOperationTimeout = TimeSpan.FromSeconds(5);
+
     /// <summary>StackExchange.Redis connection string, for example
     /// "127.0.0.1:6379". Ignored when <see cref="ConfigurationOptions"/> is
     /// set. One of the two must be provided.</summary>
@@ -23,7 +25,7 @@ public sealed class ZLinkRedisLocationOptions
 
     /// <summary>Maximum time allowed for one Store operation, including
     /// connection acquisition and the Redis command.</summary>
-    public TimeSpan OperationTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan OperationTimeout { get; set; } = DefaultOperationTimeout;
 
     internal ConfigurationOptions BuildConfiguration()
     {

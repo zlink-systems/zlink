@@ -190,8 +190,11 @@ create a separate readiness callback, retry waiter, or separate binding adapter,
 - Timeout, shutdown, and cancellation races during Framework queue waiting before binding handoff
   follow [Cancellation and shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race).
   Binding-operation cancellation and native-completion cleanup reference the ownership boundary there.
-- The Framework builds no waiting queue of its own, so no call ends for want of a place to
-  wait. A call that waits for room and runs out of time ends with `DeadlineExceeded`.
+- The Framework builds no waiting queue of its own. A call that waits for room and runs out of
+  time ends with `DeadlineExceeded`.
+- If Core reports a capacity shortage without a wait token (for example, a saturated request
+  completion slot), there is nothing to wait on, so the Framework ends the call immediately with
+  `Unavailable`.
 - In no case is the `Backpressured` status exposed, nor is the message submitted again later.
 
 | Failure | Error classification |
@@ -437,10 +440,9 @@ calls in progress, because one call uses one completion slot, as §10 defines.
 
 The Framework does not count the calls in progress. Core does. Core keeps a fixed number of
 completion slots per socket, and once they are taken it stops accepting new calls and says so
-with `ZLINK_SUBMIT_BACKPRESSURED`
-([Core socket contract](../../../../../../../core/doc/spec/core/socket/README.en.md)). That is
-not an error but a signal to wait: the binding takes it, waits for a slot, and completes the
-same call ([binding async coroutine policy](../../../../../../../bindings/doc/spec/async-coroutine-policy.en.md)).
+with `ZLINK_SUBMIT_BACKPRESSURED` and no wait token
+([Core socket contract](../../../../../../../core/doc/spec/core/socket/README.en.md)). There is
+nothing to wait on, so the call ends as classified in [§5](#5-backpressure-and-error-classification).
 The same holds when work piles up on the peer host — its `PAUSED` stops this side from
 sending, and Core and the binding wait for room
 ([§6](04-application-job-queue-and-backpressure.en.md#6-pressure-state-and-socket-control),
@@ -588,8 +590,9 @@ slot is registered — are owned, with their rules, by §10/§11 and are not rep
 - A send whose local capacity is unavailable waits up to the family send timeout; if
   capacity becomes available first it's submitted exactly once and completes normally; if
   the timeout is decided first it completes with `DeadlineExceeded`.
-- However far the number of sends and requests in progress grows, no call ends for want of a
-  place to wait; only a call that runs out of time ends with `DeadlineExceeded`.
+- A capacity shortage with a wait token continues as that wait, and only a call that runs out
+  of time ends with `DeadlineExceeded`. A rejection without a token ends with `Unavailable` as
+  [§5](#5-backpressure-and-error-classification) states.
 - Logical Multicast completes normally with no return data even with zero targets, and an
   individual target's failure after starting does not change the public return value.
 - Verify completion of Classic fanout with no subscribers against the publish rule in [§6](#6-logical-multicast-and-classic-fanout).
@@ -636,8 +639,9 @@ Binding cancellation observations reference
 
 - The completion callback runs on a new execution turn, not the call stack at the moment of
   confirmation.
-- However far the number of requests in progress grows, no request ends for lack of a
-  completion slot; each ends with a reply, an error, a timeout, a cancellation, or shutdown.
+- Each request ends with a reply, an error, a timeout, a cancellation, or shutdown. A saturated
+  Core completion slot ends the request with `Unavailable` as
+  [§5](#5-backpressure-and-error-classification) states.
 - Verify resubmission after acceptance and disconnection against the boundary in [§5](#5-backpressure-and-error-classification).
 - A result completed by cancellation, timeout, or shutdown is distinguished by a dedicated
   type or value, not by the error message string.

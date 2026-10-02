@@ -72,6 +72,8 @@ Application job queue 상한에 도달하면, 받기 전에 최종 reply·error�
 되는지 묻지 않고, 아직 상대가 가져가지 않은 message의 byte 합이 송신 queue의 상한에 닿으면
 그 상대로 가는 송신을 잠근다. 상한에 닿는 이유는 여럿이다.
 
+<p><a href="/common/diagrams/zlink-tour.html#backpressure" target="_blank">▶ 둘러보기에서 직접 눌러 보기 — Backpressure</a></p>
+
 - 짧은 시간에 평소보다 훨씬 많이 보냈다.
 - 평소와 같은 건수를 보냈지만 payload가 커서 같은 byte를 더 빨리 채웠다.
 - 네트워크가 느려 queue가 평소만큼 비워지지 않는다.

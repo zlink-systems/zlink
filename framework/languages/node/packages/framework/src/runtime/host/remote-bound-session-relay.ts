@@ -54,10 +54,7 @@ export interface ZLinkRemoteBoundSessionRelayOptions {
   readonly destroyedActorRefs: ReadonlyMap<string, ActorRef>;
   readonly boundSessionFactory: (actorId: string) => DefaultZLinkBoundSession;
   readonly updateRemoteActorPacketTarget: (actorId: string, value: unknown) => Promise<void>;
-  readonly actorPacketTargetForState: (
-    actorId: string,
-    routerChannelIdHint?: string
-  ) => ZLinkRemoteActorPacketTarget | undefined;
+  readonly actorPacketTargetForState: (actorId: string) => ZLinkRemoteActorPacketTarget | undefined;
   readonly reportOwnershipRefreshError?: (actorId: string, error: unknown) => void;
 }
 
@@ -591,11 +588,8 @@ export class ZLinkRemoteBoundSessionRelay {
     };
   }
 
-  actorPacketTargetForState(
-    actorId: string,
-    routerChannelIdHint?: string
-  ): ZLinkRemoteActorPacketTarget | undefined {
-    return this.options.actorPacketTargetForState(actorId, routerChannelIdHint);
+  actorPacketTargetForState(actorId: string): ZLinkRemoteActorPacketTarget | undefined {
+    return this.options.actorPacketTargetForState(actorId);
   }
 
   clearOwnership(actorId: string): void {
@@ -741,7 +735,7 @@ export class ZLinkRemoteBoundSessionRelay {
     signal?: AbortSignal
   ): Promise<void> {
     const actorPacketTarget = encodeRemoteActorPacketTarget(
-      this.options.actorPacketTargetForState(actorId, target.routerChannelId)
+      this.options.actorPacketTargetForState(actorId)
     );
     await this.sendRemoteBoundSessionControl(
       target,
@@ -776,7 +770,7 @@ export class ZLinkRemoteBoundSessionRelay {
         error,
         metadata,
         actorPacketTarget: encodeRemoteActorPacketTarget(
-          this.options.actorPacketTargetForState(actorId, target.routerChannelId)
+          this.options.actorPacketTargetForState(actorId)
         )
       }),
       signal

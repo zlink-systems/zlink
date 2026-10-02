@@ -309,9 +309,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     pipe_t *pair_application = NULL;
     distinct_pipe_lifetime_refs_t pair_pipe_refs (pipe_);
     //  A rejected pair is torn down after the table is unlocked: terminate()
-    //  reaches other objects and must not run under this mutex. Slot zero
-    //  identifies a protocol rejection; slots one and two also carry lanes
-    //  whose transport termination cancelled admission.
+    //  reaches other objects and must not run under this mutex.
     pipe_t *reject_pipes[3] = {NULL, NULL, NULL};
     bool reject_attached_application = false;
     if (pair_id != 0) {
@@ -391,21 +389,17 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                 && !pair.ready) {
                 const uint64_t application_connection_id =
                   pair.application->get_transport_connection_id ();
-                // Either lane may start termination while its sibling's bind
-                // is queued. A retained object is still alive, but it is not
-                // an admissible transport; cancel admission and finish the
-                // lane teardown without reporting a READY protocol error.
-                if (!pair.application->is_lifecycle_active ()
-                    || application_connection_id == 0
+                // A normal route rejection may end either connection before
+                // its sibling's bind is applied. Engine detach publishes a
+                // zero connection id before pipe termination completes. The
+                // termination owner tears down the registered sibling.
+                if (!pair.application->is_lifecycle_active () || application_connection_id == 0
                     || (pair.expected_lane_count == 2u
                         && (!pair.completion->is_lifecycle_active ()
-                            || pair.completion->get_transport_connection_id ()
-                                 == 0))) {
-                    reject_pipes[1] = pair.application;
-                    reject_pipes[2] = pair.completion;
-                } else if (pair.expected_lane_count == 2u
-                           && !same_pair_peer_identity (pair.application,
-                                                       pair.completion)) {
+                            || pair.completion->get_transport_connection_id () == 0)))
+                    return;
+                if (pair.expected_lane_count == 2u
+                    && !same_pair_peer_identity (pair.application, pair.completion)) {
                     reject_pipes[0] = pipe_;
                     reject_pipes[1] = pair.application;
                     reject_pipes[2] = pair.completion;
@@ -431,7 +425,8 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             }
             pair_application = pair.application;
         }
-        if (reject_pipes[1] && pair.application_attached) {
+        if (reject_pipes[0] && pair.application_attached
+            && pair.application) {
             reject_attached_application = true;
             pair.application_attached = false;
         }
@@ -462,12 +457,12 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         }
     }
 
-    if (reject_pipes[0] || reject_pipes[1] || reject_pipes[2]) {
+    if (reject_pipes[0]) {
         // Duplicate count-two lanes and cross-lane identity/topology conflicts
         // are only knowable when socket admission compares both validated
         // physical connections. Publish the READY protocol failure for every
         // network connection before terminating the related lane set.
-        for (size_t i = 0; reject_pipes[0] && i < 3; ++i) {
+        for (size_t i = 0; i < 3; ++i) {
             pipe_t *const rejected = reject_pipes[i];
             if (!rejected || rejected->get_transport_connection_id () == 0)
                 continue;
@@ -1035,9 +1030,7 @@ bool zlink::socket_base_t::has_in ()
           part_helper_state ();
         if (state) {
             std::lock_guard<std::mutex> lock (state->mutex);
-            if (state->recv.active
-                && state->recv.next_part_index
-                     < state->recv.buffered_parts.size ())
+            if (state->recv.active)
                 return true;
         }
     }
@@ -1244,10 +1237,7 @@ bool zlink::socket_base_t::reclassify_transport_pair_application_head (
 int zlink::socket_base_t::begin_public_part_receive_delivery_hold ()
 {
     scoped_lock_t lock (_transport_pairs_sync);
-    if (_public_part_receive_delivery_hold_active) {
-        errno = EBUSY;
-        return -1;
-    }
+    zlink_assert (!_public_part_receive_delivery_hold_active);
     _public_part_receive_delivery_hold_active = true;
     _public_part_receive_delivery_hold_pipe = NULL;
     _public_part_receive_delivery_hold_key = transport_pair_key_t (0, 0);

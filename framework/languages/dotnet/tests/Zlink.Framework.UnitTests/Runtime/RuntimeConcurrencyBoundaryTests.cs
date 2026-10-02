@@ -113,6 +113,41 @@ public sealed class RuntimeConcurrencyBoundaryTests
     }
 
     [Fact]
+    public async Task BoundSessionDeferredScope_ReportsTypedPressureAndPreservesBooleanCompatibility()
+    {
+        const string actorId = "magic-dotnet-deferred-pressure";
+        Assert.Null(
+            ZLinkBoundSessionDispatchScope.TrySubmitDeferred(actorId, _ => ValueTask.CompletedTask)
+        );
+        var completed = 0;
+        await using var scope = ZLinkBoundSessionDispatchScope.Enter(actorId);
+        for (var index = 0; index < 4096; index++)
+            Assert.Equal(
+                ZLinkOneWaySubmitStatus.Submitted,
+                ZLinkBoundSessionDispatchScope.TrySubmitDeferred(
+                    actorId,
+                    _ =>
+                    {
+                        completed++;
+                        return ValueTask.CompletedTask;
+                    }
+                )
+            );
+        Assert.Equal(
+            ZLinkOneWaySubmitStatus.Backpressured,
+            ZLinkBoundSessionDispatchScope.TrySubmitDeferred(actorId, _ => ValueTask.CompletedTask)
+        );
+        Assert.Throws<InvalidOperationException>(() =>
+            ZLinkBoundSessionDispatchScope.TryDefer(actorId, _ => ValueTask.CompletedTask)
+        );
+        await scope.DrainAsync(CancellationToken.None);
+        Assert.Equal(4096, completed);
+        Assert.Null(
+            ZLinkBoundSessionDispatchScope.TrySubmitDeferred(actorId, _ => ValueTask.CompletedTask)
+        );
+    }
+
+    [Fact]
     public async Task BoundSessionDeferredScope_DrainsOperationAddedWhileAnotherOperationIsRunning()
     {
         var firstStarted = new TaskCompletionSource(

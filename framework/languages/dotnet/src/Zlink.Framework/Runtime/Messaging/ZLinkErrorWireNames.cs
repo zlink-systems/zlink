@@ -8,62 +8,75 @@ namespace Zlink.Framework.Runtime.Messaging;
 /// </summary>
 internal static class ZLinkErrorWireNames
 {
+    private const string NotFoundName = "not_found";
+    private const string AlreadyExistsName = "already_exists";
+    private const string TypeMismatchName = "type_mismatch";
+    private const string NotConfiguredName = "not_configured";
+    private const string RejectedName = "rejected";
+    private const string UnavailableName = "unavailable";
+    private const string DeadlineExceededName = "deadline_exceeded";
+    private const string ShuttingDownName = "shutting_down";
+    private const string ProtocolErrorName = "protocol_error";
+    private const string InvalidOperationName = "invalid_operation";
+    private const string DataLostName = "data_lost";
+    private const string InternalFailureName = "internal_failure";
+
     public static string Name(ZLinkFrameworkErrorKind kind) =>
         kind switch
         {
-            ZLinkFrameworkErrorKind.NotFound => "not_found",
-            ZLinkFrameworkErrorKind.AlreadyExists => "already_exists",
-            ZLinkFrameworkErrorKind.TypeMismatch => "type_mismatch",
-            ZLinkFrameworkErrorKind.NotConfigured => "not_configured",
-            ZLinkFrameworkErrorKind.Rejected => "rejected",
-            ZLinkFrameworkErrorKind.Unavailable => "unavailable",
-            ZLinkFrameworkErrorKind.DeadlineExceeded => "deadline_exceeded",
-            ZLinkFrameworkErrorKind.ShuttingDown => "shutting_down",
-            ZLinkFrameworkErrorKind.ProtocolError => "protocol_error",
-            ZLinkFrameworkErrorKind.InvalidOperation => "invalid_operation",
-            ZLinkFrameworkErrorKind.DataLost => "data_lost",
-            ZLinkFrameworkErrorKind.InternalFailure => "internal_failure",
-            _ => "internal_failure",
+            ZLinkFrameworkErrorKind.NotFound => NotFoundName,
+            ZLinkFrameworkErrorKind.AlreadyExists => AlreadyExistsName,
+            ZLinkFrameworkErrorKind.TypeMismatch => TypeMismatchName,
+            ZLinkFrameworkErrorKind.NotConfigured => NotConfiguredName,
+            ZLinkFrameworkErrorKind.Rejected => RejectedName,
+            ZLinkFrameworkErrorKind.Unavailable => UnavailableName,
+            ZLinkFrameworkErrorKind.DeadlineExceeded => DeadlineExceededName,
+            ZLinkFrameworkErrorKind.ShuttingDown => ShuttingDownName,
+            ZLinkFrameworkErrorKind.ProtocolError => ProtocolErrorName,
+            ZLinkFrameworkErrorKind.InvalidOperation => InvalidOperationName,
+            ZLinkFrameworkErrorKind.DataLost => DataLostName,
+            ZLinkFrameworkErrorKind.InternalFailure => InternalFailureName,
+            _ => InternalFailureName,
         };
 
     public static bool TryParse(string? name, out ZLinkFrameworkErrorKind kind)
     {
         switch (name)
         {
-            case "not_found":
+            case NotFoundName:
                 kind = ZLinkFrameworkErrorKind.NotFound;
                 return true;
-            case "already_exists":
+            case AlreadyExistsName:
                 kind = ZLinkFrameworkErrorKind.AlreadyExists;
                 return true;
-            case "type_mismatch":
+            case TypeMismatchName:
                 kind = ZLinkFrameworkErrorKind.TypeMismatch;
                 return true;
-            case "not_configured":
+            case NotConfiguredName:
                 kind = ZLinkFrameworkErrorKind.NotConfigured;
                 return true;
-            case "rejected":
+            case RejectedName:
                 kind = ZLinkFrameworkErrorKind.Rejected;
                 return true;
-            case "unavailable":
+            case UnavailableName:
                 kind = ZLinkFrameworkErrorKind.Unavailable;
                 return true;
-            case "deadline_exceeded":
+            case DeadlineExceededName:
                 kind = ZLinkFrameworkErrorKind.DeadlineExceeded;
                 return true;
-            case "shutting_down":
+            case ShuttingDownName:
                 kind = ZLinkFrameworkErrorKind.ShuttingDown;
                 return true;
-            case "protocol_error":
+            case ProtocolErrorName:
                 kind = ZLinkFrameworkErrorKind.ProtocolError;
                 return true;
-            case "invalid_operation":
+            case InvalidOperationName:
                 kind = ZLinkFrameworkErrorKind.InvalidOperation;
                 return true;
-            case "data_lost":
+            case DataLostName:
                 kind = ZLinkFrameworkErrorKind.DataLost;
                 return true;
-            case "internal_failure":
+            case InternalFailureName:
                 kind = ZLinkFrameworkErrorKind.InternalFailure;
                 return true;
             default:

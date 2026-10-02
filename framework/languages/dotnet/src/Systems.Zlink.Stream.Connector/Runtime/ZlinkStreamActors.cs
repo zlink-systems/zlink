@@ -8,8 +8,8 @@ internal sealed class ZlinkStreamActors(
     ZlinkStreamConnectorCallbacks callbacks
 )
 {
-    internal const string BoundControlName = "$zlink.actor.bound";
-    internal const string UnboundControlName = "$zlink.actor.unbound";
+    internal const string BoundControlName = ZlinkStreamControlProtocol.BoundControlName;
+    internal const string UnboundControlName = ZlinkStreamControlProtocol.UnboundControlName;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly object _gate = new();
     private readonly LinkedList<ZlinkStreamActor> _actors = new();
@@ -101,17 +101,31 @@ internal sealed class ZlinkStreamActors(
 
     private ZlinkStreamActor Bind(ReadOnlySpan<byte> payload)
     {
-        if (payload.Length < 5 || payload[0] != 1)
+        if (
+            payload.Length < ZlinkStreamControlProtocol.ActorBoundMinimumSize
+            || payload[0] != ZlinkStreamControlProtocol.ActorControlVersion
+        )
             throw DecodeError("Actor bound control payload is invalid.");
-        var slot = BinaryPrimitives.ReadUInt16BigEndian(payload.Slice(1, 2));
-        var idLength = payload[3];
-        if (slot == 0 || idLength == 0 || payload.Length != 4 + idLength)
+        var slot = BinaryPrimitives.ReadUInt16BigEndian(
+            payload.Slice(
+                ZlinkStreamControlProtocol.ActorSlotOffset,
+                ZlinkStreamControlProtocol.ActorSlotSize
+            )
+        );
+        var idLength = payload[ZlinkStreamControlProtocol.ActorIdLengthOffset];
+        if (
+            slot == 0
+            || idLength == 0
+            || payload.Length != ZlinkStreamControlProtocol.ActorBoundPrefixSize + idLength
+        )
             throw DecodeError("Actor bound control payload is invalid.");
 
         string actorId;
         try
         {
-            actorId = StrictUtf8.GetString(payload.Slice(4, idLength));
+            actorId = StrictUtf8.GetString(
+                payload.Slice(ZlinkStreamControlProtocol.ActorBoundPrefixSize, idLength)
+            );
         }
         catch (DecoderFallbackException error)
         {
@@ -131,9 +145,17 @@ internal sealed class ZlinkStreamActors(
 
     private ZlinkStreamActor Unbind(ReadOnlySpan<byte> payload)
     {
-        if (payload.Length != 3 || payload[0] != 1)
+        if (
+            payload.Length != ZlinkStreamControlProtocol.ActorUnboundPayloadSize
+            || payload[0] != ZlinkStreamControlProtocol.ActorControlVersion
+        )
             throw DecodeError("Actor unbound control payload is invalid.");
-        var slot = BinaryPrimitives.ReadUInt16BigEndian(payload.Slice(1, 2));
+        var slot = BinaryPrimitives.ReadUInt16BigEndian(
+            payload.Slice(
+                ZlinkStreamControlProtocol.ActorSlotOffset,
+                ZlinkStreamControlProtocol.ActorSlotSize
+            )
+        );
         if (slot == 0)
             throw DecodeError("Actor unbound control payload is invalid.");
 

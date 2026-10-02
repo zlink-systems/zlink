@@ -99,7 +99,10 @@ details{font-size:13.5px;color:var(--ink-2)}
 summary{cursor:pointer;color:var(--muted);font-size:13px}
 details ul{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
 details code{font:12.5px var(--mono);color:var(--accent-ink)}
-.foot{font-size:12.5px;color:var(--muted)}
+.foot,.src{font-size:12.5px;color:var(--muted)}
+.bar .src{margin:0}
+.foot a,.src a{color:var(--accent-ink);text-underline-offset:2px}
+.foot a:focus-visible,.src a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 /* svg */
 svg text{font-family:var(--sans)}
 .zone-sel{fill:var(--select);stroke:var(--select-line)}
@@ -312,6 +315,7 @@ svg.shake{animation:shake .5s ease}
         <p class="line" id="line"></p>
         <div class="acts" id="acts"></div>
         <p class="res" id="res" aria-live="polite"></p>
+        <p class="src" id="src"></p>
         <details><summary>Details</summary><ul id="more"></ul></details>
       </div>
       <p class="vlabel">Game view</p>
@@ -522,29 +526,29 @@ function gClientServer(){
   }
   I.forEach((b, k) => { b.name = `Item server ${k + 1}`; b.title = b.name; }); P.forEach((b, k) => { b.name = `Payment server ${k + 1}`; b.title = b.name; });
   const STEPS = [
-    {title: 'Calling by name', line: 'A player opens the inventory in the app. The HTTP request goes to the API server, and the API server calls an item server by the channel name inventory.',
+    {title: 'Calling by name', ref: [['Ch. 20 §4.1 How It Works', '20-channel-messaging#41-how-it-works']], line: 'A player opens the inventory in the app. The HTTP request goes to the API server, and the API server calls an item server by the channel name inventory.',
      act: 'Send 4 requests to item servers', repeat: true, more: ['ClientServer channel: the feature server opens a port, and the API server connects as the client. Calls go one way, client → server.', 'The API server does not know the address of the item servers. It knows only the name inventory.', 'When there are several servers, the API server picks one of them. With equal weight, it picks them in turn (round-robin).', 'The calling code contains only <code>request_to_channel("inventory", …)</code>.'],
      async run(){ const r = await burst(4, I, 'inventory', 'inventory'); res(`${r}. The weights are equal, so requests are split evenly.`); }},
-    {title: 'Adding a server', line: 'Start item server 3. Once it is registered in the Location Store, the API server connects to it by itself and adds it as a candidate. No configuration is changed.',
+    {title: 'Adding a server', ref: [['Ch. 20 §4.2 The Receiving Side', '20-channel-messaging#42-the-receiving-side--the-server-that-opens-a-port'], ['Ch. 20 §4.3 The Calling Side', '20-channel-messaging#43-the-calling-side--the-client-that-connects-to-that-address']], line: 'Start item server 3. Once it is registered in the Location Store, the API server connects to it by itself and adds it as a candidate. No configuration is changed.',
      act: 'Start item server 3', extra: ['Send 6 requests to item servers', async () => { const r = await burst(6, I, 'inventory', 'inventory'); res(`${r}. The new server receives requests the same way.`); }],
      more: ['When a server starts, it writes its address and the channel names it serves to the Store.', 'The API server reads the Store record and connects, then verifies the identity on the actual connection before sending.', 'The calling code is the same however many servers are started.'],
      async run(){ const s3 = I[2]; s3.g.classList.remove('ghost', 'faded');
        await fly(s3.T(), store.pt, {cls: 'pkt-look', dur: 500}); store.set('ClientServer inventory → Item server 1, 2, 3', null);
        await fly(store.pt, {x: 266, y: 120}, {cls: 'pkt-look', dur: 500}); s3.ln = link({x: 266, y: 250}, s3.L(), 'wire'); chipc(580, s3.y + 6, ':7101'); s3.ready = true; upd(s3); pulse(s3.g);
        res('Item server 3 is now a candidate. Check it with "Send 6 requests to item servers".'); }},
-    {title: 'Splitting by weight', line: 'Give item server 3 a weight of 300. New requests are split 100 : 100 : 300, so the cells of server 3 pile up three times as high as those of the other servers.',
+    {title: 'Splitting by weight', ref: [['Ch. 30 §4.2 Distribution Among Candidates', '30-channel-patterns#42-distribution-among-candidates']], line: 'Give item server 3 a weight of 300. New requests are split 100 : 100 : 300, so the cells of server 3 pile up three times as high as those of the other servers.',
      act: 'Set server 3 weight to 300', extra: ['Send 10 requests to item servers', async () => { const r = await burst(10, I, 'inventory', 'inventory'); res(`${r}. Server 3 received about three times as many as the other servers.`); }],
      more: ['weight ranges from 0 to 10000, and the default is 100. When all are 100, servers are picked in turn.', 'The ratio holds over the long run. It does not decide the order of each individual call.', 'Use it when machines with different specifications are mixed, or when one machine should receive less.'],
      async run(){ I[2].w = 300; I.forEach(b => b.cur = 0); upd(I[2]); pulse(I[2].g); res('The weight of server 3 is now 300. Press "Send 10 requests to item servers" and compare how far the cells pile up.'); }},
-    {title: 'Weight 0', line: 'Change the weight of item server 1 to 0. New requests no longer go to server 1.',
+    {title: 'Weight 0', ref: [['Ch. 30 §4.3 Stopping Only New Requests While Running', '30-channel-patterns#43-stopping-only-new-requests-while-running']], line: 'Change the weight of item server 1 to 0. New requests no longer go to server 1.',
      act: 'Set server 1 weight to 0', extra: ['Send 10 requests to item servers', async () => { const r = await burst(10, I, 'inventory', 'inventory'); res(`${r}. None went to server 1.`); }],
      more: ['weight is the only value that can be changed at run time. 0 removes the server only from the candidates for new requests.', 'Requests already received are processed to the end. The connection and the Store record also remain.', 'Set it to 0 before maintenance and return it to 100 afterward.'],
      async run(){ I[0].w = 0; I.forEach(b => b.cur = 0); upd(I[0]); res('The weight of server 1 is now 0 (orange dashed line). Check it with "Send 10 requests to item servers".'); }},
-    {title: 'Calling another channel', line: 'When a player buys an item in the shop, the API server calls a payment server through the payment channel. Only the name differs. The way of calling is the same.',
+    {title: 'Calling another channel', ref: [['Ch. 30 §2.2 ClientServer', '30-channel-patterns#22-clientserver--each-channel-opens-its-own-listener'], ['Ch. 30 §4.4 Growing One ChannelName Across Several Nodes', '30-channel-patterns#44-growing-one-channelname-across-several-nodes']], line: 'When a player buys an item in the shop, the API server calls a payment server through the payment channel. Only the name differs. The way of calling is the same.',
      act: 'Send 4 requests to payment servers', repeat: true, more: ['Each channel name has its own group of servers. inventory and payment are different channels.', 'One API server holds two client registrations. Only the registration differs. The calling code is the same.', 'For each channel, the server opens a port and the client connects separately. More channels mean more connections.'],
      async run(){ const r = await burst(4, P, 'payment', 'payment approval'); res(`${r}. Requests are split within the payment group. They are not mixed with the inventory group.`); }},
   ];
-  return {title: 'ClientServer channel', steps: STEPS, foot: 'chapter 1 (overall topology), chapter 20 §4 (ClientServer channel), chapter 30 (how channels work)'};
+  return {title: 'ClientServer channel', steps: STEPS, foot: [['chapter 1 (overall topology)', '01-overview'], ['chapter 20 §4 (ClientServer channel)', '20-channel-messaging#4-clientserver-channel'], ['chapter 30 (how channels work)', '30-channel-patterns']]};
 }
 
 /* =========================================================
@@ -602,19 +606,19 @@ function gFanout(){
     return targets.map(b => b.label);
   }
   const STEPS = [
-    {title: 'Sending to all', line: 'The ops tool publishes a notice with topic all. Every server subscribed to all receives it. There is no reply.',
+    {title: 'Sending to all', ref: [['Ch. 20 §5.1 How It Works', '20-channel-messaging#51-how-it-works'], ['Ch. 30 §5.2 Classic Fanout', '30-channel-patterns#52-classic-fanout--delivery-that-allows-loss']], line: 'The ops tool publishes a notice with topic all. Every server subscribed to all receives it. There is no reply.',
      act: 'Publish topic all', repeat: true, more: ['Fanout channel: when the publisher (PUB) sends one message, each connected subscriber (SUB) receives it.', 'A fanout channel opens its own PUB/SUB socket pair, separate from the mesh.', 'The publisher does not know the list of subscribers. The publishing code stays the same when subscribers are added or removed.', 'Because there is no reply, there is only <code>publish</code>. If you need a processing result, use <code>request</code> of ClientServer or RouteMesh.'],
      async run(){ const r = await publish('all'); res(`${r.length} servers all received it:${r.join(', ')}.`); }},
-    {title: 'Field servers only', line: 'When you publish with topic field, only the field servers subscribed to field receive it. It does not go to other servers.',
+    {title: 'Field servers only', ref: [['Ch. 30 §5.3 Topic', '30-channel-patterns#53-topic--both-forms-select-receivers-by-it'], ['Ch. 20 §5.3 The Calling Side', '20-channel-messaging#53-the-calling-side--the-publishing-node']], line: 'When you publish with topic field, only the field servers subscribed to field receive it. It does not go to other servers.',
      act: 'Publish topic field', repeat: true, more: ['A subscription is registered by topic. Only subscribers that match the published topic receive the message.', 'One server can subscribe to several topics. Here, each server subscribes to its own kind plus all.', 'If the topic is omitted, the packet name of the message becomes the topic.'],
      async run(){ const r = await publish('field'); res(`Servers that received it:${r.join(', ')}. The others are dimmed.`); }},
-    {title: 'Dungeon servers only', line: 'When you publish with topic dungeon, only the dungeon servers receive it.',
+    {title: 'Dungeon servers only', ref: [['Ch. 30 §5.3 Topic', '30-channel-patterns#53-topic--both-forms-select-receivers-by-it']], line: 'When you publish with topic dungeon, only the dungeon servers receive it.',
      act: 'Publish topic dungeon', repeat: true, more: ['Within the same channel, changing only the topic selects who receives the message.'],
      async run(){ const r = await publish('dungeon'); res(`Servers that received it:${r.join(', ')}.`); }},
-    {title: 'Item servers only', line: 'When you publish with topic item, only the item servers receive it. Servers outside the game are notified the same way.',
+    {title: 'Item servers only', ref: [['Ch. 30 §5.3 Topic', '30-channel-patterns#53-topic--both-forms-select-receivers-by-it']], line: 'When you publish with topic item, only the item servers receive it. Servers outside the game are notified the same way.',
      act: 'Publish topic item', repeat: true, more: ['Any game server or feature server can receive it by subscribing to the notice channel.'],
      async run(){ const r = await publish('item'); res(`Servers that received it:${r.join(', ')}. The shop price list changed.`); }},
-    {title: 'Adding a subscriber', line: 'Start field server 3. It finds the address of the ops tool in the Location Store, then connects and subscribes by itself. Nothing changes in the ops tool.',
+    {title: 'Adding a subscriber', ref: [['Ch. 20 §5.2 The Receiving Side', '20-channel-messaging#52-the-receiving-side--a-subscribing-node'], ['Ch. 30 §2.3 Fanout', '30-channel-patterns#23-fanout--a-separate-pubsub-socket-pair']], line: 'Start field server 3. It finds the address of the ops tool in the Location Store, then connects and subscribes by itself. Nothing changes in the ops tool.',
      act: 'Start field server 3', extra: ['Publish topic field', async () => { const r = await publish('field'); res(`Servers that received it:${r.join(', ')}. The new server receives it too.`); }],
      more: ['The subscriber finds the address of the publisher (PUB) in the Store and connects to it.', 'A notice published before the connection and subscription are complete cannot be received later. There is no storing or resending.', 'The share of a slow subscriber is dropped, and the publish still succeeds. If messages must not be dropped, turn on NoDrop. Then the publish can wait and end with an error.'],
      async run(){ F3.g.classList.remove('ghost', 'faded'); await fly(F3.T(), store.pt, {cls: 'pkt-look', dur: 400}); await fly(store.pt, F3.T(), {cls: 'pkt-look', dur: 400});
@@ -622,7 +626,7 @@ function gFanout(){
        F3.ln = link({x: 224, y: 245}, {x: 400, y: F3.y + 23}, 'wire'); F3.ready = true; F3.cT.textContent = 'Got 0'; pulse(F3.g);
        res('Field server 3 connected to the ops tool and subscribed to field and all. Check it with "Publish topic field".'); }},
   ];
-  return {title: 'Fanout channel', steps: STEPS, foot: 'chapter 20 §5 (Fanout channel), chapter 30 §5 (shape of pub/sub)'};
+  return {title: 'Fanout channel', steps: STEPS, foot: [['chapter 20 §5 (Fanout channel)', '20-channel-messaging#5-fanout-channel'], ['chapter 30 §5 (shape of pub/sub)', '30-channel-patterns#5-the-forms-of-pubsub']]};
 }
 
 /* =========================================================
@@ -649,7 +653,7 @@ function gLobby(){
   serverGroups();
   box(320, 90, 200, 244, '', 'Field server', 'node A'); box(535, 90, 200, 244, '', 'Dungeon server', 'node B'); box(750, 90, 140, 244, '', 'Dungeon server', 'node C');
   mk(sB, 'text', {x: 760, y: 150, class: 't-mono', text: 'Other dungeons'});
-  const meshL = path('M420,334 L420,354 L820,354 L820,334 M635,334 L635,354', 'mesh'); mk(sB, 'text', {x: 440, y: 368, class: 'mesh-t', text: 'RouteMesh · servers call each other over one connection'});
+  const meshL = path('M226,332 L226,354 L820,354 L820,334 M420,334 L420,354 M635,334 L635,354', 'mesh'); mk(sB, 'text', {x: 350, y: 368, class: 'mesh-t', text: 'RouteMesh · session, field, dungeon servers call each other over one connection'});
   const meshD = (a, b) => `M${a},334 L${a},354 L${b},354 L${b},334`;
   const entry = qspot(330, 132, 180, 58, 'Entry Spot · Select');
   const town = qspot(330, 196, 180, 134, 'town-1', 'User Spot · Town', {lane: 72, exec: 102});
@@ -682,33 +686,33 @@ function gLobby(){
         const l = mk(gF, 'line', {x1: 770, y1: 132, x2: ch[i].x, y2: ch[i].y, class: 'beam'}); sleep(240).then(() => l.remove(), () => l.remove()); popup(ch[i].x, ch[i].y - 20, '-' + d, 'dmg boss'); }});
       [0, 1, 2, 3].forEach(k => ss.SE[k].conn && spawn(() => ss.push(k, AC[k]))); } }); }
   const STEPS = [
-    {title: 'Linking the servers', line: 'The field server and the dungeon servers are linked by one RouteMesh. They call each other by channel name, Spot id, or Actor id, and the connections are made automatically from Location Store records.',
-     act: 'Start servers', more: ['RouteMesh: servers that join the same mesh call each other in both directions over one connection.', 'Messages addressed to Spots and Actors, Actor moves between servers, and news between rooms (Logical Multicast) all travel over this connection.', 'A server that is added registers in the Store, and the other servers read the record and connect. No configuration is changed.', 'When several servers serve the same name, the Framework picks one. The calling server itself is not a candidate.'],
+    {title: 'Linking the servers', ref: [['Ch. 20 §3.1 How It Works', '20-channel-messaging#31-how-it-works'], ['Ch. 30 §2.1 RouteMesh', '30-channel-patterns#21-routemesh--many-channels-share-one-connection']], line: 'The session server, the field server, and the dungeon servers are linked by one RouteMesh. They call each other by channel name, Spot id, or Actor id, and the connections are made automatically from Location Store records.',
+     act: 'Start servers', more: ['RouteMesh: servers that join the same mesh call each other in both directions over one connection.', 'The session server also takes part in the mesh. A packet a session receives reaches its Actor over this connection.', 'Messages addressed to Spots and Actors, Actor moves between servers, and news between rooms (Logical Multicast) all travel over this connection.', 'A server that is added registers in the Store, and the other servers read the record and connect. No configuration is changed.', 'When several servers serve the same name, the Framework picks one. The calling server itself is not a candidate.'],
      async run(){ for (const x of [420, 635, 820]) { await fly({x, y: 90}, store.pt, {cls: 'pkt-look', dur: 300}); }
        store.set('mesh game → node A, B, C', '');
-       await Promise.all([flyPath(meshD(420, 635), {dur: 400, r: 5}), flyPath(meshD(635, 820), {dur: 400, r: 5}), flyPath(meshD(820, 420), {dur: 400, r: 5})]);
-       meshL.classList.add('on'); res('The three servers are linked by RouteMesh. The thick line below is the connection between the servers.'); }},
-    {title: 'Connecting', line: 'Four players connect. A session is created for each connection, and each player Actor is created in the Entry Spot and bound to the session.',
+       await Promise.all([flyPath(meshD(420, 635), {dur: 400, r: 5}), flyPath(meshD(635, 820), {dur: 400, r: 5}), flyPath(meshD(820, 420), {dur: 400, r: 5}), flyPath(meshD(226, 420), {dur: 400, r: 5})]);
+       meshL.classList.add('on'); res('The session, field, and dungeon servers are linked by RouteMesh. The thick line below is the connection between the servers.'); }},
+    {title: 'Connecting', ref: [['Ch. 24 §1 The Role of Binding an Actor and a Session', '24-actor-session#1-the-role-of-binding-an-actor-and-a-session'], ['Ch. 24 §3.1 Binding', '24-actor-session#31-binding']], line: 'Four players connect. A session is created for each connection, and each player Actor is created in the Entry Spot and bound to the session.',
      act: '4 players connect', more: ['One session is created for each client connection (STREAM).', 'Actor creation is approved by <code>on_create_actor</code> of the Entry Spot.', 'When a session is bound to an Actor, packets that the session does not handle go to that Actor.', 'The Entry Spot is where Actors that have not yet entered a town or room are. It holds no state shared between Actors.'],
      async run(){
        await Promise.all([0, 1, 2, 3].map(async i => { await sleep(i * 300);
          ss.open(i); await fly(ss.CL[i].pt, ss.SE[i].L, {dur: 320, bend: 0});
          await flyPath(ss.routeTo(i, AC[i]), {dur: 460}); AC[i].g.classList.remove('hidden'); pulse(entry.g); redraw(); ch[i].g.classList.remove('off'); }));
        store.set('P1 ~ P4 → node A · Entry Spot', ''); res('4 sessions, 4 Actors. The dashed lines are the bindings that connect each session to an Actor.'); }},
-    {title: 'Getting ready', line: 'All four players change equipment at the same time. In the Entry Spot, each Actor runs separately, so the four requests are processed at the same time.',
+    {title: 'Getting ready', ref: [['Ch. 22 §2.2 Writing the Entry Spot', '22-actor#22-writing-the-entry-spot']], line: 'All four players change equipment at the same time. In the Entry Spot, each Actor runs separately, so the four requests are processed at the same time.',
      act: 'All 4 change equipment', repeat: true, more: ['The Entry Spot keeps order separately for each Actor. Different Actors run at the same time.', 'Each request changes only its own state, so there is no reason to wait for each other.'],
      async run(){ await Promise.all([0, 1, 2, 3].map(async i => { await ss.up(i, AC[i]); AC[i].g.classList.add('run'); await sleep(200 * K); AC[i].g.classList.remove('run'); })); res('The four Actors ran <b>at the same time</b> (the green outlines lit up together).'); }},
-    {title: 'Enter the town', line: 'The four players enter the town town-1. A town is shared by many players, so it is a User Spot, and players see each other once inside.',
+    {title: 'Enter the town', ref: [['Ch. 21 §1 The Role of a Spot', '21-spot#1-the-role-of-a-spot']], line: 'The four players enter the town town-1. A town is shared by many players, so it is a User Spot, and players see each other once inside.',
      act: 'Enter the town', more: ['Entering is done with <code>join</code>. It is scheduled to run after the current handler ends (<code>defer</code>).', 'When <code>on_actor_join</code> of the town approves, the location record and the membership change at once.', 'This is a move within the same node, so the Actor does not move to another server.'],
      async run(){ [0, 1, 2, 3].forEach(i => spawn(() => join(town, i))); await sleep(200 * K); await moveActors(SLOT_T, TOWN); store.set('P1 ~ P4 → node A · town-1', null); res('The four players entered town-1. Now whatever happens in the town is delivered to everyone in the town.'); }},
-    {title: 'Moving in the town', line: 'When one player moves, the town sends that position to everyone. That is why other users appear on the screen.',
+    {title: 'Moving in the town', ref: [['Ch. 21 §1 The Role of a Spot', '21-spot#1-the-role-of-a-spot'], ['Ch. 24 §3.3 The Actor Pushes Over That Connection', '24-actor-session#33-the-actor-pushes-over-that-connection']], line: 'When one player moves, the town sends that position to everyone. That is why other users appear on the screen.',
      act: 'All 4 move', repeat: true, more: ['The town (SpotWide) processes move requests one after another through a single gate.', 'It pushes the result to everyone in the town. Each client draws the other users from that push.', 'If hundreds of players are in a town, split it into several towns (channels). Each town is one Spot.'],
      async run(){ await Promise.all([0, 1, 2, 3].map(async i => { await sleep(i * 150); await ss.up(i, AC[i]);
        await enqueue(town, {label: 'P' + (i + 1), what: `P${i + 1} moving`, actor: AC[i], from: {x: AC[i].x, y: AC[i].y + 13}});
        ch[i].walk(165 + Math.random() * 215, 80 + Math.random() * 110, 700);
        await Promise.all([0, 1, 2, 3].map(k => ss.SE[k].conn ? ss.push(k, AC[k]).then(() => { if (k !== i) seen(ch[k]); }) : null)); }));
        res('The 4 moves were processed one after another in the town, and each was delivered to <b>all clients</b> (green ring = visible on another player screen).'); }},
-    {title: 'Creating a dungeon', line: 'P1 creates a dungeon. The Framework picks the server on which to create it, and the returned id dungeon-7 becomes the address from then on.',
+    {title: 'Creating a dungeon', ref: [['Ch. 20 §3.7 Calling a Spot or an Actor', '20-channel-messaging#37-calling-a-spot-or-an-actor'], ['Ch. 21 §4.1 Creating', '21-spot#41-creating']], line: 'P1 creates a dungeon. The Framework picks the server on which to create it, and the returned id dungeon-7 becomes the address from then on.',
      act: 'P1: create a dungeon', more: ['The Location Store coordinates the right to create, so the same id is not created in two places.', 'If <code>on_create</code> of the dungeon rejects the request, the call fails and no dungeon remains.'],
      async run(){ await ss.up(0, AC[0]); AC[0].g.classList.add('run');
        await fly({x: AC[0].x, y: AC[0].y - 13}, store.pt, {cls: 'pkt-look'}); store.set(null, 'dungeon-7 → creation reserved');
@@ -717,19 +721,19 @@ function gLobby(){
        dsp.g.classList.remove('holding'); pulse(dsp.g); AC[0].g.classList.remove('run');
        store.set(null, 'dungeon-7 → node B'); dngG.classList.remove('locked'); dngSub.textContent = 'dungeon-7 · party members only';
        res('dungeon-7 was created on node B. The Framework picked the server.'); }},
-    {title: 'Party enters', line: 'The four players enter dungeon-7. The dungeon is on another server, so each Actor moves to that server together with its state.',
+    {title: 'Party enters', ref: [['Ch. 22 §1 An Actor Always Belongs to a Spot', '22-actor#1-an-actor-always-belongs-to-a-spot'], ['Ch. 20 §3.7 Calling a Spot or an Actor', '20-channel-messaging#37-calling-a-spot-or-an-actor']], line: 'The four players enter dungeon-7. The dungeon is on another server, so each Actor moves to that server together with its state.',
      act: 'Party enters', more: ['When <code>on_actor_join</code> of the receiving dungeon approves, the Actor moves to node B with its state and its pending work.', 'Messages that arrive during the move wait and are executed in order.', 'The Framework changes the session route to the new location. The client does not reconnect.'],
      async run(){ await flyPath(meshD(420, 635), {dur: 500, r: 7, label: 'join request · RouteMesh'}); pulse(dsp.g); await flyPath(meshD(635, 420), {cls: 'pkt-push', dur: 500, r: 6, label: 'approved'});
        await flyPath(meshD(420, 635), {cls: 'pkt-state', dur: 600, r: 9, label: 'state of 4 Actors'});
        await moveActors(SLOT_D, DNG, 260); store.set('P1 ~ P4 → node B · dungeon-7', null); res('The Actor state went to node B over the RouteMesh connection. The client connections stay as they are, and only the dashed lines (bindings) point to the new location.'); }},
-    {title: 'Simultaneous boss attack', line: 'The four players attack the boss at the same time. The requests are processed in one line in dungeon-7, so the boss HP drops by exactly the sum of the attacks without any lock.',
+    {title: 'Simultaneous boss attack', ref: [['Ch. 32 §3 SpotWide', '32-execution-model#3-spotwide--execution-through-one-gate']], line: 'The four players attack the boss at the same time. The requests are processed in one line in dungeon-7, so the boss HP drops by exactly the sum of the attacks without any lock.',
      act: 'All 4 attack at once', repeat: true, more: ['The dungeon (SpotWide) runs the whole room one task at a time through a single gate.', 'So the boss HP and the party state are updated with ordinary code and no lock.', 'Messages addressed to an Actor enter a queue per Actor, but there is only one execution right (the gate).'],
      async run(){ const r = await attackAll(); res(`${r.n} requests were processed in one line. Attack total${r.sum} → boss HP ${r.before} → <b>${boss.hp}</b>. Locks used: 0.`); }},
-    {title: 'Boss counterattack (timer)', line: 'The boss counterattacks periodically. The timer tick enters the same line, so it runs in turn without mixing with player attacks.',
+    {title: 'Boss counterattack (timer)', ref: [['Ch. 32 §3 SpotWide', '32-execution-model#3-spotwide--execution-through-one-gate']], line: 'The boss counterattacks periodically. The timer tick enters the same line, so it runs in turn without mixing with player attacks.',
      act: 'Start boss timer', more: ['A timer is registered on the dungeon (Spot). The tick runs from the queue of that Spot (orange T).', 'If ticks fall behind, the overrun policy chooses whether to drop them or catch up.', 'Heavy computation is handed to a worker so it does not block the line.'],
      extra: ['Attack and watch', async () => { const r = await attackAll(); res(`Attacks: ${r.n}. The attacks and the boss tick are mixed in one line and run in turn. Boss HP${boss.hp}.`); }],
      async run(){ startTimer(); res('The boss timer has started. The orange T in the queue is the tick. Press "Attack and watch".'); }},
-    {title: 'Disconnect and reconnect', line: 'The connection of P3 is lost. The Actor of P3 stays in the dungeon and the battle continues, and when the player reconnects, the session is bound to the same P3.',
+    {title: 'Disconnect and reconnect', ref: [['Ch. 24 §6 After the Connection Drops', '24-actor-session#6-after-the-connection-drops--the-session-ends-and-the-actor-stays']], line: 'The connection of P3 is lost. The Actor of P3 stays in the dungeon and the battle continues, and when the player reconnects, the session is bound to the same P3.',
      act: 'Disconnect P3', toggle: true, more: ['When the connection is lost, the bound Actor is notified of the disconnect (<code>on_disconnect_actor</code>).', 'A disconnect does not delete the Actor or remove it from the dungeon.', 'An Actor is bound to only one session. If the player connects from another device, the previous binding becomes invalid.'],
      async run(btn){ const i = 2;
        if (ss.SE[i].conn) { ss.close(i); redraw(); AC[i].g.classList.add('disc'); ch[i].g.classList.add('off');
@@ -738,14 +742,14 @@ function gLobby(){
        ss.open(i); await fly(ss.SE[i].R, store.pt, {cls: 'pkt-look', dur: 400}); await fly(store.pt, ss.SE[i].R, {cls: 'pkt-look', dur: 400});
        redraw(); AC[i].g.classList.remove('disc'); ch[i].g.classList.remove('off'); pulse(dsp.g); btn.textContent = 'Disconnect P3';
        res(`New session #${ss.SE[i].id} was bound to P3 on node B. Health and position are unchanged.`); return true; }},
-    {title: 'Room news (Logical Multicast)', line: 'When the boss is defeated, dungeon-7 sends news with raid-news. It sends it once per server over RouteMesh, and the receiving server hands it to the Spots subscribed to that topic (town-1).',
+    {title: 'Room news (Logical Multicast)', ref: [['Ch. 30 §5.1 Logical Multicast', '30-channel-patterns#51-logical-multicast--events-between-spots-on-the-mesh']], line: 'When the boss is defeated, dungeon-7 sends news with raid-news. It sends it once per server over RouteMesh, and the receiving server hands it to the Spots subscribed to that topic (town-1).',
      act: 'Final blow → publish news', more: ['Logical Multicast: publish and subscribe between Spots that reuse the RouteMesh connection as is. No separate socket is opened.', 'Receivers are limited to Spots that subscribe to the same topic. The town (town-1) subscribes to raid-news.', 'When several subscribing Spots are on the same server, they share one message.'],
      async run(){ if (boss.hp > 0) { finish = true; left = ss.SE.filter(s => s.conn).length; await attackAll(); finish = false; }
        timer = false; res('The boss was defeated. dungeon-7 sends the news.'); pulse(dsp.g);
        await flyPath(meshD(635, 420), {cls: 'pkt-pub', dur: 600, r: 7, label: 'raid-news · RouteMesh'}); pulse(town.g);
        await Promise.all(others.map(o => { seen(o); return null; })); spawn(() => banner('News: dungeon-7 boss defeated'));
        res('node A received it once and passed it to town-1. The other players in the town see the news (gray rings).'); }},
-    {title: 'Return to the town', line: 'The party returns to the town and the dungeon is closed. The town is on another server, so the Actors move again over RouteMesh.',
+    {title: 'Return to the town', ref: [['Ch. 22 §1 An Actor Always Belongs to a Spot', '22-actor#1-an-actor-always-belongs-to-a-spot'], ['Ch. 20 §3.7 Calling a Spot or an Actor', '20-channel-messaging#37-calling-a-spot-or-an-actor']], line: 'The party returns to the town and the dungeon is closed. The town is on another server, so the Actors move again over RouteMesh.',
      act: 'Return', more: ['Returning to the town is also a <code>join</code>.', 'When the dungeon is closed, the Location Store record disappears after <code>on_closing</code>.'],
      async run(){ await flyPath(meshD(635, 420), {cls: 'pkt-state', dur: 600, r: 9, label: 'state of 4 Actors'});
        await moveActors(SLOT_T, TOWN, 220); store.set('P1 ~ P4 → node A · town-1', null);
@@ -753,7 +757,7 @@ function gLobby(){
        dsp.g.classList.add('gone'); store.set(null, 'dungeon-7 → none'); dngG.classList.add('locked'); dngSub.textContent = 'Closed';
        res('The dungeon was closed and the Store record was removed. The party sees each other again in the town.'); }},
   ];
-  return {title: 'Lobby and dungeon · RouteMesh', steps: STEPS, foot: 'chapters 21, 22, 24, 32, 34, 35, 36'};
+  return {title: 'Lobby and dungeon · RouteMesh', steps: STEPS, foot: [['chapter 21', '21-spot'], ['chapter 22', '22-actor'], ['chapter 24', '24-actor-session'], ['chapter 32', '32-execution-model'], ['chapter 34', '34-activation-lifetime'], ['chapter 35', '35-actor-membership'], ['chapter 36', '36-timer-worker']]};
 }
 
 /* =========================================================
@@ -791,13 +795,13 @@ function gInstance(){
     return enqueue(guild, {label: 'D' + 'BCD'[k], what: opts.what || `Server ${'BCD'[k]} +${amount}`, from: from(k), dur: opts.dur, fn: () => { addXp(amount); glogAdd(`Party ${k + 1} contribution +${amount}`); if (opts.fn) opts.fn(); }});
   }
   const STEPS = [
-    {title: 'Waking on the first request', line: 'Party 1 defeats a boss and contributes to the guild. guild-7 does not exist yet, but when the first request arrives, the Framework creates it and processes that request right away.',
+    {title: 'Waking on the first request', ref: [['Ch. 21 §6 The Other Kinds of Spot', '21-spot#6-the-other-kinds-of-spot']], line: 'Party 1 defeats a boss and contributes to the guild. guild-7 does not exist yet, but when the first request arrives, the Framework creates it and processes that request right away.',
      act: 'Party 1 contributes', more: ['An Instance Spot has no separate call to create it. It is enough to write the instance type in the first message.', 'The Framework picks the server to create it on, and the Store prevents the same id from being created in two places.', 'The caller does not separate "create" from "send".'],
      async run(){ await contribute(0, 120); res('guild-7 was created and processed <b>that same request</b>. Guild experience +120.'); }},
-    {title: 'Several servers at once', line: 'Three dungeon servers contribute to the same guild at the same time. guild-7 processes them in one line, so the total is exact without a distributed lock.',
+    {title: 'Several servers at once', ref: [['Ch. 32 §3 SpotWide', '32-execution-model#3-spotwide--execution-through-one-gate']], line: 'Three dungeon servers contribute to the same guild at the same time. guild-7 processes them in one line, so the total is exact without a distributed lock.',
      act: '3 servers contribute at once', repeat: true, more: ['Requests that arrive with the same guild id always go to that one guild.', 'The location is looked up in the Store only the first time. After that, requests go straight to the remembered location.', 'With the conventional approach, every server must take a Redis lock, read, write, and release it.'],
      async run(){ const before = xp; const am = [0, 1, 2].map(() => 80 + Math.floor(Math.random() * 80)); await Promise.all(am.map((a, k) => contribute(k, a))); res(`3 requests were processed in one line. ${am.join(' + ')} = ${am.reduce((s, v) => s + v, 0)} → experience ${before} → <b>${xp}</b>. Locks: 0.`); }},
-    {title: 'Yielding while waiting', line: 'The guild saves the ranking to an external DB. When it waits with Yield, other contributions run in the meantime, and when the save finishes, execution continues as a new turn.',
+    {title: 'Yielding while waiting', ref: [['Ch. 32 §2 What Decides the Serialization Boundary', '32-execution-model#2-what-decides-the-serialization-boundary']], line: 'The guild saves the ranking to an external DB. When it waits with Yield, other contributions run in the meantime, and when the save finishes, execution continues as a new turn.',
      act: 'Save ranking + concurrent contributions', more: ['<code>Yield</code> gives up the execution right while waiting. When the result arrives, it enters the end of the queue as a new turn.', 'Waiting with <code>Async</code> keeps the execution right while waiting, so all other requests stop.', 'After resuming, check again the state that changed in the meantime.'],
      async run(){
        let resumed; const resumeDone = new Promise(r => { resumed = r; });
@@ -805,12 +809,12 @@ function gInstance(){
          await fly(guild.abs(guild.w, 130), DB.L(), {cls: 'pkt-look', dur: 500}); pulse(DB.g); await sleep(400 * K); await fly(DB.L(), guild.abs(guild.w, 130), {cls: 'pkt-push', dur: 500});
          await enqueue(guild, {label: 'R', what: 'Resumed turn', fn: () => glogAdd('Ranking saved (resumed turn)')}); res('The save result arrived and execution continued as a <b>new turn (R) at the end of the queue</b>. Other contributions finished first in the meantime.'); resumed(); }); }});
        await sleep(500 * K); await Promise.all([contribute(1, 90), contribute(2, 110)]); await p; await resumeDone; }},
-    {title: 'Closing when idle, waking again', line: 'When there are no requests for a while, the guild closes by itself. When the next request arrives, it wakes up again, possibly on a different server this time.',
+    {title: 'Closing when idle, waking again', ref: [['Ch. 21 §6 The Other Kinds of Spot', '21-spot#6-the-other-kinds-of-spot']], line: 'When there are no requests for a while, the guild closes by itself. When the next request arrives, it wakes up again, possibly on a different server this time.',
      act: 'Close the guild', extra: ['Party 2 contributes', async () => { await contribute(1, 150); res(`guild-7 woke up again and processed the request (gen${gen7}). The caller changed nothing.`); }],
      more: ['An Instance Spot closes itself from its own handler or timer (<code>on_closing</code>).', 'When it closes, the Store record disappears. If the next request arrives with the same id, a new incarnation is created.', 'Durable state belongs to the storage. The Spot holds only the in-memory state and the processing order.'],
      async run(){ guild.g.classList.add('holding'); res('guild-7: <code>on_closing</code>'); await sleep(260 * K); guild.g.remove(); guild = null; cache.fill(false); store.set('guild-7 → none', null); gSub.textContent = 'Closed · wakes up again on the next request'; res('guild-7 was closed. Press "Party 2 contributes" to wake it up again.'); }},
   ];
-  return {title: 'Instance Spot', steps: STEPS, foot: 'chapter 21 (Spot), chapter 32 (execution model), chapter 34 (activation and lifetime)'};
+  return {title: 'Instance Spot', steps: STEPS, foot: [['chapter 21 (Spot)', '21-spot'], ['chapter 32 (execution model)', '32-execution-model'], ['chapter 34 (activation and lifetime)', '34-activation-lifetime']]};
 }
 
 /* =========================================================
@@ -830,6 +834,7 @@ function gRelocate(){
   const store = storeBox(320, 4, 570);
   mk(sB, 'path', {d: 'M142,8 L310,8 L310,58 L896,58 L896,362 L142,362 Z', class: 'chan-frame mesh'}); chanTag(150, 362, 'RouteMesh channel · game', 'mesh');
   const ss = sessionKit(4);
+  path('M226,332 L226,345 L795,345 L795,334 M402,334 L402,345 M595,334 L595,345', 'mesh on');
   mk(sB, 'rect', {x: 316, y: 86, width: 173, height: 252, rx: 12, class: 'grp-field'}); mk(sB, 'rect', {x: 496, y: 86, width: 398, height: 252, rx: 12, class: 'grp-dng'});
   const A = box(320, 90, 165, 244, '', 'Field server', 'node A'); const B = box(500, 90, 190, 244, '', 'Dungeon server', 'node B'); const C = box(700, 90, 190, 244, '', 'Dungeon server', 'node C');
   mk(sB, 'text', {x: 330, y: 150, class: 't-mono', text: 'town-1'}); const cFree = mk(sB, 'text', {x: 710, y: 150, class: 't-mono', text: 'Has capacity'});
@@ -854,24 +859,24 @@ function gRelocate(){
   function fight(){ if (fighting) return; fighting = true; spawn(async () => { let i = 0; while (fighting) { spawn(() => attack(i % 4)); i++; await sleep(620 * K); } }); }
   let target = 'C';
   const STEPS = [
-    {title: 'In battle', line: 'On dungeon server B, the party is fighting the boss. Attack requests keep arriving at dungeon-7.',
+    {title: 'In battle', ref: [['Ch. 37 §1 What Survives the Move', '37-relocation#1-what-survives-the-move']], line: 'On dungeon server B, the party is fighting the boss. Attack requests keep arriving at dungeon-7.',
      act: 'Start the battle', more: ['The Actors of the four party members and dungeon-7 are all on node B.', 'The Location Store records "dungeon-7 is on node B".'],
      async run(){ fight(); res('Attacks keep arriving. The numbers below show the attacks sent and processed.'); }},
-    {title: 'Starting maintenance', line: 'An operator runs Host Relocate to take node B down for maintenance. The Framework confirms node C as the target.',
+    {title: 'Starting maintenance', ref: [['Ch. 37 §5 The Procedure and the Point of No Return', '37-relocation#5-the-procedure-and-the-point-of-no-return']], line: 'An operator runs Host Relocate to take node B down for maintenance. The Framework confirms node C as the target.',
      act: 'Start node B maintenance', more: ['If the target server is not ready, the relocation does not start. In that case, B keeps running as before.', 'For a SpotWide dungeon, the dungeon and all Actors in it move at once.', 'This is a planned (graceful) move. It is not a feature that automatically takes over when a server suddenly dies.'],
      async run(){ C.g.classList.add('hot'); cFree.textContent = 'Ready to receive'; banner('Moving dungeon-7 · battle continues'); res('Target: node C.'); }},
-    {title: 'Stop and hold', line: 'B finishes only what is running now and stops new execution. It keeps receiving messages and holds them in the queue (orange).',
+    {title: 'Stop and hold', ref: [['Ch. 37 §5 The Procedure and the Point of No Return', '37-relocation#5-the-procedure-and-the-point-of-no-return']], line: 'B finishes only what is running now and stops new execution. It keeps receiving messages and holds them in the queue (orange).',
      act: 'Stop execution', more: ['Receiving does not stop. So attacks sent in the meantime are not discarded either.', 'Held messages keep the order in which they arrived.'],
      async run(){ dsp.setHold(true); while (dsp.running) await sleep(30); res('dungeon-7 stopped executing. Newly arriving attacks pile up in the orange cells.'); }},
-    {title: 'Direct transfer', line: 'The dungeon state, the four party members, the held messages, and the timer are sent directly to C. The Location Store is not involved.',
+    {title: 'Direct transfer', ref: [['Ch. 37 §5 The Procedure and the Point of No Return', '37-relocation#5-the-procedure-and-the-point-of-no-return'], ['Ch. 37 §1 What Survives the Move', '37-relocation#1-what-survives-the-move']], line: 'The dungeon state, the four party members, the held messages, and the timer are sent directly to C. The Location Store is not involved.',
      act: 'Send the state', more: ['The state goes directly from the memory of B to C over the mesh connection.', 'The Store records only "who owns it now".'],
      async run(){ await fly(dsp.abs(dsp.w, 60), {x: 760, y: 200}, {cls: 'pkt-state', r: 12, dur: 600, bend: -.25, label: `state + ${dsp.q.length} held + timer`}); pulse(C.g); res('C received the state and prepared the same dungeon. C also takes over the held messages in the same order.'); }},
-    {title: 'Switch and continue', line: 'C changes the location in the Store from B to C and continues from the held messages. The client connections stay as they are.',
+    {title: 'Switch and continue', ref: [['Ch. 37 §5 The Procedure and the Point of No Return', '37-relocation#5-the-procedure-and-the-point-of-no-return']], line: 'C changes the location in the Store from B to C and continues from the held messages. The client connections stay as they are.',
      act: 'Switch', more: ['The location changes only if the expected value is still current (CAS).', 'The Framework changes the session route to C. Players do not reconnect.', 'The caller keeps using the same id, dungeon-7.'],
      async run(){ await fly({x: 820, y: 90}, store.pt, {cls: 'pkt-look', dur: 400}); store.set('dungeon-7 → node C', 'P1 ~ P4 → node C · dungeon-7');
        await dsp.moveTo(705, 132, 900 * K / 3.5 + 500, sync); dsp.setHold(false); C.g.classList.remove('hot'); cFree.textContent = ''; where.textContent = 'Running on dungeon server C'; banner('');
        res('C continues from the attacks that were held. The battle on screen did not stop.'); }},
-    {title: 'Relaying a late message', line: 'A field server still remembers the old location (B) and sends a whisper to P2. B is already empty, but it passes the received message to the new location C (relay).',
+    {title: 'Relaying a late message', ref: [['Ch. 37 §5 The Procedure and the Point of No Return', '37-relocation#5-the-procedure-and-the-point-of-no-return']], line: 'A field server still remembers the old location (B) and sends a whisper to P2. B is already empty, but it passes the received message to the new location C (relay).',
      act: 'Field server → whisper to P2', repeat: true, more: ['Message Follow: the old owner forwards the message it received to the new owner. It does not ask the sender to send it again.', 'A relay is kept only for a fixed time. After that, the sender looks up the new location in the Store again.', 'So no message is lost even if the sender remembers the old location for a while.'],
      async run(){
        relayLine.setAttribute('d', relayD()); relayLine.setAttribute('opacity', 1); oldT.setAttribute('opacity', 1);
@@ -879,11 +884,11 @@ function gRelocate(){
        res('The old location B received the whisper. B does not ask for a resend and passes it to C.'); await sleep(150 * K);
        await flyPath(relayD(), {cls: 'pkt-state', dur: 600, r: 7, label: 'relay → C'}); pulse(AC[1].g); popup(ch[1].x, ch[1].y - 22, 'whisper', 'dmg');
        relayN++; relayT.textContent = `relay ${relayN} msg`; res(`P2 received the whisper. B → C relay${relayN}, lost messages: 0.`); }},
-    {title: 'Emptying B', line: 'node B is empty. It can now be shut down and serviced. No attacks were lost in the meantime.',
+    {title: 'Emptying B', ref: [['Ch. 37 §5 The Procedure and the Point of No Return', '37-relocation#5-the-procedure-and-the-point-of-no-return']], line: 'node B is empty. It can now be shut down and serviced. No attacks were lost in the meantime.',
      act: 'Shut down node B', more: ['After maintenance, B can be started again and relocated back with the next Relocate.', 'A zero-downtime deployment follows the same procedure. Empty the servers one by one and replace them with the new version.'],
      async run(){ B.g.classList.add('faded'); fighting = false; res('Processing the remaining attacks…'); while (inflight > 0 || dsp.q.length || dsp.running) await sleep(100); upd(); res(`node B was shut down. ${cnt.textContent}.`); }},
   ];
-  return {title: 'Host Relocation', steps: STEPS, foot: 'chapter 37 (Relocation), chapter 12 (operations)'};
+  return {title: 'Host Relocation', steps: STEPS, foot: [['chapter 37 (Relocation)', '37-relocation'], ['chapter 12 (operations)', '12-operations']]};
 }
 
 /* =========================================================
@@ -974,7 +979,7 @@ function gBack(){
     } });
   }
   const STEPS = [
-    {title: 'Sending the same burst', line: 'The same attack burst is sent to the top and bottom lanes. The sending rate is more than twice the processing rate. The top lane piles up whatever it receives. The bottom lane stops the sender when the queue is full.',
+    {title: 'Sending the same burst', ref: [['Ch. 33 §2 Core HWM and the Application Job Queue', '33-backpressure#2-core-hwm-and-the-application-job-queue'], ['Ch. 33 §3.1 The Basis for Locking Sends', '33-backpressure#31-the-basis-for-locking-sends']], line: 'The same attack burst is sent to the top and bottom lanes. The sending rate is more than twice the processing rate. The top lane piles up whatever it receives. The bottom lane stops the sender when the queue is full.',
      act: 'Start the burst', more: [
        'The receiver queue has a limit (HWM). When it is full, the Core stops sending to that peer. In the meantime, <code>send</code> waits until space is available.',
        'Sending resumes when the queue drains below half. Resuming each time a single slot frees would make the sender stop and resume continuously (Core low watermark = half of the HWM).',
@@ -983,7 +988,7 @@ function gBack(){
        'Without backpressure, the receiver memory grows without limit until the server dies, and all the queued messages are lost.'],
      async run(){ run(L1, W1); run(L2, W2); W1.st.textContent = 'Piling up as received'; W2.st.textContent = 'Sending'; res('The top lane piles up until the server dies. The bottom lane repeats "stop ↔ resume". The bottom queue never exceeds the limit.'); }},
   ];
-  return {title: 'Backpressure', steps: STEPS, foot: 'chapter 33 (Backpressure) · HWM and low watermark of the Core pipe'};
+  return {title: 'Backpressure', steps: STEPS, foot: [['chapter 33 (Backpressure)', '33-backpressure'], ['HWM and low watermark of the Core pipe', null]]};
 }
 
 /* =========================================================
@@ -1048,10 +1053,10 @@ function gMeshChannel(){
   }
   const MORE_W = ['weight ranges from 0 to 10000, and the default is 100. When all are 100, nodes are picked in turn (round-robin).', 'The ratio holds over the long run. It does not decide the order of each individual call.', 'The weight rule is the same for RouteMesh and ClientServer.'];
   const STEPS = [
-    {title: 'Requesting dungeon results', line: 'When a dungeon ends, it sends one request for that dungeon\'s result (the rewards of the 4 party members) to the reward channel. The Framework picks one of the API servers that serve reward and sends it there. When the reply arrives, the reward is shown for the whole party of that dungeon.',
+    {title: 'Requesting dungeon results', ref: [['Ch. 20 §3.1 How It Works', '20-channel-messaging#31-how-it-works'], ['Ch. 20 §3.4 The Call', '20-channel-messaging#34-the-call']], line: 'When a dungeon ends, it sends one request for that dungeon\'s result (the rewards of the 4 party members) to the reward channel. The Framework picks one of the API servers that serve reward and sends it there. When the reply arrives, the reward is shown for the whole party of that dungeon.',
      act: 'Clear 4 dungeons', repeat: true, more: ['There is one request per dungeon. There is no request per party member.', 'RouteMesh channel: servers that join the same mesh call each other by channel name. The call uses only the channel name <code>reward</code> (<code>RequestToChannel</code>). RouteMesh is selected in the runtime options with ChannelName.', 'A dungeon server does not know the address of the API servers. It knows only the name reward.', 'Unlike ClientServer, it does not open a separate port and connect. It sends over the mesh that is already connected.', 'When several nodes serve the channel and the weights are equal, the Framework picks them in turn (round-robin). The reply returns on the connection the request used.'],
      async run(){ const r = await burst(4); res(`${r}. Each dungeon sent only one request.`); }},
-    {title: 'Adding a serving node', line: 'API server 3 joins the mesh. It is recorded in the Location Store as serving reward, and the setting of the callers does not change.',
+    {title: 'Adding a serving node', ref: [['Ch. 20 §3.2 The Receiving Side', '20-channel-messaging#32-the-receiving-side--the-node-serving-the-channel'], ['Ch. 30 §4.4 Growing One ChannelName Across Several Nodes', '30-channel-patterns#44-growing-one-channelname-across-several-nodes']], line: 'API server 3 joins the mesh. It is recorded in the Location Store as serving reward, and the setting of the callers does not change.',
      act: 'Start API server 3', extra: ['Clear 6 dungeons', async () => { const r = await burst(6); res(`${r}. The new server also receives reward requests.`); }],
      more: ['When a server starts, it writes its address and the channel names it serves to the Store.', 'A node already in the mesh reads the Store record and connects to the new node. There is one connection per node pair.', 'The code and settings of the callers stay the same.'],
      async run(){ const s3 = A[2]; s3.g.classList.remove('ghost', 'faded'); s3.st.textContent = 'node F';
@@ -1059,15 +1064,15 @@ function gMeshChannel(){
        await Promise.all(D.map(d => fly(store.pt, d.T(), {cls: 'pkt-look', dur: 500})));
        drawConn(0, 2); drawConn(1, 2); setConnT(); chipc(456, s3.y + 6, 'reward'); s3.ready = true; upd(s3); pulse(s3.g);
        res('API server 3 now serves reward. Check it with "Clear 6 dungeons".'); }},
-    {title: 'Splitting by weight', line: 'Give API server 3 a weight of 300. New requests are split 100 : 100 : 300, so server 3 receives about three times as many as the other servers.',
+    {title: 'Splitting by weight', ref: [['Ch. 30 §4.2 Distribution Among Candidates', '30-channel-patterns#42-distribution-among-candidates']], line: 'Give API server 3 a weight of 300. New requests are split 100 : 100 : 300, so server 3 receives about three times as many as the other servers.',
      act: 'Set API server 3 weight to 300', extra: ['Clear 10 dungeons', async () => { const r = await burst(10); res(`${r}. Server 3 received about three times as many as the other servers.`); }],
      more: [...MORE_W, 'Use it when machines with different specifications are mixed, or when one machine should receive less.'],
      async run(){ A[2].w = 300; A.forEach(b => b.cur = 0); upd(A[2]); pulse(A[2].g); res('The weight of API server 3 is now 300. Press "Clear 10 dungeons" and compare how far the cells pile up.'); }},
-    {title: 'Weight 0', line: 'Change the weight of API server 1 to 0. New requests no longer go to server 1. The connection and the Store record remain.',
+    {title: 'Weight 0', ref: [['Ch. 30 §4.3 Stopping Only New Requests While Running', '30-channel-patterns#43-stopping-only-new-requests-while-running']], line: 'Change the weight of API server 1 to 0. New requests no longer go to server 1. The connection and the Store record remain.',
      act: 'Set API server 1 weight to 0', extra: ['Clear 10 dungeons', async () => { const r = await burst(10); res(`${r}. None went to server 1.`); }],
      more: ['weight 0 removes the node only from the candidates for new requests, and keeps the connection and the Store registration. Requests already received are processed to the end.', 'weight is the only value that can be changed at run time.', 'Set it to 0 before maintenance and return it to 100 afterward.'],
      async run(){ A[0].w = 0; A.forEach(b => b.cur = 0); upd(A[0]); res('The weight of API server 1 is now 0 (orange dashed line). Check it with "Clear 10 dungeons".'); }},
-    {title: 'One more channel', line: 'API servers 2 and 3 also serve the ranking channel. Only a Store record is added, and no new connection is made. ranking requests travel over the same mesh connections as reward.',
+    {title: 'One more channel', ref: [['Ch. 30 §2.1 RouteMesh', '30-channel-patterns#21-routemesh--many-channels-share-one-connection']], line: 'API servers 2 and 3 also serve the ranking channel. Only a Store record is added, and no new connection is made. ranking requests travel over the same mesh connections as reward.',
      act: 'Add ranking servers', extra: ['Update ranking 4 times', async () => { A.forEach(b => { b.rn = 0; if (b.rt) b.rt.textContent = ''; }); R.forEach(r => r.cur = 0); await Promise.all(Array.from({length: 4}, async (_, k) => { await sleep(k * 260 * K / 3.5); await callRank(k); }));
        res(`API server 2: ${A[1].rn} req · API server 3: ${A[2].rn} req. The channel count grew by one, but no solid line (connection) was added.`); }],
      more: ['A channel is a logical split on top of the mesh. More channels do not create new sockets or connections. They use the existing peer connections.', 'MeshNode keeps one connection per node pair. reward and ranking requests travel over the same connection.', 'ClientServer and Fanout keep a separate port and connection for each channel. That is the difference from RouteMesh.'],
@@ -1076,7 +1081,7 @@ function gMeshChannel(){
        [A[1], A[2]].forEach(b => { b.rt = mk(sB, 'text', {x: 442, y: b.y + 75, class: 't-count', text: ''}); R.push({n: b, ready: true, w: 100, cur: 0}); pulse(b.g); });
        nChan = 2; setConnT(); res('API servers 2 and 3 also serve ranking. The lines stay the same and only the channel count grew. Check it with "Update ranking 4 times".'); }},
   ];
-  return {title: 'RouteMesh channel', steps: STEPS, foot: 'chapter 20 §3 (RouteMesh), chapter 30 (how channels work)'};
+  return {title: 'RouteMesh channel', steps: STEPS, foot: [['chapter 20 §3 (RouteMesh)', '20-channel-messaging#3-routemesh'], ['chapter 30 (how channels work)', '30-channel-patterns']]};
 }
 
 /* =========================================================
@@ -1133,23 +1138,23 @@ function gMeshPubSub(){
   }
   async function to(x, y){ if (Math.abs(p1.x - x) > 1 || Math.abs(p1.y - y) > 1) await p1.walk(x, y, 500 * K); await sleep(150 * K); }
   const STEPS = [
-    {title: 'One Spot per zone', line: 'The world has four zones, and each zone has one User Spot. When it starts, each zone Spot subscribes to the topics coming from the other three zones.',
+    {title: 'One Spot per zone', ref: [['Ch. 30 §5.1 Logical Multicast', '30-channel-patterns#51-logical-multicast--events-between-spots-on-the-mesh']], line: 'The world has four zones, and each zone has one User Spot. When it starts, each zone Spot subscribes to the topics coming from the other three zones.',
      act: 'Show subscriptions', more: ['The zones form a 2×2 grid, and each zone is a User Spot with an id (zone-nw, zone-ne, zone-sw, zone-se). Two Zone servers hold two zones each.', 'A Spot registers its subscriptions when it starts. The chip <code>border.ne→nw</code> is short for the topic <code>zone.border.zone-ne.zone-nw</code>.', 'The publisher does not know the list of subscribers. The Spots that subscribed to the same topic receive it.', 'A topic is a logical split on top of the mesh. Border topic packets travel over the one mesh connection between the Zone servers, and more topics do not add connections.'],
      async run(){ for (const z of ZN) { zr[z].classList.add('hot'); pulse(SP[z].g); Object.values(SP[z].chip).forEach(c => c.classList.add('hot')); await sleep(450 * K); zr[z].classList.remove('hot'); clearHot(); }
        note('Each zone subscribes to the topics of the other three'); res('Each zone subscribes to 3 topics, all coming from other zones. Subscribing does not create a new connection.'); }},
-    {title: 'Near the border', line: 'When P1 steps into the east border band inside zone-nw, zone-nw publishes the position as a topic. At the east border, only zone-ne receives it.',
+    {title: 'Near the border', ref: [['Ch. 30 §5.3 Topic', '30-channel-patterns#53-topic--both-forms-select-receivers-by-it'], ['Ch. 56 §7 The Zone Tick', '56-zoneworld#7-the-zone-tick--pushes-and-border-snapshots']], line: 'When P1 steps into the east border band inside zone-nw, zone-nw publishes the position as a topic. At the east border, only zone-ne receives it.',
      act: 'Move P1 to the east border', repeat: true, more: ['The publisher does not name the receiving Spot or node. It only publishes to the topic <code>zone.border.zone-nw.zone-ne</code>.', 'Logical Multicast uses the already connected mesh, without a separate PUB/SUB socket. Unlike classic Fanout, the receivers are the Spots that subscribed to that topic.', 'The band is 10 cells wide along the border. When a player moves inside the band, the zone Spot publishes that position.'],
      async run(){ await to(240, 64); await publish(['ne']); note('P1 ghost appears on the zone-ne screen'); res('zone-nw published to one topic and only zone-ne received it. zone-sw and zone-se did not. A P1 ghost appeared on the zone-ne user screen.'); }},
-    {title: 'Corner', line: 'P1 moves to the center corner where the four zones meet. Its position is published to the three topics ne, sw and se, and all three zones receive it.',
+    {title: 'Corner', ref: [['Ch. 30 §5.3 Topic', '30-channel-patterns#53-topic--both-forms-select-receivers-by-it']], line: 'P1 moves to the center corner where the four zones meet. Its position is published to the three topics ne, sw and se, and all three zones receive it.',
      act: 'Move P1 to the corner', extra: ['Move around the corner', async () => { for (const [x, y] of [[238, 104], [254, 114], [246, 106]]) { await p1.walk(x, y, 250 * K); await publish(['ne', 'sw', 'se']); } note('The ghosts in the three zones follow each move of P1'); res('Each time P1 moved inside the band, its position was published to three topics. The ghosts in the three zones followed.'); }],
      more: ['At the corner the bands of the four zones overlap, so the other three zones all receive this position.', 'zone-sw is on the same Zone server, so delivery stays inside the node. zone-ne and zone-se cross the mesh between the servers. The publishing code is the same.'],
      async run(){ await to(246, 110); await publish(['ne', 'sw', 'se']); note('P1 ghost on the zone-ne, zone-sw and zone-se screens'); res('zone-sw received it inside the same server, and zone-ne and zone-se received it across the mesh. Check that the position follows with "Move around the corner".'); }},
-    {title: 'Leaving the border', line: 'When P1 returns to the middle of its zone and leaves the band, a leave event is published to the same topics. The receivers remove the ghost right away.',
+    {title: 'Leaving the border', ref: [['Ch. 56 §7 The Zone Tick', '56-zoneworld#7-the-zone-tick--pushes-and-border-snapshots']], line: 'When P1 returns to the middle of its zone and leaves the band, a leave event is published to the same topics. The receivers remove the ghost right away.',
      act: 'Move P1 to the middle', more: ['The position is published while the player moves inside the band. When the player leaves the band, a leave event is published to the same topics instead of a position.', 'On receiving leave, the receiver removes that player\'s ghost at once. It does not wait for an expiry.'],
      async run(){ const w = p1.walk(110, 66, 900 * K); while (p1.x >= 236 || p1.y >= 100) await sleep(30);
        await Promise.all([w, publish(Object.keys(ghosts), 'leave')]); SP.nw.st.textContent = 'no publish · outside band'; note('All ghosts disappeared after leave'); res('P1 published leave the moment it left the band, and the ghosts in the receiving zones disappeared at once.'); }},
   ];
-  return {title: 'RouteMesh pub/sub · Logical Multicast', steps: STEPS, foot: 'chapter 30 §5.1 (Logical Multicast), chapter 56 (reading along: ZoneWorld)'};
+  return {title: 'RouteMesh pub/sub · Logical Multicast', steps: STEPS, foot: [['chapter 30 §5.1 (Logical Multicast)', '30-channel-patterns#51-logical-multicast--events-between-spots-on-the-mesh'], ['chapter 56 (reading along: ZoneWorld)', '56-zoneworld']]};
 }
 
 /* ---------- groups and steps ---------- */
@@ -1160,9 +1165,21 @@ function renderSteps(){
   STEPS.forEach((s, k) => { const li = document.createElement('li'); li.className = (k === cur ? 'cur' : '') + (done.has(k) && k !== cur ? ' done' : ''); if (k === cur) li.setAttribute('aria-current', 'step');
     const n = document.createElement('span'); n.className = 'n'; n.textContent = done.has(k) && k !== cur ? '✓' : k + 1; li.append(n, document.createTextNode(s.title)); $('steps').append(li); });
 }
+/* guide links: the base follows the guide page that embeds the tour, else the site's language selector, else dotnet */
+const GUIDE_LOCALE = '', SRC_LABEL = 'Source';
+function guideBase(){
+  try { const m = window.parent.location.pathname.match(/^((?:\/ko)?\/(?:cpp|dotnet|java|kotlin|node)\/guide\/server\/)/); if (m) return m[1]; } catch (_) {}
+  let lang = 'dotnet'; try { const v = localStorage.getItem('zlink-lang'); if (['cpp', 'dotnet', 'java', 'kotlin', 'node'].includes(v)) lang = v; } catch (_) {}
+  return `${GUIDE_LOCALE}/${lang}/guide/server/`;
+}
+function guideLinks(refs){
+  const base = guideBase();
+  return refs.map(([text, ref]) => { if (!ref) return text; const [slug, anchor] = ref.split('#'); return `<a href="${base}${slug}/${anchor ? '#' + anchor : ''}" target="_top">${text}</a>`; }).join(' · ');
+}
 function show(k){
   cur = k; const s = STEPS[k]; renderSteps();
   $('stepNo').textContent = `Step ${k + 1} / ${STEPS.length}`; $('line').textContent = s.line; res('');
+  $('src').innerHTML = s.ref ? `${SRC_LABEL}: ${guideLinks(s.ref)}` : '';
   $('more').innerHTML = s.more.map(m => `<li>${m}</li>`).join('');
   const acts = $('acts'); acts.replaceChildren();
   const b = document.createElement('button'); b.type = 'button'; b.className = 'act primary'; b.textContent = s.act; acts.append(b);
@@ -1178,7 +1195,7 @@ function show(k){
 function openGroup(key){
   gen++; curKey = key; const g = GROUPS.find(x => x[0] === key) || GROUPS[1];
   const r = g[2](); STEPS = r.steps; done = new Set();
-  $('gtitle').textContent = r.title; $('foot').textContent = `This is a simulation that runs in the browser. Timings and numbers are for demonstration only. The behavior follows the ZLink C++ server guide at zlink.systems (${r.foot}).`;
+  $('gtitle').textContent = r.title; $('foot').innerHTML = `This is a simulation that runs in the browser. Timings and numbers are for demonstration only. The behavior follows the ZLink server guide at zlink.systems (${guideLinks(r.foot)}).`;
   document.querySelectorAll('#groups button').forEach(b => b.setAttribute('aria-current', String(b.dataset.key === key)));
   try { history.replaceState(null, '', '#' + key); } catch (_) {}
   show(0);

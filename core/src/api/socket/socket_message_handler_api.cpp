@@ -55,7 +55,7 @@ zlink_recv_result_t zlink_stream_recv_packet (
         return ZLINK_RECV_INVALID_HANDLE;
     }
 
-    socket_handle_t handle = as_socket_handle (stream_);
+    socket_handle_t handle = as_socket_receive_handle (stream_);
     if (!handle.socket)
         return zlink::recv_result_internal::from_errno (errno);
 
