@@ -1366,9 +1366,9 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
             }
             try {
                 if (pending_reply)
-                    (void) owner->reply (record, *pending_reply);
+                    (void) co_await owner->reply (record, *pending_reply);
                 else if (pending_failure_reply)
-                    (void) owner->reply (record, *pending_failure_reply);
+                    (void) co_await owner->reply (record, *pending_failure_reply);
             }
             catch (...) {
                 detail::dispatch_error_reporter_t (_channel_runtime.dispatch_options_ref ())
