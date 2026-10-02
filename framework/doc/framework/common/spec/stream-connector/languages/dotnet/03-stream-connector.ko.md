@@ -269,14 +269,12 @@ public interface IZlinkStreamCodecRegistration
 
 ## 7. Dispatch
 
-**`.NET` 고유 계약이다.**
+Dispatch mode의 동작은 [공통 §7](../../32-stream-connector.ko.md#7-dispatch-모드)이 정한다. 아래는 `.NET` 표면이다.
 
 | 항목 | 계약 |
 |---|---|
-| `Manual`(기본) | 수신 callback·request callback·lifecycle event가 **`Dispatch.Async(...)`를 호출한 실행 문맥**에서 처리된다 |
-| `Immediate` | **receive 경로에서 인라인 실행한다**(별도 dispatch 작업 없음). 느린 handler는 receive loop를 막으므로 후속 receive 처리가 지연된다 |
-| `MaxPendingDispatchCallbacks` | **`Manual`에서만 적용된다.** 수신 handler가 기다리는 자리를 제한하며, 자리가 없으면 날 때까지 기다린다. **이미 수락한 request의 완료 callback은 이 제한에 들지 않는다** — 수락한 호출의 완료는 자리를 이유로 미루거나 거절하지 않는다. `Immediate`는 큐를 거치지 않으므로 이 제한을 지나지 않는다 |
-| outbound 전송 queue | dispatch 제한과 **별개인 순서 보존 queue**. 가득 찼을 때의 결과는 위 frame write queue 항목이 정한다 |
+| `Manual`(기본)의 pump | `Dispatch.Async(...)`다. 큐에 쌓인 callback은 이 호출의 실행 문맥에서 처리된다 |
+| outbound 전송 queue | dispatch 큐와 **별개인 순서 보존 queue**. 가득 찼을 때의 결과는 위 frame write queue 항목이 정한다 |
 
 - **먼저 수락한 send는 뒤에 시작한 request보다 먼저 전송된다.** request는 **자기 frame의 실제 write가
   끝난 뒤** response를 기다린다.
@@ -394,12 +392,6 @@ nullable `int`의 `null`로 표현한다.**
 public int? MaxAttempts { get; init; } = 3; // null은 무제한
 ```
 
-**`.NET`에만 있는 option:**
-
-| option | 기본값 | 의미 |
-|---|---|---|
-| `MaxPendingDispatchCallbacks` | 1024 | dispatch 대기 callback 한도(§7) |
-
 **검증 계약:**
 
 검증 시점은 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)가 소유한다. `.NET`은
@@ -411,9 +403,9 @@ public int? MaxAttempts { get; init; } = 3; // null은 무제한
 | endpoint 없음 | `ZlinkStreamException`의 `ValidationFailed` |
 | 지원하지 않는 scheme, URI scheme과 `Transport` 불일치 | `ZlinkStreamException`의 `ConfigurationError` |
 | 압축을 끈 구성에 `CompressionCodec`을 함께 지정 | `ZlinkStreamException`의 `ConfigurationError` |
-| 범위를 벗어난 개별 timeout·heartbeat·reconnect 값 또는 dispatch queue 크기 | `ZlinkStreamException`의 `ValidationFailed` |
+| 범위를 벗어난 개별 timeout·heartbeat·reconnect 값 | `ZlinkStreamException`의 `ValidationFailed` |
 
-모든 timeout과 dispatch queue 크기 option은 **양수**여야 하고, preview 길이는 **음수일 수 없다.**
+모든 timeout option은 **양수**여야 하고, preview 길이는 **음수일 수 없다.**
 `MaxAttempts`는 `null`이거나 양수여야 한다.
 
 ## 13. 회귀 테스트
@@ -425,7 +417,7 @@ public int? MaxAttempts { get; init; } = 3; // null은 무제한
 | `StreamConnectorTests.ConnectorOptionsMatchTheFrozenDefaults` | connector option의 기본값을 고정한다. |
 | `StreamConnectorTests.ManualDispatchRunsHandlerOnDispatchCaller` | Manual callback은 dispatch caller에서 실행된다. |
 | `StreamConnectorTests.ImmediateDispatchRunsHandlerWithoutManualDispatch` | Immediate callback은 별도 manual dispatch 없이 실행된다. |
-| `StreamConnectorTests.ManualRequestCallbackAdmission_Is_Bounded_And_Never_Falls_Back_To_A_Background_Thread` | request callback admission은 bounded이며 background 우회를 허용하지 않는다. |
+| `StreamConnectorTests.ManualCallbackAdmissionDoesNotWaitForDispatchPump` | Manual callback 등록은 pump를 기다리지 않으며, 등록한 callback은 pump 때 등록 순서대로 실행된다. |
 | `StreamConnectorTests.RequestTimeoutRemovesPendingRequest` | timeout 뒤 pending request를 제거한다. |
 | `StreamConnectorTests.TcpTypedRequestCorrelatesResponse` | typed request와 response correlation을 유지한다. |
 | `StreamConnectorTests.TypedConnectorUsesJsonByDefaultAndDecodeReply` | typed 기본 codec은 JSON이다. |
