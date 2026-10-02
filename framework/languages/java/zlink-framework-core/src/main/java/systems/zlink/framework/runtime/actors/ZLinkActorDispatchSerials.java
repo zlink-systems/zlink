@@ -145,14 +145,6 @@ final class ZLinkActorDispatchSerials {
                         .currentActorDispatch());
     }
 
-    QueuedTurn prepare(String actorId) {
-        return prepareAsync(actorId).toCompletableFuture().join();
-    }
-
-    QueuedTurn prepare(String actorId, ZLinkActorDispatchTarget target) {
-        return prepareAsync(actorId, target).toCompletableFuture().join();
-    }
-
     CompletionStage<QueuedTurn> prepareAsync(String actorId) {
         return targetAsync(actorId).thenCompose(snapshot -> prepareAsync(actorId, snapshot));
     }
@@ -228,10 +220,6 @@ final class ZLinkActorDispatchSerials {
 
     private record PreparedTurn(
             QueuedTurn turn, CompletionStage<Void> barrier, CompletableFuture<Void> admission) {}
-
-    ZLinkSerialExecutionQueue relocationLane(String actorId) {
-        return trackedTurnAsync(actorId).toCompletableFuture().join().activation().relocationLane();
-    }
 
     CompletionStage<ZLinkSerialExecutionQueue> relocationLaneAsync(String actorId) {
         return trackedTurnAsync(actorId).thenApply(turn -> turn.activation().relocationLane());
@@ -447,58 +435,15 @@ final class ZLinkActorDispatchSerials {
                         });
     }
 
-    Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySeal(String actorId) {
-        return trackedTurnAsync(actorId)
-                .toCompletableFuture()
-                .join()
-                .activation()
-                .trySealRelocation();
-    }
-
-    boolean abort(String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return trackedTurnAsync(actorId)
-                .toCompletableFuture()
-                .join()
-                .activation()
-                .abortRelocation(seal);
-    }
-
     CompletionStage<Boolean> abortAsync(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return trackedTurnAsync(actorId).thenApply(turn -> turn.activation().abortRelocation(seal));
-    }
-
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commit(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return trackedTurnAsync(actorId)
-                .toCompletableFuture()
-                .join()
-                .activation()
-                .commitRelocation(seal);
-    }
-
-    Optional<ZLinkRetainedSerialQueueCommit.Commit> retainCommit(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return trackedTurnAsync(actorId)
-                .toCompletableFuture()
-                .join()
-                .activation()
-                .retainRelocationCommit(seal);
     }
 
     CompletionStage<Optional<ZLinkRetainedSerialQueueCommit.Commit>> retainCommitAsync(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return trackedTurnAsync(actorId)
                 .thenApply(turn -> turn.activation().retainRelocationCommit(seal));
-    }
-
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeIngress(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return trackedTurnAsync(actorId)
-                .toCompletableFuture()
-                .join()
-                .activation()
-                .freezeRelocationIngress(seal);
     }
 
     CompletionStage<Void> awaitQuiescence() {

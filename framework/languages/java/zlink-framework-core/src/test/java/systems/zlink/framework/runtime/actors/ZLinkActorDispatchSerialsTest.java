@@ -34,7 +34,6 @@ final class ZLinkActorDispatchSerialsTest {
         owner.removeActorQueueAsync("actor-1", claim.activation()).toCompletableFuture().join();
         var recreated = owner.claimActorQueue("actor-1").toCompletableFuture().join();
         assertNotSame(claim.activation().relocationLane(), recreated.relocationLane());
-        assertSame(claim.activation().relocationLane(), dispatches.relocationLane("actor-1"));
         assertSame(
                 claim.activation().relocationLane(),
                 dispatches.relocationLaneAsync("actor-1").toCompletableFuture().join());
@@ -310,7 +309,7 @@ final class ZLinkActorDispatchSerialsTest {
             // spec/server/00-foundation/06-framework-api.ko.md:926: admission seal -> Rejected.
             var rejected =
                     dispatches.enqueue(
-                            dispatches.prepare("actor-1"),
+                            dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
                             () -> CompletableFuture.completedFuture(null));
             CompletionException rejection =
                     assertThrows(
@@ -333,14 +332,14 @@ final class ZLinkActorDispatchSerialsTest {
 
         var first =
                 dispatches.enqueue(
-                        dispatches.prepare("actor-1"),
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
                         () -> {
                             order.add("dispatch-started");
                             return active.thenRun(() -> order.add("dispatch-completed"));
                         });
         var barrier =
                 dispatches.enqueue(
-                        dispatches.prepare("actor-1"),
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
                         () -> {
                             order.add("handoff-started");
                             return CompletableFuture.completedFuture(null);
@@ -359,8 +358,10 @@ final class ZLinkActorDispatchSerialsTest {
         CompletableFuture<Void> actorA = new CompletableFuture<>();
         CompletableFuture<Void> actorB = new CompletableFuture<>();
 
-        dispatches.enqueue(dispatches.prepare("actor-a"), () -> actorA);
-        dispatches.enqueue(dispatches.prepare("actor-b"), () -> actorB);
+        dispatches.enqueue(
+                dispatches.prepareAsync("actor-a").toCompletableFuture().join(), () -> actorA);
+        dispatches.enqueue(
+                dispatches.prepareAsync("actor-b").toCompletableFuture().join(), () -> actorB);
 
         CompletableFuture<Void> barrier = dispatches.awaitQuiescence().toCompletableFuture();
         assertFalse(barrier.isDone());
@@ -377,10 +378,12 @@ final class ZLinkActorDispatchSerialsTest {
         AtomicInteger cleanupCount = new AtomicInteger();
 
         CompletionStage<Void> active =
-                dispatches.enqueue(dispatches.prepare("actor-1"), () -> release);
+                dispatches.enqueue(
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
+                        () -> release);
         CompletionStage<Void> accepted =
                 dispatches.enqueue(
-                        dispatches.prepare("actor-1"),
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
                         () -> CompletableFuture.completedFuture(null));
         CompletionStage<Void> teardown =
                 dispatches.beginTeardown(
@@ -393,7 +396,7 @@ final class ZLinkActorDispatchSerialsTest {
         assertFalse(teardown.toCompletableFuture().isDone());
         var rejected =
                 dispatches.enqueue(
-                        dispatches.prepare("actor-1"),
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
                         () -> CompletableFuture.completedFuture(null));
         CompletionException rejection =
                 assertThrows(
@@ -420,7 +423,7 @@ final class ZLinkActorDispatchSerialsTest {
 
         CompletionStage<Void> active =
                 dispatches.enqueue(
-                        dispatches.prepare("actor-1"),
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
                         () ->
                                 dispatches.beginTeardown(
                                         "actor-1",
@@ -441,7 +444,7 @@ final class ZLinkActorDispatchSerialsTest {
 
         CompletionStage<Void> first =
                 dispatches.enqueue(
-                        dispatches.prepare("actor-1"),
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
                         new byte[] {1},
                         () -> {
                             order.add("first");
@@ -449,7 +452,7 @@ final class ZLinkActorDispatchSerialsTest {
                         });
         CompletionStage<Void> second =
                 dispatches.enqueue(
-                        dispatches.prepare("actor-1"),
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
                         new byte[] {2},
                         () -> {
                             order.add("second");
@@ -469,14 +472,14 @@ final class ZLinkActorDispatchSerialsTest {
 
         CompletionStage<Void> first =
                 dispatches.enqueue(
-                        dispatches.prepare("actor-1"),
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
                         () -> {
                             firstStarted.complete(null);
                             return ZLinkSerialExecutionQueue.yieldCurrent(remote);
                         });
         CompletionStage<Void> second =
                 dispatches.enqueue(
-                        dispatches.prepare("actor-1"),
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
                         () -> {
                             secondStarted.complete(null);
                             return CompletableFuture.completedFuture(null);
@@ -517,8 +520,19 @@ final class ZLinkActorDispatchSerialsTest {
         owner.set(spotA);
         enqueueLazy(dispatches, order, "before-remove").toCompletableFuture().join();
         dispatches.awaitQuiescence().toCompletableFuture().join();
-        var seal = dispatches.trySeal("actor-1").orElseThrow();
-        dispatches.commit("actor-1", seal).orElseThrow();
+        var seal =
+                dispatches
+                        .relocationLaneAsync("actor-1")
+                        .toCompletableFuture()
+                        .join()
+                        .trySealRelocation()
+                        .orElseThrow();
+        dispatches
+                .relocationLaneAsync("actor-1")
+                .toCompletableFuture()
+                .join()
+                .commitRelocation(seal)
+                .orElseThrow();
 
         owner.set(null);
         dispatches.removeAsync("actor-1").toCompletableFuture().join();
@@ -536,9 +550,20 @@ final class ZLinkActorDispatchSerialsTest {
         List<String> order = new ArrayList<>();
 
         owner.set(spotA);
-        dispatches.relocationLane("actor-1");
-        var seal = dispatches.trySeal("actor-1").orElseThrow();
-        dispatches.commit("actor-1", seal).orElseThrow();
+        dispatches.relocationLaneAsync("actor-1").toCompletableFuture().join();
+        var seal =
+                dispatches
+                        .relocationLaneAsync("actor-1")
+                        .toCompletableFuture()
+                        .join()
+                        .trySealRelocation()
+                        .orElseThrow();
+        dispatches
+                .relocationLaneAsync("actor-1")
+                .toCompletableFuture()
+                .join()
+                .commitRelocation(seal)
+                .orElseThrow();
 
         owner.set(null);
         dispatches.removeAsync("actor-1").toCompletableFuture().join();
@@ -578,8 +603,19 @@ final class ZLinkActorDispatchSerialsTest {
         owner.set(target);
         enqueueLazy(dispatches, order, step).toCompletableFuture().join();
         dispatches.awaitQuiescence().toCompletableFuture().join();
-        var seal = dispatches.trySeal("actor-1").orElseThrow();
-        dispatches.commit("actor-1", seal).orElseThrow();
+        var seal =
+                dispatches
+                        .relocationLaneAsync("actor-1")
+                        .toCompletableFuture()
+                        .join()
+                        .trySealRelocation()
+                        .orElseThrow();
+        dispatches
+                .relocationLaneAsync("actor-1")
+                .toCompletableFuture()
+                .join()
+                .commitRelocation(seal)
+                .orElseThrow();
         dispatches
                 .beginTeardown(
                         "actor-1",
@@ -594,7 +630,7 @@ final class ZLinkActorDispatchSerialsTest {
     private static CompletionStage<Void> enqueueLazy(
             ZLinkActorDispatchSerials dispatches, List<String> order, String step) {
         return dispatches.enqueueLazyRecord(
-                dispatches.prepare("actor-1"),
+                dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
                 () -> new byte[] {1},
                 1,
                 () -> {

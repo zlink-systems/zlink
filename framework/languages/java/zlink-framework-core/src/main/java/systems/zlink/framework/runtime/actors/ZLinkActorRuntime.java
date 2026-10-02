@@ -1297,7 +1297,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                     return CompletableFuture
                                                             .<PreparedTransferredActor>failedFuture(
                                                                     new ZLinkConfigurationException(
-                                                                            "target runtime already owns actor: "
+                                                                            "target runtime already"
+                                                                                    + " owns actor: "
                                                                                     + actorId));
                                                 }
                                                 if (adapterKey != null
@@ -1305,8 +1306,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                     return CompletableFuture
                                                             .<PreparedTransferredActor>failedFuture(
                                                                     new ZLinkConfigurationException(
-                                                                            "actor transfer adapter key does not match "
-                                                                                    + "actor type: "
+                                                                            "actor transfer adapter"
+                                                                                    + " key does not"
+                                                                                    + " match actor"
+                                                                                    + " type: "
                                                                                     + adapterKey));
                                                 }
                                                 ZLinkMessage transferState =
@@ -4152,46 +4155,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         });
     }
 
-    public Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealActorRelocation(
-            String actorId) {
-        return dispatches.trySeal(actorId);
-    }
-
-    /**
-     * Returns the Framework-owned serial lane used to coordinate an Actor as part of a User Spot
-     * aggregate relocation barrier.
-     */
-    public ZLinkSerialExecutionQueue actorRelocationLane(String actorId) {
-        Objects.requireNonNull(actorId, "actorId");
-        return dispatches.relocationLane(actorId);
-    }
-
     public CompletionStage<ZLinkSerialExecutionQueue> actorRelocationLaneAsync(String actorId) {
         Objects.requireNonNull(actorId, "actorId");
         return dispatches.relocationLaneAsync(actorId);
     }
 
-    public boolean abortActorRelocation(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return dispatches.abort(actorId, seal);
-    }
-
     public CompletionStage<Boolean> abortActorRelocationAsync(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return dispatches.abortAsync(actorId, seal);
-    }
-
-    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitActorRelocation(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return dispatches.commit(actorId, seal);
-    }
-
-    public Optional<
-                    systems.zlink.framework.runtime.internal.relocation
-                            .ZLinkRetainedSerialQueueCommit.Commit>
-            retainActorRelocationCommit(
-                    String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return dispatches.retainCommit(actorId, seal);
     }
 
     public CompletionStage<
@@ -4201,11 +4172,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             retainActorRelocationCommitAsync(
                     String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return dispatches.retainCommitAsync(actorId, seal);
-    }
-
-    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeActorRelocationIngress(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return dispatches.freezeIngress(actorId, seal);
     }
 
     public <T> CompletionStage<T> runActorDispatchTurn(

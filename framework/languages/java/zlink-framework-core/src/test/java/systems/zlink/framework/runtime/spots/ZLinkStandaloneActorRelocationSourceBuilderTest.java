@@ -146,7 +146,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             AtomicInteger sourceExecutions = new AtomicInteger();
             var sourceOperation =
                     runtime.actorSessions()
-                            .actorRelocationLane("actor-a")
+                            .actorRelocationLaneAsync("actor-a")
+                            .toCompletableFuture()
+                            .join()
                             .enqueueRelocatable(
                                     acceptedRecord,
                                     () -> {
@@ -467,7 +469,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                 new byte[] {(byte) index});
                 accepted.add(
                         runtime.actorSessions()
-                                .actorRelocationLane("actor-b")
+                                .actorRelocationLaneAsync("actor-b")
+                                .toCompletableFuture()
+                                .join()
                                 .enqueueRelocatable(
                                         suffixRecord,
                                         () -> fail("source must not execute transferred ingress"),
@@ -481,7 +485,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             AtomicBoolean lateReleased = new AtomicBoolean();
             CompletableFuture<Void> lateAccepted =
                     runtime.actorSessions()
-                            .actorRelocationLane("actor-b")
+                            .actorRelocationLaneAsync("actor-b")
+                            .toCompletableFuture()
+                            .join()
                             .enqueueRelocatable(
                                     lateRecord,
                                     () -> fail("late source ingress must remain held"),
