@@ -73,10 +73,7 @@ template <typename T> class result_t
         return *_value;
     }
 
-    const framework_exception_t *error () const noexcept
-    {
-        return _framework_error.get ();
-    }
+    const framework_exception_t *error () const noexcept { return _framework_error.get (); }
 
     std::exception_ptr exception () const noexcept { return _error; }
 
@@ -127,10 +124,7 @@ template <> class result_t<void>
         }
     }
 
-    const framework_exception_t *error () const noexcept
-    {
-        return _framework_error.get ();
-    }
+    const framework_exception_t *error () const noexcept { return _framework_error.get (); }
 
     std::exception_ptr exception () const noexcept { return _error; }
 
