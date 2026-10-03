@@ -565,8 +565,7 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                     ++summary.ready_count;
                 else
                     ++summary.stopped_count;
-                summary.last_updated_at =
-                  std::max (summary.last_updated_at, descriptor.updated_at);
+                summary.last_updated_at = std::max (summary.last_updated_at, descriptor.updated_at);
             }
             descriptor_page.continuation_token = descriptors.continuation_token;
         } while (descriptor_page.continuation_token);

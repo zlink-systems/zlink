@@ -361,8 +361,8 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
               application.source_session_sequence};
         if (application.reply_route_id.has_value ())
             sent = co_await _transport->request_to_actor (
-              target_routing_id, application.source_actor, target, *application.application,
-              window, std::move (complete), application.operation, session);
+              target_routing_id, application.source_actor, target, *application.application, window,
+              std::move (complete), application.operation, session);
         else
             sent = co_await _transport->send_to_actor (target_routing_id, application.source_actor,
                                                        target, *application.application, session,

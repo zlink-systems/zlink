@@ -1715,7 +1715,8 @@ mesh_node_runtime_t::relocate_application_unit (
                   session_seal->checkpoints, {},
                   runtime::protocol::session_relocation_route_action_t::abort)) {
                 result.terminal = relocation_terminal_t::recovery_required;
-                result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+                result.reason =
+                  runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
             }
         }
         co_return runtime::stateful::aggregate_relocation_result_t{
