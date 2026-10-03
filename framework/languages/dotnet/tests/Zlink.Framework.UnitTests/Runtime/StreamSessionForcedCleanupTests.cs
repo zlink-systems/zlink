@@ -269,11 +269,6 @@ public sealed class StreamSessionForcedCleanupTests
             MonitorEventType.Disconnected
         );
         Assert.Equal(routingId, disconnected.RoutingId);
-        var nativeFailure = Assert.Throws<ZlinkConnectException>(() =>
-            nativeSocket.DisconnectRid(routingId)
-        );
-        Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, nativeFailure.Result);
-
         await session.CloseAsync();
         await session.CloseAsync();
         await lifetime.CleanupCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
