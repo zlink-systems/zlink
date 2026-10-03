@@ -15,11 +15,18 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
 {
     internal async Task StartAsync(CancellationToken cancellationToken)
     {
+        using var startupCancellation = cancellationToken.Register(
+            maintenance.RequestStartupCancellation
+        );
         try
         {
             if (locationRuntime is not null)
                 await locationRuntime
-                    .StartAsync(runtime.PrepareLocationNodeRoutingId(), cancellationToken)
+                    .StartAsync(
+                        runtime.PrepareLocationNodeRoutingId(),
+                        cancellationToken,
+                        maintenance.ShutdownCancellationToken
+                    )
                     .ConfigureAwait(false);
 
             await runtime.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -37,6 +44,16 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
             maintenance.MarkError();
             try
             {
+                if (cancellationToken.IsCancellationRequested)
+                    await (
+                        startFailure is ZLinkOwnerLeaseCancellationCleanupException
+                            ? maintenance.ShutdownAfterStartupFailureAsync(
+                                maintenance.ShutdownCancellationToken.IsCancellationRequested
+                                    ? ZLinkDrainForceReason.DeadlineExceeded
+                                    : ZLinkDrainForceReason.OwnerCleanupFailed
+                            )
+                            : maintenance.ShutdownAsync()
+                    ).ConfigureAwait(false);
                 await CloseResourcesAsync().ConfigureAwait(false);
             }
             catch (Exception cleanupFailure)

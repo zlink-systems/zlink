@@ -1,9 +1,11 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -41,10 +43,13 @@ final class ZLinkUserSpotRetireScheduler {
         var source = request.source();
         return switch (settlement) {
             case TARGET_COMMITTED -> {
-                source.completeSourceBarrierCommit();
-                yield request.sourceCleanup()
-                        .cleanup()
-                        .thenCompose(cleaned -> source.discardInitialAfterCommit())
+                yield ZLinkRelocationHandOff.completeSourceCleanup(
+                                List.of(
+                                        () ->
+                                                ZLinkHandlerStages.fromRunnable(
+                                                        source::completeSourceBarrierCommit),
+                                        () -> request.sourceCleanup().cleanup(),
+                                        source::discardInitialAfterCommit))
                         .thenRun(() -> recordActorHandoffs(stage));
             }
             case SOURCE_PRESERVED ->
@@ -114,7 +119,9 @@ final class ZLinkUserSpotRetireScheduler {
                         .count();
         for (long index = 0; index < count; index++) {
             systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.increment(
-                    "zlink.drain.actors.handed_off", Map.of());
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
+                            .DRAIN_ACTORS_HANDED_OFF_NAME,
+                    Map.of());
         }
     }
 

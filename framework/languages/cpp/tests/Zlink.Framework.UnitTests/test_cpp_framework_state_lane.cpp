@@ -65,6 +65,32 @@ TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
     EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
 }
 
+TEST (ZLinkStateLane, StandaloneTaskCompletionAllowsLaneReentry)
+{
+    constexpr auto completion_timeout = std::chrono::seconds (5);
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    lane.try_post ([&] {
+        entered.set_value ();
+        released.wait ();
+    });
+    entered.get_future ().wait ();
+    auto task = lane.run_task ([] { return 42; });
+    std::promise<int> observed;
+    auto result = observed.get_future ();
+    zlink::framework::detail::observe_task_completion (
+      task, [&] (const zlink::framework::result_t<int> &value) {
+          EXPECT_EQ (nullptr, state_lane_t::current ());
+          observed.set_value (lane.run ([&] { return value.value (); }).get ());
+      });
+    release.set_value ();
+    ASSERT_EQ (std::future_status::ready, result.wait_for (completion_timeout));
+    EXPECT_EQ (42, result.get ());
+}
+
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
 TEST (ZLinkStateLane, DebugWaitRejectsPendingOwnerCompletion)
 {

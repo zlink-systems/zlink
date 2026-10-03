@@ -1,6 +1,7 @@
 package systems.zlink.framework.perf.servers.spot
 
 import java.time.Duration
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.future.await
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotRequestHandler
@@ -110,23 +111,23 @@ class S2sRemoteRequestDriveHandler(
                 PayloadPattern.validateIdentity(sent, echoed)
                 measurement.pattern().validate(echoed.payload())
                 echoed
-            } catch (error: Exception) {
-                return failed(probe, started, error)
+            } catch (error: Throwable) {
+                if (probe) throw error
+                measurement.completeOperation(started, error)
+                if (error is CancellationException || error !is Exception) throw error
+                return PerfDriveReply(true, null)
             }
-            if (!probe) measurement.completeOperation(started) else {
+            if (probe) {
                 measurement.setupEvidence(listOf(Evidence.of("typedProbeReply", "Kotlin Spot outbound awaitReply/yieldReply", request.correlationId())))
+                return PerfDriveReply(true, reply)
             }
+            measurement.completeOperation(started)
             return PerfDriveReply(true, reply)
         } finally {
             measurement.handlerExit()
         }
     }
 
-    private fun failed(probe: Boolean, started: Long, error: Throwable): PerfDriveReply {
-        if (probe) throw error
-        measurement.completeOperation(started, error)
-        return PerfDriveReply(true, null)
-    }
 }
 
 class S2sSendSendSpot(context: ZLinkSpotContext) : PerfSpot(context) {
@@ -153,18 +154,19 @@ class S2sSendDriveHandler(
             val probe = measurement.phase() == "setup"
             val started = if (probe) PerfClock.now() else measurement.beginOperation("send")
             if (started < 0) return PerfDriveReply(false, null)
-            val sent = request.withSentTicks(started)
-            val entry = try {
-                correlations.register(sent, started)
-            } catch (error: RuntimeException) {
+            val (sent, entry) = try {
+                val sent = request.withSentTicks(started)
+                sent to correlations.register(sent, started)
+            } catch (error: Throwable) {
                 if (!probe) measurement.completeOperation(started, error)
                 throw error
             }
             try {
                 spot.context().outbound().kotlin().sendToChannel(config.channelName(), sent).await()
                 correlations.firstSendEnded(entry, null)
-            } catch (error: Exception) {
+            } catch (error: Throwable) {
                 correlations.firstSendEnded(entry, error)
+                if (error is CancellationException || error !is Exception) throw error
             }
             return PerfDriveReply(true, null)
         } finally {

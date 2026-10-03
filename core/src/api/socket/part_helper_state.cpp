@@ -28,7 +28,8 @@ zlink::part_helper_internal::find_or_create_socket_state (socket_base_t *socket_
 
     try {
         state.reset (new (std::nothrow) handle_state_t ());
-    } catch (...) {
+    }
+    catch (const std::bad_alloc &) {
         errno = ENOMEM;
         return std::shared_ptr<handle_state_t> ();
     }

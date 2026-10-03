@@ -23,6 +23,7 @@ import systems.zlink.framework.perf.ScenarioMetrics
 import systems.zlink.framework.perf.ServerApplication
 import systems.zlink.framework.perf.SpotSetup
 import systems.zlink.framework.perf.kotlin.completionStage
+import systems.zlink.framework.perf.kotlin.planStreamTargets
 import systems.zlink.framework.spots.ZLinkSpotManager
 
 internal class KotlinS2sChannelToSpotRequestEchoScenario(
@@ -34,6 +35,7 @@ internal class KotlinS2sChannelToSpotRequestEchoScenario(
     private val readiness: ObjectsReadiness,
 ) {
     private lateinit var sequences: AtomicLongArray
+    private lateinit var streamTargets: List<String>
 
     companion object {
         fun run(config: RoleConfig) {
@@ -52,9 +54,10 @@ internal class KotlinS2sChannelToSpotRequestEchoScenario(
     }
 
     fun prepare(): CompletionStage<Void> = completionStage {
-        Polling.until({ mesh.snapshot(config.meshName()).isReady() }, 10, config.workload().setupTimeoutMs().toLong()).await()
+        Polling.until({ mesh.snapshot(config.meshName()).let { it.isReady() && it.readyPeerCount() > 0 } }, 10, config.workload().setupTimeoutMs().toLong()).await()
         val found = SpotSetup.findAll(manager, config).await()
         sequences = AtomicLongArray(config.workload().logicalStreams())
+        streamTargets = planStreamTargets(config.spotIds(), config.workload().logicalStreams())
         val observations = ArrayList<Any>()
         config.spotIds().forEachIndexed { index, spotId ->
             val request = measurement.request(index, sequences.incrementAndGet(index % sequences.length()), true)
@@ -74,20 +77,21 @@ internal class KotlinS2sChannelToSpotRequestEchoScenario(
                 repeat(config.workload().inflight()) {
                     launch(Dispatchers.IO) {
                         while (measurement.canIssue()) {
-                            val spotId = config.spotIds()[stream % config.spotIds().size]
+                            val spotId = streamTargets[stream]
                             val base = measurement.request(stream, sequences.incrementAndGet(stream), false)
                             val started = measurement.beginOperation("request")
                             if (started < 0) break
-                            val request = base.withSentTicks(started)
                             try {
-                                val reply = route.kotlin().requestToSpot<PerfEchoReply>(spotId, request)
-                                    .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong())).await()
-                                PayloadPattern.validateIdentity(request, reply)
-                                measurement.pattern().validate(reply.payload())
+
+                                    val request = base.withSentTicks(started)
+                                    val reply = route.kotlin().requestToSpot<PerfEchoReply>(spotId, request)
+                                        .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong())).await()
+                                    PayloadPattern.validateIdentity(request, reply)
+                                    measurement.pattern().validate(reply.payload())
                                 measurement.completeOperation(started)
                             } catch (error: Exception) {
-                                if (error is CancellationException) throw error
                                 measurement.completeOperation(started, error)
+                                if (error is CancellationException) throw error
                             }
                         }
                     }

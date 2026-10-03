@@ -686,8 +686,17 @@ final class EntrySpotActorDispatchTests {
             //  Take the Actor queue past its relocation cut: from here every
             //  admission is rejected with RelocatedOwnerException, which is the
             //  exact post-cut window the ingress used to swallow.
-            var seal = actors.trySealActorRelocation("actor-a").orElseThrow();
-            var commit = actors.retainActorRelocationCommit("actor-a", seal).orElseThrow();
+            var seal =
+                    actors.actorRelocationLaneAsync("actor-a")
+                            .toCompletableFuture()
+                            .join()
+                            .trySealRelocation()
+                            .orElseThrow();
+            var commit =
+                    actors.retainActorRelocationCommitAsync("actor-a", seal)
+                            .toCompletableFuture()
+                            .join()
+                            .orElseThrow();
             var cut = commit.cut();
             while (!commit.tryEstablishAndFinishCapture(cut)) {
                 cut = commit.cut();
@@ -730,8 +739,17 @@ final class EntrySpotActorDispatchTests {
             ProbeActor actor = (ProbeActor) actors.localActor("actor-a").orElseThrow();
             awaitActorCreationTurn(actors);
 
-            var seal = actors.trySealActorRelocation("actor-a").orElseThrow();
-            var commit = actors.retainActorRelocationCommit("actor-a", seal).orElseThrow();
+            var seal =
+                    actors.actorRelocationLaneAsync("actor-a")
+                            .toCompletableFuture()
+                            .join()
+                            .trySealRelocation()
+                            .orElseThrow();
+            var commit =
+                    actors.retainActorRelocationCommitAsync("actor-a", seal)
+                            .toCompletableFuture()
+                            .join()
+                            .orElseThrow();
             var cut = commit.cut();
             while (!commit.tryEstablishAndFinishCapture(cut)) {
                 cut = commit.cut();
@@ -769,8 +787,17 @@ final class EntrySpotActorDispatchTests {
             ProbeActor actor = (ProbeActor) actors.localActor("actor-a").orElseThrow();
             awaitActorCreationTurn(actors);
 
-            var seal = actors.trySealActorRelocation("actor-a").orElseThrow();
-            var commit = actors.retainActorRelocationCommit("actor-a", seal).orElseThrow();
+            var seal =
+                    actors.actorRelocationLaneAsync("actor-a")
+                            .toCompletableFuture()
+                            .join()
+                            .trySealRelocation()
+                            .orElseThrow();
+            var commit =
+                    actors.retainActorRelocationCommitAsync("actor-a", seal)
+                            .toCompletableFuture()
+                            .join()
+                            .orElseThrow();
             var cut = commit.cut();
             while (!commit.tryEstablishAndFinishCapture(cut)) {
                 cut = commit.cut();

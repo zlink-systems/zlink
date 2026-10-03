@@ -240,7 +240,8 @@ final class ZLinkSpotDirectOutbound {
                                                                 .toFrameworkErrorKind(
                                                                         reply.failureCode()),
                                                         "SPOT direct request failed: "
-                                                                + reply.result()));
+                                                                + reply.result(),
+                                                        reply.failureCode()));
                                         return;
                                     }
                                     result.complete(messages.decodeReply(reply.parts(), replyType));

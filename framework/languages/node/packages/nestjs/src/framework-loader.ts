@@ -36,8 +36,19 @@ import type {
 export type FrameworkRuntimeHost = ZLinkNestIntegrationRuntimeHost;
 
 interface FrameworkIntegrationModule {
+  ZLinkSpotActorSend(packetName?: string): MethodDecorator;
+  ZLinkSpotActorRequest(packetName?: string): MethodDecorator;
+  disposeIntegrationHandler(instance: unknown): Promise<void>;
+  disposeIntegrationHandlers(instances: readonly unknown[]): Promise<void>;
+  readonly MAX_LISTENER_PORT: number;
+  readonly ZLINK_MAX_PUBLIC_WEIGHT: number;
+  readonly ZLINK_MAX_CAPACITY: number;
+  readonly ZLINK_MAX_STABLE_TYPE_BYTES: number;
   readonly ZLinkConfigurationException: new (message: string) => Error;
   createFrameworkRegistration(
+    options: ZLinkFrameworkRegistrationOptions
+  ): ZLinkFrameworkRegistration;
+  normalizeFrameworkRegistration(
     options: ZLinkFrameworkRegistrationOptions
   ): ZLinkFrameworkRegistration;
   hasActorManager(registration: ZLinkFrameworkRegistration): boolean;
@@ -99,6 +110,11 @@ interface FrameworkIntegrationModule {
   validateMessageFollowDuration(timeoutMs: number): number;
   validateSessionReplacementCallbackTimeout(timeoutMs: number): number;
   validateRoutingIdPrefix(prefix: string): string;
+  isValidPublicWeight(value: number): boolean;
+  requirePublicWeight(value: number, label: string): number;
+  isValidPositiveCapacity(value: number): boolean;
+  isValidListenerPort(value: number): boolean;
+  isValidCapacity(value: number): boolean;
   registerEntrySpot(
     options: { entrySpotType?: Type<ZLinkEntrySpot> },
     entrySpotType: Type<ZLinkEntrySpot>
@@ -112,6 +128,10 @@ interface FrameworkIntegrationModule {
     actorType: string,
     factoryType: Type
   ): void;
+  registerRelocationStore(
+    options: { relocationStoreInstance?: import('@zlink-systems/framework').ZLinkRelocationStore },
+    store: import('@zlink-systems/framework').ZLinkRelocationStore
+  ): void;
   registerIntegrationHandlerFilterScope(
     resolver: ZLinkProviderResolver,
     runner: (
@@ -124,9 +144,19 @@ interface FrameworkIntegrationModule {
 function loadFramework(): FrameworkIntegrationModule {
   const requireFramework = createRequire(__filename);
   const frameworkEntry = requireFramework.resolve('@zlink-systems/framework');
-  return requireFramework(
-    path.join(path.dirname(frameworkEntry), 'nest-integration')
-  ) as FrameworkIntegrationModule;
+  const internal = requireFramework(path.join(path.dirname(frameworkEntry), 'internal'));
+  return {
+    ...requireFramework(path.join(path.dirname(frameworkEntry), 'nest-integration')),
+    MAX_LISTENER_PORT: internal.MAX_LISTENER_PORT,
+    ZLINK_MAX_PUBLIC_WEIGHT: internal.ZLINK_MAX_PUBLIC_WEIGHT,
+    ZLINK_MAX_CAPACITY: internal.ZLINK_MAX_CAPACITY,
+    ZLINK_MAX_STABLE_TYPE_BYTES: internal.ZLINK_MAX_STABLE_TYPE_BYTES,
+    isValidPublicWeight: internal.isValidPublicWeight,
+    isValidPositiveCapacity: internal.isValidPositiveCapacity,
+    isValidListenerPort: internal.isValidListenerPort,
+    isValidCapacity: internal.isValidCapacity,
+    requirePublicWeight: internal.requirePublicWeight
+  } as FrameworkIntegrationModule;
 }
 
 // The Nest package is a workspace adapter. It loads the framework's private

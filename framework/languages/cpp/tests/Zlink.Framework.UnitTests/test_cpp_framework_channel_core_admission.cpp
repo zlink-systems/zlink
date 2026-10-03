@@ -406,6 +406,8 @@ TEST (ChannelCoreAdmissionContract, ClientClassifiesByBindingTypedResultOnly)
 
 TEST (ChannelCoreAdmission, RequestTimeoutStartsAfterCoreAdmission)
 {
+    constexpr auto reply_budget = 50ms;
+    constexpr auto admission_observation = 200ms;
     auto context = std::make_shared<zlink::context_t> ();
     const std::string channel = "core-admission-reply-budget";
     const auto endpoint = unique_inproc_endpoint ();
@@ -414,6 +416,7 @@ TEST (ChannelCoreAdmission, RequestTimeoutStartsAfterCoreAdmission)
     zlink::framework::service_collection_t services;
     services.add_singleton<gated_request_handler_t> ();
     auto provider = services.build_provider ();
+    auto &handler = provider.get_required<gated_request_handler_t> ();
     zlink::framework::handler_registry_t handlers;
     handlers.on_request<gated_request_handler_t, request_t, reply_t> (
       channel, "request", &gated_request_handler_t::handle,
@@ -430,19 +433,24 @@ TEST (ChannelCoreAdmission, RequestTimeoutStartsAfterCoreAdmission)
     server_runtime.bind_serializers (serializers);
     zlink::framework::runtime::channel_host_service_t host (
       server.message_bus (), server_runtime.channel_snapshots (), handlers, serializers, {});
-    std::thread late_server ([&] {
-        std::this_thread::sleep_for (200ms);
-        host.start (provider);
-    });
-    const auto reply = client.request_client (channel)
-                         .request (request_t{7})
-                         .timeout (50ms)
-                         .async<reply_t> ()
-                         .result ();
-    late_server.join ();
+    auto pending = client.request_client (channel)
+                     .request (request_t{1})
+                     .timeout (reply_budget)
+                     .async<reply_t> ();
+    // No server can admit the request yet. Waiting longer than the reply
+    // budget must leave the public task pending without cancelling it.
+    const auto before_admission = pending.result_for (admission_observation);
+    host.start (provider);
+    const bool entered = handler.wait_until_entered (2s);
+    // The admitted handler holds its reply until the caller's timeout wins.
+    // This observes the budget without assuming a successful 50 ms round trip.
+    const auto reply = pending.result ();
+    handler.release ();
     host.stop ();
-    ASSERT_TRUE (reply) << (reply.error () != nullptr ? reply.error ()->what () : "no error");
-    EXPECT_EQ (107, reply.value ().value);
+    EXPECT_FALSE (before_admission.has_value ()) << "reply timeout ran before Core admission";
+    EXPECT_TRUE (entered) << "Core admission did not deliver the request to the handler";
+    EXPECT_FALSE (reply);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::deadline_exceeded, reply.error_kind ());
 }
 
 TEST (ChannelCoreAdmission, MissingServerExpiresAtDefaultAdmissionTimeout)

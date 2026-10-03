@@ -336,12 +336,7 @@ internal sealed class ZLinkActorRuntimeState(
     {
         EnsureReusable();
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_state_reserved_begin actor={ActorId} "
-                + $"actor_present={Actor is not null} "
-                + $"native_generation={NativeActorRef?.Generation.ToString() ?? "<none>"} "
-                + $"retired_generation={RetiredLocalActorRef?.Generation.ToString() ?? "<none>"} "
-                + $"creation_task={_actorCreationTask is not null} "
-                + $"context_invalidated={ContextInvalidated}"
+            $"actor_state_reserved_begin actor={ActorId} actor_present={Actor is not null} native_generation={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(NativeActorRef?.Generation)} retired_generation={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(RetiredLocalActorRef?.Generation)} creation_task={_actorCreationTask is not null} context_invalidated={ContextInvalidated}"
         );
         _reservedCreationPending = true;
     }
@@ -350,9 +345,7 @@ internal sealed class ZLinkActorRuntimeState(
     {
         _reservedCreationPending = false;
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_state_reserved_published actor={ActorId} "
-                + $"actor_present={Actor is not null} "
-                + $"native_generation={NativeActorRef?.Generation.ToString() ?? "<none>"}"
+            $"actor_state_reserved_published actor={ActorId} actor_present={Actor is not null} native_generation={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(NativeActorRef?.Generation)}"
         );
     }
 
@@ -397,9 +390,7 @@ internal sealed class ZLinkActorRuntimeState(
     {
         EnsureReusable();
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_state_native_bound actor={ActorId} "
-                + $"generation={actorRef.Generation} node={actorRef.NodeRid} "
-                + $"previous_generation={NativeActorRef?.Generation.ToString() ?? "<none>"}"
+            $"actor_state_native_bound actor={ActorId} generation={actorRef.Generation} node={actorRef.NodeRid} previous_generation={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(NativeActorRef?.Generation)}"
         );
         NativeActorRef = actorRef;
     }
@@ -426,9 +417,7 @@ internal sealed class ZLinkActorRuntimeState(
 
         Actor = actor;
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_state_instance_bound actor={ActorId} "
-                + $"native_generation={NativeActorRef?.Generation.ToString() ?? "<none>"} "
-                + $"native_node={NativeActorRef?.NodeRid.ToString() ?? "<none>"}"
+            $"actor_state_instance_bound actor={ActorId} native_generation={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(NativeActorRef?.Generation)} native_node={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(NativeActorRef?.NodeRid)}"
         );
         EnsureActorMetric();
         IsConfigured = false;
@@ -1342,9 +1331,7 @@ internal sealed class ZLinkActorRuntimeState(
     private void RetireMigratedActorInstanceCore(ZLinkBackendActorRef sourceActor)
     {
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_state_migrated actor={ActorId} "
-                + $"source_generation={sourceActor.Generation} "
-                + $"current_generation={NativeActorRef?.Generation.ToString() ?? "<none>"}"
+            $"actor_state_migrated actor={ActorId} source_generation={sourceActor.Generation} current_generation={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(NativeActorRef?.Generation)}"
         );
         _ = TransitionLocalInstanceCore(ZLinkActorTerminalTransition.Migrated, sourceActor);
     }
@@ -1720,16 +1707,30 @@ internal sealed class ZLinkActorRuntimeState(
         }
     }
 
-    public async ValueTask<T> ExecuteLockedAsync<T>(
-        Func<CancellationToken, ValueTask<T>> operation,
+    internal async ValueTask<ZLinkSpotActivation?> CommitSpotMembershipAsync(
+        ZLinkSpotActivation activation,
+        Func<CancellationToken, ValueTask> commitAuthority,
+        Action publishTargetMembership,
         CancellationToken cancellationToken
     )
     {
-        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(commitAuthority);
+        ArgumentNullException.ThrowIfNull(publishTargetMembership);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await operation(cancellationToken).ConfigureAwait(false);
+            var previousActivation = await _lane.RunAsync(() => Activation).ConfigureAwait(false);
+            if (ReferenceEquals(previousActivation, activation))
+                return previousActivation;
+            await commitAuthority(cancellationToken).ConfigureAwait(false);
+            await _lane
+                .RunAsync(() =>
+                {
+                    JoinSpot(activation);
+                    publishTargetMembership();
+                })
+                .ConfigureAwait(false);
+            return previousActivation;
         }
         finally
         {
@@ -1927,10 +1928,7 @@ internal sealed class ZLinkActorRuntimeState(
     private void ClearFailedActorCreationLocked()
     {
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_state_creation_failed_clear actor={ActorId} "
-                + $"native_generation={NativeActorRef?.Generation.ToString() ?? "<none>"} "
-                + $"actor_present={Actor is not null} "
-                + $"teardown={_teardownPending}"
+            $"actor_state_creation_failed_clear actor={ActorId} native_generation={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(NativeActorRef?.Generation)} actor_present={Actor is not null} teardown={_teardownPending}"
         );
         _actorCreationTask = null;
         if (_teardownPending)

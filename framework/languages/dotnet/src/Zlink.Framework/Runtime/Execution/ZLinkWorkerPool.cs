@@ -11,6 +11,7 @@ namespace Zlink.Framework.Runtime.Execution;
 internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
 {
     private readonly TimeSpan _idleTimeout;
+    private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly int _minThreads;
     private readonly Queue<WorkerItem> _directQueue = new();
     private readonly Queue<WorkerItem> _queue = new();
@@ -24,7 +25,12 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
     private int _idleThreads;
     private int _threadCount;
 
-    public ZLinkWorkerPool(int minThreads, int maxThreads, TimeSpan idleTimeout)
+    public ZLinkWorkerPool(
+        int minThreads,
+        int maxThreads,
+        TimeSpan idleTimeout,
+        IZLinkRuntimeFailureReporter errorSink
+    )
     {
         if (minThreads < 0)
             throw new ArgumentOutOfRangeException(nameof(minThreads));
@@ -38,6 +44,7 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
         _minThreads = minThreads;
         MaxThreads = maxThreads;
         _idleTimeout = idleTimeout;
+        _errorSink = errorSink;
     }
 
     public CancellationToken ShutdownToken => _shutdownSource.Token;
@@ -302,10 +309,9 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
                 {
                     item.Run(_shutdownSource.Token);
                 }
-                catch
+                catch (Exception failure)
                 {
-                    // Worker call wrappers convert their own failures; a throwing
-                    // wrapper must never take the pool thread down.
+                    _errorSink.ReportRuntimeTaskException(nameof(WorkerLoop), failure);
                 }
             }
         }

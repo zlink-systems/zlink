@@ -7,6 +7,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
@@ -603,16 +604,15 @@ final class ZLinkSpotRelocationReplyRoutes {
                 new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "relocation source owner lease expired before authority settled");
-        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
+        List<CompletableFuture<?>> notifications = new ArrayList<>();
         for (Route route : pending) {
-            chain =
-                    chain.thenCompose(
-                            ignored ->
-                                    route.failure
-                                            .apply(unavailable)
-                                            .handle((delivered, failure) -> null));
+            try {
+                notifications.add(route.failure.apply(unavailable).toCompletableFuture());
+            } catch (RuntimeException failure) {
+                notifications.add(CompletableFuture.failedFuture(failure));
+            }
         }
-        return chain;
+        return CompletableFuture.allOf(notifications.toArray(CompletableFuture[]::new));
     }
 
     CompletionStage<Ack> relay(Relay relay, RoutingId transportSource) {
@@ -638,7 +638,8 @@ final class ZLinkSpotRelocationReplyRoutes {
                                             != relay.targetAttemptGeneration()
                                     || route.replyRouteId != relay.replyRouteId()
                                     || relay.hopCount() < 0
-                                    || relay.hopCount() > 8) {
+                                    || relay.hopCount()
+                                            > ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT) {
                                 return RouteSelection.notAcknowledged();
                             }
                             if (route.delivered) {

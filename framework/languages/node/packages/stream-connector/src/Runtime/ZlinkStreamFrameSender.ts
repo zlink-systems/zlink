@@ -38,7 +38,7 @@ class ZlinkStreamConnectionWriteQueue {
   }
 
   cancel(operation: QueuedWrite, error: unknown): void {
-    if (this.queue.has(operation) || this.active === operation) operation.fail(error);
+    if (this.queue.delete(operation) || this.active === operation) operation.fail(error);
   }
 
   /**
@@ -47,7 +47,8 @@ class ZlinkStreamConnectionWriteQueue {
    * waited for. The operations of both fail with `error`.
    */
   failAll(error: unknown): void {
-    const operations = this.active === undefined ? [...this.queue] : [this.active, ...this.queue];
+    const operations = Array.from(this.queue);
+    if (this.active !== undefined) operations.unshift(this.active);
     this.queue.clear();
     this.active = undefined;
     for (const operation of operations) operation.fail(error);

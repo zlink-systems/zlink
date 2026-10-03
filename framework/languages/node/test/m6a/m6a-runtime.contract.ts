@@ -49,11 +49,13 @@ import {
   decodeRouteMeshAdmission,
   decodeReplyHeader,
   encodeApplicationPayload,
+  encodeReject,
   encodeNodeRequestHeader,
   encodeReplyHeader,
   encodeRouteMeshAdmission
 } from '../../packages/framework/src/runtime/foundation/service-wire-m6a-codec';
 import { encodeActorJoin28 } from '../../../../runtime/protocol/generated/node/service_wire_pilot_codec.generated';
+import { enumWireRejectReason } from '../../../../runtime/protocol/generated/node/service_wire_codec.generated';
 
 function descriptor(
   nodeRoutingId: string,
@@ -271,9 +273,14 @@ test('RouteMesh admission preserves an optional maintenance wave across updates'
 
 test('RouteMesh hello advertises the configured host instead of the bind host', async () => {
   const sent: Array<{ readonly target: string; readonly parts: readonly Uint8Array[] }> = [];
-  let readableHandler: (() => void) | undefined;
+  let routes: Array<{ readonly routingId: string; readonly routeGeneration: bigint }> = [];
+  let readableHandler: ((receiveReady: boolean, routeReady: boolean) => void) | undefined;
+  let completeHello!: () => void;
+  const helloSent = new Promise<void>((resolve) => {
+    completeHello = resolve;
+  });
   const router = {
-    setReadableHandler(handler: () => void) {
+    setReadableHandler(handler: (receiveReady: boolean, routeReady: boolean) => void) {
       readableHandler = handler;
     },
     setRoutingId() {},
@@ -282,13 +289,14 @@ test('RouteMesh hello advertises the configured host instead of the bind host', 
       assert.equal(endpoint, 'tcp://127.0.0.2:0');
     },
     localEndpoint: () => 'tcp://127.0.0.2:28730',
-    routesSnapshot: () => [],
+    routesSnapshot: () => routes,
     connectToRoutingId(routingId: string, endpoint: string) {
       assert.equal(routingId, 'peer-node');
       assert.equal(endpoint, 'tcp://127.0.0.1:28731');
     },
     async send(target: string, parts: readonly Uint8Array[]) {
       sent.push({ target, parts });
+      completeHello();
     },
     receive: () => undefined,
     close() {}
@@ -316,6 +324,10 @@ test('RouteMesh hello advertises the configured host instead of the bind host', 
       endpoint: 'tcp://127.0.0.1:28731',
       expectedRid: 'peer-node'
     });
+    assert.equal(sent.length, 0);
+    routes = [{ routingId: 'peer-node', routeGeneration: 1n }];
+    readableHandler!(false, true);
+    await helloSent;
     assert.equal(sent.length, 1);
     assert.equal(sent[0]!.target, 'peer-node');
     assert.equal(
@@ -1358,6 +1370,32 @@ test('ClientServer selection and classic fanout discovery use dedicated descript
   );
 });
 
+test('security identity mismatch reject does not mark a peer NotRequired', async () => {
+  const runtime = rawServiceRuntime({
+    descriptor: { ...descriptor('local'), channels: [], objectRole: 'client' }
+  });
+  const internals = runtime as unknown as {
+    processReceived(
+      received: { sourceRid: string; parts: readonly Buffer[] },
+      nowMs: number
+    ): Promise<string>;
+  };
+  try {
+    assert.equal(
+      await internals.processReceived(
+        {
+          sourceRid: 'peer',
+          parts: [encodeReject(enumWireRejectReason('securityIdentityMismatch'))]
+        },
+        0
+      ),
+      'infrastructure'
+    );
+    assert.equal(runtime.topology.notRequiredPeers().length, 0);
+  } finally {
+    runtime.close();
+  }
+});
 test('raw admission keeps Object Client-only pairs out of liveness and records NotRequired', async () => {
   const nonce = `${process.pid}-${Date.now()}`;
   let leftDescriptor: ServiceNodeDescriptor = {

@@ -18,12 +18,15 @@ import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Fluent builder for a single request. Mirrors the C++ {@code request_builder_t}. Submission
  * returns a {@link CompletionStage}; no thread is parked while the request is in flight.
  */
 public final class ZLinkHttpRequestBuilder {
+    private static final Logger LOGGER = Logger.getLogger(ZLinkHttpRequestBuilder.class.getName());
 
     private static final ObjectMapper MAPPER = JsonMapper.builder().findAndAddModules().build();
 
@@ -85,7 +88,8 @@ public final class ZLinkHttpRequestBuilder {
         } catch (Exception cause) {
             throw HttpClientErrors.protocol("HTTP request body could not be serialized", cause);
         }
-        headers.putIfAbsent("content-type", "application/json");
+        headers.putIfAbsent(
+                HttpClientText.Header.CONTENT_TYPE.wire(), HttpClientText.JSON_CONTENT_TYPE);
         return this;
     }
 
@@ -96,7 +100,7 @@ public final class ZLinkHttpRequestBuilder {
         }
         HttpClientText.requireNonBlank(contentType, "HTTP request body content type is required");
         this.body = content;
-        headers.put("content-type", contentType);
+        headers.put(HttpClientText.Header.CONTENT_TYPE.wire(), contentType);
         return this;
     }
 
@@ -110,7 +114,7 @@ public final class ZLinkHttpRequestBuilder {
         }
         HttpClientText.requireNonBlank(contentType, "HTTP request body content type is required");
         this.bodyProvider = provider;
-        headers.put("content-type", contentType);
+        headers.put(HttpClientText.Header.CONTENT_TYPE.wire(), contentType);
         return this;
     }
 
@@ -192,7 +196,7 @@ public final class ZLinkHttpRequestBuilder {
             CompletionStage<RawHttpResponse> operation, Class<T> type) {
         return operation.thenApply(
                 raw -> {
-                    if (raw.status() >= 400) {
+                    if (raw.status() >= java.net.HttpURLConnection.HTTP_BAD_REQUEST) {
                         throw HttpClientErrors.internalFailure(
                                 "HTTP request failed with status " + raw.status());
                     }
@@ -260,8 +264,8 @@ public final class ZLinkHttpRequestBuilder {
             }
             try {
                 client.close();
-            } catch (RuntimeException ignored) {
-                // Cleanup must not replace the request result.
+            } catch (RuntimeException failure) {
+                LOGGER.log(Level.WARNING, "HTTP request client cleanup failed", failure);
             } finally {
                 client = null;
             }

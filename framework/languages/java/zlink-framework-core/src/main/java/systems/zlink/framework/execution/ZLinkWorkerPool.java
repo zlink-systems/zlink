@@ -21,6 +21,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * can run it.
  */
 public final class ZLinkWorkerPool implements AutoCloseable {
+    private static final int MIN_DEFAULT_MAX_THREADS = 2;
+    private static final int DEFAULT_THREADS_PER_PROCESSOR = 2;
     private static final AtomicInteger POOL_SEQUENCE = new AtomicInteger();
 
     private final ThreadPoolExecutor executor;
@@ -68,7 +70,9 @@ public final class ZLinkWorkerPool implements AutoCloseable {
     }
 
     public static int defaultMaxThreads() {
-        return Math.max(2, Runtime.getRuntime().availableProcessors() * 2);
+        return Math.max(
+                MIN_DEFAULT_MAX_THREADS,
+                Runtime.getRuntime().availableProcessors() * DEFAULT_THREADS_PER_PROCESSOR);
     }
 
     /** Submits a task for execution after any work already waiting for a worker. */

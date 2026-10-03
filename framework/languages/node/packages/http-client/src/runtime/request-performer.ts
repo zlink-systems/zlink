@@ -1,5 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
+import { HTTP_ACCEPTED_CONTENT_ENCODINGS } from './compression';
+
+import { HttpContentType, HttpHeaderName } from './text';
+
 import { Readable } from 'node:stream';
 import { request, type Dispatcher } from 'undici';
 import type { BodyChunkProvider, DownloadSink, ZLinkHttpMethod } from '../types';
@@ -14,6 +18,7 @@ import {
 import { ResponseBodyReader } from './response-body-reader';
 import { redirectLimitExceeded } from './http-client-errors';
 import { httpClientUserAgent } from './version';
+import { HttpFailureStage, mapFailure } from './retry-policy';
 
 export interface HttpRequestSpec {
   readonly method: ZLinkHttpMethod;
@@ -63,18 +68,23 @@ export class RequestPerformer {
       const keepAuthorization = current.origin === origin;
       const hasBody = body !== undefined || bodyProvider !== undefined;
       const headers = this.buildHeaders(spec, current, keepAuthorization, hasBody);
-      const response = await request(current.href, {
-        method,
-        headers,
-        body: this.buildBody(body, bodyProvider),
-        dispatcher: this.dispatcher,
-        maxRedirections: 0,
-        signal
-      });
+      let response: Awaited<ReturnType<typeof request>>;
+      try {
+        response = await request(current.href, {
+          method,
+          headers,
+          body: this.buildBody(body, bodyProvider, signal),
+          dispatcher: this.dispatcher,
+          maxRedirections: 0,
+          signal
+        });
+      } catch (error) {
+        throw mapFailure(error, signal.aborted, HttpFailureStage.Transport);
+      }
 
       const status = response.statusCode;
       if (this.options.cookies) {
-        const setCookie = response.headers['set-cookie'];
+        const setCookie = response.headers[HttpHeaderName.SetCookie];
         const values = Array.isArray(setCookie)
           ? setCookie
           : setCookie === undefined
@@ -85,7 +95,7 @@ export class RequestPerformer {
         }
       }
 
-      const location = headerValue(response.headers, 'location');
+      const location = headerValue(response.headers, HttpHeaderName.Location);
       if (
         this.options.followRedirects > 0 &&
         isRedirectStatus(status) &&
@@ -93,24 +103,40 @@ export class RequestPerformer {
         location.length > 0
       ) {
         if (redirectsLeft === 0) {
-          await drain(response.body);
+          await drain(response.body, signal);
           throw redirectLimitExceeded();
         }
         redirectsLeft--;
         ({ method, body } = rewriteForRedirect(status, method, body));
         bodyProvider = undefined; // consumed; never replay a non-rewindable stream on a redirect
-        await drain(response.body);
+        await drain(response.body, signal);
         current = resolveLocation(current, location);
         continue;
       }
 
       const collectedHeaders = ResponseBodyReader.collectHeaders(response.headers);
       if (spec.sink !== undefined) {
-        await this.bodyReader.streamToSink(response.body, spec.sink);
+        const sink = spec.sink;
+        try {
+          await this.bodyReader.streamToSink(response.body, (chunk) => {
+            try {
+              sink(chunk);
+            } catch (error) {
+              throw mapFailure(error, signal.aborted, HttpFailureStage.Application);
+            }
+          });
+        } catch (error) {
+          throw mapFailure(error, signal.aborted, HttpFailureStage.Transport);
+        }
         return { status, headers: collectedHeaders, body: '' };
       }
 
-      let bytes = await this.bodyReader.readBuffered(response.body);
+      let bytes: Buffer;
+      try {
+        bytes = await this.bodyReader.readBuffered(response.body);
+      } catch (error) {
+        throw mapFailure(error, signal.aborted, HttpFailureStage.Transport);
+      }
       let finalHeaders = collectedHeaders;
       if (this.options.compression) {
         const result = await this.bodyReader.decompress(bytes, finalHeaders);
@@ -138,11 +164,11 @@ export class RequestPerformer {
     hasBody: boolean
   ): Record<string, string> {
     const headers: Record<string, string> = {
-      'user-agent': httpClientUserAgent,
-      accept: 'application/json'
+      [HttpHeaderName.UserAgent]: httpClientUserAgent,
+      [HttpHeaderName.Accept]: HttpContentType.Json
     };
     if (this.options.compression) {
-      headers['accept-encoding'] = 'gzip, deflate';
+      headers[HttpHeaderName.AcceptEncoding] = HTTP_ACCEPTED_CONTENT_ENCODINGS;
     }
     // Proxy authentication is carried by the ProxyAgent dispatcher (see runtime.ts), not a header,
     // so it is not leaked to the target over a CONNECT tunnel.
@@ -152,7 +178,7 @@ export class RequestPerformer {
 
     if (!hasBody) {
       // A body source dropped by a redirect must not leave stale content-type metadata behind.
-      delete headers['content-type'];
+      delete headers[HttpHeaderName.ContentType];
     }
 
     if (this.options.cookies) {
@@ -162,7 +188,7 @@ export class RequestPerformer {
         target.protocol === 'https:'
       );
       if (cookieHeader.length > 0) {
-        headers['cookie'] = cookieHeader;
+        headers[HttpHeaderName.Cookie] = cookieHeader;
       }
     }
     return headers;
@@ -170,10 +196,17 @@ export class RequestPerformer {
 
   private buildBody(
     body: string | undefined,
-    bodyProvider: BodyChunkProvider | undefined
+    bodyProvider: BodyChunkProvider | undefined,
+    signal: AbortSignal
   ): string | Readable | undefined {
     if (bodyProvider !== undefined) {
-      const provider = bodyProvider;
+      const provider = () => {
+        try {
+          return bodyProvider();
+        } catch (error) {
+          throw mapFailure(error, signal.aborted, HttpFailureStage.Application);
+        }
+      };
       return Readable.from(
         (function* () {
           for (let chunk = provider(); chunk !== null; chunk = provider()) {
@@ -195,7 +228,7 @@ function applyHeaders(
 ): void {
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
-    if (!keepAuthorization && lower === 'authorization') {
+    if (!keepAuthorization && lower === HttpHeaderName.Authorization) {
       continue;
     }
     target[lower] = value;
@@ -213,8 +246,12 @@ function headerValue(
   return Array.isArray(value) ? value[0] : value;
 }
 
-async function drain(stream: Readable): Promise<void> {
-  for await (const _chunk of stream) {
-    // discard
+async function drain(stream: Readable, signal: AbortSignal): Promise<void> {
+  try {
+    for await (const _chunk of stream) {
+      // discard
+    }
+  } catch (error) {
+    throw mapFailure(error, signal.aborted, HttpFailureStage.Transport);
   }
 }

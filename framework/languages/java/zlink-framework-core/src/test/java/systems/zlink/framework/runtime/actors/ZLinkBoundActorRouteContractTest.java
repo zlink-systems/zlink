@@ -99,7 +99,6 @@ final class ZLinkBoundActorRouteContractTest {
                         new RawSerializer(),
                         0,
                         1,
-                        ignored -> true,
                         (ignoredActor, ignoredSequence, ignoredHeader, ignoredPayload) ->
                                 CompletableFuture.completedFuture(
                                         Optional.of(
@@ -177,7 +176,6 @@ final class ZLinkBoundActorRouteContractTest {
                         serializer,
                         0,
                         1,
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.PROTOBUF,
@@ -282,7 +280,6 @@ final class ZLinkBoundActorRouteContractTest {
                         new RawSerializer(),
                         0,
                         1,
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.JSON,
@@ -379,7 +376,6 @@ final class ZLinkBoundActorRouteContractTest {
                         new RawSerializer(),
                         0,
                         1,
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.JSON,
@@ -474,7 +470,6 @@ final class ZLinkBoundActorRouteContractTest {
                         new RawSerializer(),
                         0,
                         1,
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.JSON,
@@ -508,10 +503,27 @@ final class ZLinkBoundActorRouteContractTest {
     }
 
     @Test
-    void relocationRouteNeverReadySurfacesDeadlineExceeded() {
+    void relocationRoutePreservesBindingDeadlineTerminalWithoutReadinessPolling() {
+        var bindingFailure =
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        "binding deadline exhausted",
+                        new TimeoutException("binding deadline exhausted"));
+        AtomicInteger attempts = new AtomicInteger();
+        ZLinkBackendStreamSocket stream =
+                (ZLinkBackendStreamSocket)
+                        Proxy.newProxyInstance(
+                                ZLinkBackendStreamSocket.class.getClassLoader(),
+                                new Class<?>[] {ZLinkBackendStreamSocket.class},
+                                (proxy, method, arguments) -> {
+                                    assertEquals("relocateBoundActor", method.getName());
+                                    assertEquals(Duration.ZERO, arguments[4]);
+                                    attempts.incrementAndGet();
+                                    return CompletableFuture.failedFuture(bindingFailure);
+                                });
         ZLinkBoundActor actor =
                 new ZLinkBoundActor(
-                        null,
+                        stream,
                         RoutingId.from("session"),
                         new ZLinkBackendActorRef(RoutingId.from("actor-node-a"), "actor-1", 7),
                         "game",
@@ -520,7 +532,6 @@ final class ZLinkBoundActorRouteContractTest {
                         new UnsupportedSerializer(),
                         0,
                         1,
-                        ignored -> false,
                         null,
                         true,
                         ZLinkStreamCodec.JSON,
@@ -549,6 +560,8 @@ final class ZLinkBoundActorRouteContractTest {
                 assertInstanceOf(ZLinkFrameworkException.class, observed.getCause());
         assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, framework.kind());
         assertInstanceOf(TimeoutException.class, framework.getCause());
+        org.junit.jupiter.api.Assertions.assertSame(bindingFailure, framework);
+        assertEquals(1, attempts.get());
     }
 
     @Test
@@ -585,7 +598,6 @@ final class ZLinkBoundActorRouteContractTest {
                         new UnsupportedSerializer(),
                         0,
                         1,
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.JSON,
@@ -620,7 +632,6 @@ final class ZLinkBoundActorRouteContractTest {
                 new UnsupportedSerializer(),
                 0,
                 1,
-                ignored -> true,
                 null,
                 true,
                 ZLinkStreamCodec.JSON,

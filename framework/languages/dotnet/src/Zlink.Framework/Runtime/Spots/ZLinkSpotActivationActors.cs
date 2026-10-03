@@ -6,6 +6,8 @@ namespace Zlink.Framework.Runtime.Spots;
 
 internal abstract partial class ZLinkSpotActivation
 {
+    private static readonly TimeSpan ActorHandoffPollInterval = TimeSpan.FromMilliseconds(10);
+
     private readonly HashSet<ZLinkActorId> _actorsLeavingForEntrySpot = [];
 
     protected internal ValueTask LeaveActorFromContextAsync(
@@ -680,19 +682,10 @@ internal abstract partial class ZLinkSpotActivation
             )
             .ConfigureAwait(false);
         if (previousActivation is null)
-            await RetryCommittedMembershipCallbackAsync(
-                    ct => _runtime.NotifyEntrySpotActorLeftAsync(actor, NodeRid, ct),
-                    cancellationToken,
-                    absoluteDeadline
-                )
-                .ConfigureAwait(false);
-        else if (!ReferenceEquals(previousActivation, this) && !previousActivation.IsDisposed)
-            await RetryCommittedMembershipCallbackAsync(
-                    ct =>
-                        previousActivation.NotifyActorLeftAfterCommittedMembershipAsync(actor, ct),
-                    cancellationToken,
-                    absoluteDeadline
-                )
+            _runtime.GetSpotNodeRuntime(SpotNodeName).EntrySpotActivation?.SubmitActorLeft(actor);
+        else if (!previousActivation.IsDisposed)
+            await previousActivation
+                .NotifyActorLeftAfterCommittedMembershipAsync(actor, cancellationToken)
                 .ConfigureAwait(false);
     }
 
@@ -725,7 +718,7 @@ internal abstract partial class ZLinkSpotActivation
             }
             catch
             {
-                var delay = TimeSpan.FromMilliseconds(10);
+                var delay = ActorHandoffPollInterval;
                 if (localDeadline is { } deadlineValue)
                 {
                     var remaining = deadlineValue - Stopwatch.GetElapsedTime(0);
@@ -769,12 +762,7 @@ internal abstract partial class ZLinkSpotActivation
             && _actorHandlers!.TryResolveJoined(actor.GetType(), out descriptor)
             && descriptor is not null;
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            "actor_joined_hook actor="
-                + actor.GetType().Name
-                + " handlers="
-                + hasHandlers
-                + " resolved="
-                + resolved
+            $"actor_joined_hook actor={actor.GetType().Name} handlers={hasHandlers} resolved={resolved}"
         );
         if (resolved)
             await HandlerInvoker
@@ -854,14 +842,20 @@ internal abstract partial class ZLinkSpotActivation
             _perActorMembersDrained.TrySetResult();
     }
 
-    private async ValueTask NotifyActorLeftAfterCommittedMembershipCoreAsync(
+    private ValueTask NotifyActorLeftAfterCommittedMembershipCoreAsync(
         IZLinkActor actor,
         CancellationToken cancellationToken
     )
     {
         _actors.RemoveIfCurrent(actor);
-        await CompleteActorLeftAfterCommittedMembershipCoreAsync(actor, cancellationToken)
-            .ConfigureAwait(false);
+        var actorState = _runtime.GetOrCreateActorState(actor.Context.ActorId);
+        actorState.LeaveSpotIfCurrent(this);
+        _serial.QueueLifecycle(
+            (activation, ct) =>
+                activation.CompleteActorLeftAfterCommittedMembershipCoreAsync(actor, ct)
+        );
+        SignalPerActorMembersDrainedIfNeeded();
+        return ValueTask.CompletedTask;
     }
 
     private async ValueTask TryNotifyActorLeftAfterCommittedMembershipCoreAsync(
@@ -891,10 +885,6 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
-        var actorState = _runtime.GetOrCreateActorState(actor.Context.ActorId);
-        actorState.LeaveSpotIfCurrent(this);
-        SignalPerActorMembersDrainedIfNeeded();
-
         if (
             _actorHandlers is not null
             && _actorHandlers.TryResolveLeft(actor.GetType(), out var descriptor)

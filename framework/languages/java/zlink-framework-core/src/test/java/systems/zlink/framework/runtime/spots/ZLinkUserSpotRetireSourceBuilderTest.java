@@ -15,6 +15,7 @@ import systems.zlink.framework.locations.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
@@ -30,6 +31,7 @@ import systems.zlink.framework.spots.ZLinkSpotRelocationAdapter;
 import systems.zlink.framework.spots.ZLinkSpotRelocationReadyCompletion;
 import systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome;
 
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -42,7 +44,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class ZLinkUserSpotRetireSourceBuilderTest {
     private static final ZLinkStoreCancellation NEVER = () -> false;
@@ -144,6 +150,177 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
     }
 
     @Test
+    void readinessBoundaryYieldsBusyOwnerAndCancellationWinsBeforeGateReacquisition()
+            throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        var releaseOwner = new CompletableFuture<Void>();
+        var ownerEntered = new CompletableFuture<Void>();
+        var releaseGate = new CompletableFuture<Void>();
+        var gateEntered = new CompletableFuture<Void>();
+        try (ZLinkFrameworkRuntime host =
+                ZLinkFrameworkRuntimeTestAccess.start(options(locations, relocations, true))) {
+            try {
+                host.spotManager()
+                        .getOrCreate(SPOT_ID, STABLE_TYPE)
+                        .submit()
+                        .toCompletableFuture()
+                        .get();
+                var context = (DefaultSpotContext) LiveSpot.last.get().context();
+                var ownerField = DefaultSpotContext.class.getDeclaredField("relocationStateLane");
+                ownerField.setAccessible(true);
+                var owner =
+                        (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                                ownerField.get(context);
+                var boundary =
+                        DefaultSpotContext.class.getDeclaredMethod("reachRelocationReadyBoundary");
+                boundary.setAccessible(true);
+                var signal = new CompletableFuture<Void>();
+                var claims = new java.util.concurrent.atomic.AtomicInteger();
+                var readiness =
+                        context.awaitRelocationReadySignal(
+                                () -> {
+                                    claims.incrementAndGet();
+                                    return CompletableFuture.completedFuture(Optional.empty());
+                                },
+                                signal);
+                owner.runAsync(() -> null).toCompletableFuture().get(3, TimeUnit.SECONDS);
+                owner.runAsync(
+                        () -> {
+                            ownerEntered.complete(null);
+                            releaseOwner.join();
+                            return null;
+                        });
+                ownerEntered.get(3, TimeUnit.SECONDS);
+                var attempted = new CompletableFuture<Void>();
+                var first =
+                        context.enqueueDispatch(
+                                () -> {
+                                    try {
+                                        @SuppressWarnings("unchecked")
+                                        var completion =
+                                                (CompletionStage<Void>) boundary.invoke(context);
+                                        attempted.complete(null);
+                                        return completion;
+                                    } catch (ReflectiveOperationException failure) {
+                                        return CompletableFuture.failedFuture(failure);
+                                    }
+                                });
+                attempted.get(3, TimeUnit.SECONDS);
+                var second =
+                        context.enqueueDispatch(
+                                () -> {
+                                    gateEntered.complete(null);
+                                    return releaseGate;
+                                });
+                gateEntered.get(3, TimeUnit.SECONDS);
+                signal.complete(null);
+                releaseOwner.complete(null);
+                assertTrue(readiness.toCompletableFuture().get(3, TimeUnit.SECONDS).isEmpty());
+                assertEquals(0, claims.get());
+                releaseGate.complete(null);
+                CompletableFuture.allOf(first.toCompletableFuture(), second.toCompletableFuture())
+                        .get(3, TimeUnit.SECONDS);
+                assertEquals(0, claims.get());
+            } finally {
+                releaseOwner.complete(null);
+                releaseGate.complete(null);
+            }
+        }
+    }
+
+    @Test
+    void completionAfterWaiterDetachesStillPreventsReadinessClaim() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        var boundaryReading = new CompletableFuture<Void>();
+        var releaseRead = new CompletableFuture<Void>();
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        var cancellationSignal =
+                new CompletableFuture<Void>() {
+                    @Override
+                    public boolean isDone() {
+                        if (reads.incrementAndGet() == 2) {
+                            boundaryReading.complete(null);
+                            releaseRead.join();
+                        }
+                        return super.isDone();
+                    }
+                };
+        var claims = new java.util.concurrent.atomic.AtomicInteger();
+        try (ZLinkFrameworkRuntime host =
+                ZLinkFrameworkRuntimeTestAccess.start(options(locations, relocations, true))) {
+            try {
+                host.spotManager()
+                        .getOrCreate(SPOT_ID, STABLE_TYPE)
+                        .submit()
+                        .toCompletableFuture()
+                        .get();
+                var runtime = (ZLinkSpotRuntime) host.spotManager();
+                var context = (DefaultSpotContext) LiveSpot.last.get().context();
+                var barrier = context.relocationBarrier(runtime.actorSessions());
+                var sealing =
+                        barrier.sealForRelocation(
+                                ignored -> {
+                                    claims.incrementAndGet();
+                                    return true;
+                                },
+                                () -> false,
+                                cancellationSignal);
+                var turn =
+                        context.enqueueDispatch(
+                                () -> {
+                                    context.relocationReady().defer();
+                                    return CompletableFuture.completedFuture(null);
+                                });
+                boundaryReading.get(3, TimeUnit.SECONDS);
+                cancellationSignal.complete(null);
+                var ownerField = DefaultSpotContext.class.getDeclaredField("relocationStateLane");
+                ownerField.setAccessible(true);
+                var owner =
+                        (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                                ownerField.get(context);
+                owner.runAsync(() -> null).toCompletableFuture().get(3, TimeUnit.SECONDS);
+                releaseRead.complete(null);
+                assertTrue(sealing.toCompletableFuture().get(3, TimeUnit.SECONDS).isEmpty());
+                turn.toCompletableFuture().get(3, TimeUnit.SECONDS);
+                assertEquals(0, claims.get());
+            } finally {
+                releaseRead.complete(null);
+            }
+        }
+    }
+
+    @Test
+    void applicationSignaledReadinessObservesCancellationNotificationWithoutPolling()
+            throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        try (ZLinkFrameworkRuntime host =
+                ZLinkFrameworkRuntimeTestAccess.start(options(locations, relocations, true))) {
+            host.spotManager()
+                    .getOrCreate(SPOT_ID, STABLE_TYPE)
+                    .submit()
+                    .toCompletableFuture()
+                    .get();
+            var runtime = (ZLinkSpotRuntime) host.spotManager();
+            var context = (DefaultSpotContext) LiveSpot.last.get().context();
+            var barrier = context.relocationBarrier(runtime.actorSessions());
+            var completed = new CompletableFuture<Void>();
+            var first = barrier.sealForRelocation(ignored -> true, () -> false, completed);
+            assertFalse(first.toCompletableFuture().isDone());
+            completed.complete(null);
+            assertTrue(first.toCompletableFuture().get(3, TimeUnit.SECONDS).isEmpty());
+            var secondSignal = new CompletableFuture<Void>();
+            var second = barrier.sealForRelocation(ignored -> true, () -> false, secondSignal);
+            assertFalse(second.toCompletableFuture().isDone());
+            secondSignal.completeExceptionally(
+                    new java.util.concurrent.TimeoutException("deadline"));
+            assertTrue(second.toCompletableFuture().get(3, TimeUnit.SECONDS).isEmpty());
+        }
+    }
+
+    @Test
     void applicationSignaledPrecommitAbortContinuesBeforeHeldJob() throws Exception {
         ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
         InMemoryRelocationStore relocations = new InMemoryRelocationStore();
@@ -160,7 +337,8 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
             ZLinkUserSpotRelocationBarrier barrier =
                     context.relocationBarrier(runtime.actorSessions());
             CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> sealing =
-                    barrier.sealForRelocation(ignored -> true, () -> false);
+                    barrier.sealForRelocation(
+                            ignored -> true, () -> false, new CompletableFuture<>());
             CompletableFuture<Void> releaseTurn = new CompletableFuture<>();
             CompletionStage<Void> first =
                     context.enqueueDispatch(
@@ -216,7 +394,17 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
     }
 
     @Test
+    void confirmedTargetCommitReportsCleanupFailuresOnceWithoutChangingSettlement()
+            throws Exception {
+        exercisePreparedSource(true);
+    }
+
+    @Test
     void capturesLiveSpotAndPreparesVerifiedImmutableRootBeforeSourceCommit() throws Exception {
+        exercisePreparedSource(false);
+    }
+
+    private void exercisePreparedSource(boolean failingPostCommitCleanup) throws Exception {
         SnapshotAdapter.captured.set(null);
         ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
         ZLinkLocationRepository repository = new ZLinkProviderLocationRepository(locations);
@@ -276,13 +464,118 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                             new ZLinkRelocationAdapterRegistry(
                                     registration, ZLinkHandlerActivator.reflection()),
                             nodeRegistration.relocatableSpotFactories(),
-                            nodeRegistration.relocatableActorFactories());
+                            nodeRegistration.relocatableActorFactories(),
+                            runtime);
 
             ZLinkUserSpotRetireSourceBuilder.PreparedSource prepared =
-                    builder.prepare(SPOT_ID, rollingToVersionOne(), NEVER)
+                    builder.prepare(
+                                    SPOT_ID,
+                                    rollingToVersionOne(),
+                                    NEVER,
+                                    new CompletableFuture<>())
                             .toCompletableFuture()
                             .get();
 
+            if (failingPostCommitCleanup) {
+                var reports = new AtomicInteger();
+                var cleanupAttempts = new AtomicInteger();
+                var completed = new AtomicInteger();
+                var aborts = new AtomicInteger();
+                var diagnosticFailure = new AtomicReference<Throwable>();
+                var settlement =
+                        new CompletableFuture<ZLinkRelocationTransitionClient.Settlement>();
+                var logger = Logger.getLogger(ZLinkRelocationHandOff.class.getName());
+                var diagnostics =
+                        new Handler() {
+                            @Override
+                            public void publish(LogRecord record) {
+                                if (record.getMessage()
+                                        .startsWith("Relocation source cleanup failed:")) {
+                                    reports.incrementAndGet();
+                                    diagnosticFailure.set(record.getThrown());
+                                }
+                            }
+
+                            @Override
+                            public void flush() {}
+
+                            @Override
+                            public void close() {}
+                        };
+                ZLinkRelocationTransitionClient client =
+                        (ZLinkRelocationTransitionClient)
+                                Proxy.newProxyInstance(
+                                        ZLinkRelocationTransitionClient.class.getClassLoader(),
+                                        new Class<?>[] {ZLinkRelocationTransitionClient.class},
+                                        (proxy, method, arguments) -> {
+                                            if (method.getName().equals("settle"))
+                                                return settlement;
+                                            if (method.getName().equals("publish"))
+                                                settlement.complete(
+                                                        ZLinkRelocationTransitionClient.Settlement
+                                                                .TARGET_COMMITTED);
+                                            if (method.getName().equals("abort"))
+                                                aborts.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        });
+                logger.addHandler(diagnostics);
+                try {
+                    var request =
+                            new ZLinkUserSpotRetireScheduler.RemoteRequest(
+                                    prepared,
+                                    client,
+                                    Duration.ofSeconds(1),
+                                    Instant.now().plusSeconds(5),
+                                    () -> {
+                                        cleanupAttempts.incrementAndGet();
+                                        return ZLinkHandlerStages.completeAll(
+                                                List.of(
+                                                        () ->
+                                                                CompletableFuture.failedFuture(
+                                                                        new IllegalStateException(
+                                                                                "first committed cleanup failure")),
+                                                        () ->
+                                                                CompletableFuture.failedFuture(
+                                                                        new IllegalStateException(
+                                                                                "second committed cleanup failure")),
+                                                        () ->
+                                                                prepared.cleanupLocal(
+                                                                                Instant.now()
+                                                                                        .plusSeconds(
+                                                                                                5))
+                                                                        .thenRun(
+                                                                                completed
+                                                                                        ::incrementAndGet)));
+                                    });
+                    assertDoesNotThrow(
+                            () ->
+                                    new ZLinkUserSpotRetireScheduler()
+                                            .executeRemote(request, NEVER)
+                                            .toCompletableFuture()
+                                            .join());
+                    assertEquals(1, reports.get());
+                    assertEquals(1, cleanupAttempts.get());
+                    assertEquals(1, completed.get());
+                    assertNull(
+                            runtime.spotFor(SPOT_ID),
+                            "source Spot registry must retire after earlier cleanup failures");
+                    assertEquals(
+                            0,
+                            aborts.get(),
+                            "confirmed target commit must not abort after source cleanup failure");
+                    assertEquals(
+                            "first committed cleanup failure",
+                            diagnosticFailure.get().getMessage());
+                    assertEquals(1, diagnosticFailure.get().getSuppressed().length);
+                    assertThrows(
+                            CompletionException.class,
+                            () -> prepared.discardInitialAfterCommit().toCompletableFuture().join(),
+                            "discardInitialAfterCommit must already have run after cleanup failure");
+                } finally {
+                    logger.removeHandler(diagnostics);
+                }
+                return;
+            }
             assertSame(LiveSpot.last.get(), SnapshotAdapter.captured.get());
             assertSame(LiveSpot.last.get(), runtime.spotFor(SPOT_ID));
             var envelope =
@@ -315,7 +608,11 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
             assertThrows(
                     CompletionException.class,
                     () ->
-                            builder.prepare(SPOT_ID, rollingToVersionOne(), NEVER)
+                            builder.prepare(
+                                            SPOT_ID,
+                                            rollingToVersionOne(),
+                                            NEVER,
+                                            new CompletableFuture<>())
                                     .toCompletableFuture()
                                     .join());
             assertNull(
@@ -385,7 +682,11 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                             nodeRegistration.relocatableActorFactories());
 
             ZLinkUserSpotRetireSourceBuilder.PreparedSource prepared =
-                    builder.prepare(SPOT_ID, rollingToVersionOne(), NEVER)
+                    builder.prepare(
+                                    SPOT_ID,
+                                    rollingToVersionOne(),
+                                    NEVER,
+                                    new CompletableFuture<>())
                             .toCompletableFuture()
                             .get();
             DefaultSpotContext context = (DefaultSpotContext) LiveSpot.last.get().context();
@@ -505,7 +806,11 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                             nodeRegistration.relocatableActorFactories());
 
             var prepared =
-                    builder.prepare(SPOT_ID, rollingToVersionOne(), NEVER)
+                    builder.prepare(
+                                    SPOT_ID,
+                                    rollingToVersionOne(),
+                                    NEVER,
+                                    new CompletableFuture<>())
                             .toCompletableFuture()
                             .get(30, TimeUnit.SECONDS);
 

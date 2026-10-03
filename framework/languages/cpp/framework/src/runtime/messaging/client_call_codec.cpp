@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include <zlink/framework/detail/binary_text_codec.hpp>
+
 #include "runtime/messaging/client_call_codec.hpp"
 
 #include <atomic>
@@ -16,12 +18,12 @@ std::string next_correlation_id ()
 {
     static std::atomic_uint64_t next{1};
     std::uint64_t value = next.fetch_add (1, std::memory_order_relaxed);
-    // Cheap uint->hex (no ostringstream): runs per outbound envelope.
+    // Cheap uint->hex (no ostringstream): runs per outbound request.
     char buffer[17];
     int index = static_cast<int> (sizeof (buffer));
     buffer[--index] = '\0';
     do {
-        buffer[--index] = "0123456789abcdef"[value & 0xfu];
+        buffer[--index] = zlink::framework::detail::lowercase_hex_digits[value & 0xfu];
         value >>= 4u;
     } while (value != 0);
     return std::string (buffer + index);
@@ -124,7 +126,9 @@ envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
     header.channel_name = std::move (channel_name);
     header.message_name = std::move (message_name);
     header.content_type = envelope_codec_t::default_content_type;
-    header.correlation_id = next_correlation_id ();
+    if (kind == message_kind_t::request) {
+        header.correlation_id = next_correlation_id ();
+    }
     if (timeout.count () > 0) {
         header.deadline = format_utc_deadline (std::chrono::system_clock::now () + timeout);
     }

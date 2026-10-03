@@ -10,10 +10,18 @@ const test = require('node:test');
 const { trace } = require('@opentelemetry/api');
 const { logs } = require('@opentelemetry/api-logs');
 const { LoggerProvider } = require('@opentelemetry/sdk-logs');
+const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
 
 const telemetryRecords = [];
 const traceRecords = [];
 let failTelemetryProvider = false;
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 const loggerProvider = new LoggerProvider({
   processors: [
     {
@@ -785,10 +793,12 @@ test('logical multicast target submission failure reports stale target without c
     dispatchErrorMeshName: 'play'
   });
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {},
-    dispatchErrors: reporter
+    dispatchErrors: reporter,
+    errorSink: { reportRuntimeTaskException() { assert.fail('unexpected runtime task error'); } }
   });
   runtime.publishers.set('play', {
     publishAsync(channelName, topic) {

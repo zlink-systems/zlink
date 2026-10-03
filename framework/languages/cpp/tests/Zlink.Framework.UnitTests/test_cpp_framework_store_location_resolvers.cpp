@@ -137,6 +137,8 @@ class test_location_repository_t : public zlink::framework::location_repository_
         authorities.insert_or_assign (std::move (key), std::move (snapshot));
     }
 
+    void set_authority (const std::string &key, std::nullopt_t) { authorities.erase (key); }
+
     zlink::framework::task_t<zlink::framework::location_write_result_t>
     update_mesh_node (zlink::framework::mesh_node_descriptor_t descriptor,
                       zlink::framework::location_write_intent_t intent) override
@@ -311,17 +313,19 @@ class test_location_repository_t : public zlink::framework::location_repository_
 
     zlink::framework::task_t<zlink::framework::object_commit_result_t>
     commit (zlink::framework::object_commit_request_t request,
-            std::stop_token cancellation = {}) override
+            std::stop_token cancellation = {},
+            std::chrono::system_clock::time_point operation_deadline = {}) override
     {
-        return _inner.commit (std::move (request), cancellation);
+        return _inner.commit (std::move (request), cancellation, operation_deadline);
     }
 
     zlink::framework::task_t<zlink::framework::object_abort_result_t>
     abort (zlink::framework::object_abort_request_t request,
-           std::stop_token cancellation = {}) override
+           std::stop_token cancellation = {},
+           std::chrono::system_clock::time_point operation_deadline = {}) override
     {
         abort_count.fetch_add (1, std::memory_order_relaxed);
-        return _inner.abort (std::move (request), cancellation);
+        return _inner.abort (std::move (request), cancellation, operation_deadline);
     }
 
     zlink::framework::task_t<zlink::framework::aggregate_prepare_result_t>
@@ -410,6 +414,44 @@ class renew_failure_owner_lease_store_t final : public test_location_repository_
   private:
     owner_lease_confirmation_mode_t _confirmation_mode;
     std::atomic_size_t _confirmation_read_count{0};
+};
+
+class standalone_framework_runtime_t final : public zlink::framework::framework_runtime_t
+{
+  public:
+    zlink::framework::framework_runtime_status_t status () const override
+    {
+        return {.state = zlink::framework::framework_runtime_state_t::serving,
+                .is_ready = true,
+                .accepting_work = true};
+    }
+
+    void reset_capacity_metrics () override
+    {
+        ADD_FAILURE () << "unexpected standalone host capacity reset";
+    }
+
+    zlink::framework::listener_status_t listener_status (zlink::framework::listener_kind_t,
+                                                         std::string) const override
+    {
+        ADD_FAILURE () << "unexpected standalone host listener status query";
+        return {};
+    }
+
+    std::vector<zlink::framework::http_listener_status_t> http_listener_statuses () const override
+    {
+        ADD_FAILURE () << "unexpected standalone host HTTP listener status query";
+        return {};
+    }
+
+    std::unique_ptr<zlink::framework::runtime_observation_t>
+    observe (std::size_t,
+             std::function<void (const zlink::framework::observed_status_t<
+                                 zlink::framework::framework_runtime_status_t> &)>) override
+    {
+        ADD_FAILURE () << "unexpected standalone host observation";
+        return {};
+    }
 };
 
 class fake_location_runtime_query_t final : public location_runtime_query_t
@@ -1681,6 +1723,67 @@ class auto_connect_publish_client_t final : public zlink::framework::hosted_serv
     zlink::framework::app_t *_app;
 };
 
+class fanout_topic_context_handler_t
+{
+  public:
+    using event_type = auto_connect_event_t;
+
+    void handle (const auto_connect_event_t &event,
+                 const zlink::framework::publish_message_context_t &context)
+    {
+        if (event.value == 1 && context.topic == "a") {
+            observed_a.store (true, std::memory_order_release);
+        } else if (event.value == 2 && context.topic == "b") {
+            observed_b.store (true, std::memory_order_release);
+        }
+    }
+
+    inline static std::atomic_bool observed_a{false};
+    inline static std::atomic_bool observed_b{false};
+};
+
+class fanout_topic_context_publish_client_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    explicit fanout_topic_context_publish_client_t (zlink::framework::app_t &app) : _app (&app) {}
+
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
+    {
+        auto publisher = _app->advanced ().zlink ().publisher ();
+        for (int attempt = 0;
+             attempt < 80
+             && (!fanout_topic_context_handler_t::observed_a.load (std::memory_order_acquire)
+                 || !fanout_topic_context_handler_t::observed_b.load (std::memory_order_acquire));
+             ++attempt) {
+            try {
+                if (!fanout_topic_context_handler_t::observed_a.load (std::memory_order_acquire)) {
+                    co_await publisher
+                      .publish ("fanout-topic-context", "a", auto_connect_event_t{1})
+                      .async ();
+                }
+                if (!fanout_topic_context_handler_t::observed_b.load (std::memory_order_acquire)) {
+                    co_await publisher
+                      .publish ("fanout-topic-context", "b", auto_connect_event_t{2})
+                      .async ();
+                }
+            }
+            catch (const std::exception &error) {
+                last_error = error.what ();
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (25));
+        }
+        _app->stop ();
+        co_return;
+    }
+
+    void stop () noexcept override {}
+
+    std::string last_error;
+
+  private:
+    zlink::framework::app_t *_app;
+};
+
 template <typename Store>
 location_owner_token_t claim_test_owner (Store &store,
                                          std::string owner_id,
@@ -1867,6 +1970,69 @@ TEST (ZLinkFrameworkStoreLocationResolvers, DirectReadyRouteUsesPositiveCacheOnl
     EXPECT_FALSE (resolvers.resolve_spot_address ({}, "missing").result ().value ());
     EXPECT_FALSE (resolvers.resolve_spot_address ({}, "missing").result ().value ());
     EXPECT_EQ (0u, store.resolve_spot_count.load ());
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, ClosingRoutePreservesOwnerFencesWithoutPositiveCache)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    for (const auto kind :
+         {placement_object_kind_t::user_spot, placement_object_kind_t::instance_spot}) {
+        test_location_repository_t store;
+        const auto owner = claim_test_owner (store, "closing-owner");
+        const std::string spot_id = "closing-route";
+        const auto key = spot_authority_key (spot_id);
+        authority_snapshot_t authority{
+          .store_version = "closing-version",
+          .object_generation = 7,
+          .authority_owner_generation = 11,
+          .owner = owner,
+          .allocation = {.state = placement_allocation_state_t::active,
+                         .object_kind = kind,
+                         .stable_type = "play",
+                         .target = {.mesh_name = "closing-mesh",
+                                    .node_rid = node_rid_t::from_string ("closing-node"),
+                                    .node_lifecycle_generation = 13,
+                                    .owner = owner}}};
+        if (kind == placement_object_kind_t::user_spot)
+            authority.payload = encode_user_spot_authority_payload (
+              {.state = user_spot_authority_state_t::closing,
+               .stable_type = authority.allocation.stable_type,
+               .spot_id = spot_id,
+               .owner_id = owner.owner_id,
+               .owner_lease_generation = static_cast<std::uint64_t> (owner.lease_generation),
+               .mesh_name = authority.allocation.target.mesh_name,
+               .node_rid = authority.allocation.target.node_rid,
+               .node_generation = authority.allocation.target.node_lifecycle_generation});
+        else
+            authority.payload = encode_instance_closing_state (
+              {authority.allocation.stable_type, spot_id, authority.object_generation,
+               authority.authority_owner_generation});
+        store.set_authority (key.value, authority);
+        location_options_t options;
+        options.route_cache_max_age = std::chrono::seconds (1);
+        store_location_resolvers_t resolvers (store, options);
+        const auto address = resolvers.resolve_spot_address ({}, spot_id).result ().value ();
+        ASSERT_TRUE (address);
+        EXPECT_EQ (spot_id, address->spot_id);
+        EXPECT_EQ (authority.allocation.target.mesh_name, address->mesh_name);
+        EXPECT_EQ (authority.allocation.target.node_rid.value (), address->node_rid.to_string ());
+        EXPECT_EQ (authority.allocation.target.node_lifecycle_generation, address->node_generation);
+        EXPECT_EQ (authority.store_version, address->store_version);
+        EXPECT_EQ (authority.object_generation, address->spot_generation);
+        EXPECT_EQ (authority.object_generation, address->object_generation);
+        EXPECT_EQ (authority.authority_owner_generation, address->authority_owner_generation);
+        EXPECT_EQ (owner.owner_id, address->owner.owner_id);
+        EXPECT_EQ (owner.lease_generation, address->owner.lease_generation);
+
+        authority.store_version = "closing-version-next";
+        store.set_authority (key.value, authority);
+        const auto refreshed = resolvers.resolve_spot_address ({}, spot_id).result ().value ();
+        ASSERT_TRUE (refreshed);
+        EXPECT_EQ (authority.store_version, refreshed->store_version);
+        store.set_authority (key.value, std::nullopt);
+        EXPECT_FALSE (resolvers.resolve_spot_address ({}, spot_id).result ().value ());
+    }
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, AddLocationStoreRegistersOpaqueProvider)
@@ -2481,6 +2647,12 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostPublishesAndCleansLoc
     events.enable_subscriber ();
 
     zlink::framework::service_collection_t services;
+    services.add_factory<zlink::framework::framework_runtime_t> (
+      [] (zlink::framework::service_provider_t &)
+        -> std::shared_ptr<zlink::framework::framework_runtime_t> {
+          return std::make_shared<standalone_framework_runtime_t> ();
+      },
+      zlink::framework::service_lifetime_t::singleton);
     services.add_factory<zlink::framework::location_repository_t> (
       [store] (zlink::framework::service_provider_t &) {
           return std::static_pointer_cast<zlink::framework::location_repository_t> (store);
@@ -3074,11 +3246,11 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
           zlink::framework::runtime::messaging::message_parts_t>::success (std::move (parts));
     };
     const auto client_server_send =
-      [] (std::string, std::string, zlink::message_t,
-          std::chrono::milliseconds) -> zlink::framework::task_t<void> { co_return; };
+      [] (std::string, std::string, zlink::message_t, std::chrono::milliseconds,
+          std::map<std::string, std::string>) -> zlink::framework::task_t<void> { co_return; };
     const auto client_server_request =
-      [] (std::string, std::string, zlink::message_t message,
-          std::chrono::milliseconds) -> zlink::framework::task_t<zlink::message_t> {
+      [] (std::string, std::string, zlink::message_t message, std::chrono::milliseconds,
+          std::map<std::string, std::string>) -> zlink::framework::task_t<zlink::message_t> {
         co_return std::move (message);
     };
 
@@ -3143,6 +3315,37 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppFanoutPublishUsesLocationAutoConn
     EXPECT_GT (automatic_handler_scope_filter_t::blocked_fanout_dispatches.load (), 0);
     EXPECT_EQ (automatic_handler_scope_dependency_t::created.load (),
                automatic_handler_scope_dependency_t::destroyed.load ());
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      AppFanoutTypedHandlerUsesPacketNameAcrossTopicsAndPreservesContext)
+{
+    auto store = std::make_shared<in_memory_location_store_t> ();
+    auto app = zlink::framework::app_t::create ();
+    fanout_topic_context_handler_t::observed_a.store (false, std::memory_order_release);
+    fanout_topic_context_handler_t::observed_b.store (false, std::memory_order_release);
+    fanout_topic_context_publish_client_t *client = nullptr;
+
+    app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (store);
+        options.handlers ()
+          .group ("fanout-topic-context")
+          .add_publish<fanout_topic_context_handler_t> ();
+        options.add_fanout_channel ("fanout-topic-context")
+          .set_routing_id (zlink::routing_id_t::from ("fanout-topic-context-publisher"))
+          .enable_publisher ("tcp://127.0.0.1:0")
+          .enable_subscriber ()
+          .use_handler_group ("fanout-topic-context");
+    });
+    auto service = std::make_unique<fanout_topic_context_publish_client_t> (app);
+    client = service.get ();
+    app.add_hosted_service (std::move (service));
+
+    EXPECT_EQ (0, app.run (0, nullptr));
+    ASSERT_NE (nullptr, client);
+    EXPECT_TRUE (fanout_topic_context_handler_t::observed_a.load (std::memory_order_acquire));
+    EXPECT_TRUE (fanout_topic_context_handler_t::observed_b.load (std::memory_order_acquire));
+    EXPECT_TRUE (client->last_error.empty ()) << client->last_error;
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostReconcilesRouteMeshConnections)

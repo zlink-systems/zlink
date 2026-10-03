@@ -32,7 +32,7 @@ internal abstract partial class ZLinkSpotActivation
     private readonly ZLinkFrameworkRuntime _runtime;
     private readonly ZLinkScopedHandlerInstanceOwner _handlerInstances;
     private readonly AsyncServiceScope _scope;
-    private readonly ZLinkSpotSerialExecutor _serial;
+    internal readonly ZLinkSpotSerialExecutor _serial;
     private readonly CancellationTokenSource _stopSource = new();
     private readonly ZLinkSpotSubscriptionRegistry _subscriptions = new();
     private readonly ZLinkSpotTimerRegistry _timers;
@@ -51,6 +51,7 @@ internal abstract partial class ZLinkSpotActivation
     );
     private int _releasedLocalResources;
     private object? _spot;
+    private TaskCompletionSource<ZLinkSpotActivation?>? _successor;
     private ZLinkPerActorShellRelocationPlan? _perActorShellRelocation;
 
     protected ZLinkSpotActivation(
@@ -316,7 +317,7 @@ internal sealed class ZLinkUserSpotActivation
 
     internal override ZLinkPlacementObjectKind PlacementKind => ZLinkPlacementObjectKind.UserSpot;
 
-    internal override string KindName => "user";
+    internal override string KindName => ZLinkRuntimeMetrics.UserSpotKind;
 
     internal override bool SupportsIdleEviction => false;
 
@@ -399,7 +400,7 @@ internal sealed class ZLinkInstanceSpotActivation : ZLinkSpotActivation, IZLinkI
     internal override ZLinkPlacementObjectKind PlacementKind =>
         ZLinkPlacementObjectKind.InstanceSpot;
 
-    internal override string KindName => "instance";
+    internal override string KindName => ZLinkRuntimeMetrics.InstanceSpotKind;
 
     internal override bool SupportsIdleEviction => true;
 

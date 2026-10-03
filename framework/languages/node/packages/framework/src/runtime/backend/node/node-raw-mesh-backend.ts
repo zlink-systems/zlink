@@ -1,18 +1,14 @@
-import { randomBytes } from 'node:crypto';
-import { setImmediate as yieldToIO } from 'node:timers/promises';
 import {
   decodeStreamWireFrame,
   decodeStreamWireHeader,
   encodeStreamWireFrame,
   encodeStreamWireHeader
 } from '@zlink-systems/stream-wire';
-import { disconnectStreamPeer } from './node-socket-backend-adapter';
-import { translateBindingResultError } from './node-backend-adapter-support';
-import { ZLinkFrameworkException } from '../../../contracts';
-import { internalFrameworkWireReply } from '../../framework-errors-internal';
 import {
-  Message,
   RoutingId as BindingRoutingId,
+  ConfigError,
+  ConfigResult,
+  Message,
   RequestResult,
   SubmitError,
   SubmitResult,
@@ -20,51 +16,64 @@ import {
   type StreamSocket,
   type SubmitResult as SubmitResultValue
 } from '@zlink-systems/zlink';
-import {
-  isZLinkBackendResultError,
-  ZLinkBackendResultError,
-  type ZLinkBackendMessageLike as MessageLike
-} from '../runtime-values';
-import { ZLinkBufferMessage } from '../runtime-message';
+import { randomBytes } from 'node:crypto';
+import { setImmediate as yieldToIO } from 'node:timers/promises';
+import { type RoutingId, ZLinkFrameworkException } from '../../../contracts';
+
 import type { Message as FrameworkMessage } from '../../../contracts/Common/Message';
-import type { ZLinkDispatchErrorReporter } from '../../channels/dispatch-error-reporter';
-import type {
-  MeshOperationId,
-  MeshPeerEntry,
-  MeshPublisher,
-  ReadyBatch,
-  ReadyRecord,
-  ReceiveBatch,
-  ReceiveRecord,
-  ServiceSpot,
-  StreamSessionActorAuthorityFence,
-  StreamSessionService
-} from '../../foundation/service-runtime-contracts';
+import { ZLinkConfigurationException } from '../../../contracts/Configuration/ConfigurationException';
+import { buildAdvertisedEndpoint } from '../../../contracts/Configuration/EndpointNotation';
+import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../../contracts/Configuration/InternalDefaults';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../../contracts/Configuration/Registration';
 import {
-  OperationKind,
-  ReadyDomain,
-  ReadyOwnerKind,
-  ReceiveKind
-} from '../../foundation/service-runtime-contracts';
+  isValidPositiveCapacity,
+  isValidPublicWeight,
+  ZLINK_DEFAULT_PUBLIC_WEIGHT,
+  ZLINK_MAX_CAPACITY,
+  ZLINK_MAX_PUBLIC_WEIGHT
+} from '../../../contracts/Configuration/RegistrationBuilderPolicy';
+import { shouldCompactBackingArray } from '../../admission';
+import type { ApplicationJobQueuePort } from '../../application-jobs/contracts';
+import type { ZLinkDispatchErrorReporter } from '../../channels/dispatch-error-reporter';
+import { ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE } from '../../foundation/operation-identity';
 import {
   OperationCancelledError,
   OperationTimeoutError
 } from '../../foundation/operation-registry';
 import {
   RawServiceMeshRuntime,
+  RAW_MESH_RECEIVE_TIME_BUDGET_MS,
   type RawServiceRequestResult
 } from '../../foundation/raw-service-mesh-runtime';
+import type { ServiceInstanceActivationRecoveryEnvelope } from '../../foundation/service-instance-activation-recovery-codec';
+import type {
+  ServiceMailboxClaim,
+  ServiceMailboxDomain,
+  ServiceMailboxRecord
+} from '../../foundation/service-mailbox';
+import { encodeServiceMetadataFrame } from '../../foundation/service-metadata-codec';
 import {
-  decodeApplicationPayloadView,
-  encodeMultipartApplicationPayload,
-  type ServiceApplicationPayload,
-  ServiceWireProtocolError
-} from '../../foundation/service-wire-m6a-codec';
-import {
-  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
-  SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
-  SERVICE_WIRE_REQUIRED_CAPABILITY
-} from '../../foundation/service-wire-constants.generated';
+  type MeshOperationId,
+  type MeshPeerEntry,
+  type MeshPublisher,
+  type ReadyBatch,
+  type ReadyRecord,
+  type ReceiveBatch,
+  type ReceiveRecord,
+  type ServiceSpot,
+  type StreamSessionActorAuthorityFence,
+  type StreamSessionService,
+  MeshNodeRuntimeState,
+  MeshPeerRuntimeState,
+  OperationKind,
+  ReadyDomain,
+  ReadyOwnerKind,
+  ReceiveKind,
+  StreamSessionRuntimeState
+} from '../../foundation/service-runtime-contracts';
+
+import { serviceSessionBindingIngressPortIfRegistered } from '../../foundation/service-session-binding-ingress-port';
+import type { ServiceActorRef, ServiceSpotState } from '../../foundation/service-stateful-registry';
 import {
   ServiceStatefulRuntime,
   statefulMailboxData,
@@ -72,14 +81,12 @@ import {
   type ServiceInstanceApplicationLifecycle,
   type ServicePendingInstanceActivation,
   type ServiceSpotMessageFollowSeal,
-  type ServiceUserSpotOperationHandler,
-  type ServiceUserSpotOperationResult,
   type ServiceStatefulMailboxData,
   type ServiceStatefulPendingOperation,
-  type ServiceStatefulResult
+  type ServiceStatefulResult,
+  type ServiceUserSpotOperationHandler,
+  type ServiceUserSpotOperationResult
 } from '../../foundation/service-stateful-runtime';
-import type { ServiceActorRef, ServiceSpotState } from '../../foundation/service-stateful-registry';
-import { serviceSessionBindingIngressPortIfRegistered } from '../../foundation/service-session-binding-ingress-port';
 import type {
   ServiceActorCreateRecord,
   ServiceDirectSpotRouteFence,
@@ -90,27 +97,44 @@ import type {
   ServiceUserSpotCloseRecord,
   ServiceUserSpotCreateRecord
 } from '../../foundation/service-stateful-wire-codec';
-import { encodeServiceMetadataFrame } from '../../foundation/service-metadata-codec';
-import type { ServiceInstanceActivationRecoveryEnvelope } from '../../foundation/service-instance-activation-recovery-codec';
-import type {
-  ServiceMailboxClaim,
-  ServiceMailboxDomain,
-  ServiceMailboxRecord
-} from '../../foundation/service-mailbox';
 import type {
   ServiceChannelDescriptor,
   ServiceNodeDescriptor
 } from '../../foundation/service-topology-registry';
-import type { RoutingId } from '../../../contracts';
-import { buildAdvertisedEndpoint } from '../../../contracts/Configuration/EndpointNotation';
-import { ZLinkConfigurationException } from '../../../contracts/Configuration/ConfigurationException';
+import { SERVICE_WIRE_COMMAND_OFFSET } from '../../foundation/service-wire-binary-primitives';
+import {
+  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+  SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+  SERVICE_WIRE_REQUIRED_CAPABILITY,
+  ServiceWireCommand,
+  ServiceWireFrameworkErrorCode
+} from '../../foundation/service-wire-constants.generated';
+import {
+  APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES,
+  APPLICATION_PAYLOAD_VERSION,
+  decodeApplicationPayloadView,
+  encodeMultipartApplicationPayload,
+  ServiceWireProtocolError,
+  type ServiceApplicationPayload
+} from '../../foundation/service-wire-m6a-codec';
+import { submitToRequestResult } from '../../messaging/submission-result';
+import { internalFrameworkWireReply } from '../../framework-errors-internal';
 import type {
   ZLinkBackendActorRef,
-  ZLinkBackendObjectPlacement,
-  ZLinkBackendMeshNode
+  ZLinkBackendMeshNode,
+  ZLinkBackendObjectPlacement
 } from '../contracts';
 import type { ZLinkRawBindingPort } from '../raw-binding-port';
-import type { ApplicationJobQueuePort } from '../../application-jobs/contracts';
+import { ZLinkBufferMessage } from '../runtime-message';
+import {
+  isZLinkBackendResultError,
+  ZLinkBackendResultError,
+  type ZLinkBackendMessageLike as MessageLike
+} from '../runtime-values';
+import { translateBindingResultError } from './node-backend-adapter-support';
+import { disconnectStreamPeer } from './node-socket-backend-adapter';
+const DEFAULT_NATIVE_ACTIVE_CAPACITY = 10_000;
+const UNSTARTED_DIAGNOSTIC_ENDPOINT = 'inproc://not-started';
 
 const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
@@ -119,6 +143,9 @@ const MAX_DRAIN_RECORDS = 64;
 // Preserve the existing route observation/admission/liveness cadence. Only the binding
 // readable handler admits receive work; this timer never probes the socket.
 const MESH_BACKEND_MAINTENANCE_INTERVAL_MS = 1;
+// Spec 08 §4.2 bounds the combined turn. Raw gets one equal share; stateful
+// can use the remaining turn, including time the raw registry did not consume.
+const MESH_BACKEND_RAW_MAINTENANCE_SHARE = 1 / 2;
 /**
  * Conservative Actor Join admission cap for relocation state chunks (spec 15
  * §4.2): a stable lower bound safe on any deployment, never lowered on
@@ -163,14 +190,24 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   };
   private readonly onMaintenance = (): void => {
     this.maintenanceTimer = undefined;
+    if (this.closed) return;
+    const nowMs = performance.now();
+    const turnDeadlineMs = nowMs + RAW_MESH_RECEIVE_TIME_BUDGET_MS;
+    this.runtime?.expireOperations(
+      nowMs,
+      nowMs + RAW_MESH_RECEIVE_TIME_BUDGET_MS * MESH_BACKEND_RAW_MAINTENANCE_SHARE
+    );
+    this.stateful?.expireOperations(nowMs, turnDeadlineMs);
+    this.scheduleMaintenance();
     void this.pump();
   };
+  private readonly onPendingOperationsChanged = (): void => this.scheduleMaintenance();
   private nextPeerIntent = 1n;
   private closed = false;
   private objectRole: ServiceNodeDescriptor['objectRole'] = 'none';
-  private placementWeight = 100;
-  private activeCapacityLimit = 10_000;
-  private pendingCapacityLimit = 128;
+  private placementWeight = ZLINK_DEFAULT_PUBLIC_WEIGHT;
+  private activeCapacityLimit: number = DEFAULT_NATIVE_ACTIVE_CAPACITY;
+  private pendingCapacityLimit: number = DEFAULT_ACTIVATION_CONCURRENCY_LIMIT;
   private objectCapabilities: readonly string[] = [];
   private maintenanceWave?: string;
   private mailboxRecordDropped?: (record: {
@@ -350,6 +387,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       throw new Error('MeshNode bind endpoint is not configured.');
     const descriptor = this.createDescriptor();
     const runtime = new RawServiceMeshRuntime({
+      onPendingOperationsChanged: this.onPendingOperationsChanged,
       descriptor,
       resolveAdvertisedEndpoint: (boundEndpoint) => this.resolveAdvertisedEndpoint(boundEndpoint),
       bindingPort: this.bindingPort,
@@ -393,7 +431,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.stateful = new ServiceStatefulRuntime(
       runtime,
       descriptor.nodeRoutingId,
-      descriptor.lifecycleGeneration
+      descriptor.lifecycleGeneration,
+      this.onPendingOperationsChanged
     );
     if (this.dispatchErrors !== undefined) {
       this.stateful.setDispatchErrorReporter(this.dispatchErrors, this.meshName);
@@ -509,7 +548,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
             lifecycleGeneration: options.expectedLifecycleGeneration
           })
     });
-    if (nodeRoutingId !== undefined) await runtime.announcePeer(nodeRoutingId);
     return intent;
   }
 
@@ -645,7 +683,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return await this.requireRuntime().requestService(
       String(targetRid),
       frames.map((frame) => Buffer.from(frame)),
-      options?.timeoutMs ?? 30_000
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
   }
 
@@ -657,7 +695,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const pending = this.requireRuntime().requestToNode(
       String(targetRid),
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? 30_000
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
     return this.observeCompletion(pending.id, OperationKind.NodeRequest, pending.promise);
   }
@@ -677,7 +715,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const pending = this.requireRuntime().requestToChannel(
       channelName,
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? 30_000
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
     return this.observeCompletion(pending.id, OperationKind.ChannelRequest, pending.promise);
   }
@@ -726,7 +764,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       source: 1,
       state:
         this.runtime?.isPeerRouteReady(peer.descriptor.nodeRoutingId) === false
-          ? 1
+          ? MeshPeerRuntimeState.Connecting
           : peerStateCode(peer.descriptor.state),
       routingId: peer.descriptor.nodeRoutingId as RoutingId,
       lifecycleGeneration: peer.descriptor.lifecycleGeneration,
@@ -740,7 +778,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       connectionIntentId:
         findIntent(descriptor.nodeRoutingId, descriptor.advertisedEndpoint)?.id ?? 0n,
       source: 1,
-      state: 6,
+      state: MeshPeerRuntimeState.NotRequired,
       routingId: descriptor.nodeRoutingId as RoutingId,
       lifecycleGeneration: descriptor.lifecycleGeneration,
       descriptorRevision: descriptor.descriptorRevision,
@@ -930,17 +968,19 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     stableType: string,
     generation: bigint,
     authorityOwnerGeneration: bigint,
-    spotId: string,
+    spotId: string | undefined,
     spotGeneration: bigint,
     membershipEpoch: bigint
   ): ZLinkBackendActorRef {
-    return this.requireStateful().restoreActorAuthority(
+    const stateful = this.requireStateful();
+    const entry = spotId === undefined ? stateful.entrySpot().ref : undefined;
+    return stateful.restoreActorAuthority(
       actorId,
       stableType,
       generation,
       authorityOwnerGeneration,
-      spotId,
-      spotGeneration,
+      entry?.spotId ?? spotId!,
+      entry?.generation ?? spotGeneration,
       membershipEpoch
     ).ref;
   }
@@ -1116,13 +1156,15 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     route: ServiceInstanceRouteFence,
     parts: MessageLike | readonly MessageLike[],
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    instanceIntent = false
   ): Promise<SubmitResult> {
     const result = await this.requireStateful().sendToInstanceSpot(
       route,
       encodeMultipart(parts),
       sourceSpotId,
-      metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata)
+      metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
+      instanceIntent
     );
     return result as SubmitResult;
   }
@@ -1130,9 +1172,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestInstanceSpot(
     route: ServiceInstanceRouteFence,
     parts: MessageLike | readonly MessageLike[],
-    timeoutMs = 30_000,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    instanceIntent = false
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.InstanceSpotRequest,
@@ -1141,7 +1184,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         encodeMultipart(parts),
         timeoutMs,
         sourceSpotId,
-        metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata)
+        metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
+        instanceIntent
       )
     );
   }
@@ -1149,7 +1193,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   actorLookup(actorId: string) {
     const actor = this.requireStateful().actor(actorId);
     if (actor === undefined) {
-      throw Object.assign(new Error(`Actor '${actorId}' was not found.`), { nativeErrno: 2 });
+      const error = new ConfigError(ConfigResult.NotFound);
+      error.message = `Actor '${actorId}' was not found.`;
+      throw error;
     }
     return {
       actor: actor.ref,
@@ -1159,14 +1205,21 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     };
   }
 
-  lookupRemoteActor(targetNodeRid: unknown, actorId: string, timeoutMs = 30_000): MeshOperationId {
+  lookupRemoteActor(
+    targetNodeRid: unknown,
+    actorId: string,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
+  ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorLookup,
       this.requireStateful().lookupRemoteActor(String(targetNodeRid), actorId, timeoutMs)
     );
   }
 
-  destroyActor(actor: ZLinkBackendActorRef, timeoutMs = 30_000): MeshOperationId {
+  destroyActor(
+    actor: ZLinkBackendActorRef,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
+  ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorDestroy,
       this.requireStateful().destroyActor(actor, timeoutMs)
@@ -1179,7 +1232,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     targetSpotId: unknown,
     targetSpotGeneration: bigint,
     request: ServiceApplicationPayload,
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorJoin,
@@ -1206,7 +1259,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly ownerLeaseGeneration: bigint;
     },
     local: { readonly phase: 'admission'; readonly transferId: string },
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorJoin,
@@ -1227,7 +1280,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     actor: ZLinkBackendActorRef,
     targetNodeRid: unknown,
     request: ServiceApplicationPayload,
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     const target = String(targetNodeRid);
     return this.observeStateful(
@@ -1246,7 +1299,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly ownerLeaseGeneration: bigint;
     },
     local: { readonly phase: 'admission'; readonly transferId: string },
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     const target = String(targetNodeRid);
     return this.observeStateful(
@@ -1286,7 +1339,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         this.peerGeneration(String(actor.nodeRid)),
         actor.generation,
         encodeMultipart(parts),
-        options?.timeoutMs ?? 30_000
+        options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
       )
     );
   }
@@ -1318,7 +1371,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         this.peerGeneration(String(target.nodeRid)),
         target.generation,
         encodeMultipart(parts),
-        options?.timeoutMs ?? 30_000,
+        options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
         source
       )
     );
@@ -1340,7 +1393,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   closeActorBoundSession(
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     const binding = this.requireStateful().registry.binding(actor);
     if (binding === undefined) {
@@ -1360,7 +1413,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   leaveActor(
     actor: ZLinkBackendActorRef,
     expectedMembershipEpoch: bigint,
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorLeave,
@@ -1444,7 +1497,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       nodeRoutingId: this.routingId,
       lifecycleGeneration: this.lifecycleGeneration,
       descriptorRevision: 1n,
-      advertisedEndpoint: this.bindEndpoint ?? 'inproc://not-started',
+      advertisedEndpoint: this.bindEndpoint ?? UNSTARTED_DIAGNOSTIC_ENDPOINT,
       channels,
       state: 'preparing',
       // Plaintext RouteMesh peers use the shared default admission identity.
@@ -1472,15 +1525,21 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   private scheduleMaintenance(): void {
-    if (this.closed || this.maintenanceTimer !== undefined) return;
-    this.maintenanceTimer = setTimeout(this.onMaintenance, MESH_BACKEND_MAINTENANCE_INTERVAL_MS);
+    if (this.closed) return;
+    this.maintenanceTimer ??= setTimeout(this.onMaintenance, MESH_BACKEND_MAINTENANCE_INTERVAL_MS);
+    const pending =
+      (this.runtime?.pendingOperationCount ?? 0) + (this.stateful?.pendingOperationCount ?? 0) > 0;
+    if (pending === this.maintenanceTimer.hasRef()) return;
+    if (pending) {
+      this.maintenanceTimer.ref();
+    } else {
+      this.maintenanceTimer.unref();
+    }
   }
 
   private async pump(): Promise<void> {
     if (this.isClosed() || this.pumping) return;
     this.pumping = true;
-    if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
-    this.maintenanceTimer = undefined;
     try {
       do {
         const ready = this.readable;
@@ -1532,7 +1591,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     operationKind: number,
     pending: ServiceStatefulPendingOperation
   ): MeshOperationId {
-    const id = { high: 2n, low: pending.id };
+    const id = { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id };
     void pending.promise.then(
       (result) => this.enqueueCompletion(id, operationKind, result),
       (error) => this.enqueueCompletion(id, operationKind, requestFailureResult(error))
@@ -1583,7 +1642,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.completionCount -= 1;
     if (this.completionCount === 0) {
       this.clearCompletions();
-    } else if (this.completionHead >= 1024 && this.completionHead * 2 >= this.completions.length) {
+    } else if (shouldCompactBackingArray(this.completionHead, this.completions.length)) {
       this.completions.splice(0, this.completionHead);
       this.completionHead = 0;
     }
@@ -1739,7 +1798,7 @@ class RawServiceSpot implements ServiceSpot {
       this.state,
       routeFence,
       parts,
-      options?.timeoutMs ?? 30_000
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
   }
 
@@ -1815,7 +1874,7 @@ function entrySpotFenceVersion(generation: bigint): string {
 }
 
 class RawStreamSessionService implements StreamSessionService {
-  private state = 1;
+  private state: StreamSessionRuntimeState = StreamSessionRuntimeState.Created;
   private closed = false;
   private readonly sessionTargets = new Map<string, RoutingId>();
 
@@ -1830,7 +1889,7 @@ class RawStreamSessionService implements StreamSessionService {
 
   start(): void {
     if (this.closed) throw new Error('STREAM session service is closed.');
-    this.state = 2;
+    this.state = StreamSessionRuntimeState.Started;
   }
 
   shutdown(_timeoutMs: number): RequestResultValue {
@@ -1841,7 +1900,7 @@ class RawStreamSessionService implements StreamSessionService {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.state = 5;
+    this.state = StreamSessionRuntimeState.Closed;
     this.sessionTargets.clear();
   }
 
@@ -1858,7 +1917,11 @@ class RawStreamSessionService implements StreamSessionService {
     };
   }
 
-  lookupActor(targetNodeRid: RoutingId, actorId: string, timeoutMs = 30_000): MeshOperationId {
+  lookupActor(
+    targetNodeRid: RoutingId,
+    actorId: string,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
+  ): MeshOperationId {
     this.requireStarted();
     return this.observe(
       OperationKind.ActorLookup,
@@ -1869,7 +1932,7 @@ class RawStreamSessionService implements StreamSessionService {
   bindActor(
     sessionRid: RoutingId,
     actor: ServiceActorRef,
-    timeoutMs = 30_000,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
     onBindingReplaced?: (
       actorId: string,
       retiredSession: ServiceRetiredBoundSessionRouteFence,
@@ -1898,7 +1961,7 @@ class RawStreamSessionService implements StreamSessionService {
     sessionRid: RoutingId,
     actor: ServiceActorRef,
     expectedBindingGeneration: bigint,
-    timeoutMs = 30_000
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     this.requireStarted();
     return this.observe(
@@ -1971,7 +2034,7 @@ class RawStreamSessionService implements StreamSessionService {
   }
 
   private requireStarted(): void {
-    if (this.state !== 2 || this.closed) {
+    if (this.state !== StreamSessionRuntimeState.Started || this.closed) {
       throw new Error('STREAM session service is not started.');
     }
   }
@@ -2213,7 +2276,7 @@ function decodeMultipartRecord(
     };
   }
   const header = record.parts[0]!;
-  const command = header[3]!;
+  const command = header[SERVICE_WIRE_COMMAND_OFFSET]!;
   const payloadFrame = record.parts[1]!;
   const application = decodeApplicationEnvelope(payloadFrame);
   const channelName = record.owner.startsWith('channel:')
@@ -2224,11 +2287,11 @@ function decodeMultipartRecord(
       ? { high: 0n, low: 0n }
       : { high: 1n, low: record.correlation };
   const kind =
-    command === 16
+    command === ServiceWireCommand.nodeSend
       ? ReceiveKind.NodeSend
-      : command === 17
+      : command === ServiceWireCommand.nodeRequest
         ? ReceiveKind.NodeRequest
-        : command === 18
+        : command === ServiceWireCommand.channelSend
           ? ReceiveKind.ChannelSend
           : ReceiveKind.ChannelRequest;
   const operationKind =
@@ -2285,7 +2348,7 @@ function decodeStatefulRecord(
   const operationId =
     record.correlation === undefined
       ? { high: 0n, low: 0n }
-      : { high: 2n, low: record.correlation };
+      : { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: record.correlation };
   const ingressLifecycle = receiveIngressLifecycle(record);
   return {
     kind: stateful.receiveKind,
@@ -2317,6 +2380,9 @@ function decodeStatefulRecord(
           : decodeMultipart(application.payload),
     ...(stateful.isPending === undefined ? {} : { isPending: stateful.isPending }),
     ...(stateful.deadlineUnixMs === undefined ? {} : { deadlineUnixMs: stateful.deadlineUnixMs }),
+    ...(stateful.activationRecord === undefined
+      ? {}
+      : { activationRecord: stateful.activationRecord }),
     ...(stateful.messageFollowOrigin === undefined
       ? {}
       : { messageFollowOrigin: stateful.messageFollowOrigin }),
@@ -2430,7 +2496,7 @@ function readyDomain(domain: ServiceMailboxDomain): number {
 /**
  * The one classification of a failed node/channel/stateful request into its
  * completion terminal. A binding REQUEST result is Core's decision and is kept
- * as is; a submit failure retains its Core meaning at the request boundary.
+ * as is; a submit failure is classified from its submission or completion phase.
  * A reply that could not be decoded is a protocol
  * failure (spec 32-framework-error-model:91-92). The failure code is a wire
  * code, so a Core result carries 0.
@@ -2440,14 +2506,19 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
   if (isZLinkBackendResultError(failure)) {
     return {
       terminalResult:
-        failure.operation === 'request' ? failure.result : submitFailureTerminal(failure.result),
+        failure.operation === 'request'
+          ? failure.result
+          : submitToRequestResult(failure.result, failure.phase),
       failureCode: 0
     };
   }
   //  requestProtocolError(16): the schema terminal-failure-integrity rule
   //  forbids a typed terminal (104) with failure none.
   if (failure instanceof ServiceWireProtocolError) {
-    return { terminalResult: RequestResult.ProtocolError, failureCode: 16 };
+    return {
+      terminalResult: RequestResult.ProtocolError,
+      failureCode: ServiceWireFrameworkErrorCode.requestProtocolError
+    };
   }
   if (failure instanceof ZLinkFrameworkException) {
     return internalFrameworkWireReply(failure);
@@ -2458,32 +2529,10 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
   if (failure instanceof OperationCancelledError) {
     return { terminalResult: RequestResult.NotConnected, failureCode: 0 };
   }
-  return { terminalResult: RequestResult.InternalError, failureCode: 17 };
-}
-
-function submitFailureTerminal(result: number): number {
-  switch (result) {
-    case SubmitResult.Backpressured:
-      return RequestResult.Backpressured;
-    case SubmitResult.NotConnected:
-      return RequestResult.NotConnected;
-    case SubmitResult.NotFound:
-      return RequestResult.NotFound;
-    case SubmitResult.NotAdmitted:
-      return RequestResult.Rejected;
-    case SubmitResult.InvalidHandle:
-    case SubmitResult.InvalidArgument:
-    case SubmitResult.ThreadViolation:
-      return RequestResult.InvalidArgument;
-    case SubmitResult.InvalidState:
-      return RequestResult.InvalidState;
-    case SubmitResult.NotSupported:
-      return RequestResult.NotSupported;
-    case SubmitResult.Terminated:
-      return RequestResult.Terminated;
-    default:
-      return RequestResult.InternalError;
-  }
+  return {
+    terminalResult: RequestResult.InternalError,
+    failureCode: ServiceWireFrameworkErrorCode.requestFailed
+  };
 }
 
 function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {
@@ -2522,7 +2571,10 @@ function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLi
 
 function decodeApplicationEnvelope(frame: Uint8Array) {
   const bytes = Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
-  if (bytes.length < 11 || bytes[0] !== 1) {
+  if (
+    bytes.length < APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES ||
+    bytes[0] !== APPLICATION_PAYLOAD_VERSION
+  ) {
     throw new ServiceWireProtocolError('Invalid application envelope.');
   }
   const bodyLength = bytes.readUInt32BE(1);
@@ -2620,22 +2672,35 @@ function requireRawReadyBatch(batch: ReadyBatch): RawReadyBatch {
   return batch;
 }
 
-function stateCode(state: ServiceNodeDescriptor['state']): number {
-  return ['preparing', 'serving', 'retiring', 'draining', 'stopped', 'error'].indexOf(state) + 1;
+function stateCode(state: ServiceNodeDescriptor['state']): MeshNodeRuntimeState {
+  switch (state) {
+    case 'preparing':
+      return MeshNodeRuntimeState.Preparing;
+    case 'serving':
+      return MeshNodeRuntimeState.Serving;
+    case 'retiring':
+      return MeshNodeRuntimeState.Retiring;
+    case 'draining':
+      return MeshNodeRuntimeState.Draining;
+    case 'stopped':
+      return MeshNodeRuntimeState.Stopped;
+    case 'error':
+      return MeshNodeRuntimeState.Error;
+  }
 }
 
 function peerStateCode(state: ServiceNodeDescriptor['state']): number {
   switch (state) {
     case 'preparing':
-      return 2;
+      return MeshPeerRuntimeState.Preparing;
     case 'serving':
     case 'retiring':
-      return 3;
+      return MeshPeerRuntimeState.Serving;
     case 'draining':
-      return 4;
+      return MeshPeerRuntimeState.Draining;
     case 'stopped':
     case 'error':
-      return 5;
+      return MeshPeerRuntimeState.Closed;
   }
 }
 
@@ -2648,15 +2713,15 @@ function createLifecycleGeneration(): bigint {
 }
 
 function requirePositivePlacementValue(value: number, name: string): number {
-  if (!Number.isSafeInteger(value) || value <= 0 || value > 0x7fff_ffff) {
-    throw new RangeError(`${name} must be an integer in 1..2147483647.`);
+  if (!isValidPositiveCapacity(value)) {
+    throw new RangeError(`${name} must be an integer in 1..${ZLINK_MAX_CAPACITY}.`);
   }
   return value;
 }
 
 function requirePublicWeight(value: number, name: string): number {
-  if (!Number.isInteger(value) || value < 0 || value > 10_000) {
-    throw new RangeError(`${name} must be an integer in 0..10000.`);
+  if (!isValidPublicWeight(value)) {
+    throw new RangeError(`${name} must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`);
   }
   return value;
 }

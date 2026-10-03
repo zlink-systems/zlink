@@ -5,6 +5,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
+const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
+
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const {
@@ -16,6 +21,11 @@ const {
 const {
   ZLinkInMemoryAuthorityStore
 } = require('../../packages/framework/dist/runtime/locations/in-memory-authority-store');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
@@ -29,6 +39,7 @@ const {
 const { ZLinkExecutionBarrier } = require('../../packages/framework/dist/runtime/execution');
 const { ZLinkSpotSerialTurnExecutor } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
 const { ZLinkRuntimeAdmissionGate } = require('../../packages/framework/dist/runtime/admission');
+const protocol = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 
 const fixture = JSON.parse(
   fs.readFileSync(
@@ -123,8 +134,13 @@ async function createOwner(given) {
   }
 
   let coordinator;
+  class PingHandler {
+    handle() { counters.handler++; return 'handled'; }
+  }
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RoomSpot],
+    spotPacketHandlers: [{ spotType: RoomSpot, handlerType: PingHandler, packetName: 'Ping' }],
     closeErrorSink: {
       reportRuntimeTaskException: (name, error) => diagnostics.push({ name, error })
     },
@@ -365,16 +381,26 @@ test('Close processes a turn and message admitted before its local seal', async 
   assert.deepEqual(events, ['first', 'second', 'message']);
 });
 
-test('Closing commit rejects new Spot admission', async () => {
+test('Closing DirectSpot request terminates as NotFound without running the old handler', async () => {
   const owner = await createOwner({ authority: 'Ready', holdOnClosing: true });
   const close = owner.spots.close(owner.ref);
+  const parts = protocol.encodeChannelEnvelopeParts(1, 'spot', 'Ping', {}).map((part) => zlink.Message.from(part));
+  const replies = [];
   try {
     await owner.closingEntered.promise;
     assert.equal(await owner.authority(), 'Closing');
-    assert.equal(await outcome(() => owner.manager.executeOnSpot(owner.RoomSpot, owner.spotId, () => 'late')), 'Rejected');
-    assert.equal(await outcome(() => owner.manager.getOrCreate(MESH, owner.RoomSpot, owner.spotId)), 'Rejected');
+    const request = owner.manager.dispatchMeshSpot(MESH, { spotId: owner.spotId }, {
+      kind: framework.ReceiveKind.SpotRequest, operationKind: framework.OperationKind.SpotRequest, parts,
+      reply: (response) => { replies.push(response.map((part) => zlink.Message.from(part))); return zlink.SubmitResult.Ok; }
+    });
+    owner.finishClosing.resolve();
+    await request;
+    assert.equal(replies.length, 1);
+    assert.throws(() => protocol.decodeChannelReply(replies[0]), (error) => errorKindName(error) === 'NotFound');
+    assert.equal(owner.counters.handler, 0);
   } finally {
     owner.finishClosing.resolve();
+    for (const part of [...parts, ...replies.flat()]) part.close();
   }
   assert.equal(await close, true);
 });
@@ -401,13 +427,14 @@ test('completed Close rejects lifecycle submission without retaining work', asyn
   const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
   assert.notEqual(activation, undefined);
   assert.equal(await owner.spots.close(owner.ref), true);
+  await activation.serial.whenIdle();
   let ran = false;
   await assert.rejects(
     () => activation.serial.executeLifecycleOperation(() => { ran = true; }),
     (error) => errorKindName(error) === 'Rejected'
   );
-  assert.equal(ran, false);
   assert.equal(activation.serial.hasPendingWork, false);
+  assert.equal(ran, false);
 });
 
 test('membership makes Close false without rejecting admission', async () => {

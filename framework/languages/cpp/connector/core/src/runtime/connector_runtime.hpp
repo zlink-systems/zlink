@@ -35,6 +35,7 @@ class actor_access_t
 };
 
 class shared_runtime_t;
+bool stream_trace_enabled ();
 bool configure_shared_runtime_worker_count (std::size_t worker_count);
 
 struct pending_write_t
@@ -47,7 +48,7 @@ struct pending_write_t
 
 struct pending_request_t
 {
-    std::uint64_t request_seq = 0;
+    std::uint64_t write_id = 0;
     packet_t packet;
     std::function<void (result_t<request_reply_t>)> callback;
     std::shared_ptr<boost::asio::steady_timer> timeout_timer;
@@ -292,6 +293,7 @@ registered_handler_count (const std::shared_ptr<connector_state_t> &state,
 }
 
 void publish_error (connector_state_t &state, error_t error) noexcept;
+void publish_close_error (connector_state_t &state, boost::system::error_code error);
 
 /* stream-connector §7, §9: a registered handler or callback that fails reaches
  * the error handlers as UserCallbackFailed; the next handler still runs. */
@@ -437,8 +439,9 @@ void fail_connection_operations (const std::shared_ptr<connector_state_t> &state
  * current connection it publishes the error, moves the state to disconnected,
  * fails every write and request accepted on the connection and releases the
  * waits that observed it as disconnected, delivered like any other completion
- * (stream-connector §10.1.1). On true the caller closes the transport and
- * schedules the reconnect. Must be called with no connector lock held. */
+ * (stream-connector §10.1.1). It starts transport close, whose failure is an
+ * error event. On true the caller schedules the reconnect. Must be called
+ * with no connector lock held. */
 bool connection_ended (const std::shared_ptr<connector_state_t> &state,
                        const error_t &error,
                        const std::shared_ptr<stream_connection_t> &observed_connection);

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.Contracts.Locations;
 using Zlink.Framework.Runtime.Configuration;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.AspNetCore;
@@ -9,7 +10,8 @@ internal sealed class ZLinkSpotHandleWatchHost(
     IZLinkLocationWatchStore? watchStore,
     ZLinkStoreLocationResolvers rows,
     ZLinkSpotHandleRegistry? handles,
-    ZLinkLocationOptions options
+    ZLinkLocationOptions options,
+    IZLinkRuntimeFailureReporter errorSink
 ) : IHostedService, IAsyncDisposable
 {
     private readonly object _lifecycleGate = new();
@@ -98,23 +100,17 @@ internal sealed class ZLinkSpotHandleWatchHost(
             {
                 return;
             }
-            catch
+            catch (Exception failure)
             {
-                var retryDelay =
-                    options.PollingInterval > TimeSpan.Zero
-                        ? options.PollingInterval
-                        : TimeSpan.FromMilliseconds(100);
-                await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
+                errorSink.ReportRuntimeTaskException(nameof(WatchAsync), failure);
+                await Task.Delay(options.PollingInterval, cancellationToken).ConfigureAwait(false);
             }
         }
     }
 
     private async Task PollAsync(CancellationToken cancellationToken)
     {
-        var interval =
-            options.PollingInterval > TimeSpan.Zero
-                ? options.PollingInterval
-                : TimeSpan.FromMilliseconds(100);
+        var interval = options.PollingInterval;
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -136,9 +132,9 @@ internal sealed class ZLinkSpotHandleWatchHost(
             {
                 return;
             }
-            catch
+            catch (Exception failure)
             {
-                // The next polling interval retries every still-live key.
+                errorSink.ReportRuntimeTaskException(nameof(PollAsync), failure);
             }
         }
     }

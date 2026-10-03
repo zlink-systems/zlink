@@ -303,6 +303,43 @@ public final class GameQuestClientScenario {
                                         progress.questId().equals(Messages.QuestIds.FirstHunt)
                                                 && progress.currentCount() == 5));
 
+        ensure(
+                postRaw(
+                        options.apiAHttpEndpoint(),
+                        "/self-check/projection/player-alice/"
+                                + Messages.QuestIds.OpenAuction
+                                + "/delete"));
+        Messages.GetQuestProgressRes beforeClose =
+                apiAStream
+                        .request(new Messages.GetQuestProgressReq("player-alice"))
+                        .submit(Messages.GetQuestProgressRes.class)
+                        .toCompletableFuture()
+                        .join();
+        ensure(
+                beforeClose.activeQuests().stream()
+                        .noneMatch(
+                                progress ->
+                                        progress.questId().equals(Messages.QuestIds.OpenAuction)));
+        System.out.println("gamequest-close-requested player=player-alice");
+        waitForApplicationRelease();
+        Messages.SyncQuestProgressRes closeReplay =
+                apiAStream
+                        .request(new Messages.SyncQuestProgressReq("player-alice"))
+                        .submit(Messages.SyncQuestProgressRes.class)
+                        .toCompletableFuture()
+                        .join();
+        ensure(hasProgress(closeReplay.updatedQuests(), Messages.QuestIds.FirstHunt, 5));
+        ensure(
+                closeReplay.updatedQuests().stream()
+                        .anyMatch(
+                                progress ->
+                                        progress.questId().equals(Messages.QuestIds.OpenAuction)
+                                                && progress.status()
+                                                        .equals(
+                                                                Messages.QuestStatuses
+                                                                        .RewardGranted)));
+        System.out.println("gamequest-close-replay=completed");
+
         apiAStream.close().submit().toCompletableFuture().join();
         apiBStream.close().submit().toCompletableFuture().join();
         ZLinkStreamConnector reconnectedStream =
@@ -371,27 +408,6 @@ public final class GameQuestClientScenario {
         System.out.println(SampleNames.ServerEvidenceMarker);
     }
 
-    public void verifyRehydrated(ZLinkStreamConnector apiAStream) {
-        apiAStream.connect().submit().toCompletableFuture().join();
-        Messages.JoinSessionRes joined =
-                apiAStream
-                        .request(new Messages.JoinSessionReq("player-alice"))
-                        .submit(Messages.JoinSessionRes.class)
-                        .toCompletableFuture()
-                        .join();
-        ensure(
-                joined.activeQuests().stream()
-                        .anyMatch(
-                                progress ->
-                                        progress.questId().equals(Messages.QuestIds.FirstHunt)
-                                                && progress.currentCount() == 5
-                                                && progress.status()
-                                                        .equals(
-                                                                Messages.QuestStatuses
-                                                                        .RewardGranted)));
-        apiAStream.close().submit().toCompletableFuture().join();
-    }
-
     public void verifyOwnerUnavailable(ZLinkStreamConnector apiAStream) throws Exception {
         String playerId = "player-owner-unavailable";
         apiAStream.connect().submit().toCompletableFuture().join();
@@ -400,7 +416,7 @@ public final class GameQuestClientScenario {
                 .submit(Messages.JoinSessionRes.class)
                 .toCompletableFuture()
                 .join();
-        waitForOwnerTerminationRelease();
+        waitForApplicationRelease();
         try {
             apiAStream
                     .request(
@@ -500,7 +516,7 @@ public final class GameQuestClientScenario {
         throw new IllegalStateException("Projection did not reach " + questId + "=" + currentCount);
     }
 
-    private void waitForOwnerTerminationRelease() throws IOException, InterruptedException {
+    private void waitForApplicationRelease() throws IOException, InterruptedException {
         if (options.ownerUnavailableReleaseFile().isBlank()) {
             throw new IllegalStateException("sample.ownerUnavailableReleaseFile is required");
         }
@@ -545,7 +561,7 @@ public final class GameQuestClientScenario {
                 }
             }
         }
-        throw new IllegalStateException("Timed out waiting for owner termination release");
+        throw new IllegalStateException("Timed out waiting for application release");
     }
 
     private static boolean isUnavailable(Throwable error) {

@@ -85,6 +85,7 @@ function validateSchema(schema) {
     }
   }
   const amendmentBounds = new Map([
+    ["weightMax", 10000n],
     ["creationIntentBytes", 1048576n],
     ["creationTerminalEnvelopeBytes", 1048576n],
     ["maintenanceAggregateParticipants", 1024n],
@@ -1633,7 +1634,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       ttlMs: 15000,
       renewTimeoutMs: 3000,
       fencingMarginMs: 5000,
-      startupRelation: "renewInterval-plus-renewTimeout-strictly-less-than-ttl-minus-fencingMargin",
+      startupRelation: "max-renewInterval-renewTimeout-plus-renewTimeout-strictly-less-than-ttl-minus-fencingMargin",
       scope: "all-location-store-hosts-independent-of-routing-allocation",
     }],
     ["local-creation-publication-integrity", {
@@ -1740,9 +1741,9 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       return;
     }
     if (constraint.kind === "owner-lease-timing-integrity"
-        && constraint.renewIntervalMs + constraint.renewTimeoutMs
+        && Math.max(constraint.renewIntervalMs, constraint.renewTimeoutMs) + constraint.renewTimeoutMs
           >= constraint.ttlMs - constraint.fencingMarginMs) {
-      fail(location, "owner lease renew interval plus timeout must be strictly less than TTL minus fencing margin");
+      fail(location, "owner lease max(renew interval, renew timeout) plus timeout must be strictly less than TTL minus fencing margin");
     }
     const actual = { ...constraint };
     delete actual.kind;
@@ -4991,7 +4992,8 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "targetNodeGeneration", $ref: "nonzero-u64" },
     { name: "targetSpotId", $ref: "text8" },
     { name: "authority", $ref: "authority-generation-fence" },
-  ], "$.types", "Ready Instance route must carry the exact current authority fence");
+    { name: "instanceIntent", $ref: "bool8" },
+  ], "$.types", "Ready Instance route must carry the exact current authority fence and the call's Instance intent");
   requireFields(coldInstanceRoute?.fields, [
     { name: "targetNodeRid", $ref: "rid" },
     { name: "targetNodeGeneration", $ref: "nonzero-u64" },
@@ -7806,6 +7808,16 @@ function runSelfTests(schema) {
       );
       constraint.fencingMarginMs = 1000;
     }],
+    ["owner lease timeout dominates interval", (candidate) => {
+      const constraint = candidate.semanticConstraints.find(
+        (entry) => entry.kind === "owner-lease-timing-integrity",
+      );
+      constraint.renewIntervalMs = 1000;
+      constraint.renewTimeoutMs = 8000;
+    }, "max(renew interval, renew timeout)"],
+    ["obsolete weight maximum", (candidate) => {
+      candidate.bounds.find((entry) => entry.name === "weightMax").value = 100;
+    }, "bound weightMax must equal 10000"],
     ["terminal owner not listed in the taxonomy", (candidate) => {
       const owner = candidate.types.find((type) => type.name === "actor-ref");
       owner.fields.push(

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import org.junit.jupiter.api.Test;
 
@@ -36,6 +37,172 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSerialExecutionQueueTest {
+    @Test
+    void incarnationTransitionRetainsOriginalMessagesAndNeverRunsOldClosures() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        List<Object> dispatched = new CopyOnWriteArrayList<>();
+        AtomicInteger oldCalls = new AtomicInteger();
+        AtomicBoolean committed = new AtomicBoolean();
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        Object original = new Object();
+        var first =
+                queue.enqueueMessage(
+                        original,
+                        0,
+                        () -> {
+                            oldCalls.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        () -> {},
+                        null);
+        var close =
+                queue.enqueueLifecycleTransition(
+                        () -> {
+                            committed.set(true);
+                            queue.commitLifecycleTransition();
+                            return ZLinkSerialExecutionQueue.yieldCurrent(release);
+                        },
+                        message -> {
+                            dispatched.add(message);
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        committed::get,
+                        ignored -> true);
+        executor.take().run();
+        assertFalse(first.toCompletableFuture().isDone());
+        assertFalse(close.toCompletableFuture().isDone());
+        Object later = new Object();
+        var second =
+                queue.enqueueMessage(
+                        later,
+                        0,
+                        () -> {
+                            oldCalls.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        () -> {},
+                        null);
+        release.complete(null);
+        executor.runUntil(
+                CompletableFuture.allOf(
+                        first.toCompletableFuture(),
+                        second.toCompletableFuture(),
+                        close.toCompletableFuture()));
+        first.toCompletableFuture().get(3, TimeUnit.SECONDS);
+        second.toCompletableFuture().get(3, TimeUnit.SECONDS);
+        close.toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertEquals(List.of(original, later), dispatched);
+        assertEquals(0, oldCalls.get());
+        queue.close();
+    }
+
+    @Test
+    void incarnationTransitionResumesItsOwnerAfterLifecycleBurstLimit() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(
+                        executor, ZLinkExecutionLanePolicy.spot(), 1, Duration.ofNanos(1));
+        CompletableFuture<Void> firstRelease = new CompletableFuture<>();
+        CompletableFuture<Void> secondRelease = new CompletableFuture<>();
+        AtomicBoolean committed = new AtomicBoolean();
+        AtomicInteger dispatched = new AtomicInteger();
+        var message =
+                queue.enqueueMessage(
+                        new Object(),
+                        0,
+                        () -> fail("the old incarnation must not dispatch"),
+                        () -> {},
+                        null);
+        var close =
+                queue.enqueueLifecycleTransition(
+                        () -> {
+                            committed.set(true);
+                            queue.commitLifecycleTransition();
+                            return ZLinkSerialExecutionQueue.yieldCurrent(firstRelease)
+                                    .thenCompose(
+                                            ignored ->
+                                                    ZLinkSerialExecutionQueue.yieldCurrent(
+                                                            secondRelease));
+                        },
+                        original -> {
+                            dispatched.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        committed::get,
+                        ignored -> true);
+        executor.take().run();
+        firstRelease.complete(null);
+        executor.take().run();
+        secondRelease.complete(null);
+        executor.runUntil(
+                CompletableFuture.allOf(
+                        message.toCompletableFuture(), close.toCompletableFuture()));
+        assertEquals(1, dispatched.get());
+        queue.close();
+    }
+
+    @Test
+    void uncommittedIncarnationTransitionKeepsOriginalApplicationWork() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        AtomicInteger calls = new AtomicInteger();
+        var accepted =
+                queue.enqueueRelocatable(
+                        new byte[] {1},
+                        () -> {
+                            calls.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        () -> fail("uncommitted Close must retain the original payload"),
+                        null);
+        var close =
+                queue.enqueueLifecycleTransition(
+                        () -> CompletableFuture.completedFuture(null),
+                        ignored -> {
+                            throw new AssertionError("uncommitted Close must not replay");
+                        },
+                        () -> false,
+                        ignored -> true);
+        executor.take().run();
+        executor.runUntil(
+                CompletableFuture.allOf(
+                        accepted.toCompletableFuture(), close.toCompletableFuture()));
+        accepted.toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertEquals(1, calls.get());
+        queue.close();
+    }
+
+    @Test
+    void abruptErrorCompletesTheOperationAndReleasesItsExecutionGate() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
+        AssertionError failure = new AssertionError("abrupt handler failure");
+        CompletableFuture<Void> failed =
+                queue.enqueue(
+                                () -> {
+                                    throw failure;
+                                },
+                                null)
+                        .toCompletableFuture();
+        try {
+            executor.take().run();
+        } catch (AssertionError abrupt) {
+            assertSame(failure, abrupt);
+        }
+        assertTrue(failed.isCompletedExceptionally());
+        assertSame(failure, assertThrows(ExecutionException.class, failed::get).getCause());
+        CompletableFuture<Void> cleanup =
+                queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                        .toCompletableFuture();
+        executor.take().run();
+        cleanup.get(3, TimeUnit.SECONDS);
+        queue.close();
+    }
+
     @Test
     void closeDetectsActiveAndSuspendedRelocationBoundaryUntilFinished() throws Exception {
         CountingExecutor executor = new CountingExecutor();
@@ -69,6 +236,7 @@ final class ZLinkSerialExecutionQueueTest {
             assertThrows(AssertionError.class, queue::close);
         } finally {
             drain.run();
+            executor.runUntil(boundary.reached().toCompletableFuture());
             boundary.reached().toCompletableFuture().get(3, TimeUnit.SECONDS);
             boundary.release();
         }
@@ -684,6 +852,28 @@ final class ZLinkSerialExecutionQueueTest {
         queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
         assertTrue(
                 queue.tryEnqueueWithPayloadBytes(0, () -> CompletableFuture.completedFuture(null)));
+    }
+
+    @Test
+    void failedHandlersDoNotChangeAnyTryAdmission() throws Exception {
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.generic());
+        var executions = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.Supplier<CompletionStage<Void>> failure =
+                () -> {
+                    executions.incrementAndGet();
+                    return CompletableFuture.failedFuture(
+                            new IllegalStateException("handler failed"));
+                };
+        assertTrue(queue.tryEnqueue(failure));
+        queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertEquals(1, executions.get());
+        assertTrue(queue.tryEnqueueWithPayloadBytes(0, failure));
+        queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertEquals(2, executions.get());
+        assertTrue(queue.tryEnqueueRelocatable(new byte[] {1}, failure));
+        queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertEquals(3, executions.get());
     }
 
     @Test
@@ -1607,6 +1797,17 @@ final class ZLinkSerialExecutionQueueTest {
             Runnable task = pending.poll(3, TimeUnit.SECONDS);
             assertTrue(task != null, "the configured executor must receive a drain task");
             return task;
+        }
+
+        private void runUntil(CompletableFuture<?> completion) throws InterruptedException {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (!completion.isDone()) {
+                long remaining = deadline - System.nanoTime();
+                assertTrue(remaining > 0, "the configured executor must finish the accepted work");
+                Runnable task = pending.poll(remaining, TimeUnit.NANOSECONDS);
+                assertTrue(task != null, "the configured executor must receive a drain task");
+                task.run();
+            }
         }
     }
 

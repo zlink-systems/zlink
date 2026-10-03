@@ -1,61 +1,50 @@
-import type { ZLinkListenerRecords } from '../foundation/listener-records';
-import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../contracts/Configuration/InternalDefaults';
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
 import { randomUUID } from 'node:crypto';
-import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkActor,
-  ZLinkChannelClient,
-  ZLinkFanoutClient,
-  ZLinkMessage,
-  ZLinkMeshNodeDescriptor,
-  ZLinkMessageSerializer,
-  ZLinkSpotPublisherClient
-} from '../../contracts';
-import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
-import { ZLinkLocationWriteIntent, ZLinkLocationWriteStatus } from '../../contracts/Locations';
 import {
-  ZLinkFrameworkRuntimeState,
+  type ActorRef,
+  type RoutingId,
+  type ZLinkActor,
+  type ZLinkChannelClient,
+  type ZLinkFanoutClient,
+  type ZLinkMeshNodeDescriptor,
+  type ZLinkMessage,
+  type ZLinkMessageSerializer,
+  type ZLinkSpotPublisherClient,
   ZLinkFrameworkException,
+  ZLinkFrameworkRuntimeState,
   ZLinkObjectRole
 } from '../../contracts';
-import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
+
+import type { Message } from '../../contracts/Common/Message';
+import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
+import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../contracts/Configuration/InternalDefaults';
+import {
+  ZLINK_DEFAULT_PUBLIC_WEIGHT,
+  ZLINK_MAX_CAPACITY,
+  ZLINK_MAX_PUBLIC_WEIGHT,
+  isValidPublicWeight
+} from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
-import {
-  ReceiveKind,
-  type ReadyRecord,
-  type ReceiveRecord
-} from '../foundation/service-runtime-contracts';
-import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
-import {
-  ZLinkConfigurationException,
-  type ZLinkFrameworkRegistration,
-  type ZLinkSpotNodeOptions
-} from '../configuration';
+import { ZLinkLocationWriteIntent, ZLinkLocationWriteStatus } from '../../contracts/Locations';
+import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
+import type { ZLinkLocationOwnerToken } from '../../contracts/Locations/Writes';
+import { createAbortError } from '../abort';
+import type { ZLinkActivationConcurrency } from '../activation-admission';
+import type { ZLinkRemoteBoundSessionTarget } from '../actors';
+import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
 import type {
   ZLinkBackendAdapterFactory,
   ZLinkBackendContext,
   ZLinkBackendMeshNode,
   ZLinkBackendSpotNode
 } from '../backend/contracts';
-import type { ZLinkLocationOwnerToken } from '../../contracts/Locations/Writes';
-import { ZLinkMeshDispatchPump } from '../backend/mesh-dispatch-pump';
-import { requireZLinkInfrastructureExecutionArea } from '../execution';
-import { runWithOutboundFlow } from '../diagnostics/flow-context';
 import { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
+import { ZLinkMeshDispatchPump } from '../backend/mesh-dispatch-pump';
+import { SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import { requireUniqueRouteMeshChannel, resolveChannelRoute } from '../channels/channel-clients';
 import {
@@ -66,14 +55,43 @@ import {
   encodeChannelReplyParts
 } from '../channels/channel-envelope';
 import {
+  ZLinkConfigurationException,
+  type ZLinkFrameworkRegistration,
+  type ZLinkSpotNodeOptions
+} from '../configuration';
+import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
+import { runWithOutboundFlow } from '../diagnostics/flow-context';
+import { requireZLinkInfrastructureExecutionArea } from '../execution';
+import type { ZLinkListenerRecords } from '../foundation/listener-records';
+import {
+  type ZLinkMessageFollowOrigin,
+  ReceiveKind,
+  type ReadyRecord,
+  type ReceiveRecord
+} from '../foundation/service-runtime-contracts';
+
+import type { ServiceMessageFollowRecord } from '../foundation/service-stateful-wire-codec';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
+import {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} from '../host/application-job-queue';
+import {
   ZLinkAutoConnectLoop,
   ZLinkAutoConnectReconciler,
   ZLinkLocationRuntime,
   type ZLinkLocationEventSink,
   type ZLinkLocationRuntimeStores
 } from '../locations';
-import type { ZLinkRemoteBoundSessionTarget } from '../actors';
-import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
+import {
+  classifySubmitResult,
+  ZLinkSubmitStatus,
+  type ZLinkSubmitResult
+} from '../messaging/submission-result';
+import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import type { ZLinkDetachedTaskRunner } from './spot-actor-join-dispatch';
 import { ZLinkEntrySpotActivation } from './spot-entry-activation';
 import {
@@ -83,20 +101,13 @@ import {
 } from './spot-node-autoconnect';
 import type { ZLinkSpotRoutedTransport } from './spot-outbound';
 import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
-import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import type {
   ZLinkEntryActorRuntime,
-  ZLinkSpotActorTransferRuntime,
   ZLinkSpotActorHandoffRuntime,
+  ZLinkSpotActorTransferRuntime,
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
-import { createAbortError } from '../abort';
-import type { ZLinkActivationConcurrency } from '../activation-admission';
-import type { ServiceMessageFollowRecord } from '../foundation/service-stateful-wire-codec';
-import {
-  ApplicationJobQueue,
-  resolveApplicationJobQueueConfiguration
-} from '../host/application-job-queue';
+const DEFAULT_SPOT_NODE_SHUTDOWN_TIMEOUT_MS = 1000;
 
 const ZLINK_SEND_DONT_WAIT = 1;
 
@@ -105,6 +116,7 @@ const ZLINK_SEND_DONT_WAIT = 1;
 const EMPTY_SPOT_METADATA: ReadonlyMap<string, string> = new Map();
 
 export interface ZLinkSpotNodeRuntimeManagerOptions {
+  readonly errorSink: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
   readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
   readonly primaryMeshName?: string;
@@ -125,7 +137,7 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
-  readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
+  readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly applicationJobQueue?: ApplicationJobQueue;
   readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
   readonly peerAdmissionSealed?: (meshName: string) => boolean;
@@ -166,6 +178,9 @@ export class ZLinkSpotNodeRuntimeManager {
   private readonly applicationJobQueue: ApplicationJobQueue;
 
   constructor(private readonly options: ZLinkSpotNodeRuntimeManagerOptions) {
+    if ((options.detachedTaskRunner as unknown) === undefined) {
+      throw new ZLinkConfigurationException('Spot node runtime requires a detached task runner.');
+    }
     this.applicationJobQueue =
       options.applicationJobQueue ??
       new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
@@ -209,7 +224,8 @@ export class ZLinkSpotNodeRuntimeManager {
           peerResolver: location.resolver,
           executor: capability.executor,
           events: location.events,
-          options: location.options
+          options: location.options,
+          errorSink: this.options.errorSink
         });
         const loop = new ZLinkAutoConnectLoop({
           reconciler,
@@ -325,7 +341,7 @@ export class ZLinkSpotNodeRuntimeManager {
             : Object.keys(spotNode.actorFactories ?? {}).length) > 0;
         node.configureObjectPlacement({
           role: spotNode.objectRole ?? (hasLegacyObjectFactories ? 'server' : 'none'),
-          placementWeight: spotNode.placementWeight ?? 100,
+          placementWeight: spotNode.placementWeight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT,
           activeCapacityLimit: aggregatePlacementCapacity(
             spotNode.actorLimit ?? 0,
             spotNode.spotLimit ?? 0
@@ -501,7 +517,11 @@ export class ZLinkSpotNodeRuntimeManager {
             channelName,
             state === ZLinkFrameworkRuntimeState.Draining
               ? 0
-              : this.effectiveChannelWeight(meshName, channelName, channel.weight ?? 100)
+              : this.effectiveChannelWeight(
+                  meshName,
+                  channelName,
+                  channel.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT
+                )
           ])
         ),
         applicationVersion: this.options.registration.applicationVersion,
@@ -616,7 +636,11 @@ export class ZLinkSpotNodeRuntimeManager {
     if (registration === undefined) {
       throw new ZLinkConfigurationException(`Mesh '${meshName}' is not registered.`);
     }
-    return this.runtimePlacementWeights.get(meshName) ?? registration.placementWeight ?? 100;
+    return (
+      this.runtimePlacementWeights.get(meshName) ??
+      registration.placementWeight ??
+      ZLINK_DEFAULT_PUBLIC_WEIGHT
+    );
   }
 
   channelWeight(channelName: string): number {
@@ -701,7 +725,8 @@ export class ZLinkSpotNodeRuntimeManager {
     );
     return {
       meshName: match.meshName,
-      configuredWeight: match.mesh.meshChannels?.[channelName]?.weight ?? 100
+      configuredWeight:
+        match.mesh.meshChannels?.[channelName]?.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT
     };
   }
 
@@ -719,14 +744,10 @@ export class ZLinkSpotNodeRuntimeManager {
         await this.publishMeshNodeState(state, undefined, meshName);
       });
     this.runtimeWeightPublication = publish;
-    if (this.options.detachedTaskRunner !== undefined) {
-      this.options.detachedTaskRunner.runDetached(
-        `RouteMesh '${meshName}' runtime weight publication`,
-        async () => await publish
-      );
-    } else {
-      void publish.catch(() => undefined);
-    }
+    this.options.detachedTaskRunner.runDetached(
+      `RouteMesh '${meshName}' runtime weight publication`,
+      async () => await publish
+    );
   }
 
   get primaryMeshCompletions(): ZLinkMeshCompletionTable | undefined {
@@ -820,7 +841,7 @@ export class ZLinkSpotNodeRuntimeManager {
     await settle(meshPumps.reverse().map((pump) => pump.dispose()));
     await settle(
       meshNodes.reverse().map(async (node) => {
-        node.shutdown(1000);
+        node.shutdown(DEFAULT_SPOT_NODE_SHUTDOWN_TIMEOUT_MS);
         node.close();
       })
     );
@@ -1219,26 +1240,12 @@ export function createFrameworkEntrySpotId(prefix: string): string {
 }
 
 function mapPublishSubmitStatus(result: number): ZLinkSubmitStatus {
-  switch (result) {
-    case SubmitResult.Ok:
-      return ZLinkSubmitStatus.Submitted;
-    case SubmitResult.Backpressured:
-    case SubmitResult.NotAdmitted:
-      return ZLinkSubmitStatus.Backpressured;
-    case SubmitResult.NotFound:
-      // A publish with no matching subscriber is a successful zero-recipient
-      // operation, not an operation-specific not-found failure.
-      return ZLinkSubmitStatus.Submitted;
-    case SubmitResult.NotConnected:
-      return ZLinkSubmitStatus.RouteNotConnected;
-    case SubmitResult.Terminated:
-    case SubmitResult.InvalidHandle:
-      return ZLinkSubmitStatus.Shutdown;
-    default:
-      throw new ZLinkConfigurationException(
-        `Logical Multicast failed with submit result '${result}'.`
-      );
-  }
+  // Source publication preserves its local admission status before commit.
+  if (result === SubmitResult.NotAdmitted || result === SubmitResult.Backpressured)
+    return ZLinkSubmitStatus.Backpressured;
+  // A publish with no matching subscriber succeeds with zero recipients.
+  if (result === SubmitResult.NotFound) return ZLinkSubmitStatus.Submitted;
+  return classifySubmitResult(result, 'Logical Multicast').status;
 }
 
 function requireEntrySpotReply(result: number): void {
@@ -1250,8 +1257,10 @@ function requireEntrySpotReply(result: number): void {
 }
 
 function requirePublicRuntimeWeight(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0 || value > 10_000) {
-    throw new ZLinkConfigurationException(`${label} must be an integer in 0..10000.`);
+  if (!isValidPublicWeight(value)) {
+    throw new ZLinkConfigurationException(
+      `${label} must be an integer in 0..${ZLINK_MAX_PUBLIC_WEIGHT}.`
+    );
   }
   return value;
 }
@@ -1343,7 +1352,7 @@ function objectCapability(
 }
 
 function aggregatePlacementCapacity(actorLimit: number, spotLimit: number): number {
-  const unlimited = 0x7fff_ffff;
+  const unlimited = ZLINK_MAX_CAPACITY;
   const actors = actorLimit === 0 ? unlimited : actorLimit;
   const spots = spotLimit === 0 ? unlimited : spotLimit;
   return Math.min(unlimited, actors + spots);

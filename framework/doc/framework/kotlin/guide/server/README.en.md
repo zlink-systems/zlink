@@ -130,25 +130,26 @@ endpoints and real-time connections run in the same process.
 | Order | Document | Content |
 |----|------|------|
 | 1 | [Overview](01-overview.en.md) | A quick map of the core surface, layers, and topology |
-| 2 | [Quickstart](../../quickstart.en.md) | Install, a minimal project where two processes call each other, first-run checks |
-| 3 | [Core Concepts](03-concepts.en.md) | What a channel, a Spot, an Actor and a session each are |
-| 4 | [Channel Messaging](20-channel-messaging.en.md) | The path that calls by name — registering and calling |
-| 5 | [Spot](21-spot.en.md) | Creating and calling a shared place by id |
-| 6 | [Actor](22-actor.en.md) | Creating and calling one entity by id |
-| 7 | [STREAM](23-stream.en.md) | A client outside the mesh attaching over one connection |
-| 8 | [Session and Actor](24-actor-session.en.md) | Binding one connection to one Actor |
-| 9 | [Location](25-location.en.md) | Looking up the node something is on by id |
-| 10 | [Monitoring](26-monitoring.en.md) | A placeholder in the feature guide — no body yet |
-| 11 | [The Execution Model](32-execution-model.en.md) | Two queues, the serialization scope, the turn |
-| 12 | [Backpressure](33-backpressure.en.md) | When arrival outruns processing, and the options that affect it |
-| 13 | [Activation and Lifetime](34-activation-lifetime.en.md) | Creation time per kind, lifecycle callbacks, injection lifetime |
-| 14 | [Actor Membership](35-actor-membership.en.md) | Moving between Spots, reservations and limits |
-| 15 | [Timers and Workers](36-timer-worker.en.md) | Periodic execution, running outside the line, giving the turn back |
-| 16 | [Relocation](37-relocation.en.md) | What survives a move, the adapter, the unit |
-| 17 | [How Channels Work](30-channel-patterns.en.md) | Pattern differences, target selection, pub/sub, connection and discovery |
-| 18 | [Handlers and Message Processing](31-handler-dispatch.en.md) | Registration variants, filters, codecs, handler kinds |
-| 19 | [How STREAM Works](38-stream-boundary.en.md) | Startup checks, error ownership, reply tokens, execution mode |
-| 20 | [How Session Binding Works](39-session-binding.en.md) | How many bindings, route refresh, disconnect, failures |
+| 2 | [Interactive Tour](02-tour.en.md) | Step through how each feature behaves, using a single MORPG |
+| 3 | [Quickstart](../../quickstart.en.md) | Install, a minimal project where two processes call each other, first-run checks |
+| 4 | [Core Concepts](03-concepts.en.md) | What a channel, a Spot, an Actor and a session each are |
+| 5 | [Channel Messaging](20-channel-messaging.en.md) | The path that calls by name — registering and calling |
+| 6 | [Spot](21-spot.en.md) | Creating and calling a shared place by id |
+| 7 | [Actor](22-actor.en.md) | Creating and calling one entity by id |
+| 8 | [STREAM](23-stream.en.md) | A client outside the mesh attaching over one connection |
+| 9 | [Session and Actor](24-actor-session.en.md) | Binding one connection to one Actor |
+| 10 | [Location](25-location.en.md) | Looking up the node something is on by id |
+| 11 | [Monitoring](26-monitoring.en.md) | A placeholder in the feature guide — no body yet |
+| 12 | [The Execution Model](32-execution-model.en.md) | Two queues, the serialization scope, the turn |
+| 13 | [Backpressure](33-backpressure.en.md) | When arrival outruns processing, and the options that affect it |
+| 14 | [Activation and Lifetime](34-activation-lifetime.en.md) | Creation time per kind, lifecycle callbacks, injection lifetime |
+| 15 | [Actor Membership](35-actor-membership.en.md) | Moving between Spots, reservations and limits |
+| 16 | [Timers and Workers](36-timer-worker.en.md) | Periodic execution, running outside the line, giving the turn back |
+| 17 | [Relocation](37-relocation.en.md) | What survives a move, the adapter, the unit |
+| 18 | [How Channels Work](30-channel-patterns.en.md) | Pattern differences, target selection, pub/sub, connection and discovery |
+| 19 | [Handlers and Message Processing](31-handler-dispatch.en.md) | Registration variants, filters, codecs, handler kinds |
+| 20 | [How STREAM Works](38-stream-boundary.en.md) | Startup checks, error ownership, reply tokens, execution mode |
+| 21 | [How Session Binding Works](39-session-binding.en.md) | How many bindings, route refresh, disconnect, failures |
 | 22 | [Operations and Lifecycle](12-operations.en.md) | Runtime metrics, relocate, drain, readiness wiring |
 | 23 | [Options](16-options.en.md) | The options, their defaults, and when to change them |
 | 24 | [Picking a Sample](14-samples.en.md) | Choosing which sample to read first and how to run it |

@@ -7,6 +7,7 @@ import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkStreamError;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -50,6 +51,9 @@ public final class PerfActorRelaySession implements ZLinkSession {
         return actor(dispatch, payload).thenCompose(actor -> actor.relay(dispatch, payload)).whenComplete((ignored, error) -> {
             if (error != null) {
                 measurement.recordDiagnostic(error);
+            } else if ("setup".equals(measurement.phase())) {
+                // The Session role has no typed reply of its own: its setup probe is the admitted relay.
+                measurement.setupEvidence(List.of(Evidence.of("relayAdmission", "ZLinkSessionActor.relay", true)));
             }
         });
     }

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
 
@@ -7,11 +8,6 @@ namespace Zlink.Framework.Runtime.Streams;
 
 internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 {
-    internal static readonly TimeSpan SessionShutdownUpperBound = TimeSpan.FromMilliseconds(900);
-    internal static readonly TimeSpan SessionForceCleanupUpperBound = TimeSpan.FromMilliseconds(
-        100
-    );
-    private const int ReceiveBatchSize = 64;
     private static readonly TimeSpan ReceivePollInterval = TimeSpan.FromMilliseconds(100);
     private readonly ZLinkStreamSessionTable _sessions;
     private readonly ZLinkSessionSerialExecutor _sessionIngress;
@@ -46,7 +42,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         bool actorDispatchEnabled = false,
         string? boundEndpoint = null,
         string? advertisedEndpoint = null,
-        long maxMessageSize = 64L * 1024L,
+        long maxMessageSize = ZLinkSocketConfig.DefaultStreamMaxMessageSize,
         ZLinkApplicationJobQueue? applicationJobQueue = null
     )
     {
@@ -80,7 +76,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             runtime.DrainAdmission,
             transport,
             _timeProvider,
-            actorDispatchEnabled
+            actorDispatchEnabled,
+            _errorSink
         );
     }
 
@@ -126,7 +123,10 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     internal ValueTask ForceStopSessionsAsync(CancellationToken cancellationToken) =>
         _sessions.ForceStopSessionsAsync(cancellationToken);
 
-    public ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => DisposeAsync(CancellationToken.None);
+
+    /// <summary>Disposes the node; the token is the host shutdown deadline that forces session cleanup.</summary>
+    internal ValueTask DisposeAsync(CancellationToken deadline)
     {
         var task = Volatile.Read(ref _disposeTask);
         if (task is not null)
@@ -143,7 +143,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         {
             try
             {
-                await DisposeCoreAsync().ConfigureAwait(false);
+                await DisposeCoreAsync(deadline).ConfigureAwait(false);
                 completion.TrySetResult();
             }
             catch (Exception error)
@@ -162,12 +162,12 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         return new ValueTask(completion.Task);
     }
 
-    private async Task DisposeCoreAsync()
+    private async Task DisposeCoreAsync(CancellationToken deadline)
     {
         var sessions = await _sessions.StopAsync().ConfigureAwait(false);
         var failures = new List<Exception>();
         await CaptureAsync(RequestStopAsync).ConfigureAwait(false);
-        await CaptureAsync(() => DisposeSessionsAsync(sessions)).ConfigureAwait(false);
+        await CaptureAsync(() => DisposeSessionsAsync(sessions, deadline)).ConfigureAwait(false);
         await CaptureAsync(_sessionIngress.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_controlIngress.DisposeAsync).ConfigureAwait(false);
         if (Monitor is { } monitor)
@@ -259,7 +259,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     }
 
     private async ValueTask DisposeSessionsAsync(
-        IReadOnlyCollection<ZLinkStreamSessionRuntime> sessions
+        IReadOnlyCollection<ZLinkStreamSessionRuntime> sessions,
+        CancellationToken deadline
     )
     {
         if (sessions.Count == 0)
@@ -270,37 +271,21 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             .ToArray();
         try
         {
-            await Task.WhenAll(disposals)
-                .WaitAsync(SessionShutdownUpperBound)
-                .ConfigureAwait(false);
+            await Task.WhenAll(disposals).WaitAsync(deadline).ConfigureAwait(false);
             return;
         }
-        catch (TimeoutException) { }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested) { }
 
         var forcedCloses = sessions
             .Select(static session => session.ForceCloseForShutdownAsync().AsTask())
             .ToArray();
-        try
-        {
-            await Task.WhenAll(disposals.Concat(forcedCloses))
-                .WaitAsync(SessionForceCleanupUpperBound)
-                .ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            for (var index = 0; index < disposals.Length; index++)
-                ZLinkUnawaitedSubmit.Observe(
-                    new ValueTask(disposals[index]),
-                    $"stream-session-late-dispose:{index}",
-                    _errorSink
-                );
-            for (var index = 0; index < forcedCloses.Length; index++)
-                ZLinkUnawaitedSubmit.Observe(
-                    new ValueTask(forcedCloses[index]),
-                    $"stream-session-late-force-close:{index}",
-                    _errorSink
-                );
-        }
+        for (var index = 0; index < disposals.Length; index++)
+            ZLinkUnawaitedSubmit.Observe(
+                new ValueTask(disposals[index]),
+                $"stream-session-late-dispose:{index}",
+                _errorSink
+            );
+        await Task.WhenAll(forcedCloses).ConfigureAwait(false);
     }
 
     public void Start()
@@ -372,7 +357,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 long batchBytes = 0;
                 for (
                     var receivedCount = 0;
-                    receivedCount < ReceiveBatchSize && !stop.IsCancellationRequested;
+                    receivedCount < ZLinkReceiveBatchBudget.MaximumRecords
+                        && !stop.IsCancellationRequested;
                     receivedCount++
                 )
                 {
@@ -684,6 +670,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         switch (monitorEvent.NativeEvent)
         {
             case ZLinkSocketNativeEventType.ConnectionReady:
+                if ((monitorEvent.Flags & MonitorEventFlags.ConnectionReadyEdge) == 0)
+                    break;
                 if (monitorEvent.RoutingId is RoutingId readyRoutingId)
                 {
                     await ClearDisconnectedRoutingIdAsync(readyRoutingId).ConfigureAwait(false);

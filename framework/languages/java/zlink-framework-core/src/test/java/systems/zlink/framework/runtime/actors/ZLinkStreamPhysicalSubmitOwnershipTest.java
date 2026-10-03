@@ -86,7 +86,6 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                         new RawSerializer(),
                         0,
                         BINDING_GENERATION,
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.JSON,
@@ -139,7 +138,6 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                         new RawSerializer(),
                         0,
                         BINDING_GENERATION,
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.JSON,
@@ -188,12 +186,12 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                                     }
                                     default -> defaultValue(method.getReturnType());
                                 });
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
         ZLinkSessionActor actor =
-                runtime(stream)
-                        .bind(new ActorRef("actor-1", 7, "game", NODE_A))
+                runtime.bind(new ActorRef("actor-1", 7, "game", NODE_A))
                         .toCompletableFuture()
                         .join();
-        ZLinkSessionActorsRuntime.enterRelayDispatch(oneWayHeader("Play"));
+        runtime.enterRelayDispatch(oneWayHeader("Play"));
         try {
             CompletableFuture<Void> submission =
                     actor.relay(ZLinkMessage.of("payload")).toCompletableFuture();
@@ -203,7 +201,7 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
             assertTrue(submission.cancel(false));
             assertTrue(physicalTerminal.isCancelled());
         } finally {
-            ZLinkSessionActorsRuntime.exitRelayDispatch();
+            runtime.exitRelayDispatch();
         }
     }
 
@@ -238,7 +236,6 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                         new RawSerializer(),
                         0,
                         BINDING_GENERATION,
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.JSON,
@@ -396,7 +393,6 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                         null,
                         null,
                         ZLinkStreamCodec.JSON,
-                        ignored -> true,
                         ZLinkRelayMetadataPolicy.EMPTY);
         Method relay =
                 ZLinkBoundSessionRuntime.class.getDeclaredMethod(
@@ -447,7 +443,6 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                         new RawSerializer(),
                         0,
                         1,
-                        ignored -> true,
                         (ignoredActor, ignoredSequence, ignoredHeader, ignoredPayload) ->
                                 CompletableFuture.completedFuture(
                                         Optional.of(
@@ -509,7 +504,6 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                         null,
                         null,
                         ZLinkStreamCodec.JSON,
-                        ignored -> true,
                         ZLinkRelayMetadataPolicy.EMPTY);
 
         CompletionStage<Void> submission = runtime.send("payload").submit();
@@ -534,14 +528,7 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
 
     private static ZLinkSessionActorsRuntime runtime(ZLinkBackendStreamSocket stream) {
         return new ZLinkSessionActorsRuntime(
-                stream,
-                SESSION,
-                null,
-                new RawSerializer(),
-                ignored -> true,
-                null,
-                true,
-                ZLinkStreamCodec.RAW);
+                stream, SESSION, null, new RawSerializer(), null, true, ZLinkStreamCodec.RAW);
     }
 
     private static ZLinkBackendStreamSocket relocationStream(

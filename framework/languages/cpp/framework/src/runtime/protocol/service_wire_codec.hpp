@@ -23,6 +23,8 @@
 namespace zlink::framework::runtime::protocol
 {
 
+inline constexpr char message_follow_hop_count_metadata_key[] = "__zlink.messageFollowHopCount";
+
 class service_wire_error_t : public std::runtime_error
 {
   public:
@@ -668,6 +670,13 @@ struct instance_spot_activation_target_t
     std::string stable_type;
     std::string descriptor_version;
     std::uint64_t deadline_unix_ms = 0;
+    // authorityOwnerGeneration > 0은 기존 instance-route-v1 Ready variant이다.
+    std::uint64_t object_generation = 0;
+    std::uint64_t authority_owner_generation = 0;
+    std::string owner_id;
+    std::uint64_t owner_lease_generation = 0;
+    std::string store_version;
+    bool instance_intent = false;
 
     friend bool operator== (const instance_spot_activation_target_t &,
                             const instance_spot_activation_target_t &) = default;

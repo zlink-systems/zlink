@@ -138,7 +138,14 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                                           *projected_id, authority->object_generation};
             address.node_generation = authority->allocation.target.node_lifecycle_generation;
             apply_authority (address, *authority);
-            cache_ready_route (_spot_routes, spot_id, address);
+            // Closing retains its exact owner route, but is never a Ready cache entry.
+            const auto ready_user = decode_ready_user_spot_authority_payload (authority->payload);
+            const auto instance = ready_user
+                                    ? std::optional<instance_spot_authority_payload_t>{}
+                                    : decode_instance_spot_authority_payload (authority->payload);
+            if (ready_user
+                || (instance && instance->state == instance_spot_authority_state_t::ready))
+                cache_ready_route (_spot_routes, spot_id, address);
             return completed (std::optional<spot_address_t>{std::move (address)});
         }
         if (!mesh_name.empty ()) {
@@ -398,11 +405,16 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     static std::optional<std::string> decode_spot_id (const std::vector<std::byte> &payload)
     {
-        if (const auto user = decode_ready_user_spot_authority_payload (payload))
+        if (const auto user = decode_direct_user_spot_authority_payload (payload);
+            user
+            && (user->state == user_spot_authority_state_t::ready
+                || user->state == user_spot_authority_state_t::closing))
             return user->spot_id;
         if (const auto instance = decode_instance_spot_authority_payload (payload);
             instance && instance->state == instance_spot_authority_state_t::ready)
             return instance->spot_id;
+        if (const auto closing = decode_instance_closing_state (payload))
+            return closing->spot_id;
         if (payload.size () < 5 || std::to_integer<unsigned char> (payload[0]) != 'Z'
             || std::to_integer<unsigned char> (payload[1]) != 'L'
             || std::to_integer<unsigned char> (payload[2]) != 'I'
@@ -589,7 +601,8 @@ class store_location_runtime_query_t final : public location_runtime_query_t
         do {
             const auto remaining = static_cast<std::size_t> (page.page_size) - output.items.size ();
             auto read = _store
-                          ->list_authorities (std::string ("zla1:") + authority_kind + ":",
+                          ->list_authorities (std::string (authority_key_codec_detail::prefix)
+                                                + authority_kind + ":",
                                               std::move (cursor), remaining)
                           .result ();
             if (!read.has_value ())
@@ -679,17 +692,18 @@ class store_location_runtime_query_t final : public location_runtime_query_t
     static std::size_t
     encoded_size_upper_bound (const location_page_t<location_object_entry_t> &page)
     {
+        constexpr std::size_t maximum_json_escape_bytes = sizeof ("\\uFFFF") - 1;
         constexpr std::size_t fixed_page_bytes = 256;
         constexpr std::size_t fixed_entry_bytes = 256;
         auto size = fixed_page_bytes;
         if (page.continuation_token)
-            size += page.continuation_token->size () * 6;
+            size += page.continuation_token->size () * maximum_json_escape_bytes;
         for (const auto &entry : page.items) {
             size += fixed_entry_bytes;
-            size += entry.global_id.size () * 6;
-            size += entry.mesh_name.size () * 6;
-            size += entry.stable_type.size () * 6;
-            size += entry.node_rid.to_string ().size () * 6;
+            size += entry.global_id.size () * maximum_json_escape_bytes;
+            size += entry.mesh_name.size () * maximum_json_escape_bytes;
+            size += entry.stable_type.size () * maximum_json_escape_bytes;
+            size += entry.node_rid.to_string ().size () * maximum_json_escape_bytes;
         }
         return size;
     }
@@ -715,7 +729,7 @@ class store_location_runtime_query_t final : public location_runtime_query_t
 
     static void validate_page (const location_page_request_t &page)
     {
-        if (page.page_size < 1 || page.page_size > 1000)
+        if (page.page_size < 1 || page.page_size > location_page_item_limit)
             throw std::invalid_argument ("location query page size must be between 1 and 1000");
     }
 

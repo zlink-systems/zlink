@@ -684,7 +684,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        bool durable = false
     )
     {
         try
@@ -695,7 +696,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     SendFlags.None,
                     timeout,
                     cancellationToken,
-                    metadata
+                    metadata,
+                    durable
                 )
                 .ConfigureAwait(false);
         }
@@ -1332,10 +1334,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             )
             .ConfigureAwait(false);
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"entry_spot_location_tracked node={Node.RoutingId} "
-                + $"spot={EntrySpotId} spot_gen={_entrySpot.LifecycleGeneration} "
-                + $"node_gen={nodeGeneration} authority_gen={_entrySpot.LifecycleGeneration} "
-                + $"status={status}"
+            $"entry_spot_location_tracked node={Node.RoutingId} spot={EntrySpotId} spot_gen={_entrySpot.LifecycleGeneration} node_gen={nodeGeneration} authority_gen={_entrySpot.LifecycleGeneration} status={status}"
         );
         if (status != ZLinkLocationWriteStatus.Stored)
             throw new ZLinkFrameworkException(

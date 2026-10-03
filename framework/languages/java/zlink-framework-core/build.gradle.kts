@@ -99,15 +99,16 @@ val verifyPublicContractModuleBoundary by tasks.registering {
             project(":zlink-framework-testkit"),
         )
         val modulePath = buildList {
-            add(tasks.jar.get().archiveFile.get().asFile.absolutePath)
-            add(starterJar.get().archiveFile.get().asFile.absolutePath)
-            add(testkitJar.get().archiveFile.get().asFile.absolutePath)
-            addAll(configurations.runtimeClasspath.get().files.map { it.absolutePath })
-            companionProjects.forEach { companion ->
-                addAll(companion.configurations.getByName("runtimeClasspath").files
-                    .map { it.absolutePath })
+            add(tasks.jar.get().archiveFile.get().asFile)
+            add(starterJar.get().archiveFile.get().asFile)
+            add(testkitJar.get().archiveFile.get().asFile)
+            (listOf(project) + companionProjects).forEach { moduleProject ->
+                addAll(moduleProject.configurations.getByName("compileClasspath").files)
+                addAll(moduleProject.configurations.getByName("runtimeClasspath").files)
             }
-        }.distinct().joinToString(File.pathSeparator)
+        }.filter { it.isFile && it.extension == "jar" }
+            .distinctBy { it.absolutePath }
+            .joinToString(File.pathSeparator) { it.absolutePath }
 
         fun compileFixture(name: String): Int {
             val sourceRoot = layout.projectDirectory
@@ -180,23 +181,12 @@ val verifyPublicContractModuleBoundary by tasks.registering {
             "classpath applications must not start ZLinkFrameworkRuntime directly"
         }
 
-        val companionModulePath = buildList {
-            add(tasks.jar.get().archiveFile.get().asFile)
-            add(starterJar.get().archiveFile.get().asFile)
-            add(testkitJar.get().archiveFile.get().asFile)
-            addAll(configurations.runtimeClasspath.get().files)
-            companionProjects.forEach { companion ->
-                addAll(companion.configurations.getByName("runtimeClasspath").files)
-            }
-        }.filter { it.isFile && it.extension == "jar" }
-            .distinctBy { it.absolutePath }
-            .joinToString(File.pathSeparator) { it.absolutePath }
         val javaExecutable = launcher.get().executablePath.asFile.absolutePath
         val validation = ProcessBuilder(
             javaExecutable,
             "--validate-modules",
             "--module-path",
-            companionModulePath,
+            modulePath,
         ).inheritIO().start()
         check(validation.waitFor() == 0) {
             "core, Spring starter, and testkit must resolve on one module path"
@@ -215,7 +205,7 @@ val verifyPublicContractModuleBoundary by tasks.registering {
         check(ProcessBuilder(
             javacExecutable,
             "--module-path",
-            companionModulePath,
+            modulePath,
             "--patch-module",
             "zlink.framework.spring.boot.starter=${smokeSourceRoot.absolutePath}",
             "-d",
@@ -227,7 +217,7 @@ val verifyPublicContractModuleBoundary by tasks.registering {
         val smoke = ProcessBuilder(
             javaExecutable,
             "--module-path",
-            companionModulePath,
+            modulePath,
             "--patch-module",
             "zlink.framework.spring.boot.starter=${smokeOutput.absolutePath}",
             "-m",
@@ -241,7 +231,7 @@ val verifyPublicContractModuleBoundary by tasks.registering {
     }
 }
 
-tasks.named("check") {
+tasks.named("test") {
     dependsOn(verifyPublicContractModuleBoundary)
 }
 

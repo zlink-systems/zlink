@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -30,6 +31,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkSessionActor;
@@ -56,6 +58,91 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 final class ZLinkSessionActorBindingContractTest {
+    @Test
+    void equalDispatchValuesInDifferentSessionsKeepTheirRelayHeadersUntilCompletion() {
+        FakeStream firstStream = new FakeStream();
+        FakeStream secondStream = new FakeStream();
+        var firstRuntime = runtime(firstStream);
+        var secondRuntime = runtime(secondStream);
+        var firstActor =
+                firstRuntime
+                        .bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+                        .toCompletableFuture()
+                        .join();
+        var secondActor =
+                secondRuntime
+                        .bind(new ActorRef("actor-2", 8, MESH, NODE_B))
+                        .toCompletableFuture()
+                        .join();
+        var firstDispatch =
+                new systems.zlink.framework.streams.ZLinkSessionDispatchContext(
+                        "Play", Map.of(), true, null);
+        var secondDispatch =
+                new systems.zlink.framework.streams.ZLinkSessionDispatchContext(
+                        "Play", Map.of(), true, null);
+
+        var firstHeader =
+                new ZLinkStreamHeader("Play", Map.of(), Optional.of(1L))
+                        .withCorrelationId("11111111111111111111111111111111");
+        var secondHeader =
+                new ZLinkStreamHeader("Play", Map.of(), Optional.of(2L))
+                        .withCorrelationId("22222222222222222222222222222222");
+        firstStream.pendingBoundRequest =
+                CompletableFuture.completedFuture(
+                        List.of(
+                                Message.from(
+                                        ZLinkStreamFrameCodec.encode(
+                                                ZLinkStreamHeader.createResponse(
+                                                        firstHeader,
+                                                        ZLinkStreamCodec.RAW,
+                                                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                                        "",
+                                                        Map.of()),
+                                                new byte[0]))));
+        secondStream.pendingBoundRequest =
+                CompletableFuture.completedFuture(
+                        List.of(
+                                Message.from(
+                                        ZLinkStreamFrameCodec.encode(
+                                                ZLinkStreamHeader.createResponse(
+                                                        secondHeader,
+                                                        ZLinkStreamCodec.RAW,
+                                                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                                        "",
+                                                        Map.of()),
+                                                new byte[0]))));
+        firstRuntime.enterRelayDispatch(firstDispatch, firstHeader);
+        firstRuntime.exitRelayDispatch();
+        secondRuntime.enterRelayDispatch(secondDispatch, secondHeader);
+        secondRuntime.exitRelayDispatch();
+        try {
+            firstActor.relay(firstDispatch, ZLinkMessage.empty()).toCompletableFuture().join();
+            assertEquals(Optional.of(1L), firstStream.relayHeaders.getLast().requestSequence());
+            assertEquals(
+                    firstHeader.correlationId(),
+                    firstStream.relayHeaders.getLast().correlationId());
+            firstRuntime.exitRelayDispatch(firstDispatch);
+            secondActor.relay(secondDispatch, ZLinkMessage.empty()).toCompletableFuture().join();
+            assertEquals(Optional.of(2L), secondStream.relayHeaders.getLast().requestSequence());
+            assertEquals(
+                    secondHeader.correlationId(),
+                    secondStream.relayHeaders.getLast().correlationId());
+            secondRuntime.exitRelayDispatch(secondDispatch);
+            CompletionException failure =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    secondActor
+                                            .relay(secondDispatch, ZLinkMessage.empty())
+                                            .toCompletableFuture()
+                                            .join());
+            assertInstanceOf(IllegalStateException.class, failure.getCause());
+        } finally {
+            firstRuntime.exitRelayDispatch(firstDispatch);
+            secondRuntime.exitRelayDispatch(secondDispatch);
+        }
+    }
+
     private static final RoutingId SESSION = RoutingId.from("session-a");
     private static final RoutingId NODE_A = RoutingId.from("actor-node-a");
     private static final RoutingId NODE_B = RoutingId.from("actor-node-b");
@@ -71,7 +158,7 @@ final class ZLinkSessionActorBindingContractTest {
                 runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
         assertEquals(1, stream.binds.size());
 
-        ZLinkSessionActorsRuntime.enterRelayDispatch(header("Play"));
+        runtime.enterRelayDispatch(header("Play"));
         try {
             actor.relay(
                             ZLinkMessage.fromEncoded(
@@ -81,7 +168,7 @@ final class ZLinkSessionActorBindingContractTest {
                     .toCompletableFuture()
                     .join();
         } finally {
-            ZLinkSessionActorsRuntime.exitRelayDispatch();
+            runtime.exitRelayDispatch();
         }
 
         assertEquals(List.of("actor-1"), stream.binds);
@@ -206,7 +293,7 @@ final class ZLinkSessionActorBindingContractTest {
         stream.relayFailure = SubmitResult.NOT_FOUND;
         int relaysBeforeFailure = stream.relays.size();
 
-        ZLinkSessionActorsRuntime.enterRelayDispatch(header("Play"));
+        runtime.enterRelayDispatch(header("Play"));
         try {
             CompletionException completion =
                     assertThrows(
@@ -215,7 +302,7 @@ final class ZLinkSessionActorBindingContractTest {
             ZLinkFrameworkException error = (ZLinkFrameworkException) completion.getCause();
             assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, error.kind());
         } finally {
-            ZLinkSessionActorsRuntime.exitRelayDispatch();
+            runtime.exitRelayDispatch();
         }
 
         assertEquals(1, stream.binds.size());
@@ -338,7 +425,7 @@ final class ZLinkSessionActorBindingContractTest {
                 runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
         corruptIngressGateProjection(runtime, 70, BINDING_GENERATION + 1);
 
-        relay(actor, "projection-mismatch").toCompletableFuture().join();
+        relay(runtime, actor, "projection-mismatch").toCompletableFuture().join();
 
         assertEquals("actor-1:projection-mismatch", stream.relays.getLast());
     }
@@ -483,7 +570,7 @@ final class ZLinkSessionActorBindingContractTest {
         runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
                 .toCompletableFuture()
                 .join();
-        CompletionStage<Void> held = relay(actor, "held");
+        CompletionStage<Void> held = relay(runtime, actor, "held");
 
         runtime.applyRelocationRouteCommand(abort(relocation)).toCompletableFuture().join();
         held.toCompletableFuture().join();
@@ -519,7 +606,7 @@ final class ZLinkSessionActorBindingContractTest {
         runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
                 .toCompletableFuture()
                 .join();
-        CompletionStage<Void> held = relay(actor, "held-authority-mismatch");
+        CompletionStage<Void> held = relay(runtime, actor, "held-authority-mismatch");
 
         runtime.applyRelocationRouteCommand(abort(relocation, 1)).toCompletableFuture().join();
 
@@ -539,7 +626,7 @@ final class ZLinkSessionActorBindingContractTest {
         runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
                 .toCompletableFuture()
                 .join();
-        CompletionStage<Void> held = relay(actor, "held-after-seal");
+        CompletionStage<Void> held = relay(runtime, actor, "held-after-seal");
 
         expireRelocationSeal(runtime);
 
@@ -657,22 +744,13 @@ final class ZLinkSessionActorBindingContractTest {
                 0);
     }
 
-    private static CompletionStage<Void> relay(ZLinkSessionActor actor) {
-        return relay(actor, "Play");
-    }
-
-    private static CompletionStage<Void> relay(ZLinkSessionActor actor, String packetName) {
-        ZLinkSessionActorsRuntime.enterRelayDispatch(header(packetName));
+    private static CompletionStage<Void> relay(
+            ZLinkSessionActorsRuntime runtime, ZLinkSessionActor actor, String packetName) {
+        runtime.enterRelayDispatch(header(packetName));
         try {
             return actor.relay(ZLinkMessage.empty());
         } finally {
-            ZLinkSessionActorsRuntime.exitRelayDispatch();
-        }
-    }
-
-    private static void relay(ZLinkSessionActor actor, int count) {
-        for (int index = 0; index < count; index++) {
-            relay(actor).toCompletableFuture().join();
+            runtime.exitRelayDispatch();
         }
     }
 
@@ -683,7 +761,6 @@ final class ZLinkSessionActorBindingContractTest {
                         SESSION,
                         null,
                         new RawSerializer(),
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.RAW);
@@ -700,7 +777,6 @@ final class ZLinkSessionActorBindingContractTest {
                         SESSION,
                         null,
                         new RawSerializer(),
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.RAW);
@@ -731,7 +807,6 @@ final class ZLinkSessionActorBindingContractTest {
                         SESSION,
                         null,
                         new RawSerializer(),
-                        ignored -> true,
                         null,
                         true,
                         ZLinkStreamCodec.RAW,
@@ -918,6 +993,7 @@ final class ZLinkSessionActorBindingContractTest {
         private final List<String> unbinds = new java.util.concurrent.CopyOnWriteArrayList<>();
         private final List<String> relays = new ArrayList<>();
         private final List<Long> relaySequences = new ArrayList<>();
+        private final List<ZLinkStreamHeader> relayHeaders = new ArrayList<>();
         private final Map<String, CompletableFuture<Void>> pendingUnbinds =
                 new ConcurrentHashMap<>();
         private boolean deferUnbind;
@@ -1180,6 +1256,7 @@ final class ZLinkSessionActorBindingContractTest {
                 List<Message> parts,
                 SendFlags flags) {
             relays.add(actorId + ":" + header.packetName());
+            relayHeaders.add(header);
             if (blockRelayEntered != null) {
                 blockRelayEntered.countDown();
                 CountDownLatch release = blockRelayRelease;
@@ -1213,6 +1290,7 @@ final class ZLinkSessionActorBindingContractTest {
                 ZLinkStreamHeader header,
                 List<Message> parts,
                 Duration timeout) {
+            relayHeaders.add(header);
             if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
                     header.packetName())) {
                 disconnectNotifications++;

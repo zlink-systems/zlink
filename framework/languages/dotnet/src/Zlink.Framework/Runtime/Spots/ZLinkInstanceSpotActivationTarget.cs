@@ -11,6 +11,7 @@ internal enum ZLinkInstanceSpotAuthorityState : byte
 {
     Creating = 1,
     Ready = 2,
+    Closing = 3,
 }
 
 internal sealed record ZLinkInstanceSpotAuthorityPayload(
@@ -35,10 +36,6 @@ internal sealed record ZLinkInstanceSpotActivationRecoveryPointer(
 
 internal static class ZLinkInstanceSpotAuthorityPayloadCodec
 {
-    private static ReadOnlySpan<byte> Magic => "ZLAU"u8;
-    private const byte Version = 1;
-    private const int MaximumBytes = 1024 * 1024;
-
     internal static byte[] Encode(ZLinkInstanceSpotAuthorityPayload payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
@@ -55,21 +52,29 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
         spot.U8(
             payload.State switch
             {
-                ZLinkInstanceSpotAuthorityState.Creating => 1,
-                ZLinkInstanceSpotAuthorityState.Ready => 2,
+                ZLinkInstanceSpotAuthorityState.Creating => (byte)
+                    ServiceWireCodec.InstanceAuthorityState.ColdActivating,
+                ZLinkInstanceSpotAuthorityState.Ready => (byte)
+                    ServiceWireCodec.InstanceAuthorityState.Ready,
+                ZLinkInstanceSpotAuthorityState.Closing => (byte)
+                    ServiceWireCodec.InstanceAuthorityState.Closing,
                 _ => throw new ArgumentOutOfRangeException(nameof(payload)),
             }
         );
         spot.U16(checked((ushort)instance.Count));
         spot.Bytes(instance.WrittenSpan);
         var identity = new Writer();
-        identity.U8(3);
+        identity.U8((byte)ServiceWireCodec.SpotKind.Instance);
         identity.U16(checked((ushort)spot.Count));
         identity.Bytes(spot.WrittenSpan);
 
         var body = new Writer();
-        body.U8(payload.State == ZLinkInstanceSpotAuthorityState.Creating ? (byte)1 : (byte)0);
-        body.U8(2);
+        body.U8(
+            payload.State == ZLinkInstanceSpotAuthorityState.Creating
+                ? (byte)ServiceWireCodec.AuthorityOperationKind.ColdActivation
+                : (byte)ServiceWireCodec.AuthorityOperationKind.Steady
+        );
+        body.U8((byte)ServiceWireCodec.AuthorityObjectKind.Spot);
         body.U16(checked((ushort)identity.Count));
         body.Bytes(identity.WrittenSpan);
         body.Text8(payload.OwnerId);
@@ -83,7 +88,8 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
         {
             if (
                 recovery.Sha256.Length != SHA256.HashSizeInBytes
-                || recovery.EncodedSize > MaximumBytes
+                || recovery.EncodedSize
+                    > ZLinkCanonicalRelocationAuthorityStateCodec.MaximumPayloadBytes
                 || recovery.InboxSequence == 0
                 || recovery.ReplayCursor > recovery.InboxSequence
             )
@@ -106,13 +112,13 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
         }
 
         var result = new Writer();
-        result.Bytes(Magic);
-        result.U8(Version);
+        result.Bytes(ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityMagic);
+        result.U8(ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityVersion);
         result.U16(0);
         result.U32(checked((uint)body.Count));
         result.Bytes(body.WrittenSpan);
         result.U32(Zlink.Framework.Runtime.Locations.ZLinkCrc32C.Compute(result.WrittenSpan));
-        if (result.Count > MaximumBytes)
+        if (result.Count > ZLinkCanonicalRelocationAuthorityStateCodec.MaximumPayloadBytes)
             throw new ArgumentOutOfRangeException(nameof(payload));
         return result.ToArray();
     }
@@ -125,11 +131,19 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
         payload = null!;
         try
         {
-            if (encoded.Length is < 15 or > MaximumBytes || !encoded[..4].SequenceEqual(Magic))
+            if (
+                encoded.Length < ZLinkCanonicalRelocationAuthorityStateCodec.MinimumEnvelopeBytes
+                || encoded.Length > ZLinkCanonicalRelocationAuthorityStateCodec.MaximumPayloadBytes
+                || !encoded[..ZLinkCanonicalRelocationAuthorityStateCodec.MagicBytes]
+                    .SequenceEqual(ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityMagic)
+            )
                 return false;
             var reader = new Reader(encoded);
-            reader.Skip(4);
-            if (reader.U8() != Version || reader.U16() != 0)
+            reader.Skip(ZLinkCanonicalRelocationAuthorityStateCodec.MagicBytes);
+            if (
+                reader.U8() != ZLinkCanonicalRelocationAuthorityStateCodec.AuthorityVersion
+                || reader.U16() != 0
+            )
                 return false;
             var body = reader.Slice(checked((int)reader.U32()));
             var checksumOffset = reader.Offset;
@@ -142,10 +156,10 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
             )
                 return false;
             var operation = body.U8();
-            if (body.U8() != 2)
+            if (body.U8() != (byte)ServiceWireCodec.AuthorityObjectKind.Spot)
                 return false;
             var identity = body.Slice(body.U16());
-            if (identity.U8() != 3)
+            if (identity.U8() != (byte)ServiceWireCodec.SpotKind.Instance)
                 return false;
             var spot = identity.Slice(identity.U16());
             var instanceState = spot.U8();
@@ -156,8 +170,16 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
                 return false;
             var state = instanceState switch
             {
-                1 when operation == 1 => ZLinkInstanceSpotAuthorityState.Creating,
-                2 when operation == 0 => ZLinkInstanceSpotAuthorityState.Ready,
+                (byte)ServiceWireCodec.InstanceAuthorityState.ColdActivating
+                    when operation
+                        == (byte)ServiceWireCodec.AuthorityOperationKind.ColdActivation =>
+                    ZLinkInstanceSpotAuthorityState.Creating,
+                (byte)ServiceWireCodec.InstanceAuthorityState.Ready
+                    when operation == (byte)ServiceWireCodec.AuthorityOperationKind.Steady =>
+                    ZLinkInstanceSpotAuthorityState.Ready,
+                (byte)ServiceWireCodec.InstanceAuthorityState.Closing
+                    when operation == (byte)ServiceWireCodec.AuthorityOperationKind.Steady =>
+                    ZLinkInstanceSpotAuthorityState.Closing,
                 _ => (ZLinkInstanceSpotAuthorityState)0,
             };
             if (state == 0)
@@ -184,7 +206,10 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
                 var encodedSize = recoveryBody.U32();
                 var inboxSequence = recoveryBody.NonZeroU64();
                 var replayCursor = recoveryBody.U64();
-                if (encodedSize > MaximumBytes || replayCursor > inboxSequence)
+                if (
+                    encodedSize > ZLinkCanonicalRelocationAuthorityStateCodec.MaximumPayloadBytes
+                    || replayCursor > inboxSequence
+                )
                     return false;
                 recovery = new ZLinkInstanceSpotActivationRecoveryPointer(
                     reference,
@@ -395,6 +420,8 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
 
 internal static class ZLinkInstanceSpotActivationEnvelopeCodec
 {
+    private const int MaximumPayloadParts = 1024;
+    private const int MaximumFieldBytes = 4 * 1024 * 1024;
     private static readonly byte[] Magic = "ZLIA"u8.ToArray();
     private const byte Version = 2;
 
@@ -489,7 +516,7 @@ internal static class ZLinkInstanceSpotActivationEnvelopeCodec
             var sourceSpotId = ReadText(reader);
             ReadOnlyMemory<byte>? metadata = reader.ReadBoolean() ? ReadBytes(reader) : null;
             var count = reader.ReadInt32();
-            if (count is < 1 or > 1024)
+            if (count is < 1 or > MaximumPayloadParts)
                 return false;
             var payload = new ReadOnlyMemory<byte>[count];
             for (var index = 0; index < count; index++)
@@ -528,7 +555,7 @@ internal static class ZLinkInstanceSpotActivationEnvelopeCodec
     private static byte[] ReadBytes(BinaryReader reader)
     {
         var length = reader.ReadInt32();
-        if (length is < 0 or > 4 * 1024 * 1024)
+        if (length is < 0 or > MaximumFieldBytes)
             throw new InvalidDataException("Instance Spot activation field length is invalid.");
         var value = reader.ReadBytes(length);
         if (value.Length != length)
@@ -584,6 +611,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
     ZLinkLocationOwnerToken owner
 ) : IInstanceSpotActivationTarget
 {
+    private const int RecoveryScanPageSize = 128;
+    private const int AuthorityConvergencePollMilliseconds = 10;
+    private const int RequestForwardPollMilliseconds = 2;
     private static readonly TimeSpan RecoveryRetention = TimeSpan.FromHours(24);
     private readonly ZLinkInstanceSpotOperationGate operationGate = new();
     private readonly ZLinkInstanceSpotMonitoring monitoring = new();
@@ -747,6 +777,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 .CommitAsync(
                     reservation,
                     ZLinkInstanceSpotAuthorityPayloadCodec.Encode(readyPayload),
+                    DateTimeOffset.FromUnixTimeMilliseconds(
+                        checked((long)operation.DeadlineUnixMs)
+                    ),
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -814,7 +847,12 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
         do
         {
             var scan = await authorityStore
-                .ListAuthoritiesAsync("zla1:s:", cursor, 128, cancellationToken)
+                .ListAuthoritiesAsync(
+                    ZLinkAuthorityKeyCodec.Prefix(ZLinkAuthorityKeyKind.Spot),
+                    cursor,
+                    RecoveryScanPageSize,
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             if (scan is ZLinkAuthorityScanResult.ScanExpired)
             {
@@ -1146,7 +1184,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                             $"Instance Spot '{operation.Target.TargetSpotId}' activation forwarding deadline elapsed."
                         );
                     await Task.Delay(
-                            TimeSpan.FromMilliseconds(Math.Min(2, forwardRemaining)),
+                            TimeSpan.FromMilliseconds(
+                                Math.Min(RequestForwardPollMilliseconds, forwardRemaining)
+                            ),
                             cancellationToken
                         )
                         .ConfigureAwait(false);
@@ -1160,6 +1200,36 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     operationRoot.Reference,
                     StringComparison.Ordinal
                 );
+            // A Missing intent can reach its owner after another operation
+            // has already started Close. Its original operation remains the
+            // accepted application record behind the owner's lifecycle item.
+            if (
+                authority.State == ZLinkInstanceSpotAuthorityState.Closing
+                && await catalog
+                    .TryGetInstanceActivationAsync(
+                        authority.SpotId,
+                        authority.StableType,
+                        current.ObjectGeneration
+                    )
+                    .ConfigureAwait(false)
+                    is { } closingActivation
+            )
+            {
+                var terminal = await DispatchFirstMessageAsync(
+                        closingActivation,
+                        operation,
+                        requestSource,
+                        current,
+                        metadata,
+                        payload,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                await relocationStore
+                    .DeleteRelocationAsync(operationRoot.Reference, CancellationToken.None)
+                    .ConfigureAwait(false);
+                return terminal;
+            }
             if (
                 authority.State == ZLinkInstanceSpotAuthorityState.Ready
                 && !anotherOperationIsAccepted
@@ -1255,7 +1325,12 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 throw new TimeoutException(
                     $"Instance Spot '{operation.Target.TargetSpotId}' activation deadline elapsed."
                 );
-            await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(10, remaining)), cancellationToken)
+            await Task.Delay(
+                    TimeSpan.FromMilliseconds(
+                        Math.Min(AuthorityConvergencePollMilliseconds, remaining)
+                    ),
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             var read = await authorityStore
                 .ReadAuthorityAsync(
@@ -1295,7 +1370,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 payload,
                 metadata,
                 operation.IsRequest,
-                cancellationToken
+                cancellationToken,
+                operation
             )
             .ConfigureAwait(false);
     }

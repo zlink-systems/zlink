@@ -44,7 +44,8 @@ class relocation_store_port_t
   public:
     virtual ~relocation_store_port_t () = default;
     virtual relocation_stored_t put (const std::vector<std::uint8_t> &payload,
-                                     std::chrono::hours retention) = 0;
+                                     std::chrono::hours retention,
+                                     std::chrono::steady_clock::time_point operation_deadline) = 0;
     virtual std::optional<std::vector<std::uint8_t>> get (const std::string &reference) = 0;
     virtual void remove (const std::string &reference) = 0;
 };
@@ -76,7 +77,9 @@ class durable_session_journal_store_t
   public:
     explicit durable_session_journal_store_t (std::shared_ptr<relocation_store_port_t> store);
 
-    durable_session_journal_root_t prepare (const durable_session_journal_record_t &record);
+    durable_session_journal_root_t
+    prepare (const durable_session_journal_record_t &record,
+             std::chrono::steady_clock::time_point operation_deadline);
     std::optional<durable_session_journal_record_t>
     recover (const durable_session_journal_root_t &root) const;
     void cleanup (const durable_session_journal_root_t &root);
@@ -133,6 +136,7 @@ struct relocation_authority_fence_t
     std::string expected_store_version;
     location_owner_token_t source_owner;
     location_owner_token_t target_owner;
+    protocol::relocation_id_t relocation;
 };
 
 /* Settled authority of one relocation unit as the Location Store shows it.
@@ -207,7 +211,9 @@ class authority_relocation_port_t
              std::vector<std::byte> target_application_payload = {},
              /* The StoreVersion the relocation NewOwner CAS expects (the source
               * fence); empty for a publish that is not a relocation CAS. */
-             std::string expected_store_version = {}) = 0;
+             std::string expected_store_version = {},
+             protocol::relocation_id_t relocation = {},
+             location_owner_token_t source_owner = {}) = 0;
     virtual std::optional<authority_relocation_reference_t> read (object_kind_t kind,
                                                                   const std::string &key) = 0;
     virtual authority_publish_result_t publish_completion (object_kind_t,
@@ -680,7 +686,7 @@ class maintenance_runtime_t
      * FIFO; a new unit acquires headroom before its source admission seal. */
     mutable std::mutex _budget_mutex;
     std::uint64_t _budget_in_flight_bytes = 0;
-    std::deque<std::pair<std::uint64_t, std::shared_ptr<detail::task_completion_source_t<bool>>>>
+    std::deque<std::pair<std::uint64_t, std::shared_ptr<task_completion_source_t<bool>>>>
       _budget_waiters;
 };
 
@@ -774,7 +780,7 @@ class host_maintenance_runtime_t
     std::uint64_t _active_attempt = 0;
     std::uint64_t _next_attempt = 1;
     std::map<std::uint64_t, termination_result_t> _attempt_results;
-    std::shared_ptr<detail::task_completion_source_t<termination_result_t>> _active_completion;
+    std::shared_ptr<task_completion_source_t<termination_result_t>> _active_completion;
     std::optional<termination_result_t> _terminal;
 };
 

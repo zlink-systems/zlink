@@ -1,11 +1,11 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Systems.Zlink;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Systems.Zlink;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Dispatch;
@@ -68,6 +68,8 @@ public static class ServerApplication
     {
         var config = app.Services.GetRequiredService<RoleConfig>();
         var measurement = app.Services.GetRequiredService<Measurement>();
+        var coreVersion = global::Systems.Zlink.Zlink.Version();
+        measurement.CoreVersion = $"{coreVersion.Major}.{coreVersion.Minor}.{coreVersion.Patch}";
         var runtime = app.Services.GetRequiredService<IZLinkFrameworkRuntime>();
         var provider = app.Services.GetRequiredService<PublicMetricCollector>();
         if (config.diagnostics is not null) _ = app.Services.GetRequiredService<MessageFlowFileListener>();
@@ -87,9 +89,9 @@ public static class ServerApplication
         app.MapGet("/perf/ready", () => Json(Ready(app.Services)));
         app.MapGet("/perf/stats", (HttpContext context) =>
         {
-            // The runner's last read of a phase (?final=1) ends the settle: roles that keep recording seal their originals then.
+            // The runner's last read of a phase (?final=1) collects its final snapshot.
             measurement.FinalSnapshot = context.Request.Query.ContainsKey("final");
-            return Json(WithCoreVersion(measurement.Snapshot(PublicStatus(app.Services)) with { publicMetrics = provider.Snapshot() }));
+            return Json(measurement.Snapshot(PublicStatus(app.Services)) with { publicMetrics = provider.Snapshot() });
         });
         app.MapPost("/perf/reset", async (HttpContext context) =>
         {
@@ -126,13 +128,6 @@ public static class ServerApplication
             throw new JsonException("Identity text fields must be non-null JSON strings.");
         return value;
     }
-    // Public binding API: the version of the libzlink this process actually loaded.
-    private static PerfMetricsSnapshot WithCoreVersion(PerfMetricsSnapshot snapshot)
-    {
-        var (major, minor, patch) = Systems.Zlink.Zlink.Version();
-        return snapshot with { provenance = new(snapshot.provenance) { ["coreVersion"] = $"{major}.{minor}.{patch}" } };
-    }
-
     public static IResult Json<T>(T value, int status = 200) => Results.Json(value, ServerJson, statusCode: status);
     public static object PublicStatus(IServiceProvider services)
     {
@@ -143,9 +138,7 @@ public static class ServerApplication
         if (topology == "clientserver") return new { host, clientServer = services.GetRequiredService<IZLinkClientServerRuntime>().GetStatus(config.channelName!) };
         return new { host };
     }
-    // A role that reports ObjectsReadiness.Ready=false has not registered this cell's mesh or channel, so only the host is observed.
-    private static string? ObservedTopology(IServiceProvider services) =>
-        services.GetService<ObjectsReadiness>() is { Ready: false } ? null : services.GetRequiredService<RoleConfig>().topology;
+    private static string? ObservedTopology(IServiceProvider services) => services.GetRequiredService<RoleConfig>().topology;
     public static PerfReady Ready(IServiceProvider services)
     {
         var config = services.GetRequiredService<RoleConfig>();
@@ -188,18 +181,6 @@ public static class ServerApplication
         return new(config.runId, config.cellId, config.role, config.roleInstance, infrastructure,
             objectsReady, probe, infrastructure && objectsReady && probe && !measurement.HasErrors, PerfClock.UnixMs, evidence.ToArray(), reasons.ToArray());
     }
-}
-
-// The role's own statement that its cell objects (Spot, Actor, subscriptions) are not yet prepared (§16.1 objectsReady).
-// The role replaces the statement as its public create/bind results arrive; the evidence lists those results.
-public sealed class ObjectsReadiness(bool ready, string reason)
-{
-    private sealed record State(bool Ready, string Reason, object[] Evidence);
-    private volatile State state = new(ready, reason, []);
-    public bool Ready => state.Ready;
-    public string Reason => state.Reason;
-    public object[] Evidence => state.Evidence;
-    public void Set(bool ready, string reason, object[] evidence) => state = new(ready, reason, evidence);
 }
 
 public sealed class RoutingIdObservationConverter : JsonConverter<RoutingId>

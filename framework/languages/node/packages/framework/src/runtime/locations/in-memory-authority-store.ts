@@ -1,4 +1,13 @@
+import {
+  AUTHORITY_ENVELOPE_MAX_BYTES,
+  CREATION_INTENT_MAX_BYTES,
+  CREATION_TERMINAL_ENVELOPE_MAX_BYTES
+} from '../../contracts/Configuration/InternalDefaults';
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
+import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
+import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import { randomUUID } from 'node:crypto';
+import { SHA256_DIGEST_BYTES } from '../foundation/actor-join-recovery-codec';
 import type {
   ZLinkAggregateAbortResult,
   ZLinkAggregateCommitResult,
@@ -34,9 +43,9 @@ import { encodeAuthorityKey } from './authority-key-codec';
 import { creationTerminalPreimage } from './opaque-record-key';
 
 const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
-const MAX_PAYLOAD_BYTES = 1024 * 1024;
+
 const CREATION_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
-const MAX_U64 = 0xffff_ffff_ffff_ffffn;
+const MAX_U64 = UINT64_MAX;
 
 export interface ZLinkInMemoryAuthorityValidation {
   isTargetLive(
@@ -190,10 +199,22 @@ export class ZLinkInMemoryAuthorityStore {
     if (!this.isOwnerLive(row.snapshot)) {
       return { kind: 'conflict', current: this.read(keyValue) };
     }
+    if (
+      mutation.generationTransition === 'reincarnate' &&
+      (this.objectGeneration >= MAX_GENERATION || this.ownerGeneration >= MAX_GENERATION)
+    ) {
+      return { kind: 'generationExhausted' };
+    }
     const nextVersion = this.tryNextStoreVersion();
     if (nextVersion === undefined) return { kind: 'generationExhausted' };
     row.snapshot = {
       ...row.snapshot,
+      ...(mutation.generationTransition === 'reincarnate'
+        ? {
+            objectGeneration: ++this.objectGeneration,
+            authorityOwnerGeneration: ++this.ownerGeneration
+          }
+        : {}),
       storeVersion: version(nextVersion),
       payload: Buffer.from(mutation.payload)
     };
@@ -208,8 +229,8 @@ export class ZLinkInMemoryAuthorityStore {
     signal?: AbortSignal
   ): Promise<ZLinkAuthorityScanResult> {
     signal?.throwIfAborted();
-    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
-      throw new RangeError('Authority scan limit must be in 1..1000.');
+    if (!Number.isInteger(limit) || limit < 1 || limit > ZLINK_PROVIDER_MAX_PAGE_SIZE) {
+      throw new RangeError(`Authority scan limit must be in 1..${ZLINK_PROVIDER_MAX_PAGE_SIZE}.`);
     }
     const decoded =
       cursor === undefined
@@ -814,7 +835,7 @@ function validateAuthorityMutation(mutation: ZLinkAuthorityMutation): void {
   }
   const generationTransition = (mutation as { readonly generationTransition?: unknown })
     .generationTransition;
-  if (generationTransition !== 'preserve') {
+  if (generationTransition !== 'preserve' && generationTransition !== 'reincarnate') {
     throw new TypeError('Authority owner transitions require an aggregate CAS.');
   }
 }
@@ -826,9 +847,9 @@ function validateReserve(request: ZLinkObjectReserveRequest): void {
   validatePayload(request.creatingPayload);
   validateCapacityVector(request.capacity);
   if (
-    request.intent.requestSha256.byteLength !== 32 ||
+    request.intent.requestSha256.byteLength !== SHA256_DIGEST_BYTES ||
     request.intent.requestEncodedSize < 0n ||
-    request.intent.requestEncodedSize > BigInt(MAX_PAYLOAD_BYTES)
+    request.intent.requestEncodedSize > BigInt(CREATION_INTENT_MAX_BYTES)
   ) {
     throw new TypeError('Object creation content receipt is invalid.');
   }
@@ -837,9 +858,13 @@ function validateReserve(request: ZLinkObjectReserveRequest): void {
 function validateCreationOperation(operation: ZLinkCreationOperationIdentity): void {
   const sourceRid = String(operation.sourceNodeRid);
   const sourceRidBytes = Buffer.byteLength(sourceRid, 'utf8');
-  if (sourceRidBytes < 1 || sourceRidBytes > 255 || sourceRid.includes('\0')) {
+  if (
+    sourceRidBytes < 1 ||
+    sourceRidBytes > ZLINK_MAX_ROUTING_ID_BYTES ||
+    sourceRid.includes('\0')
+  ) {
     throw new TypeError(
-      'Creation terminal source node RID must contain 1..255 UTF-8 bytes without NUL.'
+      `Creation terminal source node RID must contain 1..${ZLINK_MAX_ROUTING_ID_BYTES} UTF-8 bytes without NUL.`
     );
   }
   if (
@@ -861,8 +886,10 @@ function validateTerminalForMutation(
 ): ZLinkCreationTerminalRecord | undefined {
   if (publication === undefined) return undefined;
   validateCreationOperation(publication.operation);
-  if (publication.terminalEnvelope.byteLength > MAX_PAYLOAD_BYTES) {
-    throw new RangeError('Creation terminal envelope must not exceed 1 MiB.');
+  if (publication.terminalEnvelope.byteLength > CREATION_TERMINAL_ENVELOPE_MAX_BYTES) {
+    throw new RangeError(
+      `Creation terminal envelope must not exceed ${CREATION_TERMINAL_ENVELOPE_MAX_BYTES / (1024 * 1024)} MiB.`
+    );
   }
   const deadlineMs = publication.operationDeadline.getTime();
   const expiresAtMs = deadlineMs + CREATION_TERMINAL_RETENTION_MS;
@@ -915,8 +942,8 @@ function validateAggregateRequest(request: ZLinkAggregatePrepareRequest): void {
   if (request.aggregateGeneration < 1n || request.participants.length < 1) {
     throw new RangeError('Aggregate generation and participant count are invalid.');
   }
-  if (request.inventoryDigest.byteLength !== 32) {
-    throw new TypeError('Aggregate inventory digest must contain 32 bytes.');
+  if (request.inventoryDigest.byteLength !== SHA256_DIGEST_BYTES) {
+    throw new TypeError(`Aggregate inventory digest must contain ${SHA256_DIGEST_BYTES} bytes.`);
   }
   validateCapacityVector(request.capacity);
   const keys = request.participants.map((participant) => participant.authorityKey.value);
@@ -927,8 +954,10 @@ function validateAggregateRequest(request: ZLinkAggregatePrepareRequest): void {
 }
 
 function validatePayload(payload: Uint8Array): void {
-  if (payload.byteLength > MAX_PAYLOAD_BYTES) {
-    throw new RangeError('Authority payload exceeds 1 MiB.');
+  if (payload.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES) {
+    throw new RangeError(
+      `Authority payload exceeds ${AUTHORITY_ENVELOPE_MAX_BYTES / (1024 * 1024)} MiB.`
+    );
   }
 }
 

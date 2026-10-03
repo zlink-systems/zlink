@@ -192,7 +192,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        bool durable = false
     ) =>
         ValueTask.FromException<ZLinkBackendRouteReceived>(
             new NotSupportedException(
@@ -595,7 +596,9 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         IReadOnlyList<Message> parts,
         SendFlags flags,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     ) =>
         ValueTask.FromException(
             new NotSupportedException("This Spot backend does not support direct Spot sends.")
@@ -609,7 +612,9 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     ) =>
         ValueTask.FromException<ZLinkBackendRouteReceived>(
             new NotSupportedException("This Spot backend does not support direct Spot requests.")

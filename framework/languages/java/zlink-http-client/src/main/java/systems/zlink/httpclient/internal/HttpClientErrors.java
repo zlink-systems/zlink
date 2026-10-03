@@ -7,10 +7,17 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.http.HttpTimeoutException;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 /** Owns the HTTP client contract's mapping from failure situations to framework error kinds. */
 public final class HttpClientErrors {
+
+    enum FailureStage {
+        TRANSPORT,
+        APPLICATION
+    }
 
     private HttpClientErrors() {}
 
@@ -46,13 +53,29 @@ public final class HttpClientErrors {
     }
 
     public static ZLinkFrameworkException fromExecutionFailure(Throwable cause) {
-        if (cause instanceof ZLinkFrameworkException failure) {
-            return failure;
+        return fromExecutionFailure(cause, FailureStage.TRANSPORT);
+    }
+
+    static ZLinkFrameworkException fromExecutionFailure(Throwable cause, FailureStage stage) {
+        if (cause instanceof ZLinkFrameworkException failure) return failure;
+        if (stage == FailureStage.TRANSPORT) {
+            Throwable current = cause;
+            while ((current instanceof IOException
+                            || current instanceof UncheckedIOException
+                            || current instanceof CompletionException
+                            || current instanceof ExecutionException)
+                    && current.getCause() != null
+                    && current.getCause() != current) {
+                current = current.getCause();
+                if (current instanceof ZLinkFrameworkException failure) return failure;
+            }
         }
-        if (cause instanceof HttpTimeoutException || cause instanceof TimeoutException) {
+        if (stage == FailureStage.TRANSPORT
+                && (cause instanceof HttpTimeoutException || cause instanceof TimeoutException)) {
             return deadlineExceeded(cause);
         }
-        if (cause instanceof IOException || cause instanceof UncheckedIOException) {
+        if (stage == FailureStage.TRANSPORT
+                && (cause instanceof IOException || cause instanceof UncheckedIOException)) {
             return unavailable(cause);
         }
         return internalFailure(cause);

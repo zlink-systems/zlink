@@ -16,6 +16,8 @@ namespace Zlink.Framework.Runtime.Backend.DotNet;
 // Spot pull consumers and completion callbacks retain their existing contracts.
 internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 {
+    private const int MinimumApplicationWorkers = 2;
+
     private readonly IMeshNode _node;
     private readonly ZLinkMeshCompletionTable _completions;
     private readonly ZLinkApplicationJobQueue? _applicationJobQueue;
@@ -89,7 +91,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         _node.SetReadyHandler(OnReady);
         using (ExecutionContext.SuppressFlow())
         {
-            var workers = new Task[Math.Max(2, Environment.ProcessorCount)];
+            var workers = new Task[Math.Max(MinimumApplicationWorkers, Environment.ProcessorCount)];
             for (var index = 0; index < workers.Length; index++)
                 workers[index] = _applicationTaskRunner is { } runner
                     ? runner.Run("mesh-application-worker", ct => RunAsync(_stop.Token, ct))
@@ -129,11 +131,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 $"Spot dispatch state '{currentSpotId}' is already registered."
             );
 
-        if (
-            !((ICollection<KeyValuePair<ZLinkSpotId, SpotDispatchState>>)_spots).Remove(
-                new(previous, state)
-            )
-        )
+        if (!RemoveSpotRegistration(previous, state))
             throw new InvalidOperationException(
                 $"Spot dispatch state '{previousSpotId}' could not be rekeyed."
             );
@@ -146,6 +144,36 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         );
     }
 
+    private bool RemoveSpotRegistration(ZLinkSpotId spotId, SpotDispatchState state) =>
+        ((ICollection<KeyValuePair<ZLinkSpotId, SpotDispatchState>>)_spots).Remove(
+            new(spotId, state)
+        );
+
+    internal async ValueTask UnregisterSpotAsync(string spotId, SpotDispatchState state)
+    {
+        RemoveSpotRegistration(ZLinkSpotId.FromBoundary(spotId, nameof(spotId)), state);
+        var failures = new ZLinkFailureCollector();
+        var pending = new List<Task>();
+        if (!state.Routes.IsEmpty && state.DispatchHandler is not null)
+            failures.Capture(() =>
+                ObserveDispatchResult(
+                    state.Raise(ZLinkBackendSpotDispatchEvent.RouteReadable),
+                    pending
+                )
+            );
+        foreach (var completion in pending)
+            await failures.CaptureAsync(() => new ValueTask(completion)).ConfigureAwait(false);
+        while (state.Routes.TryDequeue(out var route))
+            failures.Capture(route.Dispose);
+        while (state.Subscriptions.TryDequeue(out var subscription))
+            failures.Capture(subscription.Dispose);
+        while (state.ActorJoins.TryDequeue(out var join))
+            failures.Capture(join.Dispose);
+        while (state.Lifecycles.TryDequeue(out var lifecycle))
+            failures.Capture(() => lifecycle.ApplicationJobAdmission?.Dispose());
+        failures.ThrowIfAny();
+    }
+
     public void SetDispatchHandler(
         string spotId,
         Func<
@@ -156,6 +184,29 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     {
         var state = RegisterSpot(spotId);
         state.DispatchHandler = handler;
+        if (!state.Routes.IsEmpty)
+        {
+            var runner =
+                _applicationTaskRunner
+                ?? throw new InvalidOperationException(
+                    "Retained Spot ingress requires the existing application execution owner."
+                );
+            ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+                runner.TryRunDetached(
+                    "mesh-spot-dispatch-registration",
+                    async _ =>
+                    {
+                        var pending = new List<Task>();
+                        ObserveDispatchResult(
+                            state.Raise(ZLinkBackendSpotDispatchEvent.RouteReadable),
+                            pending
+                        );
+                        if (pending.Count != 0)
+                            await Task.WhenAll(pending).ConfigureAwait(false);
+                    }
+                )
+            );
+        }
     }
 
     // Registers the node-level route/channel dispatch sink. Node-addressed
@@ -652,7 +703,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             sourceNodeGeneration: record.SourceBindingGeneration,
             requestSource: requestSource == default ? null : requestSource,
             deadlineUnixMs: ZLinkMeshRecordAdapters.NormalizeDeadline(record.DeadlineUnixMs),
-            payloadOwner: payloadOwner
+            payloadOwner: payloadOwner,
+            instanceIntent: record.InstanceIntent
         );
         state.Routes.Enqueue(route);
         routeDispatch = state;

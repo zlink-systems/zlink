@@ -20,10 +20,8 @@ namespace zlink::framework::runtime::stateful
 namespace
 {
 
-constexpr std::uint32_t terminal_protocol_error = 104;
-constexpr std::uint32_t terminal_internal_error = 105;
-constexpr std::uint32_t terminal_rejected = 106;
-constexpr std::uint32_t terminal_conflict = 107;
+constexpr std::size_t mailbox_claim_byte_limit = 16u * 1024u * 1024u;
+
 
 class mailbox_claim_release_guard_t final
 {
@@ -388,8 +386,9 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
 
 stateful_error_t raw_stateful_dispatch_t::ingest (const object_ref_t &owner)
 {
-    auto claim = _transport->mailbox ().try_claim_owner (
-      mesh::service_mailbox_domain_t::application, mailbox_owner (owner), 1, 16u * 1024u * 1024u);
+    auto claim =
+      _transport->mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
+                                              mailbox_owner (owner), 1, mailbox_claim_byte_limit);
     if (!claim)
         return stateful_error_t::not_found;
 
@@ -559,12 +558,13 @@ stateful_error_t raw_stateful_dispatch_t::ingest (const object_ref_t &owner)
             // moving replies with the retryable relocation terminal
             // (conflict + spotMoving maps to a retryable unavailable on the
             // requester), so the session owner keeps redelivery ownership.
-            const auto terminal_result = validation == stateful_error_t::generation_stale
-                                             || validation == stateful_error_t::moving
-                                           ? terminal_conflict
-                                         : validation == stateful_error_t::conflict
-                                           ? terminal_rejected
-                                           : terminal_protocol_error;
+            const auto terminal_result =
+              validation == stateful_error_t::generation_stale
+                  || validation == stateful_error_t::moving
+                ? static_cast<std::uint32_t> (protocol::request_terminal_result::conflict)
+              : validation == stateful_error_t::conflict
+                ? static_cast<std::uint32_t> (protocol::request_terminal_result::rejected)
+                : static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError);
             const auto failure_code =
               validation == stateful_error_t::generation_stale
                 ? static_cast<std::uint32_t> (protocol::framework_error_code::actorLocationStale)
@@ -603,7 +603,8 @@ stateful_error_t raw_stateful_dispatch_t::ingest (const object_ref_t &owner)
         if (record.reply_token && record.correlation) {
             claim_guard.dismiss ();
             reply_failure_then_release_claim (
-              *_transport, std::move (record), terminal_protocol_error,
+              *_transport, std::move (record),
+              static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
               static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError),
               claim_holder);
         }
@@ -632,7 +633,8 @@ stateful_error_t raw_stateful_dispatch_t::ingest (const object_ref_t &owner)
         if (record.reply_token && record.correlation) {
             claim_guard.dismiss ();
             reply_failure_then_release_claim (
-              *_transport, std::move (record), terminal_rejected,
+              *_transport, std::move (record),
+              static_cast<std::uint32_t> (protocol::request_terminal_result::rejected),
               static_cast<std::uint32_t> (protocol::framework_error_code::requestRejected),
               claim_holder);
         }
@@ -688,7 +690,8 @@ raw_stateful_dispatch_t::complete_async (const stateful_delivery_t &delivery,
     if (delivery.request) {
         const auto delivered =
           !reply ? _transport->reply_failure (
-                     pending.transport, terminal_internal_error,
+                     pending.transport,
+                     static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
                      static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed))
                  : _transport->reply (pending.transport, *reply);
         if (!delivered) {
@@ -771,7 +774,9 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
         else
             delivered = _transport->reply_failure (
               pending.transport,
-              relay.terminal_result == 0 ? terminal_internal_error : relay.terminal_result,
+              relay.terminal_result == 0
+                ? static_cast<std::uint32_t> (protocol::request_terminal_result::internalError)
+                : relay.terminal_result,
               static_cast<std::uint32_t> (relay.failure_code));
     }
     catch (...) {
@@ -884,8 +889,10 @@ stateful_error_t raw_stateful_dispatch_t::discard_owner_pending (const object_re
     for (auto &item : cleanup) {
         (void) _objects->discard_application (owner, item.sequence);
         if (item.request && item.claim)
-            reply_failure_then_release_claim (*_transport, std::move (*item.request),
-                                              terminal_conflict, 0, item.claim);
+            reply_failure_then_release_claim (
+              *_transport, std::move (*item.request),
+              static_cast<std::uint32_t> (protocol::request_terminal_result::conflict), 0,
+              item.claim);
         else if (item.claim)
             (void) _transport->mailbox ().release (*item.claim);
     }
@@ -1108,7 +1115,7 @@ task_t<raw_relocation_replay_result_t> raw_relocation_replay_coordinator_t::pump
     const auto local = _transport->topology ().local_descriptor ();
     auto claim = _transport->mailbox ().try_claim_owner (
       mesh::service_mailbox_domain_t::infrastructure, mailbox_owner (local.node_routing_id), 1,
-      16u * 1024u * 1024u);
+      mailbox_claim_byte_limit);
     if (!claim)
         co_return raw_relocation_replay_result_t::no_data;
     auto record = std::move (claim->records.front ());

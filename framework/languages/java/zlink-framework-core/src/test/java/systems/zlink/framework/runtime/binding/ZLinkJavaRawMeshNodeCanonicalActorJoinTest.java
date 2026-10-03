@@ -12,8 +12,11 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 import java.nio.charset.StandardCharsets;
@@ -22,9 +25,81 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
+    @Test
+    void localActorLeftReportsAllCleanupFailuresOnceWithoutResubmission() {
+        AtomicReference<Throwable> reportedFailure = new AtomicReference<>();
+        AtomicInteger reports = new AtomicInteger();
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicInteger completed = new AtomicInteger();
+        Logger logger = Logger.getLogger(ZLinkJavaRawMeshNode.class.getName());
+        Handler diagnostics =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        if (record.getMessage().startsWith("Actor Left handler failed:")) {
+                            reportedFailure.set(record.getThrown());
+                            reports.incrementAndGet();
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(diagnostics);
+        try (var context = Zlink.createContext();
+                var source = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId node = RoutingId.from("r4-java-source-cleanup");
+            source.setRoutingId(node);
+            source.setActorLeftHandler(
+                    (rid, left) -> {
+                        attempts.incrementAndGet();
+                        return ZLinkHandlerStages.completeAll(
+                                List.of(
+                                        () ->
+                                                CompletableFuture.failedFuture(
+                                                        new IllegalStateException(
+                                                                "first source cleanup failure")),
+                                        () ->
+                                                CompletableFuture.failedFuture(
+                                                        new IllegalStateException(
+                                                                "second source cleanup failure")),
+                                        () -> {
+                                            completed.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        }));
+                    });
+            source.sendActorLeft(
+                            node,
+                            new ZLinkServiceM6BWireCodec.ActorLeft(
+                                    new ZLinkServiceM6BWireCodec.ActorIdentity("actor-r4", 7L),
+                                    "source-spot",
+                                    1L,
+                                    2L))
+                    .toCompletableFuture()
+                    .join();
+            assertEquals(1, reports.get());
+            assertEquals(1, attempts.get());
+            assertEquals(1, completed.get());
+            assertEquals("first source cleanup failure", reportedFailure.get().getMessage());
+            assertEquals(1, reportedFailure.get().getSuppressed().length);
+            assertEquals(
+                    "second source cleanup failure",
+                    reportedFailure.get().getSuppressed()[0].getMessage());
+        } finally {
+            logger.removeHandler(diagnostics);
+        }
+    }
+
     @Test
     void actorJoin28UsesStructuralFlavorSelectionAndReturnsTypedReplies() throws Exception {
         String endpoint = "inproc://jvm-canonical-actor-join-" + System.nanoTime();
@@ -167,15 +242,14 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
     }
 
     @Test
-    void supersededActorJoinAloneMapsToActorLocationStale() {
+    void supersededActorJoinMapsToInvalidOperation() {
+        // Error model §2.1 sends InvalidOperation without a cause as invalidState/none.
         assertArrayEquals(
-                new int[] {107, 21},
+                new int[] {111, 0},
                 ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                "attempt was superseded",
-                                null,
-                                java.util.Map.of("zlink.actorJoin.superseded", "true"))));
+                                "attempt was superseded")));
         assertArrayEquals(
                 new int[] {105, 13},
                 ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
@@ -187,12 +261,20 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
                 systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult
                         .INTERNAL_ERROR
                         .toFrameworkErrorKind(13));
-        assertArrayEquals(
-                new int[] {105, 17},
+        int[] unrelatedInvalidOperation =
                 ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                "an unmarked invalid operation")));
+                                "an unrelated invalid operation"));
+        assertArrayEquals(new int[] {111, 0}, unrelatedInvalidOperation);
+        assertTrue(
+                ServiceWireConstants.validTerminalFailure(
+                        unrelatedInvalidOperation[0], unrelatedInvalidOperation[1]));
+        assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult
+                        .fromWireTerminal(unrelatedInvalidOperation[0])
+                        .toFrameworkErrorKind(unrelatedInvalidOperation[1]));
     }
 
     private static void awaitAdmitted(ZLinkJavaRawMeshNode node) throws InterruptedException {

@@ -93,6 +93,7 @@ test('deadline uses the closed snake_case force reason and terminal event exactl
   });
   runtime.markServing();
   const observed = runtime.observe('game', 4)[Symbol.asyncIterator]();
+  assert.equal((await observed.next()).value.status.state, framework.ZLinkTopologyState.Ready);
   assert.deepEqual(await runtime.drain('game', 10), {
     kind: 'forceStopped',
     reason: 'deadline_exceeded'
@@ -109,20 +110,45 @@ test('deadline uses the closed snake_case force reason and terminal event exactl
 
 test('drain classifies publish, owner cleanup, and teardown failures with closed snake_case reasons', async () => {
   const cases = [
-    ['ZLinkDrainingStatePublishError', 'drain_state_publish_failed', 'publishDraining'],
-    ['ZLinkOwnerCleanupError', 'owner_cleanup_failed', 'drainResources'],
-    ['Error', 'teardown_failed', 'drainResources']
+    [framework.ZLinkDrainingStatePublishError, 'drain_state_publish_failed', 'publishDraining'],
+    [framework.ZLinkOwnerCleanupError, 'owner_cleanup_failed', 'drainResources'],
+    [Error, 'teardown_failed', 'drainResources']
   ];
-  for (const [errorName, reason, phase] of cases) {
+  for (const [ErrorType, reason, phase] of cases) {
     const gate = new framework.ZLinkRuntimeAdmissionGate();
-    const failure = new Error(reason);
-    failure.name = errorName;
+    const failure = new ErrorType(reason);
     const runtime = createRuntime(gate, {
       async publishDraining() {
         if (phase === 'publishDraining') throw failure;
       },
       async drainResources() {
         if (phase === 'drainResources') throw failure;
+      }
+    });
+    assert.deepEqual(await runtime.drain('game'), { kind: 'forceStopped', reason });
+  }
+});
+
+test('drain error classification uses actual types despite changed or impersonated names', async () => {
+  const actual = new framework.ZLinkOwnerCleanupError(new Error('cleanup failed'));
+  actual.name = 'renamed-by-observer';
+  const published = new framework.ZLinkDrainingStatePublishError(new Error('publication failed'));
+  published.name = 'renamed-by-observer';
+  const publishImpersonated = new Error('ordinary failure');
+  publishImpersonated.name = 'ZLinkDrainingStatePublishError';
+  const impersonated = new Error('ordinary failure');
+  impersonated.name = 'ZLinkOwnerCleanupError';
+  for (const [failure, reason] of [
+    [actual, 'owner_cleanup_failed'],
+    [published, 'drain_state_publish_failed'],
+    [publishImpersonated, 'teardown_failed'],
+    [new AggregateError([actual]), 'owner_cleanup_failed'],
+    [impersonated, 'teardown_failed'],
+    [new AggregateError([impersonated]), 'teardown_failed']
+  ]) {
+    const runtime = createRuntime(new framework.ZLinkRuntimeAdmissionGate(), {
+      async drainResources() {
+        throw failure;
       }
     });
     assert.deepEqual(await runtime.drain('game'), { kind: 'forceStopped', reason });
@@ -205,6 +231,7 @@ test('RouteMesh observer reports a complete status after placement capacity chan
   });
   runtime.markServing();
   const events = runtime.observe('game', 4)[Symbol.asyncIterator]();
+  assert.equal((await events.next()).value.status.placement.activeActorCount, 1);
 
   counts = { activeActorCount: 2, activeSpotCount: 1 };
   descriptor = {
@@ -378,6 +405,7 @@ test('RouteMesh status follows local channel and placement weight overrides', as
   assert.equal(initial.placement.isAvailable, true);
 
   const events = runtime.observe('game', 4)[Symbol.asyncIterator]();
+  assert.equal((await events.next()).value.status.placement.isAvailable, true);
   descriptor = {
     ...descriptor,
     placementWeight: 0,
@@ -401,7 +429,7 @@ test('RouteMesh status follows local channel and placement weight overrides', as
   assert.equal(observed.value.status.placement.isAvailable, false);
   assert.equal(
     observed.value.status.placement.unavailableReason,
-    framework.ZLinkTopologyReason.NoReadyTarget
+    framework.ZLinkTopologyReason.CapacityExceeded
   );
 });
 
@@ -459,6 +487,7 @@ test('RouteMesh observer reports Location Store degradation and recovery', async
   });
   runtime.markServing();
   const events = runtime.observe('game', 4)[Symbol.asyncIterator]();
+  assert.equal((await events.next()).value.status.state, framework.ZLinkTopologyState.Ready);
 
   storeHealthy = false;
   const degraded = await nextObserved(
@@ -806,6 +835,76 @@ function createRuntime(gate, overrides = {}) {
   });
 }
 
+test('RouteMesh native timestamps and queries do not consume published status sequences', async t => {
+  let nativeTimestamp = 100n;
+  let hostState = framework.ZLinkFrameworkRuntimeState.Serving;
+  const node = fakeMeshNode();
+  const originalStatus = node.status;
+  node.status = () => ({ ...originalStatus(), lastChangedMs: nativeTimestamp });
+  const runtime = createRuntime(new framework.ZLinkRuntimeAdmissionGate(), {
+    meshNode: node,
+    hostState: () => hostState
+  });
+  runtime.markServing();
+  const events = runtime.observe('game')[Symbol.asyncIterator]();
+  t.after(() => events.return());
+  const initial = (await events.next()).value.status;
+  nativeTimestamp = 200n;
+  assert.equal(runtime.snapshot('game').sequence, initial.sequence);
+  runtime.hostStateChanged();
+  assert.equal(runtime.snapshot('game').sequence, initial.sequence);
+  hostState = framework.ZLinkFrameworkRuntimeState.Relocating;
+  runtime.hostStateChanged();
+  const changed = (await events.next()).value.status;
+  assert.equal(changed.sequence, initial.sequence + 1n);
+  assert.equal(changed.state, framework.ZLinkTopologyState.Stopping);
+  runtime.stopObservers();
+  const terminal = (await events.next()).value.status;
+  assert.equal(terminal.sequence, changed.sequence + 1n);
+  runtime.stopObservers();
+  assert.equal(runtime.snapshot('game').sequence, terminal.sequence);
+});
+
+test('RouteMesh publishes simultaneous peer changes once to every observer of the same mesh', async t => {
+  let peers = [];
+  const node = fakeMeshNode();
+  node.peers = () => peers;
+  const nodes = new Map([['game', node], ['other', fakeMeshNode()]]);
+  const runtime = new framework.ZLinkRouteMeshRuntimeCoordinator({
+    meshNames: [...nodes.keys()],
+    meshOptions: new Map([...nodes.keys()].map(name => [name, { meshChannels: {} }])),
+    meshNode: name => nodes.get(name),
+    admission: new framework.ZLinkRuntimeAdmissionGate(),
+    publishRetiring: async () => {}, rollbackRetiring: async () => {},
+    publishDraining: async () => {}, publishHostDraining: async () => {},
+    drainResources: async () => {}, cleanupHostResources: async () => {}, forceStopResources: async () => {}
+  });
+  runtime.markServing();
+  const first = runtime.observe('game')[Symbol.asyncIterator]();
+  const second = runtime.observe('game')[Symbol.asyncIterator]();
+  const other = runtime.observe('other')[Symbol.asyncIterator]();
+  t.after(async () => { await first.return(); await second.return(); await other.return(); });
+  const initial = (await first.next()).value.status;
+  await second.next();
+  const otherInitial = (await other.next()).value.status;
+  peers = ['node-a', 'node-b'].map(routingId => ({
+    routingId, lifecycleGeneration: 1n, descriptorRevision: 1n,
+    state: framework.MeshPeerRuntimeState.Serving
+  }));
+  runtime.hostStateChanged();
+  const changed = (await first.next()).value.status;
+  assert.equal(changed.sequence, initial.sequence + 1n);
+  assert.equal(changed.readyPeerCount, 2);
+  assert.equal((await second.next()).value.status.sequence, changed.sequence);
+  assert.equal(runtime.snapshot('other').sequence, otherInitial.sequence);
+  runtime.hostStateChanged();
+  assert.equal(runtime.snapshot('game').sequence, changed.sequence);
+  peers = peers.map(peer => ({ ...peer, state: framework.MeshPeerRuntimeState.Draining }));
+  runtime.hostStateChanged();
+  assert.equal((await first.next()).value.status.sequence, changed.sequence + 1n);
+  assert.equal((await second.next()).value.status.sequence, changed.sequence + 1n);
+});
+
 function runtimeDescriptor(overrides = {}) {
   return {
     objectRole: framework.ZLinkObjectRole.Server,
@@ -828,7 +927,7 @@ function fakeMeshNode() {
     status() {
       return {
         meshName: 'game', routingId: 'node-a', lifecycleGeneration: 1n,
-        descriptorRevision: 1n, localEndpoint: 'tcp://127.0.0.1:1', state: 3,
+        descriptorRevision: 1n, localEndpoint: 'tcp://127.0.0.1:1', state: framework.MeshNodeRuntimeState.Serving,
         lastChangedMs: 1n,
         pendingApplicationMessages: 0n, pendingInfrastructureMessages: 0n
       };
@@ -869,3 +968,30 @@ async function nextObserved(events, timeoutMessage) {
   assert.equal(observed.done, false);
   return observed.value.status;
 }
+
+test('RouteMesh query publishes changed payload without observers', async () => {
+  let peers = [];
+  const node = fakeMeshNode();
+  node.peers = () => peers;
+  const runtime = createRuntime(new framework.ZLinkRuntimeAdmissionGate(), { meshNode: node });
+  const initial = runtime.snapshot('game');
+  assert.equal(initial.sequence, 1n);
+  assert.equal(runtime.snapshot('game').sequence, 1n);
+  peers = [{ routingId: 'node-b', lifecycleGeneration: 1n, descriptorRevision: 1n, state: framework.MeshPeerRuntimeState.Serving }];
+  const changed = runtime.snapshot('game');
+  assert.equal(changed.sequence, 2n);
+  assert.equal(changed.readyPeerCount, 1);
+  assert.equal(runtime.snapshot('game').sequence, 2n);
+  const events = runtime.observe('game')[Symbol.asyncIterator]();
+  assert.equal((await events.next()).value.status.sequence, 2n);
+  await events.return();
+  peers = [];
+  runtime.hostStateChanged();
+  assert.equal(runtime.snapshot('game').sequence, 3n);
+  runtime.stopObservers();
+  const terminal = runtime.snapshot('game');
+  node.status = () => { throw new Error('disposed'); };
+  assert.equal(runtime.snapshot('game'), terminal);
+  runtime.stopObservers();
+  assert.equal(runtime.snapshot('game'), terminal);
+});

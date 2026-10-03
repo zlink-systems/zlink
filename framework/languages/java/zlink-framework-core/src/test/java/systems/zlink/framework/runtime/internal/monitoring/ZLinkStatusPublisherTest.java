@@ -19,6 +19,222 @@ import java.util.function.IntConsumer;
 
 final class ZLinkStatusPublisherTest {
     @Test
+    void subscriptionAcceptedDuringFailureDetachRechecksSourceRetention() throws Exception {
+        var publisher =
+                ZLinkStatusPublisher.create(
+                        () -> 1,
+                        value -> value,
+                        1,
+                        ignored -> false,
+                        ignored -> false,
+                        Runnable::run);
+        var registrations = new AtomicInteger();
+        publisher.onActiveSubscriptions(
+                active -> {
+                    if (active) registrations.incrementAndGet();
+                });
+        publisher.subscribe(
+                new Flow.Subscriber<>() {
+                    public void onSubscribe(Flow.Subscription subscription) {}
+
+                    public void onNext(ZLinkObservedStatus<Integer> value) {}
+
+                    public void onError(Throwable failure) {}
+
+                    public void onComplete() {}
+                });
+        var gateField = ZLinkStatusPublisher.class.getDeclaredField("retentionGate");
+        gateField.setAccessible(true);
+        var listField = ZLinkStatusPublisher.class.getDeclaredField("subscriptions");
+        listField.setAccessible(true);
+        var current = (java.util.List<?>) listField.get(publisher);
+        CompletableFuture<Void> failed;
+        var replacement = new CompletableFuture<Flow.Subscription>();
+        synchronized (gateField.get(publisher)) {
+            failed =
+                    CompletableFuture.runAsync(
+                            () -> publisher.fail(new IllegalStateException("registration")));
+            long limit = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (!current.isEmpty() && System.nanoTime() < limit) Thread.onSpinWait();
+            assertTrue(current.isEmpty());
+            publisher.subscribe(statusSubscriber(new CopyOnWriteArrayList<>(), replacement));
+            assertEquals(1, registrations.get());
+        }
+        failed.get(3, TimeUnit.SECONDS);
+        assertEquals(2, registrations.get());
+        replacement.join().cancel();
+    }
+
+    @Test
+    void sourceFailureDetachesEveryCurrentObserverBeforeImmediateResubscribe() {
+        var publisher =
+                ZLinkStatusPublisher.create(
+                        () -> 1,
+                        value -> value,
+                        1,
+                        ignored -> false,
+                        ignored -> false,
+                        Runnable::run);
+        var registrations = new AtomicInteger();
+        publisher.onActiveSubscriptions(
+                active -> {
+                    if (active) registrations.incrementAndGet();
+                });
+        var cause = new IllegalStateException("source registration failed");
+        var errors = new CopyOnWriteArrayList<Throwable>();
+        var replacement = new CompletableFuture<Flow.Subscription>();
+        var replacementValues = new CopyOnWriteArrayList<ZLinkObservedStatus<Integer>>();
+        publisher.subscribe(
+                new Flow.Subscriber<>() {
+                    public void onSubscribe(Flow.Subscription subscription) {}
+
+                    public void onNext(ZLinkObservedStatus<Integer> value) {}
+
+                    public void onError(Throwable failure) {
+                        errors.add(failure);
+                        publisher.subscribe(statusSubscriber(replacementValues, replacement));
+                    }
+
+                    public void onComplete() {}
+                });
+        publisher.subscribe(
+                new Flow.Subscriber<>() {
+                    public void onSubscribe(Flow.Subscription subscription) {}
+
+                    public void onNext(ZLinkObservedStatus<Integer> value) {}
+
+                    public void onError(Throwable failure) {
+                        errors.add(failure);
+                    }
+
+                    public void onComplete() {}
+                });
+        assertEquals(1, registrations.get());
+        publisher.fail(cause);
+        assertEquals(List.of(cause, cause), errors);
+        assertEquals(2, registrations.get());
+        replacement.join().request(1);
+        assertEquals(1, replacementValues.size());
+        replacement.join().cancel();
+    }
+
+    @Test
+    void throwingErrorObserverDoesNotSkipOtherObserverAndLogsOriginalCallbackCause() {
+        var publisher =
+                ZLinkStatusPublisher.create(
+                        () -> 1,
+                        value -> value,
+                        1,
+                        ignored -> false,
+                        ignored -> false,
+                        Runnable::run);
+        var cause = new IllegalStateException("source registration failed");
+        var thrown = new IllegalArgumentException("observer failed");
+        var errors = new CopyOnWriteArrayList<Throwable>();
+        var diagnostics = new CopyOnWriteArrayList<Throwable>();
+        var logger = java.util.logging.Logger.getLogger(ZLinkStatusPublisher.class.getName());
+        var handler =
+                new java.util.logging.Handler() {
+                    public void publish(java.util.logging.LogRecord record) {
+                        diagnostics.add(record.getThrown());
+                    }
+
+                    public void flush() {}
+
+                    public void close() {}
+                };
+        logger.addHandler(handler);
+        try {
+            publisher.subscribe(
+                    new Flow.Subscriber<>() {
+                        public void onSubscribe(Flow.Subscription subscription) {}
+
+                        public void onNext(ZLinkObservedStatus<Integer> value) {}
+
+                        public void onError(Throwable failure) {
+                            errors.add(failure);
+                            throw thrown;
+                        }
+
+                        public void onComplete() {}
+                    });
+            publisher.subscribe(
+                    new Flow.Subscriber<>() {
+                        public void onSubscribe(Flow.Subscription subscription) {}
+
+                        public void onNext(ZLinkObservedStatus<Integer> value) {}
+
+                        public void onError(Throwable failure) {
+                            errors.add(failure);
+                        }
+
+                        public void onComplete() {}
+                    });
+            org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> publisher.fail(cause));
+            assertEquals(List.of(cause, cause), errors);
+            assertEquals(List.of(thrown), diagnostics);
+            publisher.fail(cause);
+            assertEquals(2, errors.size());
+        } finally {
+            logger.removeHandler(handler);
+        }
+    }
+
+    @Test
+    void subscriptionCapacitiesKeepTerminalRetentionAndLossIndependent() throws Exception {
+        var state = new AtomicReference<>(new SourceStatus("A", 0, false));
+        var publisher =
+                ZLinkStatusPublisher.create(
+                        state::get,
+                        SourceStatus::sequence,
+                        SourceStatus::source,
+                        2,
+                        SourceStatus::terminal,
+                        ignored -> false,
+                        Runnable::run);
+        var narrow = new CopyOnWriteArrayList<ZLinkObservedStatus<SourceStatus>>();
+        var wide = new CopyOnWriteArrayList<ZLinkObservedStatus<SourceStatus>>();
+        var narrowSubscription = new CompletableFuture<Flow.Subscription>();
+        var wideSubscription = new CompletableFuture<Flow.Subscription>();
+        publisher.subscribe(statusSubscriber(narrow, narrowSubscription), 1);
+        publisher.subscribe(statusSubscriber(wide, wideSubscription), 3);
+        for (String source : List.of("A", "B", "C")) {
+            state.set(new SourceStatus(source, 1, true));
+            publisher.signal();
+        }
+        narrowSubscription.get(1, TimeUnit.SECONDS).request(3);
+        wideSubscription.get(1, TimeUnit.SECONDS).request(3);
+        assertEquals(List.of("C"), narrow.stream().map(item -> item.status().source()).toList());
+        assertEquals(
+                List.of("A", "B", "C"), wide.stream().map(item -> item.status().source()).toList());
+        assertEquals(2, narrow.getFirst().loss().discardedTerminalCount());
+        assertEquals(0, wide.getFirst().loss().discardedTerminalCount());
+    }
+
+    @Test
+    void sourceSignalsWithoutSubscribersDoNotReadSnapshots() {
+        var reads = new AtomicInteger();
+        var publisher =
+                ZLinkStatusPublisher.create(
+                        reads::incrementAndGet,
+                        value -> value,
+                        2,
+                        ignored -> false,
+                        ignored -> false,
+                        Runnable::run);
+        publisher.signalIfSubscribed();
+        publisher.signalIfSubscribed();
+        assertEquals(0, reads.get());
+        var received = new CopyOnWriteArrayList<ZLinkObservedStatus<Integer>>();
+        var subscription = new CompletableFuture<Flow.Subscription>();
+        publisher.subscribe(statusSubscriber(received, subscription));
+        assertEquals(1, reads.get());
+        subscription.join().cancel();
+        publisher.signalIfSubscribed();
+        assertEquals(1, reads.get());
+    }
+
+    @Test
     void intermediateSnapshotsCoalesceOnlyWithinTheSameSource() throws Exception {
         AtomicReference<SourceStatus> state =
                 new AtomicReference<>(new SourceStatus("A", 0, false));

@@ -10,7 +10,7 @@ namespace Zlink.Framework.UnitTests;
 // the published Draining. Service-wire §5: a repeated Hello/Admit that carries
 // the current descriptor is idempotent - it completes the admission again
 // without re-admitting the peer or resetting its descriptor/liveness epoch.
-public sealed class MeshNodeShutdownSealTests
+public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     private const string MeshName = "orders";
     private const string EphemeralTcpEndpoint = "tcp://127.0.0.1:0";
@@ -85,27 +85,116 @@ public sealed class MeshNodeShutdownSealTests
         {
             scheduler.Release();
         }
+        (
+            IMeshNodeMonitor Monitor,
+            RoutingId PeerRid,
+            MeshNodeStatus Status,
+            MeshNodePeer[] Peers
+        )[] observations = [];
         await WaitUntilAsync(() =>
-            left.Status().AdmittedPeerCount == 1 && right.Status().AdmittedPeerCount == 1
-        );
-        // Let the crossed Admit replies and two admission retry intervals pass.
-        await Task.Delay(TimeSpan.FromMilliseconds(1200));
-
-        foreach (
-            var (node, monitor, peerRid) in new[]
+        {
+            observations = new[]
             {
-                (left, leftMonitor, rightRid),
-                (right, rightMonitor, leftRid),
-            }
+                (
+                    Monitor: leftMonitor,
+                    PeerRid: rightRid,
+                    Status: left.Status(),
+                    Peers: left.Peers()
+                ),
+                (
+                    Monitor: rightMonitor,
+                    PeerRid: leftRid,
+                    Status: right.Status(),
+                    Peers: right.Peers()
+                ),
+            };
+            return observations.All(observation =>
+                observation.Status.State == MeshNodeState.Ready
+                && observation.Status.AdmittedPeerCount == 1
+                && observation.Peers.Length == 1
+                && observation.Peers[0].RoutingId == observation.PeerRid
+                && observation.Peers[0].State == MeshPeerState.Admitted
+            );
+        });
+        // Preserve both nodes' complete event order before an assertion can fail.
+        (MeshMonitorStatus Status, List<MeshMonitorEvent> Events) ObserveMonitor(
+            IMeshNodeMonitor monitor,
+            RoutingId peerRid,
+            string phase
         )
         {
+            var events = new List<MeshMonitorEvent>();
+            while (monitor.Recv(RecvFlags.DontWait) is { } meshEvent)
+                events.Add(meshEvent);
             var status = monitor.Status();
+            output.WriteLine(
+                "{0} monitor peer={1} status={2} events=[{3}]",
+                phase,
+                peerRid,
+                System.Text.Json.JsonSerializer.Serialize(status),
+                string.Join(
+                    ", ",
+                    events.Select(meshEvent => $"{meshEvent.Kind}:{meshEvent.PeerRid}")
+                )
+            );
+            return (status, events);
+        }
+        var monitorObservations = observations
+            .Select(observation =>
+                (
+                    Observation: observation,
+                    Snapshot: ObserveMonitor(observation.Monitor, observation.PeerRid, "Initial")
+                )
+            )
+            .ToArray();
+        foreach (var (observation, (status, events)) in monitorObservations)
+        {
+            var (_, peerRid, nodeStatus, peers) = observation;
+            Assert.Single(
+                events,
+                meshEvent =>
+                    meshEvent.PeerRid == peerRid
+                    && meshEvent.Kind == MeshMonitorEventKind.PeerAdmitted
+            );
+            Assert.DoesNotContain(
+                events,
+                meshEvent =>
+                    meshEvent.PeerRid == peerRid
+                    && meshEvent.Kind == MeshMonitorEventKind.PeerClosed
+            );
             Assert.Equal(1UL, status.PeerAdmitted);
             Assert.Equal(0UL, status.ProtocolErrors);
-            Assert.Equal(MeshNodeState.Ready, node.Status().State);
-            Assert.Equal(1U, node.Status().AdmittedPeerCount);
-            var admitted = Assert.Single(node.Peers(), peer => peer.RoutingId == peerRid);
+            Assert.Equal(MeshNodeState.Ready, nodeStatus.State);
+            Assert.Equal(1U, nodeStatus.AdmittedPeerCount);
+            var admitted = Assert.Single(peers, peer => peer.RoutingId == peerRid);
             Assert.Equal(MeshPeerState.Admitted, admitted.State);
+        }
+        var finalObservations = monitorObservations
+            .Select(first =>
+                (
+                    PeerRid: first.Observation.PeerRid,
+                    InitialStatus: first.Snapshot.Status,
+                    Snapshot: ObserveMonitor(
+                        first.Observation.Monitor,
+                        first.Observation.PeerRid,
+                        "Final"
+                    )
+                )
+            )
+            .ToArray();
+        foreach (var (peerRid, initialStatus, (status, events)) in finalObservations)
+        {
+            Assert.DoesNotContain(
+                events,
+                meshEvent =>
+                    meshEvent.PeerRid == peerRid
+                    && meshEvent.Kind
+                        is MeshMonitorEventKind.PeerAdmitted
+                            or MeshMonitorEventKind.PeerClosed
+            );
+            Assert.Equal(initialStatus.PeerAdmitted, status.PeerAdmitted);
+            Assert.Equal(initialStatus.ProtocolErrors, status.ProtocolErrors);
+            Assert.Equal(initialStatus.PeerRejected, status.PeerRejected);
         }
     }
 

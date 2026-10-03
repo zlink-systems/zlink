@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { frameworkErrorMappingFixture } from './framework-error-mapping-fixture';
 import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
 import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
+import { ZLinkInMemoryLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-location-store';
 import {
   createServiceRelocationId,
   decodeQueuedHandoffPacket,
@@ -55,11 +57,16 @@ import {
 import type { CanonicalActorJoinRecovery } from '../../packages/framework/src/runtime/foundation/actor-join-recovery-codec';
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
 import { ZLinkActivationAdmission } from '../../packages/framework/src/runtime/activation-admission';
+import {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} from '../../packages/framework/src/runtime/execution';
 import { ZLinkFormalRemoteActorAdmissionRegistry } from '../../packages/framework/src/runtime/spots/formal-remote-actor-admission-registry';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
+import { ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE } from '../../packages/framework/src/runtime/host/relocation-integrity-fault-gate';
 
 const coordinator = {
   ownerId: 'source-owner',
@@ -547,10 +554,11 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     const first = dispatch(prepare);
     const second = dispatch(prepare);
     assert.equal(prepareCalls, 1);
-    await assert.rejects(
-      dispatch({ ...prepare, applicationVersion: 5n }),
-      /repeated Prepare with different bytes/
+    assert.equal(
+      await dispatch({ ...prepare, coordinator: { ...coordinator, leaseGeneration: 4n } }),
+      true
     );
+    assert.equal(sent.length, 0, 'a different exact identity must not receive the active reply');
     release();
     assert.deepEqual(await Promise.all([first, second]), [true, true]);
     assert.equal(prepareCalls, 1);
@@ -605,6 +613,154 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     );
     assert.deepEqual(oneWay, ['data', 'cutover']);
     assert.equal(sent.length, 2, 'commands 31 and 34 must not send responses');
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+for (const restoreOutcome of ['ready', 'failed'] as const) {
+  test(`Prepare manifest conflict preserves the original ${restoreOutcome} replay`, async () => {
+    const prepare: ServiceMaintenanceRelocationPrepare = {
+      kind: 'prepare',
+      relocation: { high: 107n, low: 109n },
+      targetAttemptGeneration: 1n,
+      coordinator,
+      target,
+      initiatorRole: 'source',
+      object,
+      sourceNodeRid: 'source',
+      sourceNodeGeneration: 2n,
+      payloadTotalLength: 24n,
+      payloadChunkCount: 1,
+      payloadChecksumCrc32c: 123,
+      applicationVersion: 4n
+    };
+    const sent: Buffer[] = [];
+    let prepareCalls = 0;
+    let readySubmitted = false;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runtime = new ZLinkHostServiceRelocationRuntime({ meshNode: () => ({}) } as never);
+    const internals = runtime as unknown as {
+      handlePrepareControl: () => Promise<ServiceMaintenanceRelocationReady>;
+    };
+    internals.handlePrepareControl = async () => {
+      prepareCalls += 1;
+      await held;
+      if (restoreOutcome === 'failed') {
+        throw new ServiceRelocationDataLostError('restore manifest failed');
+      }
+      return {
+        kind: 'ready',
+        relocation: prepare.relocation,
+        targetAttemptGeneration: prepare.targetAttemptGeneration,
+        coordinator,
+        target,
+        object,
+        senderRole: 'target'
+      };
+    };
+    const dispatch = async (request: ServiceMaintenanceRelocationPrepare) => {
+      const part = Message.from(encodeServiceRelocationControlRequest(request));
+      try {
+        return await runtime.tryHandleControl('mesh-a', {
+          kind: ReceiveKind.NodeRequest,
+          sourceNodeRid: 'source',
+          parts: [part],
+          reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+            const bytes = Buffer.from(Array.isArray(reply) ? reply[0]! : reply);
+            sent.push(bytes);
+            if (decodeServiceRelocationControlResponse(bytes).kind === 'ready' && !readySubmitted) {
+              readySubmitted = true;
+              return SubmitResult.NotConnected;
+            }
+            return SubmitResult.Ok;
+          }
+        } as never);
+      } finally {
+        part.close();
+      }
+    };
+    try {
+      await dispatch(prepare);
+      await dispatch({ ...prepare, payloadChecksumCrc32c: 124 });
+      await waitUntil(() => sent.length === 1);
+      const conflict = decodeServiceRelocationControlResponse(sent[0]!);
+      assert.equal(conflict.kind, 'failed');
+      assert.equal((conflict as ServiceMaintenanceRelocationFailed).failureCode, 35);
+      assert.equal(prepareCalls, 1, 'conflict must not restart the existing restore');
+      release();
+      await waitUntil(() => sent.length === 2);
+      const originalTerminal = sent[1]!;
+      assert.equal(decodeServiceRelocationControlResponse(originalTerminal).kind, restoreOutcome);
+      await dispatch({ ...prepare, sourceNodeGeneration: 3n });
+      assert.equal(sent.length, 2, 'stale identity must not change the terminal reply');
+      await dispatch(prepare);
+      assert.equal(sent.length, 3);
+      assert.deepEqual(sent[2], originalTerminal, 'the accepted restore outcome must still replay');
+      assert.equal(prepareCalls, 1);
+    } finally {
+      release();
+      await runtime.dispose();
+    }
+  });
+}
+
+test('the integrity fault gate fails the original Prepare with replayable DataLost', async () => {
+  const prepare: ServiceMaintenanceRelocationPrepare = {
+    kind: 'prepare',
+    relocation: { high: 127n, low: 131n },
+    targetAttemptGeneration: 1n,
+    coordinator,
+    target,
+    initiatorRole: 'source',
+    object,
+    sourceNodeRid: 'source',
+    sourceNodeGeneration: 2n,
+    payloadTotalLength: 24n,
+    payloadChunkCount: 1,
+    payloadChecksumCrc32c: 123,
+    applicationVersion: 4n
+  };
+  const gate = {
+    consumeChecksumMismatch: () => false,
+    consumeIdentityConflict: () => true
+  };
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    meshNode: () => ({}),
+    providerResolver: {
+      get: (token: unknown) =>
+        token === ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE ? gate : undefined
+    }
+  } as never);
+  const sent: Buffer[] = [];
+  const dispatch = async () => {
+    const part = Message.from(encodeServiceRelocationControlRequest(prepare));
+    try {
+      await runtime.tryHandleControl('mesh-a', {
+        kind: ReceiveKind.NodeRequest,
+        sourceNodeRid: 'source',
+        parts: [part],
+        reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+          sent.push(Buffer.from(Array.isArray(reply) ? reply[0]! : reply));
+          return SubmitResult.Ok;
+        }
+      } as never);
+    } finally {
+      part.close();
+    }
+  };
+  try {
+    await dispatch();
+    await waitUntil(() => sent.length === 1);
+    const terminal = decodeServiceRelocationControlResponse(sent[0]!);
+    assert.equal(terminal.kind, 'failed');
+    assert.equal((terminal as ServiceMaintenanceRelocationFailed).failureCode, 35);
+    await dispatch();
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent[1], sent[0], 'fault terminal must replay without attempting Restore');
   } finally {
     await runtime.dispose();
   }
@@ -692,104 +848,18 @@ test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its 
   }
 });
 
-test(
-  'a target-side Prepare failure encodes the classified error kind onto the shared wire ' +
-    'failureCode vocabulary instead of collapsing every reason to requestFailed(17)',
-  () => {
-    // Cross-language reference mapping (java commit 97fc074058, mirrored by
-    // dotnet ResolveRelocationFailedWireCode): each typed framework error kind
-    // maps to the closest code the generated ServiceWireFrameworkErrorCode
-    // vocabulary actually defines. The wire vocabulary predates the typed
-    // kinds, so kinds without a dedicated code take a documented nearest fit;
-    // ShuttingDown/InternalFailure and any unclassified error stay on the
-    // opaque requestFailed(17), and relocationDataLost(35) stays reserved for
-    // verified checksum/assembly/digest integrity failures.
-    const framework = (kind: ZLinkFrameworkErrorKind) =>
-      new ZLinkFrameworkException(kind, `kind ${kind}`);
-
-    // The dedicated integrity tag and the DataLost kind both encode 35.
-    assert.equal(
-      relocationFailedFailureCode(new ServiceRelocationDataLostError('checksum'), 'actor'),
-      35
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.DataLost), 'userSpot'),
-      35
-    );
-
-    // Kind-shaped codes shared by every object kind.
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.Rejected), 'actor'),
-      15
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.ProtocolError), 'actor'),
-      16
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.DeadlineExceeded), 'actor'),
-      19
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.Unavailable), 'actor'),
-      13
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.NotFound), 'actor'),
-      14
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.AlreadyExists), 'userSpot'),
-      3
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.NotConfigured), 'actor'),
-      9
-    );
-
-    // Object-kind splits: the schema defines Actor- and Spot-specific codes.
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.InvalidOperation), 'actor'),
-      21
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.InvalidOperation), 'userSpot'),
-      33
-    );
+test('relocation failure codes use the shared error model fixture', () => {
+  for (const row of frameworkErrorMappingFixture.send)
     assert.equal(
       relocationFailedFailureCode(
-        framework(ZLinkFrameworkErrorKind.InvalidOperation),
-        'instanceSpot'
+        new ZLinkFrameworkException(ZLinkFrameworkErrorKind[row.kind], 'fixture')
       ),
-      33
+      row.codeOnlyFailureCode ?? row.failureCode,
+      row.kind
     );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.TypeMismatch), 'actor'),
-      4
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.TypeMismatch), 'userSpot'),
-      7
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.TypeMismatch), 'instanceSpot'),
-      7
-    );
-
-    // No dedicated wire code exists for these; the opaque requestFailed(17)
-    // is the agreed closest fit (ShuttingDown re-judged 2026-08-19, C-10).
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.ShuttingDown), 'actor'),
-      17
-    );
-    assert.equal(
-      relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.InternalFailure), 'actor'),
-      17
-    );
-    assert.equal(relocationFailedFailureCode(new Error('untyped restore failure'), 'actor'), 17);
-    assert.equal(relocationFailedFailureCode('not even an Error', 'userSpot'), 17);
-  }
-);
+  assert.equal(relocationFailedFailureCode(new ServiceRelocationDataLostError('checksum')), 35);
+  assert.equal(relocationFailedFailureCode(new Error('untyped restore failure')), 17);
+});
 
 test('cutover boundary reconciliation replaces a stale pre-reconnect span with the retransmitted whole batch', async () => {
   // Spec 28 §4.4: a retransmission after reconnect always resends the entire
@@ -1011,6 +1081,7 @@ function targetCasFixture() {
     );
   };
   return {
+    envelope,
     expected,
     committedAuthority,
     // The settlement retry timer is unref'd like every runtime timer; the
@@ -1025,6 +1096,73 @@ function targetCasFixture() {
     }
   };
 }
+
+for (const operation of ['read', 'lease', 'preserve'] as const) {
+  for (const error of [
+    new TypeError('invalid source key'),
+    new RangeError('invalid source bound')
+  ]) {
+    test(`source settlement propagates ${error.name} from Store ${operation}`, async () => {
+      const fixture = targetCasFixture();
+      let calls = 0;
+      const runtime = new ZLinkHostServiceRelocationRuntime({
+        locationStore: () => ({
+          readAuthority: async () => {
+            if (operation === 'read' && ++calls === 1) throw error;
+            return calls > 0 && operation !== 'lease'
+              ? fixture.committedAuthority
+              : fixture.expected;
+          },
+          readOwnerLease: async () => {
+            if (operation === 'lease' && ++calls === 1) throw error;
+            return {
+              kind: 'found',
+              token: {
+                ownerId: fixture.expected.ownerId,
+                leaseGeneration: fixture.expected.ownerLeaseGeneration
+              },
+              leaseExpiresAt: new Date(Date.now() + 60_000),
+              storeNow: new Date()
+            };
+          },
+          compareExchangeAuthority: async () => {
+            if (operation === 'preserve' && ++calls === 1) throw error;
+            return { kind: 'stored' };
+          }
+        })
+      } as never);
+      const source = runtime as unknown as {
+        settleSourceAuthority(...args: unknown[]): Promise<unknown>;
+      };
+      await assert.rejects(
+        source.settleSourceAuthority(fixture.envelope, fixture.expected, target, () => true, {}),
+        (observed) => observed === error
+      );
+      assert.equal(calls, 1);
+    });
+  }
+}
+
+test('source settlement retains its fence after a provider read failure', async () => {
+  const fixture = targetCasFixture();
+  let reads = 0;
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    locationStore: () => ({
+      readAuthority: async () => {
+        if (++reads === 1) throw new Error('Store response lost');
+        return fixture.committedAuthority;
+      }
+    })
+  } as never);
+  const source = runtime as unknown as {
+    settleSourceAuthority(...args: unknown[]): Promise<unknown>;
+  };
+  assert.equal(
+    await source.settleSourceAuthority(fixture.envelope, fixture.expected, target, () => false, {}),
+    'target'
+  );
+  assert.equal(reads, 2);
+});
 
 test('target-only CAS reconciles an unknown response to the exact committed owner', async () => {
   const fixture = targetCasFixture();
@@ -1046,6 +1184,49 @@ test('target-only CAS reconciles an unknown response to the exact committed owne
   assert.equal(committed?.ownerId, target.ownerId);
   assert.equal(committed?.authorityOwnerGeneration, 12n);
 });
+
+test('target CAS propagates public Store invalid key during reconciliation', async () => {
+  const store = new ZLinkInMemoryLocationStore();
+  const runtime = new ZLinkHostServiceRelocationRuntime({ locationStore: () => store } as never);
+  const read = runtime as unknown as {
+    readAggregateForCommitRetry(prepared: unknown): Promise<unknown>;
+  };
+  await assert.rejects(
+    read.readAggregateForCommitRetry({ plan: { participants: [{ key: { value: '' } }] } }),
+    TypeError
+  );
+});
+
+for (const validationError of [
+  new TypeError('invalid aggregate'),
+  new RangeError('invalid bound')
+]) {
+  for (const operation of ['commit', 'read', 'lease'] as const) {
+    test(`target CAS propagates ${validationError.name} from Store ${operation}`, async () => {
+      const fixture = targetCasFixture();
+      let calls = 0;
+      const runtime = new ZLinkHostServiceRelocationRuntime({
+        locationStore: () => ({
+          commitAggregate: async () => {
+            if (operation === 'commit' && ++calls === 1) throw validationError;
+            if (operation === 'lease') throw new Error('commit response lost');
+            return { kind: 'stale' };
+          },
+          readAuthority: async () => {
+            if (operation === 'read' && ++calls === 1) throw validationError;
+            return fixture.expected;
+          },
+          readOwnerLease: async () => {
+            if (operation === 'lease' && ++calls === 1) throw validationError;
+            return { kind: 'missing', storeNow: new Date() };
+          }
+        })
+      } as never);
+      await assert.rejects(fixture.commit(runtime), (error) => error === validationError);
+      assert.equal(calls, 1, 'caller validation cannot be retried as an unknown Store result');
+    });
+  }
+}
 
 test('target CAS resubmits indeterminate results with no deadline while the target lease is valid', async () => {
   const fixture = targetCasFixture();
@@ -2041,7 +2222,106 @@ test('ActorJoin source profile reaches the existing Message Follow terminal afte
   }
 });
 
+test('post-commit route cleanup failure preserves Accepted and is diagnosed once', async (t) => {
+  const failure = new Error('route cleanup failed after target commit');
+  const diagnostics: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  let attempts = 0;
+  const harness = createActorJoinHostHarness({
+    reconcileStatefulAuthorityRoutes: async () => {
+      attempts++;
+      throw failure;
+    }
+  });
+  try {
+    const result = await harness.relocate();
+    assert.equal(String(result.actorRef.nodeRid), 'target');
+    await harness.sourceLeaveIdle();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(diagnostics.length, 1);
+    assert.strictEqual(diagnostics[0]![1], failure);
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(attempts, 1);
+    const authority = await harness.location.readAuthority();
+    assert.equal(authority.kind, 'snapshot');
+    if (authority.kind === 'snapshot') assert.equal(authority.ownerId, 'target-owner');
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('source retirement completes registry removal and reports all failed stages once', async (t) => {
+  const leaveFailure = new Error('source leave failed');
+  const retireFailure = new Error('source registry cleanup failed');
+  const diagnostics: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  const harness = createActorJoinHostHarness({
+    sourceLeaveFailure: leaveFailure,
+    sourceRetirementFailure: retireFailure
+  });
+  try {
+    await harness.relocate();
+    await harness.sourceLeaveIdle();
+    // The retirement diagnostic follows the asynchronous manager completion.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(diagnostics.length, 1);
+    assert.ok(diagnostics[0]![1] instanceof AggregateError);
+    assert.deepEqual((diagnostics[0]![1] as AggregateError).errors, [leaveFailure, retireFailure]);
+    assert.equal(await harness.deliverSourceLeaveAgain(), true);
+    harness.completeSourceCleanup();
+    await Promise.resolve();
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(diagnostics.length, 1);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('post-commit source cleanup failure preserves Accepted and reports all failures once', async (t) => {
+  const failure = new Error('source cleanup failed after target commit');
+  const leaveFailure = new Error('source leave failed after target commit');
+  const retirementFailure = new Error('source disposal failed after target commit');
+  const diagnostics: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  let attempts = 0;
+  let routeAttempts = 0;
+  const harness = createActorJoinHostHarness({
+    sourceLeaveFailure: leaveFailure,
+    sourceRetirementFailure: retirementFailure,
+    commitSource: async () => {
+      attempts++;
+      throw failure;
+    },
+    reconcileStatefulAuthorityRoutes: async () => {
+      routeAttempts++;
+    }
+  });
+  try {
+    const result = await harness.relocate();
+    assert.equal(String(result.actorRef.nodeRid), 'target');
+    assert.equal(attempts, 1);
+    assert.equal(routeAttempts, 0);
+    await harness.sourceLeaveIdle();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
+    assert.equal(diagnostics.length, 1);
+    assert.ok(diagnostics[0]![1] instanceof AggregateError);
+    assert.deepEqual((diagnostics[0]![1] as AggregateError).errors, [
+      failure,
+      leaveFailure,
+      retirementFailure
+    ]);
+  } finally {
+    await harness.dispose();
+  }
+});
+
 interface ActorJoinHarnessOptions {
+  readonly sourceLeaveFailure?: Error;
+  readonly sourceRetirementFailure?: Error;
+  readonly commitSource?: () => Promise<void>;
+  readonly reconcileStatefulAuthorityRoutes?: () => Promise<void>;
   readonly holdAccepted?: boolean;
   readonly holdSourceLeave?: boolean;
   readonly readyResult?: number;
@@ -2153,6 +2433,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       sourceCleanupRefs.push(sourceRef);
       events.push('source:removed');
       sourceLeaveDone();
+      if (options.sourceRetirementFailure !== undefined) throw options.sourceRetirementFailure;
     }
   };
   const sourceActorTransfer = {
@@ -2171,6 +2452,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         setReplayResults() {},
         async commit() {
           events.push('source:committed');
+          await options.commitSource?.();
         },
         async rollback() {
           events.push('source:rolled-back');
@@ -2184,6 +2466,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       sourceLeaveSpotIds.push(sourceSpotId);
       events.push('source:onLeave:started');
       await sourceLeaveGate;
+      if (options.sourceLeaveFailure !== undefined) throw options.sourceLeaveFailure;
       events.push('source:onLeave:completed');
     }
   };
@@ -2207,16 +2490,22 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       _actorType: string,
       objectGeneration: bigint,
       authorityOwnerGeneration: bigint,
-      spotId: string,
+      spotId: string | undefined,
       spotGeneration: bigint,
       membershipEpoch: bigint
     ) {
+      assert.equal(
+        spotId,
+        undefined,
+        'Entry relocation preserves logical membership at the native boundary'
+      );
       events.push('restore:hidden');
       targetNativeAuthority = {
         actor: { actorId: restoredActorId, generation: objectGeneration, nodeRid: 'target' },
         authorityOwnerGeneration,
-        spotId,
-        spotGeneration,
+        spotId: spotId ?? String(targetDescriptor.rid),
+        spotGeneration:
+          spotId === undefined ? targetDescriptor.lifecycleGeneration : spotGeneration,
         membershipEpoch
       };
       targetState = {
@@ -2287,6 +2576,10 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const targetDeliveries: Promise<void>[] = [];
   const sourceDeliveries: Promise<void>[] = [];
   const deliveryErrors: unknown[] = [];
+  const taskShutdown = new AbortController();
+  const taskErrorSink = new ZLinkRuntimeTaskErrorSink();
+  taskErrorSink.onRuntimeTaskException(({ error }) => deliveryErrors.push(error));
+  const detachedTaskRunner = new ZLinkRuntimeTaskRunner(taskErrorSink, taskShutdown.signal);
   const deliver = (
     runtime: ZLinkHostServiceRelocationRuntime,
     sourceNodeRid: string,
@@ -2437,6 +2730,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     resolveRelocationActivation: () => undefined,
     options: {
       entryNodeRid: 'entry-target',
+      detachedTaskRunner,
       canonicalActorJoinResolver: async () => ({ actorType: 'Player' }),
       actorResolver: () => undefined,
       async dispatchEntryActorJoin() {
@@ -2619,6 +2913,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   };
   sourceRuntime = new ZLinkHostServiceRelocationRuntime({
     ...common,
+    reconcileStatefulAuthorityRoutes: options.reconcileStatefulAuthorityRoutes,
     currentOwner: () => ({ ownerId: 'source-owner', leaseGeneration: 3n }),
     localDescriptor: () => ({ rid: 'source', lifecycleGeneration: 2n }),
     meshNode: () => sourceNode,
@@ -2801,6 +3096,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     },
     async dispose() {
       sourceSignal.abort(new Error('ActorJoin harness disposed.'));
+      taskShutdown.abort();
       releaseAccepted();
       releaseSourceLeave();
       admissions.delete(relocationId);

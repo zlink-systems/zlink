@@ -27,7 +27,6 @@ final class ZLinkFrameworkAutoConnectSubsystem {
                 registration,
                 channels,
                 meshNodes == null ? Map.of() : meshNodes.nodesByName(),
-                spots == null ? Map.of() : spots.nodesByName(),
-                spots);
+                spots == null ? Map.of() : spots.nodesByName());
     }
 }

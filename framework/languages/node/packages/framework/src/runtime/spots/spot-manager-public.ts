@@ -1,12 +1,8 @@
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  internalFrameworkErrorKind,
-  wireReplyFailureException
-} from '../framework-errors-internal';
 import { randomUUID } from 'node:crypto';
 import {
+  type ZLinkMessageSerializer,
   ZLinkFrameworkException,
+  ZLinkSpotKind,
   type RoutingId,
   type SpotId,
   type SpotRef,
@@ -15,20 +11,26 @@ import {
   type ZLinkSpotCreateCall,
   type ZLinkSpotCreateResult,
   type ZLinkSpotGetOrCreateCall,
-  type ZLinkSpotManager,
-  ZLinkSpotKind
+  type ZLinkSpotManager
 } from '../../contracts';
-import type { ZLinkMessageSerializer } from '../../contracts';
+
+import { ZLINK_MAX_SPOT_ID_BYTES } from '../../contracts/Common/CoreTypes';
 import type { ZLinkObjectFactoryRegistration } from '../../contracts/Configuration/RegistrationTypes';
 import { ZLinkConfigurationException } from '../configuration';
-import type { ZLinkUserSpotCreationCoordinator } from '../host/user-spot-creation-coordinator';
-import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
-import type { DefaultZLinkSpotManager } from './index';
-import { encodeFrameworkCreationPayload } from '../messaging/creation-payload-codec';
-import type { ServiceUserSpotCloseRecord } from '../foundation/service-stateful-wire-codec';
-import type { ServiceUserSpotOperationResult } from '../foundation/service-stateful-runtime';
-import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
 import { captureZLinkSpotSerialTurn, requireZLinkYieldTurn } from '../execution';
+import type { ServiceUserSpotOperationResult } from '../foundation/service-stateful-runtime';
+import type { ServiceUserSpotCloseRecord } from '../foundation/service-stateful-wire-codec';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  internalFrameworkErrorKind,
+  wireReplyFailureException
+} from '../framework-errors-internal';
+import type { ZLinkUserSpotCreationCoordinator } from '../host/user-spot-creation-coordinator';
+import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
+import { encodeFrameworkCreationPayload } from '../messaging/creation-payload-codec';
+import type { DefaultZLinkSpotManager } from './index';
+import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
 
 export interface ZLinkPublicSpotManagerOptions {
   readonly local: DefaultZLinkSpotManager;
@@ -331,8 +333,10 @@ function selectFactory(
 
 function requireText(value: string, label: string): string {
   const bytes = Buffer.byteLength(value);
-  if (bytes < 1 || bytes > 255 || value.includes('\0')) {
-    throw invalidConfiguration(`${label} must contain 1..255 UTF-8 bytes and no NUL.`);
+  if (bytes < 1 || bytes > ZLINK_MAX_SPOT_ID_BYTES || value.includes('\0')) {
+    throw invalidConfiguration(
+      `${label} must contain 1..${ZLINK_MAX_SPOT_ID_BYTES} UTF-8 bytes and no NUL.`
+    );
   }
   return value;
 }

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/Contracts/Messaging/message.hpp>
+#include <zlink/framework/detail/utf8.hpp>
 #include <zlink/framework/contracts/channels/call.hpp>
 #include <zlink/framework/contracts/detail/message_payload.hpp>
 #include <zlink/framework/contracts/detail/message_name.hpp>
@@ -57,49 +58,7 @@ namespace detail
 {
 inline bool is_valid_actor_id (std::string_view value) noexcept
 {
-    if (value.empty () || value.size () > 255)
-        return false;
-
-    const auto *bytes = reinterpret_cast<const unsigned char *> (value.data ());
-    std::size_t index = 0;
-    while (index < value.size ()) {
-        const auto first = bytes[index++];
-        if (first <= 0x7f)
-            continue;
-
-        std::size_t continuation_count = 0;
-        std::uint32_t code_point = 0;
-        std::uint32_t minimum = 0;
-        if (first >= 0xc2 && first <= 0xdf) {
-            continuation_count = 1;
-            code_point = first & 0x1f;
-            minimum = 0x80;
-        } else if (first >= 0xe0 && first <= 0xef) {
-            continuation_count = 2;
-            code_point = first & 0x0f;
-            minimum = 0x800;
-        } else if (first >= 0xf0 && first <= 0xf4) {
-            continuation_count = 3;
-            code_point = first & 0x07;
-            minimum = 0x10000;
-        } else {
-            return false;
-        }
-
-        if (index + continuation_count > value.size ())
-            return false;
-        for (std::size_t offset = 0; offset < continuation_count; ++offset) {
-            const auto next = bytes[index++];
-            if ((next & 0xc0) != 0x80)
-                return false;
-            code_point = (code_point << 6) | (next & 0x3f);
-        }
-        if (code_point < minimum || code_point > 0x10ffff
-            || (code_point >= 0xd800 && code_point <= 0xdfff)) {
-            return false;
-        }
-    }
-    return true;
+    return !value.empty () && value.size () <= identifier_max_bytes && is_valid_utf8 (value);
 }
 
 class actor_gateway_state_t;
@@ -476,7 +435,8 @@ namespace detail
 {
 struct actor_join_reply_t
 {
-    int result_code = 0;
+    static constexpr int accepted = 0;
+    int result_code = accepted;
     actor_ref_t actor;
     zlink::message_t reply;
 };
@@ -609,6 +569,9 @@ class actor_join_call_t
 
   private:
     friend class actor_context_t;
+    friend class spot_context_t;
+
+    static constexpr std::chrono::milliseconds default_timeout{5000};
 
     actor_join_call_t (deferred_fn_t deferred,
                        detail::deferred_barrier_reserver_t reserve_barrier) :
@@ -625,7 +588,7 @@ class actor_join_call_t
     deferred_fn_t _deferred;
     async_deferred_fn_t _async_deferred;
     detail::deferred_barrier_reserver_t _reserve_barrier;
-    std::chrono::milliseconds _timeout{5000};
+    std::chrono::milliseconds _timeout{default_timeout};
     bool _deferred_once = false;
 };
 
@@ -832,6 +795,7 @@ class actor_context_t
   private:
     friend class spot_node_builder_t;
     friend class detail::spot_node_runtime_t;
+    friend class spot_context_t;
     friend class session_actor_t;
     friend class session_actor_manager_t;
     friend class detail::actor_gateway_runtime_t;
@@ -849,6 +813,10 @@ class actor_context_t
                                                          std::string content_type,
                                                          std::chrono::milliseconds timeout);
     result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_join_barrier () const;
+    static task_t<detail::actor_join_reply_t>
+    join_entry_spot_erased (std::shared_ptr<actor_context_t> context,
+                            zlink::message_t request,
+                            std::chrono::milliseconds timeout);
     serializer_registry_t *serializer_registry () const noexcept;
     std::optional<zlink::message_t> create_payload () const;
 

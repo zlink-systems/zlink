@@ -2,6 +2,7 @@ package systems.zlink.samples.gamequest.server.questmission.spots;
 
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
+import systems.zlink.framework.spots.ZLinkSpotClosingContext;
 import systems.zlink.samples.gamequest.server.questmission.store.QuestStore;
 import systems.zlink.samples.gamequest.shared.contracts.Messages;
 
@@ -41,6 +42,14 @@ public final class PlayerQuestSpot implements ZLinkInstanceSpot {
     }
 
     // --8<-- [end:doc-gq-spot-init]
+
+    @Override
+    public CompletionStage<Void> onClosing(ZLinkSpotClosingContext closingContext) {
+        System.out.printf(
+                "gamequest-mission closing player=%s generation=%d%n",
+                playerId, context.objectGeneration());
+        return CompletableFuture.completedFuture(null);
+    }
 
     private void requirePlayer(String requestedPlayerId) {
         if (!playerId.equals(requestedPlayerId)) {

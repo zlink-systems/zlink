@@ -1,3 +1,4 @@
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -31,6 +32,8 @@ import {
   matchEveryDeclaredMessageType
 } from '../../contracts/Configuration/CodecSerializerSelection';
 
+const MAX_DECLARED_TYPE_SELECTIONS = 1024;
+
 export interface ZLinkSerializerRegistryLike {
   readonly serializers: ReadonlyMap<string, ZLinkMessageSerializer>;
 }
@@ -49,7 +52,7 @@ interface ZLinkSerializerSelectionPlan {
 }
 
 const noSerializer = Symbol('noSerializer');
-const JSON_CONTENT_TYPE = 'application/json';
+const JSON_CONTENT_TYPE = ZlinkStreamContentType.Json;
 const frameworkJsonReceiveCodec = Symbol('frameworkJsonReceiveCodec');
 const defaultReceiveCodecs: ReadonlyMap<string, typeof frameworkJsonReceiveCodec> = new Map<
   string,
@@ -89,9 +92,9 @@ export function encodeFrameworkPayload(
       return {
         message: rememberContentType(
           toRuntimeMessage(payload.toEncodedPayload()),
-          'application/octet-stream'
+          ZlinkStreamContentType.Raw
         ),
-        contentType: 'application/octet-stream'
+        contentType: ZlinkStreamContentType.Raw
       };
     }
     declaredType = readZLinkMessageDeclaredType(payload);
@@ -146,7 +149,7 @@ export function decodeFrameworkPayloadMessage<T>(
   message: Message,
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>,
   type?: Type<T>,
-  contentType = JSON_CONTENT_TYPE,
+  contentType: string = JSON_CONTENT_TYPE,
   packetName?: string,
   contractPart: 'payload' | 'reply' = 'payload'
 ): T {
@@ -157,7 +160,7 @@ export function decodeFrameworkTypedPayloadMessage<T>(
   message: Message,
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>,
   type?: Type<T>,
-  contentType = JSON_CONTENT_TYPE,
+  contentType: string = JSON_CONTENT_TYPE,
   packetName?: string,
   contractPart: 'payload' | 'reply' = 'payload'
 ): T {
@@ -195,7 +198,7 @@ function decodeFrameworkPayload<T>(
 export function wrapFrameworkPayloadMessage(
   message: Message,
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>,
-  contentType = JSON_CONTENT_TYPE,
+  contentType: string = JSON_CONTENT_TYPE,
   packetName?: string,
   contractPart: 'payload' | 'reply' = 'payload'
 ): ZLinkMessage {
@@ -324,7 +327,7 @@ function serializerSelectionPlanOf(
         return cached === noSerializer ? undefined : cached;
       }
       const selected = selectSerializerFromEntries(frozenEntries, declaredType);
-      if (cachedBusinessTypeCount < 1024) {
+      if (cachedBusinessTypeCount < MAX_DECLARED_TYPE_SELECTIONS) {
         outboundByBusinessType.set(declaredType, selected ?? noSerializer);
         cachedBusinessTypeCount += 1;
       }

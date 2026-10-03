@@ -1,10 +1,29 @@
+import { createHash } from 'node:crypto';
+import {
+  type RoutingId,
+  type SpotRef,
+  type ZLinkSpotCreateResult,
+  ZLinkFrameworkException,
+  ZLinkSpotCreateState
+} from '../../contracts';
+
+import {
+  decodeServiceClosingSpotAuthority,
+  decodeServiceReadySpotAuthority,
+  encodeServiceUserSpotAuthorityPayload
+} from '../foundation/service-authority-payload-codec';
+import type { ServiceUserSpotOperationResult } from '../foundation/service-stateful-runtime';
+import type {
+  ServiceDirectSpotRouteFence,
+  ServiceUserSpotCloseRecord,
+  ServiceUserSpotCreateRecord
+} from '../foundation/service-stateful-wire-codec';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
   wireReplyFailureException
 } from '../framework-errors-internal';
-import { createHash } from 'node:crypto';
-import type { RoutingId, SpotRef, ZLinkSpotCreateResult } from '../../contracts';
+import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import type {
   ZLinkAuthoritySnapshot,
   ZLinkLocationOwnerToken,
@@ -14,20 +33,9 @@ import type {
   ZLinkAuthorityStore,
   ZLinkObjectCreationStore
 } from '../locations/internal-store-contracts';
-import { ZLinkFrameworkException, ZLinkSpotCreateState } from '../../contracts';
-import {
-  decodeServiceReadySpotAuthority,
-  decodeServiceClosingSpotAuthority,
-  encodeServiceUserSpotAuthorityPayload
-} from '../foundation/service-authority-payload-codec';
-import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import type { ZLinkLocalSpotCreateResult } from '../spots/spot-manager-internal-contracts';
-import type { ServiceUserSpotOperationResult } from '../foundation/service-stateful-runtime';
-import type {
-  ServiceUserSpotCloseRecord,
-  ServiceUserSpotCreateRecord,
-  ServiceDirectSpotRouteFence
-} from '../foundation/service-stateful-wire-codec';
+const DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS = 1_000;
+const DEFAULT_USER_SPOT_POLL_INTERVAL_MS = 10;
 
 export interface ZLinkUserSpotCreationCoordinatorOptions {
   readonly store: ZLinkObjectCreationStore & ZLinkAuthorityStore;
@@ -109,9 +117,10 @@ export class ZLinkUserSpotCreationCoordinator {
     ) => Promise<ZLinkLocalSpotCreateResult>,
     discard?: (signal?: AbortSignal) => Promise<void>
   ): Promise<ZLinkUserSpotCreationResult> {
-    const deadline = createDeadline(request.timeoutMs, request.signal);
-    const deadlineMs = performance.now() + request.timeoutMs;
     const deadlineUnixMs = Date.now() + request.timeoutMs;
+    const remainingMs = Math.max(0, deadlineUnixMs - Date.now());
+    const deadline = createDeadline(remainingMs, request.signal);
+    const deadlineMs = performance.now() + remainingMs;
     const signal = deadline.signal;
     signal.throwIfAborted();
     const sha256 = createHash('sha256').update(request.requestPayload).digest();
@@ -187,7 +196,8 @@ export class ZLinkUserSpotCreationCoordinator {
               }
             }
           },
-          signal
+          signal,
+          BigInt(deadlineUnixMs)
         );
       } catch (error) {
         deadline.close();
@@ -530,7 +540,8 @@ export class ZLinkUserSpotCreationCoordinator {
               }
             }
           },
-          signal
+          signal,
+          record.deadlineUnixMs
         );
         await discard?.(signal);
         return {
@@ -565,7 +576,8 @@ export class ZLinkUserSpotCreationCoordinator {
               ownerNodeGeneration: current.allocation.descriptorLifecycleGeneration
             })
           },
-          signal
+          signal,
+          record.deadlineUnixMs
         );
       } catch (error) {
         throw createInternalFrameworkException(
@@ -596,7 +608,9 @@ export class ZLinkUserSpotCreationCoordinator {
       };
     } catch (error) {
       local?.publication?.abort();
-      const cleanupDeadline = createDeadline(this.options.cleanupTimeoutMs ?? 1_000);
+      const cleanupDeadline = createDeadline(
+        this.options.cleanupTimeoutMs ?? DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS
+      );
       const cleanupSignal = cleanupDeadline.signal;
       const cleanup = await Promise.allSettled([
         waitForAbort(
@@ -760,7 +774,7 @@ export class ZLinkUserSpotCreationCoordinator {
       if (current.kind === 'snapshot' && current.allocation.state === 'active') {
         return spotRef(current, request);
       }
-      await wait(this.options.pollIntervalMs ?? 10, signal);
+      await wait(this.options.pollIntervalMs ?? DEFAULT_USER_SPOT_POLL_INTERVAL_MS, signal);
     }
   }
 

@@ -17,6 +17,25 @@ internal static class CoreTestSupport
         @"^#define\s+ZLINK_VERSION_(MAJOR|MINOR|PATCH)\s+(\d+)\s*$",
         RegexOptions.Compiled);
 
+    internal static int Errno(string name)
+    {
+        string platform = OperatingSystem.IsWindows() ? "windows"
+            : OperatingSystem.IsMacOS() ? "darwin"
+            : OperatingSystem.IsLinux() ? "linux"
+            : throw new PlatformNotSupportedException();
+        using Stream stream = typeof(Message).Assembly.GetManifestResourceStream(
+            $"Zlink.Errno.{platform}.properties")
+            ?? throw new InvalidOperationException("Core errno resource is missing.");
+        using var reader = new StreamReader(stream);
+        while (reader.ReadLine() is { } line)
+        {
+            if (line.StartsWith(name + "=", StringComparison.Ordinal))
+                return int.Parse(line[(name.Length + 1)..],
+                    CultureInfo.InvariantCulture);
+        }
+        throw new InvalidOperationException($"Core errno {name} is missing.");
+    }
+
     internal static bool IsNativeAvailable()
     {
         try

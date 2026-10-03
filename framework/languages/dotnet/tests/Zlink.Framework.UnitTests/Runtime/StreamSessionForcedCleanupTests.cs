@@ -11,6 +11,213 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StreamSessionForcedCleanupTests
 {
+    [Theory]
+    [InlineData(MonitorEventFlags.None)]
+    [InlineData(MonitorEventFlags.ConnectionReadyEdge)]
+    public void Monitor_mapping_preserves_ready_edge_flag(MonitorEventFlags flags)
+    {
+        var native = new MonitorEvent(
+            MonitorEventType.ConnectionReady,
+            0,
+            RoutingId.From("mapping-ready"),
+            "local",
+            "remote",
+            0,
+            0,
+            flags
+        );
+        var mapped =
+            Zlink.Framework.Runtime.Backend.DotNet.Mappings.ZLinkDotNetBackendMappings.ToFramework(
+                native
+            );
+        Assert.Equal(flags, mapped.Flags);
+    }
+
+    [Fact]
+    public async Task Ready_count_snapshot_cannot_create_session_but_ready_edge_can()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        var lifetime = new SessionOrderingLifetime();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(lifetime)
+            .AddSingleton(_ => runtime);
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket();
+        var monitor = new TestSocketMonitor();
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None,
+            runtime.ExecutionOwner
+        );
+        await using var node = new ZLinkStreamNodeRuntime(
+            "ready-edge-contract",
+            provider,
+            socket,
+            monitor,
+            typeof(SessionOrderingSession),
+            runner,
+            "test"
+        );
+        var snapshot = RoutingId.From("count-snapshot");
+        var edge = RoutingId.From("actual-ready-edge");
+        node.Start();
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.Disconnected,
+                snapshot,
+                "local-snapshot",
+                "remote-snapshot",
+                0
+            )
+        );
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.ConnectionReady,
+                snapshot,
+                "local-snapshot",
+                "remote-snapshot",
+                0,
+                MonitorEventFlags.None
+            )
+        );
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.ConnectionReady,
+                edge,
+                "local-edge",
+                "remote-edge",
+                1,
+                MonitorEventFlags.ConnectionReadyEdge
+            )
+        );
+        await lifetime.WaitConnectedAsync(edge);
+        Assert.Empty(lifetime.Events(snapshot));
+        Assert.Equal(1, node.SessionCount);
+        var receiveProcessed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        socket.BeforeRecvPacket = () =>
+        {
+            if (socket.DequeuedPacketCount != 0)
+                receiveProcessed.TrySetResult();
+            return true;
+        };
+        EmitJson(socket, snapshot, new SessionOrderingMessage());
+        await receiveProcessed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Empty(lifetime.Events(snapshot));
+        Assert.Equal(1, node.SessionCount);
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.ConnectionReady,
+                snapshot,
+                "local-snapshot",
+                "remote-snapshot",
+                2,
+                MonitorEventFlags.ConnectionReadyEdge
+            )
+        );
+        await lifetime.WaitConnectedAsync(snapshot);
+        Assert.Equal(2, node.SessionCount);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(ZlinkStreamMessageKind.Send)]
+    [InlineData(ZlinkStreamMessageKind.Control)]
+    public async Task Stream_inbound_deadline_contract(ZlinkStreamMessageKind? inboundKind)
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(_ => runtime);
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket();
+        var time = new ManualTimeProvider();
+        await using var session = await ZLinkStreamSessionRuntime.CreateAsync(
+            provider,
+            socket,
+            RoutingId.From("heartbeat-contract"),
+            typeof(DrainRaceSession),
+            static _ => { },
+            "test",
+            time,
+            requireConnectionReady: true
+        );
+
+        time.Advance(ZLinkStreamSessionLiveness.HeartbeatTimeout);
+        session.CheckLiveness();
+        Assert.Equal(0, socket.DisconnectCount);
+        Assert.False(socket.SendAsyncStarted.Task.IsCompleted);
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            session.EnqueueConnected("local", "remote")
+        );
+
+        if (inboundKind is { } kind)
+        {
+            for (var cycle = 0; cycle < 3; cycle++)
+            {
+                time.Advance(
+                    ZLinkStreamSessionLiveness.HeartbeatTimeout - TimeSpan.FromMilliseconds(1)
+                );
+                var header = new ZlinkStreamHeader(
+                    kind,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.None,
+                    null,
+                    kind == ZlinkStreamMessageKind.Control
+                        ? Systems
+                            .Zlink
+                            .Stream
+                            .Connector
+                            .Runtime
+                            .Protocol
+                            .ZlinkStreamControlProtocol
+                            .HeartbeatPongName
+                        : "heartbeat-data",
+                    ZlinkStreamMetadata.Empty
+                );
+                var admission =
+                    kind == ZlinkStreamMessageKind.Control
+                        ? session.TryEnqueueControlPacket(
+                            Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
+                            Message.From(Array.Empty<byte>())
+                        )
+                        : session.TryEnqueuePacket(
+                            Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
+                            Message.From(Array.Empty<byte>())
+                        );
+                Assert.Equal(ZLinkSerialPostAdmission.Accepted, admission);
+                session.CheckLiveness();
+                Assert.Equal(0, socket.DisconnectCount);
+            }
+        }
+
+        time.Advance(
+            ZLinkStreamSessionLiveness.HeartbeatTimeout
+                - ZLinkStreamSessionLiveness.HeartbeatInterval
+        );
+        session.EnqueueConnected("duplicate-local", "duplicate-remote");
+        time.Advance(ZLinkStreamSessionLiveness.HeartbeatInterval);
+        session.CheckLiveness();
+        await socket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        AssertHeartbeatTimeoutFrame(socket.SentFrames.Last());
+    }
+
+    private static void AssertHeartbeatTimeoutFrame(byte[] frame)
+    {
+        Assert.True(ZLinkStreamFrameCodec.TryDecode(frame, out _, out var payload));
+        Assert.Equal(
+            Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamSessionClosingCodec.EncodeHeartbeatTimeout(),
+            payload.ToArray()
+        );
+    }
+
     [Fact]
     public async Task CloseAfterPhysicalPeerDisconnect_CompletesAndCleansBindingOnce()
     {
@@ -407,7 +614,8 @@ public sealed class StreamSessionForcedCleanupTests
                     first,
                     "local-a",
                     "remote-a",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             monitor.Emit(
@@ -416,7 +624,8 @@ public sealed class StreamSessionForcedCleanupTests
                     second,
                     "local-b",
                     "remote-b",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             await lifetime.WaitConnectedAsync(first);
@@ -524,7 +733,8 @@ public sealed class StreamSessionForcedCleanupTests
                     session,
                     "local-c",
                     "remote-c",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
 
@@ -583,7 +793,8 @@ public sealed class StreamSessionForcedCleanupTests
                     goodPeer,
                     "local-good",
                     "remote-good",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             EmitJson(socket, goodPeer, new SessionOrderingMessage());
@@ -643,7 +854,8 @@ public sealed class StreamSessionForcedCleanupTests
                     goodPeer,
                     "local-good",
                     "remote-good",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             EmitJson(socket, goodPeer, new SessionOrderingMessage());
@@ -696,7 +908,8 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             EmitJson(socket, routingId, new SessionOrderingMessage());
@@ -749,7 +962,8 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             await lifetime.WaitConnectedAsync(routingId);
@@ -812,7 +1026,8 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             EmitJson(socket, routingId, new SessionOrderingMessage());
@@ -887,7 +1102,8 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             for (var packet = 0; packet < 4; packet++)
@@ -952,7 +1168,8 @@ public sealed class StreamSessionForcedCleanupTests
                     null,
                     "stale-local",
                     "stale-remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             monitor.Emit(
@@ -976,7 +1193,8 @@ public sealed class StreamSessionForcedCleanupTests
                     session,
                     "local-b",
                     "remote-b",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
 
@@ -1031,7 +1249,8 @@ public sealed class StreamSessionForcedCleanupTests
                     null,
                     "ambiguous-local-a",
                     "ambiguous-remote-a",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             monitor.Emit(
@@ -1040,7 +1259,8 @@ public sealed class StreamSessionForcedCleanupTests
                     null,
                     "ambiguous-local-b",
                     "ambiguous-remote-b",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             monitor.Emit(
@@ -1049,7 +1269,8 @@ public sealed class StreamSessionForcedCleanupTests
                     second,
                     "local-b",
                     "remote-b",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             monitor.Emit(
@@ -1058,7 +1279,8 @@ public sealed class StreamSessionForcedCleanupTests
                     first,
                     "local-a",
                     "remote-a",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
 
@@ -1123,7 +1345,8 @@ public sealed class StreamSessionForcedCleanupTests
                     expected,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             var header = new ZlinkStreamHeader(
@@ -1156,7 +1379,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Stream_node_shutdown_upper_bound_does_not_wait_for_cancellation_callback()
+    public async Task Stream_node_host_deadline_does_not_wait_for_cancellation_callback()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new CancellationAwareLifetime();
@@ -1204,7 +1427,8 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             var header = new ZlinkStreamHeader(
@@ -1227,7 +1451,9 @@ public sealed class StreamSessionForcedCleanupTests
             );
             await lifetime.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-            var shutdown = node.DisposeAsync().AsTask();
+            using var deadline = new CancellationTokenSource();
+            var shutdown = node.DisposeAsync(deadline.Token).AsTask();
+            deadline.Cancel();
             await lifetime.CancellationCallbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             await shutdown.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.Equal(0, lifetime.HandlerDisposeCount);
@@ -1245,7 +1471,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Stream_node_shutdown_upper_bound_does_not_wait_for_terminal_cancellation_callback()
+    public async Task Stream_node_host_deadline_does_not_wait_for_terminal_cancellation_callback()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new TerminalCancellationLifetime { CloseFromDispatch = true };
@@ -1284,13 +1510,16 @@ public sealed class StreamSessionForcedCleanupTests
                     routingId,
                     "local",
                     "remote",
-                    0
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
                 )
             );
             EmitJson(socket, routingId, new TerminalCancellationMessage());
             await lifetime.DisconnectedStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-            var shutdown = node.DisposeAsync().AsTask();
+            using var deadline = new CancellationTokenSource();
+            var shutdown = node.DisposeAsync(deadline.Token).AsTask();
+            deadline.Cancel();
             await lifetime.CancellationCallbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             await shutdown.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.Equal(0, lifetime.DependencyDisposeCount);
@@ -1500,7 +1729,8 @@ public sealed class StreamSessionForcedCleanupTests
             runtime.DrainAdmission,
             "test",
             TimeProvider.System,
-            actorDispatchEnabled: false
+            actorDispatchEnabled: false,
+            errorSink: runtime.ErrorSink
         );
         var session = Assert.IsType<ZLinkStreamSessionRuntime>(
             await table.GetOrCreateAsync(
@@ -1544,7 +1774,8 @@ public sealed class StreamSessionForcedCleanupTests
             runtime.DrainAdmission,
             "test",
             TimeProvider.System,
-            actorDispatchEnabled: false
+            actorDispatchEnabled: false,
+            errorSink: runtime.ErrorSink
         );
         using var shutdown = new CancellationTokenSource();
         await table.SealAdmissionAsync(shutdown.Token);
@@ -2037,19 +2268,24 @@ public sealed class StreamSessionForcedCleanupTests
             _ = dependency;
             _registration = cancellationToken.Register(() =>
             {
-                lifetime.CancellationCallbackStarted.TrySetResult();
-                lifetime.AllowCancellationCallback.Task.GetAwaiter().GetResult();
-                if (lifetime.ThrowFromCancellationCallback)
-                    throw new InvalidOperationException("terminal cancellation callback failed");
+                try
+                {
+                    lifetime.CancellationCallbackStarted.TrySetResult();
+                    lifetime.AllowCancellationCallback.Task.GetAwaiter().GetResult();
+                    if (lifetime.ThrowFromCancellationCallback)
+                        throw new InvalidOperationException(
+                            "terminal cancellation callback failed"
+                        );
+                }
+                finally
+                {
+                    lifetime.CancellationObserved.TrySetResult();
+                }
             });
             lifetime.DisconnectedStarted.TrySetResult();
             try
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                lifetime.CancellationObserved.TrySetResult();
+                await lifetime.CancellationObserved.Task;
             }
             finally
             {
@@ -2208,15 +2444,9 @@ public sealed class StreamSessionForcedCleanupTests
                 lifetime.CancellationCallbackCompleted.TrySetResult();
             });
             lifetime.Entered.TrySetResult();
-            try
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                lifetime.CancellationObserved.TrySetResult();
-                throw;
-            }
+            await lifetime.CancellationCallbackCompleted.Task;
+            lifetime.CancellationObserved.TrySetResult();
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         public async ValueTask DisposeAsync()
@@ -2520,6 +2750,8 @@ public sealed class StreamSessionForcedCleanupTests
         public TaskCompletionSource<byte[]> SentFrame { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public System.Collections.Concurrent.ConcurrentQueue<byte[]> SentFrames { get; } = new();
+
         public bool BlockSendAsync { get; init; }
 
         public Exception? SendAsyncFailure { get; init; }
@@ -2609,7 +2841,9 @@ public sealed class StreamSessionForcedCleanupTests
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                SentFrame.TrySetResult(payload.ToArray());
+                var frame = payload.ToArray();
+                SentFrames.Enqueue(frame);
+                SentFrame.TrySetResult(frame);
                 SendAsyncStarted.TrySetResult();
                 if (BlockSendAsync)
                     await AllowSendAsync.Task.WaitAsync(cancellationToken).ConfigureAwait(false);

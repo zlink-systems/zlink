@@ -261,7 +261,7 @@ public sealed class LogicalMulticastSubmitTests
 
     private static ZLinkWorkerPool CreatePool()
     {
-        return new ZLinkWorkerPool(0, 1, TimeSpan.FromSeconds(30));
+        return new ZLinkWorkerPool(0, 1, TimeSpan.FromSeconds(30), new ZLinkRuntimeErrorSink());
     }
 
     private class PublishSpotProxy : DispatchProxy

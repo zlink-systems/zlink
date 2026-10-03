@@ -133,7 +133,7 @@ The leading 2 bytes of a STREAM frame are `header_size`.
 - **The header's first byte is `format_marker = 0xF2`.** A different
   value is a decode error.
 - `kind`/`codec` are encoded as a **1-byte enum**, not a string.
-- Packet name is `u8 name_len + UTF-8 bytes`, at most **255 bytes**.
+- Packet name is `u8 name_len + UTF-8 bytes`, at most **255 bytes**. The packet name of a `Send`, a `Request` and a push can't be empty or consist only of whitespace (characters with the Unicode `White_Space` property), and every surface that takes a name rejects such a name.
   **`Response` and `Error` don't carry a
   [packet name](../server/00-foundation/02-glossary.en.md#packet-name)** — encoded with
   `name_len = 0`. Since a response doesn't select a handler and
@@ -364,6 +364,7 @@ is put **only in request/response/error response.**
 - **When a request timeout, close, or disconnect occurs, pending
   requests complete as failure and are removed from the map.** They are not
   automatically resent after reconnection (§6).
+- When a Request ends by timeout or caller cancellation, its frame that hasn't started being written isn't sent.
 - A Request timeout starts at operation acceptance and covers queue wait, frame write, and reply
   wait.
 
@@ -594,8 +595,9 @@ state.
 **Heartbeat:**
 
 - If on, sends a control ping at the specified interval.
-- If no inbound frame arrives within the specified timeout, treats the
-  transport as disconnected and applies the reconnect policy.
+- If no inbound frame arrives within the specified timeout, counted from the later of the
+  connection establishment time and the last inbound frame, treats the transport as
+  disconnected and applies the reconnect policy.
 - **Even with heartbeat off, it still replies with pong to an inbound
   ping.**
 
@@ -694,6 +696,9 @@ configuration mistake from a connection failure.
 |---|---|
 | **`Manual`** (default) | The receive loop doesn't directly call a handler/error/disconnect/request callback — it puts it in an internal queue. The user explicitly pumps it to run |
 | `Immediate` | Runs directly on the receive path |
+
+The internal queue of `Manual` never delays or refuses registering a callback because of capacity.
+A registered callback runs, in registration order, when the user pumps.
 
 **The reason the default is `Manual` is a game engine constraint**
 (§2.2). Since an engine object can't be handled off the main thread, it
@@ -801,6 +806,8 @@ reason, or the reconnect condition.
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |
 | `UserCallbackFailed`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
 
+If the transport close fails during close handling, the connection is confirmed closed, the close reason and automatic reconnect policy of the cause that started the close are kept, and the close failure is delivered as a `Disconnected` error event. An explicit close call that finished its cleanup doesn't fail because of the close failure.
+
 ### 9.1 The Closed Error Code Set
 
 The **thirteen codes above are all of them.** An implementation neither adds nor
@@ -835,7 +842,7 @@ language that delivers by exception defines **a dedicated exception type that
 carries the code.**
 
 The same requirement applies to option validation failures and to violations of the
-observation surfaces (§10.1).
+observation surfaces (§10.1). Test assertion helpers also read only this code: they don't infer a code from an exception's type or message, and they pass on a failure that carries no code unchanged.
 
 ## 10. Receive Message Queue
 

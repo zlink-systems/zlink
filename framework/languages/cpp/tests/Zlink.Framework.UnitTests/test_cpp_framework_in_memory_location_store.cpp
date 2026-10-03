@@ -254,6 +254,69 @@ TEST (ZLinkFrameworkInMemoryLocationStore, AuthorityRestorePreservesIdentityWith
     EXPECT_NE (nullptr, std::get_if<authority_conflict_t> (&stale));
 }
 
+TEST (ZLinkFrameworkInMemoryLocationStore, ReincarnateIssuesGenerationPairWithoutReallocating)
+{
+    using namespace zlink::framework;
+    in_memory_location_repository_t store;
+    const auto owner = claim_owner (store, "reincarnate-owner");
+    publish_mesh_node (store, "reincarnate-node", owner, 1);
+    object_reserve_request_t request{
+      .key = {placement_object_kind_t::actor, "reincarnate-actor"},
+      .intent = {.stable_type = "player"},
+      .target = {"play", node_rid_t::from_string ("reincarnate-node"), 1, owner},
+      .capacity_bundle = {.actor_slots = 1}};
+    const auto reserved = std::get<object_reserved_t> (store.reserve (request).result ().value ());
+    const auto key = actor_authority_key (request.key.global_id);
+    EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (
+      store
+        .compare_exchange_authority (key, reserved.creating.store_version,
+                                     authority_reincarnate_t{{std::byte{0x01}}})
+        .result ()
+        .value ()));
+    const auto ready =
+      std::get<object_committed_t> (
+        store.commit ({request.key, reserved.fence, {std::byte{0x02}}}).result ().value ())
+        .ready;
+    const auto reincarnated =
+      store
+        .compare_exchange_authority (key, ready.store_version,
+                                     authority_reincarnate_t{{std::byte{0x03}}})
+        .result ()
+        .value ();
+    const auto *stored = std::get_if<authority_stored_t> (&reincarnated);
+    ASSERT_NE (nullptr, stored);
+    EXPECT_GT (stored->snapshot.object_generation, ready.object_generation);
+    EXPECT_GT (stored->snapshot.authority_owner_generation, ready.authority_owner_generation);
+    EXPECT_NE (stored->snapshot.store_version, ready.store_version);
+    EXPECT_EQ (stored->snapshot.owner.owner_id, owner.owner_id);
+    EXPECT_EQ (stored->snapshot.owner.lease_generation, owner.lease_generation);
+    EXPECT_EQ (stored->snapshot.allocation.target.node_rid.value (),
+               ready.allocation.target.node_rid.value ());
+    EXPECT_EQ (stored->snapshot.allocation.capacity_bundle.actor_slots, 1);
+    EXPECT_EQ (stored->snapshot.allocation.state, placement_allocation_state_t::active);
+    for (const auto &mutation :
+         std::vector<authority_mutation_t>{authority_reincarnate_t{}, authority_delete_t{}})
+        EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (
+          store.compare_exchange_authority (key, ready.store_version, mutation)
+            .result ()
+            .value ()));
+    auto other = request;
+    other.key.global_id = "reincarnate-over-capacity";
+    EXPECT_TRUE (std::holds_alternative<object_placement_capacity_exhausted_t> (
+      store.reserve (other).result ().value ()));
+    store.release_owner_lease (owner).result ().value ();
+    EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (
+      store
+        .compare_exchange_authority (key, stored->snapshot.store_version,
+                                     authority_reincarnate_t{{std::byte{0x04}}})
+        .result ()
+        .value ()));
+    const auto current =
+      std::get<authority_snapshot_t> (store.read_authority (key).result ().value ());
+    EXPECT_EQ (current.store_version, stored->snapshot.store_version);
+    EXPECT_EQ (current.payload, stored->snapshot.payload);
+}
+
 TEST (ZLinkFrameworkInMemoryLocationStore,
       StoreRevisionExhaustionDoesNotReuseVersionOrMutateAuthority)
 {
@@ -278,13 +341,15 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
       store.commit ({request.key, reserved.fence, {std::byte{0x01}}}).result ().value ());
     ASSERT_EQ (std::to_string (max_revision), committed.ready.store_version);
 
-    const auto result = store
-                          .compare_exchange_authority (actor_authority_key ("max-revision"),
-                                                       committed.ready.store_version,
-                                                       authority_put_t{{std::byte{0x02}}})
-                          .result ()
-                          .value ();
-    EXPECT_NE (nullptr, std::get_if<authority_generation_exhausted_t> (&result));
+    for (const auto &mutation : std::vector<authority_mutation_t>{
+           authority_put_t{{std::byte{0x02}}}, authority_reincarnate_t{{std::byte{0x02}}}}) {
+        const auto result = store
+                              .compare_exchange_authority (actor_authority_key ("max-revision"),
+                                                           committed.ready.store_version, mutation)
+                              .result ()
+                              .value ();
+        EXPECT_NE (nullptr, std::get_if<authority_generation_exhausted_t> (&result));
+    }
     const auto current = std::get<authority_snapshot_t> (
       store.read_authority (actor_authority_key ("max-revision")).result ().value ());
     EXPECT_EQ (committed.ready.store_version, current.store_version);
@@ -485,6 +550,18 @@ TEST (ZLinkFrameworkInMemoryLocationStore, AggregateMovesCapacityOnce)
     const auto *fence = std::get_if<aggregate_prepared_t> (&prepared);
     ASSERT_NE (fence, nullptr);
     const auto before_commit = store.list_mesh_nodes ("play").result ().value ();
+    for (const auto &mutation : std::vector<authority_mutation_t>{
+           authority_put_t{}, authority_reincarnate_t{}, authority_delete_t{}})
+        EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (
+          store
+            .compare_exchange_authority (actor_authority_key ("fenced-actor"), actor.store_version,
+                                         mutation)
+            .result ()
+            .value ()));
+    EXPECT_EQ (actor.store_version,
+               std::get<authority_snapshot_t> (
+                 store.read_authority (actor_authority_key ("fenced-actor")).result ().value ())
+                 .store_version);
     ASSERT_EQ (before_commit.items.size (), 2u);
     const auto target_before =
       std::find_if (before_commit.items.begin (), before_commit.items.end (),
@@ -538,6 +615,101 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     EXPECT_EQ (tree->root, tree_root (tree->pages, 2049));
 }
 
+TEST (ZLinkFrameworkInMemoryLocationStore, AggregateInventorySplitsOnEncodedByteLimit)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime::aggregate_inventory;
+
+    aggregate_participant_t participant;
+    participant.key.value = "inventory-\"escaped\\key";
+    participant.expected_store_version = "1";
+    participant.authority_payload.resize (page_byte_limit / 3, std::byte{0x01});
+    const auto tree = build_tree ({participant, participant});
+    ASSERT_TRUE (tree);
+    ASSERT_EQ (tree->pages.size (), 2u);
+    for (const auto &page : tree->pages) {
+        EXPECT_LE (page.encoded.size (), page_byte_limit);
+        const auto decoded = decode_page (page.encoded);
+        ASSERT_TRUE (decoded);
+        EXPECT_EQ (decoded->at (0).authority_payload, participant.authority_payload);
+    }
+
+    participant.authority_payload.resize (page_byte_limit);
+    EXPECT_FALSE (build_tree ({participant}));
+}
+
+
+TEST (ZLinkFrameworkInMemoryLocationStore, AggregateInventoryPreservesPageBytesAtByteBoundary)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime::aggregate_inventory;
+    constexpr std::size_t page_count = 12;
+    std::vector<aggregate_participant_t> participants;
+    for (std::size_t index = 0; index < page_count; ++index) {
+        aggregate_participant_t participant;
+        participant.key.value = std::to_string (index) + ":inventory-actor";
+        participant.expected_store_version = std::to_string (index + 1);
+        participant.authority_payload.assign (page_byte_limit / 4, std::byte{0x01});
+        participants.push_back (std::move (participant));
+    }
+    const auto tree = build_tree (participants);
+    ASSERT_TRUE (tree);
+    ASSERT_EQ (tree->pages.size (), page_count);
+    for (std::size_t index = 0; index < page_count; ++index) {
+        const auto expected = encode_page (index, {participants[index]});
+        EXPECT_EQ (tree->pages[index].encoded, expected);
+        EXPECT_EQ (tree->pages[index].digest, runtime::sha256 (expected));
+        EXPECT_EQ (tree->pages[index].participants.size (), 1u);
+    }
+    EXPECT_EQ (tree->root, tree_root (tree->pages, participants.size ()));
+    participants.front ().authority_payload.assign (page_byte_limit, std::byte{0x01});
+    EXPECT_FALSE (build_tree (participants));
+}
+
+TEST (ZLinkFrameworkInMemoryLocationStore, AggregateInventoryKeepsMaximalPagesForLargePayloads)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime::aggregate_inventory;
+    constexpr std::size_t raw_page_count = 4;
+    const auto payload_bytes = page_byte_limit * raw_page_count / page_item_limit;
+    std::vector<aggregate_participant_t> participants;
+    for (std::size_t index = 0; index < page_item_limit; ++index) {
+        aggregate_participant_t participant;
+        participant.key.value = std::to_string (index) + ":\"inventory-actor";
+        participant.expected_store_version = std::to_string (index + 1);
+        participant.authority_payload.assign (payload_bytes / 2, std::byte{0x01});
+        participant.membership_mutation.assign (payload_bytes / 2, std::byte{0x02});
+        participants.push_back (std::move (participant));
+    }
+    const auto tree = build_tree (participants);
+    ASSERT_TRUE (tree);
+    EXPECT_EQ (tree->participant_count, participants.size ());
+    std::size_t offset = 0;
+    for (std::size_t index = 0; index < tree->pages.size (); ++index) {
+        const auto &page = tree->pages[index];
+        EXPECT_LE (page.encoded.size (), page_byte_limit);
+        const auto first = participants.begin () + static_cast<std::ptrdiff_t> (offset);
+        const std::vector<aggregate_participant_t> expected (
+          first, first + static_cast<std::ptrdiff_t> (page.participants.size ()));
+        EXPECT_EQ (page.encoded, encode_page (index, expected));
+        EXPECT_EQ (page.digest, runtime::sha256 (page.encoded));
+        offset += page.participants.size ();
+        if (offset < participants.size () && page.participants.size () < page_item_limit) {
+            auto larger = page.participants;
+            larger.push_back (participants[offset]);
+            std::size_t raw_bytes = 0;
+            for (const auto &participant : larger) {
+                raw_bytes +=
+                  participant.key.value.size () + participant.expected_store_version.size ()
+                  + participant.authority_payload.size () + participant.membership_mutation.size ();
+            }
+            EXPECT_LE (raw_bytes, page_byte_limit);
+            EXPECT_GT (encode_page (index, larger).size (), page_byte_limit);
+        }
+    }
+    EXPECT_EQ (offset, participants.size ());
+    EXPECT_EQ (tree->root, tree_root (tree->pages, participants.size ()));
+}
 
 TEST (ZLinkFrameworkInMemoryLocationStore, MaintainsOwnerLeasesAndUsesPollingWithoutStampHint)
 {
@@ -555,6 +727,32 @@ TEST (ZLinkFrameworkInMemoryLocationStore, MaintainsOwnerLeasesAndUsesPollingWit
     EXPECT_TRUE (std::holds_alternative<zlink::framework::owner_lease_released_t> (released));
     EXPECT_TRUE (std::holds_alternative<zlink::framework::owner_lease_missing_t> (
       store.read_owner_lease ("owner-a").result ().value ()));
+}
+
+TEST (ZLinkFrameworkInMemoryLocationStore, LiveMeshNodesExcludePreviousOwnerLeaseGeneration)
+{
+    in_memory_location_repository_t store;
+    const auto previous = claim_owner (store, "descriptor-owner");
+    publish_mesh_node (store, "previous-node", previous);
+    ASSERT_TRUE (std::holds_alternative<zlink::framework::owner_lease_released_t> (
+      store.release_owner_lease (previous).result ().value ()));
+
+    const auto current = claim_owner (store, previous.owner_id);
+    ASSERT_NE (previous.lease_generation, current.lease_generation);
+    publish_mesh_node (store, "current-node", current);
+
+    // Raw Store enumeration retains descriptors; Framework validates their owner token.
+    const auto stored = store.list_mesh_nodes ("play").result ().value ();
+    ASSERT_EQ (2u, stored.items.size ());
+    live_location_reader_t reader (store);
+    EXPECT_FALSE (reader.owner_available (previous).result ().value ());
+    EXPECT_TRUE (reader.owner_available (current).result ().value ());
+
+    const auto live = reader.list_mesh_nodes ("play").result ().value ();
+    ASSERT_EQ (1u, live.items.size ());
+    EXPECT_EQ (zlink::routing_id_t::from ("current-node"), live.items.front ().rid);
+    EXPECT_EQ (current.owner_id, live.items.front ().owner_id);
+    EXPECT_EQ (current.lease_generation, live.items.front ().lease_generation);
 }
 
 

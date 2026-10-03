@@ -778,7 +778,8 @@ internal struct MeshReceiveRecord
         ulong replyRouteId = 0,
         ulong deadlineUnixMs = 0,
         Func<RequestResult, uint, SubmitResult>? terminalReply = null,
-        ZLinkMultipartPayloadView? applicationPayloadView = null
+        ZLinkMultipartPayloadView? applicationPayloadView = null,
+        bool instanceIntent = false
     )
     {
         Kind = kind;
@@ -807,6 +808,7 @@ internal struct MeshReceiveRecord
         ReplyRouteId = replyRouteId;
         DeadlineUnixMs = deadlineUnixMs;
         ApplicationPayloadView = applicationPayloadView;
+        InstanceIntent = instanceIntent;
     }
 
     public MeshRecordKind Kind { get; }
@@ -830,6 +832,7 @@ internal struct MeshReceiveRecord
     public byte MessageFollowHopCount { get; }
     public ulong ReplyRouteId { get; }
     public ulong DeadlineUnixMs { get; }
+    internal bool InstanceIntent { get; }
     public MeshRecordPayload? KindData { get; }
     internal ZLinkMultipartPayloadView? ApplicationPayloadView { get; }
 

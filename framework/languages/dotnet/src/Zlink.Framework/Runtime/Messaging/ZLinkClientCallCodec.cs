@@ -11,7 +11,6 @@ internal static class ZLinkClientCallCodec
         TimeSpan? timeout = null,
         string? topic = null,
         string? source = null,
-        bool includeCorrelationId = true,
         bool includeDeadline = true
     )
     {
@@ -29,7 +28,7 @@ internal static class ZLinkClientCallCodec
             channelName,
             messageName,
             ZLinkEnvelopeCodec.DefaultContentType,
-            includeCorrelationId || correlationRequired ? ZlinkStreamCorrelation.Next() : null,
+            correlationRequired ? ZlinkStreamCorrelation.Next() : null,
             includeDeadline && timeout is { } value ? DateTimeOffset.UtcNow.Add(value) : null,
             topic,
             null,

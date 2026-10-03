@@ -1,3 +1,4 @@
+import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkPeerLocationFilter } from '../../contracts/Locations/Keys';
 import type { ZLinkPeerLocationResolver } from '../../contracts/Locations/Resolvers';
@@ -10,6 +11,7 @@ import type { ZLinkBackendMeshNode } from '../backend/contracts';
 import { AsyncResource } from 'node:async_hooks';
 import { ZLinkStateLane } from '../execution/state-lane';
 import { toBackendRoutingId as toBackendRoutingId } from '../routing-id';
+import { MeshPeerRuntimeState } from '../foundation/service-runtime-contracts';
 import {
   ZLinkLocationRuntime,
   ZLinkOwnerLeaseTracker,
@@ -113,7 +115,7 @@ function meshDescriptorPeerResolver(runtime: ZLinkLocationRuntime): ZLinkPeerLoc
           nodeRid: descriptor.rid,
           role: ZLinkLocationRole.Router,
           endpoint: descriptor.endpoint,
-          weight: 100,
+          weight: ZLINK_DEFAULT_PUBLIC_WEIGHT,
           draining: descriptor.state !== ZLinkFrameworkRuntimeState.Serving,
           value: descriptor.descriptorRevision,
           ownerId: descriptor.ownerId,
@@ -205,7 +207,7 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
           peer.endpoint === target.endpoint &&
           (target.nodeRid === undefined || String(peer.routingId) === String(target.nodeRid)) &&
           peer.lifecycleGeneration === target.lifecycleGeneration &&
-          peer.state === 3
+          peer.state === MeshPeerRuntimeState.Serving
       );
   }
 
@@ -241,7 +243,9 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
   }
 
   private prepareConnectCore(key: string): ZLinkSpotNodeConnectionIntent | undefined {
-    if (this.connectionIntents.has(key)) return undefined;
+    const current = this.connectionIntents.get(key);
+    if (current !== undefined)
+      return current.connectionIntentId === undefined ? current : undefined;
     const intent: ZLinkSpotNodeConnectionIntent = {};
     this.connectionIntents.set(key, intent);
     return intent;
@@ -252,29 +256,19 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
     key: string,
     intent: ZLinkSpotNodeConnectionIntent
   ): Promise<boolean> {
-    try {
-      const connectionIntentId = await this.node.connectPeer({
-        endpoint: target.endpoint,
-        expectedRid: target.nodeRid === undefined ? undefined : toBackendRoutingId(target.nodeRid),
-        expectedSecurityIdentity: toAdmissionSecurityIdentity(target.metadata?.securityIdentity),
-        expectedLifecycleGeneration: target.lifecycleGeneration
-      });
-      const accepted = await this.lane.run(() => {
-        if (this.connectionIntents.get(key) !== intent) return false;
-        intent.connectionIntentId = connectionIntentId;
-        return true;
-      });
-      if (!accepted) this.node.removePeerConnection(connectionIntentId);
-      return accepted;
-    } catch {
-      // A discovered endpoint can become unavailable between the store read and
-      // the socket connect. Leave the target inactive so the next reconciliation
-      // can retry without terminating the host's background runtime.
-      await this.lane.run(() => {
-        if (this.connectionIntents.get(key) === intent) this.connectionIntents.delete(key);
-      });
-      return false;
-    }
+    const connectionIntentId = await this.node.connectPeer({
+      endpoint: target.endpoint,
+      expectedRid: target.nodeRid === undefined ? undefined : toBackendRoutingId(target.nodeRid),
+      expectedSecurityIdentity: toAdmissionSecurityIdentity(target.metadata?.securityIdentity),
+      expectedLifecycleGeneration: target.lifecycleGeneration
+    });
+    const accepted = await this.lane.run(() => {
+      if (this.connectionIntents.get(key) !== intent) return false;
+      intent.connectionIntentId = connectionIntentId;
+      return true;
+    });
+    if (!accepted) this.node.removePeerConnection(connectionIntentId);
+    return accepted;
   }
 
   private disconnectPeer(target: ZLinkAutoConnectTarget): void {

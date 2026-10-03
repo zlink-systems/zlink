@@ -102,6 +102,7 @@ struct spot_actor_commit_route_request_t
 
 struct spot_actor_leave_route_command_t
 {
+    static constexpr const char *channel_name = "node";
     static constexpr const char *packet_name = "__zlink.spot.actor.leave";
 
     std::string transfer_id;
@@ -150,7 +151,7 @@ struct spot_actor_packet_route_request_t
     std::uint64_t actor_owner_lease_generation = 0;
     std::string spot_id;
     std::string packet_name_value;
-    std::string content_type = "application/json";
+    std::string content_type = zlink::detail::json_profile::content_type;
     std::uint8_t message_follow_hop_count = 0;
     std::map<std::string, std::string> metadata;
     std::vector<std::uint8_t> payload;

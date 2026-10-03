@@ -18,7 +18,8 @@ internal sealed class QuestEventProcessor(
 
     public async ValueTask ProcessAsync(
         GameplayFact gameplayFact,
-        int? replayGeneration,
+        int? replayRehydrationCount,
+        ulong objectGeneration,
         CancellationToken cancellationToken
     )
     {
@@ -36,11 +37,12 @@ internal sealed class QuestEventProcessor(
             cancellationToken
         );
         var aggregate = QuestProgressAggregate.Rehydrate(definition, stream);
-        if (replayGeneration is { } generation)
+        if (replayRehydrationCount is { } rehydrationCount)
             logger.LogInformation(
-                "gamequest-mission replayed player={PlayerId} generation={Generation}",
+                "gamequest-mission replayed player={PlayerId} rehydrationCount={RehydrationCount} objectGeneration={ObjectGeneration}",
                 gameplayFact.PlayerId,
-                generation
+                rehydrationCount,
+                objectGeneration
             );
         var decision = aggregate.Decide(gameplayFact);
         if (decision is null)
@@ -78,7 +80,8 @@ internal sealed class QuestEventProcessor(
 
     public async ValueTask<QuestProgressState[]> SyncAsync(
         string playerId,
-        int? replayGeneration,
+        int? replayRehydrationCount,
+        ulong objectGeneration,
         CancellationToken cancellationToken
     )
     {
@@ -95,7 +98,8 @@ internal sealed class QuestEventProcessor(
                     "api-a",
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                 ),
-                replayGeneration,
+                replayRehydrationCount,
+                objectGeneration,
                 cancellationToken
             );
 

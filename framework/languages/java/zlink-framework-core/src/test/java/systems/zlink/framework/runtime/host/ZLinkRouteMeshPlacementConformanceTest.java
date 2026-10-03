@@ -59,6 +59,7 @@ final class ZLinkRouteMeshPlacementConformanceTest {
 
     static volatile CompletableFuture<Void> spotCreateGate = OPEN;
     static volatile CompletableFuture<Void> instanceInitializeGate = OPEN;
+    static volatile CompletableFuture<Void> instanceInitializeEntered = OPEN;
     static volatile CompletableFuture<Void> actorJoinGate = OPEN;
 
     @Test
@@ -126,6 +127,7 @@ final class ZLinkRouteMeshPlacementConformanceTest {
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
             List<CompletableFuture<?>> held = new ArrayList<>();
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
             String lastActorId = null;
             String lastSpotId = null;
             int objectIndex = 0;
@@ -159,19 +161,25 @@ final class ZLinkRouteMeshPlacementConformanceTest {
                                 case "instanceSpot" -> {
                                     instanceInitializeGate = gate;
                                     PlacementInstanceSpot.initialized = new CompletableFuture<>();
+                                    instanceInitializeEntered = new CompletableFuture<>();
                                     CompletableFuture<Void> initialized =
                                             PlacementInstanceSpot.initialized;
                                     // The send completes once the Instance Spot accepts it; the
                                     // cold activation ends when onInitialize finishes.
-                                    yield PlacementEntrySpot.contexts
-                                            .get(nodeRid(meshName, suffix))
-                                            .outbound()
-                                            .sendToSpot(objectId, "wake")
-                                            .instanceSpot(INSTANCE_TYPE_PREFIX + meshName)
-                                            .inMesh(meshName)
-                                            .submit()
-                                            .toCompletableFuture()
-                                            .thenCompose(accepted -> initialized);
+                                    var activation =
+                                            PlacementEntrySpot.contexts
+                                                    .get(nodeRid(meshName, suffix))
+                                                    .outbound()
+                                                    .sendToSpot(objectId, "wake")
+                                                    .instanceSpot(INSTANCE_TYPE_PREFIX + meshName)
+                                                    .inMesh(meshName)
+                                                    .submit()
+                                                    .toCompletableFuture()
+                                                    .thenCompose(accepted -> initialized);
+                                    if (hold) {
+                                        instanceInitializeEntered.get(10, TimeUnit.SECONDS);
+                                    }
+                                    yield activation;
                                 }
                                 case "actorJoin" -> {
                                     actorJoinGate = gate;
@@ -252,6 +260,7 @@ final class ZLinkRouteMeshPlacementConformanceTest {
         actorFactoryGate = OPEN;
         spotCreateGate = OPEN;
         instanceInitializeGate = OPEN;
+        instanceInitializeEntered = OPEN;
         actorJoinGate = OPEN;
     }
 
@@ -372,6 +381,7 @@ final class ZLinkRouteMeshPlacementConformanceTest {
         @Override
         public CompletionStage<Void> onInitialize() {
             CompletableFuture<Void> done = initialized;
+            instanceInitializeEntered.complete(null);
             return instanceInitializeGate.thenRun(() -> done.complete(null));
         }
     }

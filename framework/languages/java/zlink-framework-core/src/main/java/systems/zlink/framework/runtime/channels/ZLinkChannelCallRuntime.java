@@ -233,7 +233,8 @@ final class ZLinkChannelCallRuntime {
             result.completeExceptionally(
                     ZLinkFrameworkErrorOrigin.framework(
                             reply.result().toFrameworkErrorKind(reply.failureCode()),
-                            "channel request failed: " + reply.result()));
+                            "channel request failed: " + reply.result(),
+                            reply.failureCode()));
             return;
         }
         if (ZLinkChannelRuntime.isFrameworkErrorReply(reply.parts())) {
@@ -351,20 +352,6 @@ final class ZLinkChannelCallRuntime {
         return flow == null
                 ? List.of(packet, payload, contentTypeFrame)
                 : List.of(packet, payload, contentTypeFrame, flow);
-    }
-
-    static List<Message> copyParts(
-            Optional<String> packetName, Message payload, String contentType) {
-        List<Message> source = parts(packetName, payload, contentType);
-        try {
-            return ZLinkChannelRuntime.copyMessages(source);
-        } finally {
-            for (Message part : source) {
-                if (part != payload) {
-                    part.close();
-                }
-            }
-        }
     }
 
     /**

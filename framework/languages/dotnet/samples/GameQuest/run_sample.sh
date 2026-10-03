@@ -164,8 +164,8 @@ wait_total_at_least() {
 }
 
 find_owner_mission() {
-  local pattern_a="gamequest-owner ready player=player-alice generation=2 node=mission-a"
-  local pattern_b="gamequest-owner ready player=player-alice generation=2 node=mission-b"
+  local pattern_a="gamequest-owner ready player=player-alice rehydrationCount=2 node=mission-a"
+  local pattern_b="gamequest-owner ready player=player-alice rehydrationCount=2 node=mission-b"
   for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
     if grep -Fq -- "${pattern_a}" "${LOG_DIR}/mission-a.log" 2>/dev/null; then
       echo "mission-a"
@@ -181,9 +181,9 @@ find_owner_mission() {
   return 1
 }
 
-find_closed_mission() {
-  local pattern_a="gamequest-owner closed player=player-alice generation=1 node=mission-a"
-  local pattern_b="gamequest-owner closed player=player-alice generation=1 node=mission-b"
+find_closing_mission() {
+  local pattern_a="gamequest-owner closing-entered player=player-alice rehydrationCount=1 node=mission-a"
+  local pattern_b="gamequest-owner closing-entered player=player-alice rehydrationCount=1 node=mission-b"
   for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
     if grep -Fq -- "${pattern_a}" "${LOG_DIR}/mission-a.log" 2>/dev/null; then
       echo "mission-a"
@@ -195,7 +195,7 @@ find_closed_mission() {
     fi
     sleep 0.1
   done
-  echo "Timed out waiting for the player-alice owner-closed marker" >&2
+  echo "Timed out waiting for the player-alice owner-closing-entered marker" >&2
   return 1
 }
 
@@ -264,10 +264,17 @@ CLIENT_PID="$!"
 PIDS+=("${CLIENT_PID}")
 
 wait_log_contains "${LOG_DIR}/client.log" "gamequest-client close-replay-armed player=player-alice"
-CLOSED_MISSION="$(find_closed_mission)"
+CLOSING_MISSION="$(find_closing_mission)"
 touch "${CLOSE_REPLAY_RELEASE_FILE}"
 wait_log_contains "${LOG_DIR}/client.log" "gamequest-client owner-loss-armed player=player-alice"
 OWNER_MISSION="$(find_owner_mission)"
+wait_log_contains "${LOG_DIR}/${OWNER_MISSION}.log" "gamequest-mission replayed player=player-alice rehydrationCount=2"
+CLOSING_OBJECT_GENERATION="$(grep -F "gamequest-owner closing-entered player=player-alice rehydrationCount=1 node=${CLOSING_MISSION}" "${LOG_DIR}/${CLOSING_MISSION}.log" | sed -nE 's/.*objectGeneration=([1-9][0-9]*).*/\1/p' | head -n 1)"
+REPLAY_OBJECT_GENERATION="$(grep -F "gamequest-mission replayed player=player-alice rehydrationCount=2" "${LOG_DIR}/${OWNER_MISSION}.log" | sed -nE 's/.*objectGeneration=([1-9][0-9]*).*/\1/p' | head -n 1)"
+if [[ -z "${CLOSING_OBJECT_GENERATION}" || -z "${REPLAY_OBJECT_GENERATION}" || "${CLOSING_OBJECT_GENERATION}" == "${REPLAY_OBJECT_GENERATION}" ]]; then
+  echo "Close replay must execute in a different runtime ObjectGeneration" >&2
+  exit 1
+fi
 OWNER_PID="${SERVER_PIDS["${OWNER_MISSION}"]}"
 kill -9 "${OWNER_PID}"
 OWNER_STATUS=0
@@ -290,8 +297,8 @@ wait_total_at_least 4 "gamequest-mission processed player=" "${LOG_DIR}/mission-
 wait_total_at_least 1 "gamequest-mission reconciled player=player-alice quest=" "${LOG_DIR}/mission-a.log" "${LOG_DIR}/mission-b.log"
 reconciled_count=$(( $(count_log_matches "${LOG_DIR}/mission-a.log" "gamequest-mission reconciled player=player-alice quest=") + $(count_log_matches "${LOG_DIR}/mission-b.log" "gamequest-mission reconciled player=player-alice quest=") ))
 [[ "${reconciled_count}" == "1" ]]
-wait_total_at_least 1 "gamequest-mission replayed player=player-alice generation=" "${LOG_DIR}/mission-a.log" "${LOG_DIR}/mission-b.log"
-replayed_count=$(( $(count_log_matches "${LOG_DIR}/mission-a.log" "gamequest-mission replayed player=player-alice generation=") + $(count_log_matches "${LOG_DIR}/mission-b.log" "gamequest-mission replayed player=player-alice generation=") ))
+wait_total_at_least 1 "gamequest-mission replayed player=player-alice rehydrationCount=" "${LOG_DIR}/mission-a.log" "${LOG_DIR}/mission-b.log"
+replayed_count=$(( $(count_log_matches "${LOG_DIR}/mission-a.log" "gamequest-mission replayed player=player-alice rehydrationCount=") + $(count_log_matches "${LOG_DIR}/mission-b.log" "gamequest-mission replayed player=player-alice rehydrationCount=") ))
 [[ "${replayed_count}" == "1" ]]
 wait_total_at_least 1 "gamequest-owner unavailable player=player-alice" "${LOG_DIR}/api-a.log" "${LOG_DIR}/api-b.log"
 unavailable_count=$(( $(count_log_matches "${LOG_DIR}/api-a.log" "gamequest-owner unavailable player=player-alice") + $(count_log_matches "${LOG_DIR}/api-b.log" "gamequest-owner unavailable player=player-alice") ))

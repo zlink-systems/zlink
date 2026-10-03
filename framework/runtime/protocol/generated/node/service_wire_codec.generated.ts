@@ -4257,7 +4257,7 @@ function readChannelEntry(reader: Reader, context: ServiceWireDecoderContext, en
 
 
   value["weight"] = readU32(reader, context, value, flags);
-  if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 100n) fail("weight constraint");
+  if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 10000n) fail("weight constraint");
 
 
 
@@ -4273,7 +4273,7 @@ function writeChannelEntry(input: ChannelEntry, writer: Writer, context: Service
 
   writeText8(value["channelName"], writer, context, value, flags);
   if (value["weight"] === undefined) fail("weight required");
-  if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 100n) fail("weight constraint");
+  if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 10000n) fail("weight constraint");
 
   writeU32(value["weight"], writer, context, value, flags);
 }
@@ -4451,7 +4451,7 @@ function readDescriptorExtension(reader: Reader, context: ServiceWireDecoderCont
             item.done("objectRole"); break;
       case 8:
             if (value["placementWeight"] !== undefined) fail("descriptor-extension duplicate"); value["placementWeight"] = readU32(item, context, value, flags);
-            if (numeric(value["placementWeight"]) < 0n || numeric(value["placementWeight"]) > 100n) fail("placementWeight constraint");
+            if (numeric(value["placementWeight"]) < 0n || numeric(value["placementWeight"]) > 10000n) fail("placementWeight constraint");
 
             item.done("placementWeight"); break;
       case 9:
@@ -4526,7 +4526,7 @@ function writeDescriptorExtension(input: DescriptorExtension, writer: Writer, co
     const item = new Writer(); writeObjectRole(value["objectRole"], item, context, value, flags); const itemBytes = item.result(); writeU8(7, body, context, value, flags); writeU32(itemBytes.length, body, context, value, flags); body.put(itemBytes);
   }
   if (value["placementWeight"] !== undefined) {
-    if (numeric(value["placementWeight"]) < 0n || numeric(value["placementWeight"]) > 100n) fail("placementWeight constraint");
+    if (numeric(value["placementWeight"]) < 0n || numeric(value["placementWeight"]) > 10000n) fail("placementWeight constraint");
 
     const item = new Writer(); writeU32(value["placementWeight"], item, context, value, flags); const itemBytes = item.result(); writeU8(8, body, context, value, flags); writeU32(itemBytes.length, body, context, value, flags); body.put(itemBytes);
   }
@@ -4660,7 +4660,7 @@ function readClientServerAdmission(reader: Reader, context: ServiceWireDecoderCo
 
 
     value["weight"] = readU32(body, context, value, flags);
-    if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 100n) fail("weight constraint");
+    if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 10000n) fail("weight constraint");
 
     value["runtimeState"] = readRuntimeState(body, context, value, flags);
 
@@ -4726,7 +4726,7 @@ function writeClientServerAdmission(input: ClientServerAdmission, writer: Writer
 
     writeNonzeroU64(numeric(value["descriptorRevision"]), body, context, value, flags);
     if (value["weight"] === undefined) fail("weight required");
-    if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 100n) fail("weight constraint");
+    if (numeric(value["weight"]) < 0n || numeric(value["weight"]) > 10000n) fail("weight constraint");
 
     writeU32(value["weight"], body, context, value, flags);
     if (value["runtimeState"] === undefined) fail("runtimeState required");
@@ -6376,7 +6376,7 @@ function writeFrozenRecord(input: FrozenRecord, writer: Writer, context: Service
 export function decodeFrozenRecord(bytes: Uint8Array, context: ServiceWireDecoderContext): FrozenRecord { const reader = new Reader(bytes); const value = readFrozenRecord(reader, context, {}, 0); reader.done("frozen-record"); return value; }
 export function encodeFrozenRecord(value: FrozenRecord, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeFrozenRecord(value, writer, context, {}, 0); return writer.result(); }
 
-export type InstanceRouteV1 = { readonly routeKind: "ready"; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64; readonly targetSpotId: Text8; readonly authority: AuthorityGenerationFence } | { readonly routeKind: "coldActivation"; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64; readonly targetSpotId: Text8; readonly targetMeshName: Text8; readonly stableType: Text8; readonly targetDescriptorVersion: Text8; readonly deadlineUnixMs: NonzeroU64 };
+export type InstanceRouteV1 = { readonly routeKind: "ready"; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64; readonly targetSpotId: Text8; readonly authority: AuthorityGenerationFence; readonly instanceIntent: Bool8 } | { readonly routeKind: "coldActivation"; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64; readonly targetSpotId: Text8; readonly targetMeshName: Text8; readonly stableType: Text8; readonly targetDescriptorVersion: Text8; readonly deadlineUnixMs: NonzeroU64 };
 
 function readInstanceRouteV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): InstanceRouteV1 {
   void context; void enclosing; void flags;
@@ -6394,6 +6394,9 @@ function readInstanceRouteV1(reader: Reader, context: ServiceWireDecoderContext,
 
 
     value["authority"] = readAuthorityGenerationFence(body, context, value, flags);
+
+
+    value["instanceIntent"] = readBool8(body, context, value, flags);
 
 
   } else if (same(value["routeKind"], "coldActivation")) {
@@ -6439,6 +6442,9 @@ function* readIncrementalInstanceRouteV1(reader: IncrementalInput, context: Serv
 
 
     value["authority"] = yield* readIncrementalAuthorityGenerationFence(body, context, value, flags);
+
+
+    value["instanceIntent"] = yield* readIncrementalBool8(body, context, value, flags);
 
 
   } else if (same(value["routeKind"], "coldActivation")) {
@@ -6491,8 +6497,12 @@ function writeInstanceRouteV1(input: InstanceRouteV1, writer: Writer, context: S
 
 
     writeAuthorityGenerationFence(value["authority"], body, context, value, flags);
+    if (value["instanceIntent"] === undefined) fail("instanceIntent required");
+
+
+    writeBool8(value["instanceIntent"], body, context, value, flags);
   } else if (same(value["routeKind"], "coldActivation")) {
-    if (value["authority"] !== undefined) fail("instance-route-v1 discriminator agreement");
+    if (value["authority"] !== undefined || value["instanceIntent"] !== undefined) fail("instance-route-v1 discriminator agreement");
     if (value["targetNodeRid"] === undefined) fail("targetNodeRid required");
 
 

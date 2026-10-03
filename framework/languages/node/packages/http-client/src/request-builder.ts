@@ -1,7 +1,16 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '@zlink-systems/framework';
 import type { ZLinkHttpClient, ZLinkHttpClientBuilder } from './client';
+import type { HttpRequestSpec } from './runtime/request-performer';
+import {
+  HttpContentType,
+  HttpHeaderName,
+  makeMultipartBoundary,
+  percentEncode,
+  requireNonBlank,
+  requirePositiveTimeout
+} from './runtime/text';
 import type {
   BodyChunkProvider,
   DownloadSink,
@@ -11,13 +20,7 @@ import type {
   ZLinkHttpExecutionTurn,
   ZLinkHttpMethod
 } from './types';
-import type { HttpRequestSpec } from './runtime/request-performer';
-import {
-  makeMultipartBoundary,
-  percentEncode,
-  requireNonBlank,
-  requirePositiveTimeout
-} from './runtime/text';
+const HTTP_FAILURE_STATUS_MIN = 400;
 
 interface MultipartPart {
   name: string;
@@ -88,11 +91,17 @@ export class ZLinkHttpRequestBuilder {
     return this.clientInstance;
   }
 
-  private async closeIfOwned(): Promise<void> {
-    if (this.ownsClient && this.clientInstance !== undefined) {
-      // A one-shot cleanup failure must not mask the request result.
-      await this.clientInstance.close().catch(() => undefined);
+  private async execute<T>(client: ZLinkHttpClient, operation: Promise<T>): Promise<T> {
+    if (!this.ownsClient) return operation;
+    const [outcome] = await Promise.allSettled([operation]);
+    try {
+      await client.close();
+    } catch (closeError) {
+      // HTTP client builder §1: a request failure takes precedence over close.
+      if (outcome.status === 'fulfilled') throw closeError;
     }
+    if (outcome.status === 'rejected') throw outcome.reason;
+    return outcome.value;
   }
 
   header(name: string, value: string): this {
@@ -126,11 +135,11 @@ export class ZLinkHttpRequestBuilder {
       }
       requireNonBlank(contentType, 'HTTP request body content type is required');
       this.bodyValue = value;
-      this.headersValue['content-type'] = contentType;
+      this.headersValue[HttpHeaderName.ContentType] = contentType;
       return this;
     }
     this.bodyValue = JSON.stringify(value);
-    this.headersValue['content-type'] ??= 'application/json';
+    this.headersValue[HttpHeaderName.ContentType] ??= HttpContentType.Json;
     return this;
   }
 
@@ -147,7 +156,7 @@ export class ZLinkHttpRequestBuilder {
     }
     requireNonBlank(contentType, 'HTTP request body content type is required');
     this.bodyProviderValue = provider;
-    this.headersValue['content-type'] = contentType;
+    this.headersValue[HttpHeaderName.ContentType] = contentType;
     return this;
   }
 
@@ -175,11 +184,7 @@ export class ZLinkHttpRequestBuilder {
   async submitRaw(): Promise<RawHttpResponse> {
     const request = this.makeRequest(undefined);
     const client = this.resolveClient();
-    try {
-      return await client.runtime.executeAsync(request);
-    } finally {
-      await this.closeIfOwned();
-    }
+    return this.execute(client, client.runtime.executeAsync(request));
   }
 
   /**
@@ -195,11 +200,7 @@ export class ZLinkHttpRequestBuilder {
     }
     const request = this.makeRequest(sink);
     const client = this.resolveClient();
-    try {
-      return await client.runtime.executeAsync(request);
-    } finally {
-      await this.closeIfOwned();
-    }
+    return this.execute(client, client.runtime.executeAsync(request));
   }
 
   submit<T>(): Promise<HttpResponse<T>>;
@@ -216,8 +217,14 @@ export class ZLinkHttpRequestBuilder {
   }
 
   protected async executeTyped<T>(): Promise<HttpResponse<T>> {
-    const raw = await this.submitRaw();
-    if (raw.status >= 400) {
+    const request = this.makeRequest(undefined);
+    const client = this.resolveClient();
+    return this.execute(client, this.decodeResponse<T>(client.runtime.executeAsync(request)));
+  }
+
+  private async decodeResponse<T>(pending: Promise<RawHttpResponse>): Promise<HttpResponse<T>> {
+    const raw = await pending;
+    if (raw.status >= HTTP_FAILURE_STATUS_MIN) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.InternalFailure,
         `HTTP request failed with status ${raw.status}`
@@ -293,13 +300,13 @@ export class ZLinkHttpRequestBuilder {
     }
 
     if (this.formValue.length > 0) {
-      headers['content-type'] = 'application/x-www-form-urlencoded';
+      headers[HttpHeaderName.ContentType] = HttpContentType.UrlEncoded;
       return { body: this.encodeFormBody(), headers };
     }
 
     if (this.multipartValue.length > 0) {
       const boundary = makeMultipartBoundary();
-      headers['content-type'] = `multipart/form-data; boundary=${boundary}`;
+      headers[HttpHeaderName.ContentType] = `${HttpContentType.Multipart}; boundary=${boundary}`;
       return { body: this.encodeMultipartBody(boundary), headers };
     }
 

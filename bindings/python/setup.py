@@ -21,7 +21,7 @@ def _supported_platform() -> str:
     if sys.platform == "win32" and machine in {"x86_64", "amd64"}:
         return "windows-x86_64"
     raise RuntimeError(
-        "zlink Python Core 1.12.0 supports Linux x86_64 and Windows x86_64"
+        "zlink Python Core 1.13.0 supports Linux x86_64 and Windows x86_64"
     )
 
 
@@ -121,17 +121,19 @@ def _native_package_data() -> dict[str, list[str]]:
     abi_major = 0
     version = f"{major}.{minor}.{patch}"
     if sys.platform == "win32":
-        expected_names = {"zlink.dll"}
-        runtime_name = "zlink.dll"
+        package_names = ("zlink.dll",)
+        expected_names = set(package_names)
     else:
-        expected_names = {
-            "libzlink.so",
-            f"libzlink.so.{abi_major}",
-            f"libzlink.so.{version}",
-        }
-        runtime_name = f"libzlink.so.{version}"
-    if not (payload_dir / runtime_name).is_file():
-        raise RuntimeError(f"Core runtime payload is missing from {payload_dir}")
+        package_names = ("libzlink.so", f"libzlink.so.{abi_major}")
+        expected_names = {*package_names, f"libzlink.so.{version}"}
+    missing = sorted(
+        name for name in expected_names if not (payload_dir / name).is_file()
+    )
+    if missing:
+        raise RuntimeError(
+            "Core runtime payload is missing from "
+            f"{payload_dir}: {', '.join(missing)}"
+        )
     payload_names = {
         path.name
         for path in payload_dir.iterdir()
@@ -145,21 +147,16 @@ def _native_package_data() -> dict[str, list[str]]:
             "Unsupported or stale Core payload remains in "
             f"{payload_dir}: {', '.join(unexpected)}"
         )
-    if sys.platform != "win32" and not (payload_dir / "libzlink.so").is_symlink():
-        raise RuntimeError(f"Core runtime loader link is missing from {payload_dir}")
-    if sys.platform == "win32":
-        return {"zlink": ["py.typed", f"native/{SUPPORTED_PLATFORM}/zlink.dll"]}
     return {
         "zlink": [
             "py.typed",
-            f"native/{platform_dir}/libzlink.so",
-            f"native/{platform_dir}/libzlink.so.{abi_major}",
-            f"native/{platform_dir}/libzlink.so.{version}",
+            *(f"native/{platform_dir}/{name}" for name in package_names),
         ]
     }
 
 
 setup(
+    include_package_data=False,
     package_data=_native_package_data(),
     ext_modules=[
         _native_extension(

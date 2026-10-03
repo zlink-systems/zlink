@@ -1,11 +1,25 @@
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging;
+using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class RuntimeMetricsTests
 {
+    [Fact]
+    public void State_Tag_Values_Are_Exact()
+    {
+        Assert.Equal("current", ZLinkRuntimeMetrics.StateTagValues.Current);
+        Assert.Equal("peak", ZLinkRuntimeMetrics.StateTagValues.Peak);
+        Assert.Equal("reserved", ZLinkRuntimeMetrics.StateTagValues.Reserved);
+        Assert.Equal("queued", ZLinkRuntimeMetrics.StateTagValues.Queued);
+        Assert.Equal("in_use", ZLinkRuntimeMetrics.StateTagValues.InUse);
+        Assert.Equal("running", ZLinkRuntimeMetrics.StateTagValues.Running);
+        Assert.Equal("paused", ZLinkRuntimeMetrics.StateTagValues.Paused);
+        Assert.Equal("cumulative", ZLinkRuntimeMetrics.StateTagValues.Cumulative);
+    }
+
     [Fact]
     public void Meter_Catalog_Uses_Exact_Names_Kinds_Units_And_Scope()
     {
@@ -389,8 +403,8 @@ public sealed class RuntimeMetricsTests
     public void Disabled_Host_Operation_Remains_Safe()
     {
         var operation = ZLinkRuntimeMetrics.StartHostShutdown();
-        operation.Complete("stopped", "none");
-        operation.Complete("force_stopped", "deadline_exceeded");
+        operation.Complete(ZLinkFrameworkTerminationOutcome.Stopped, "none");
+        operation.Complete(ZLinkFrameworkTerminationOutcome.ForceStopped, "deadline_exceeded");
     }
 
     [Fact]
@@ -776,7 +790,7 @@ public sealed class RuntimeMetricsTests
             (_, _, tags) => samples.Add(Tags(tags))
         );
 
-        ZLinkRuntimeMetrics.RecordStreamClosed("tcp", "server_drain");
+        ZLinkRuntimeMetrics.RecordStreamClosed("tcp", ZlinkStreamCloseReason.ServerDrain);
 
         var sample = Assert.Single(samples);
         Assert.Equal("tcp", sample["transport"]);
@@ -808,8 +822,8 @@ public sealed class RuntimeMetricsTests
         listener.Start();
 
         var operation = ZLinkRuntimeMetrics.StartHostShutdown();
-        operation.Complete("force_stopped", "deadline_exceeded");
-        operation.Complete("force_stopped", "teardown_failed");
+        operation.Complete(ZLinkFrameworkTerminationOutcome.ForceStopped, "deadline_exceeded");
+        operation.Complete(ZLinkFrameworkTerminationOutcome.ForceStopped, "teardown_failed");
 
         Assert.Equal([(1L, (string?)"deadline_exceeded")], samples);
     }

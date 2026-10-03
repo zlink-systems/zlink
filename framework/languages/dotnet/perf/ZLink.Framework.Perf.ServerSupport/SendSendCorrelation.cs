@@ -6,8 +6,8 @@ namespace ZLink.Framework.Perf;
 // calls, tied together only by the correlationId in the DTO. The first result of a correlation stands; a reply that
 // arrives after that is only counted (duplicate, late or unknown). The table clears with the window at reset.
 //
-// Order of one operation: Register (right before the first public send, fixing the expiry deadline), then
-// FirstSendEnded with that send's terminal, then CompleteAsync for the final result. The return handler calls Reply.
+// Register fixes the expiry deadline. The operation owner accounts the result returned by CompleteAsync once.
+// The return handler calls Reply.
 public sealed class SendSendCorrelation
 {
     private const int Pending = 0, Succeeded = 1, Failed = 2, Expired = 3;
@@ -15,18 +15,10 @@ public sealed class SendSendCorrelation
     public sealed class Entry(PerfEchoRequest request, long startedTicks, long expiresAtTicks)
     {
         public long StartedTicks { get; } = startedTicks;
-        internal readonly PerfEchoRequest Request = request;
+        internal PerfEchoRequest? Request = request;
         internal readonly long ExpiresAtTicks = expiresAtTicks;
-        internal readonly TaskCompletionSource<Exception?> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource<(Exception? Error, long CompletedTicks)> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int State;
-        internal long ClosedTicks;
-        internal bool Close(int state, Exception? error)
-        {
-            if (Interlocked.CompareExchange(ref State, state, Pending) != Pending) return false;
-            ClosedTicks = PerfClock.Now;
-            Result.SetResult(error);
-            return true;
-        }
     }
 
     private readonly ConcurrentDictionary<string, Entry> entries = [];
@@ -43,7 +35,8 @@ public sealed class SendSendCorrelation
 
     public Entry Register(PerfEchoRequest request, long startedTicks)
     {
-        var entry = new Entry(request, startedTicks, PerfClock.Now + measurement.Config.workload.correlationExpiryMs * 1_000_000L);
+        var entry = new Entry(request, startedTicks,
+            PerfClock.Now + measurement.Config.workload.correlationExpiryMs * 1_000_000L);
         if (!entries.TryAdd(request.correlationId, entry))
             throw new PerfValidationException("IdentityMismatch", "A correlationId was issued twice.");
         return entry;
@@ -55,40 +48,67 @@ public sealed class SendSendCorrelation
     // the echo was already fixed first.
     public void FirstSendEnded(Entry entry, Exception? error)
     {
+        var now = PerfClock.Now;
+        if (ExpireIfDue(entry, now)) return;
         if (error is null) { if (measurement.Phase != "setup") metrics.Count("messages.admitted"); }
-        else entry.Close(Failed, error);
+        else Close(entry, Failed, error, now);
     }
 
     // The return handler's one call: the reply's identity and payload decide the first result.
     public void Reply(PerfEchoReply reply)
     {
         if (!entries.TryGetValue(reply.correlationId, out var entry)) { metrics.Count("messages.unknownCorrelation"); return; }
+        var request = Volatile.Read(ref entry.Request);   // null once the correlation has a result
         Exception? invalid = null;
-        try
+        if (request is not null)
         {
-            PayloadPattern.ValidateIdentity(entry.Request, reply);
-            measurement.Pattern.Validate(reply.payload);
+            try
+            {
+                PayloadPattern.ValidateIdentity(request, reply);
+                measurement.Pattern.Validate(reply.payload);
+            }
+            catch (PerfValidationException error) { invalid = error; }
         }
-        catch (PerfValidationException error) { invalid = error; }
-        if (!entry.Close(invalid is null ? Succeeded : Failed, invalid))
+        var now = PerfClock.Now;
+        ExpireIfDue(entry, now);
+        if (!Close(entry, invalid is null ? Succeeded : Failed, invalid, now) || Volatile.Read(ref entry.State) == Expired)
             metrics.Count(Volatile.Read(ref entry.State) == Succeeded ? "messages.duplicateReply" : "messages.lateReply");
     }
+
+    private bool Close(Entry entry, int state, Exception? error, long now)
+    {
+        lock (entry)
+        {
+            if (entry.State != Pending) return false;
+            if (IsDue(entry, now)) { state = Expired; error = ExpiredError(); }
+            entry.State = state;
+            Interlocked.Exchange(ref entry.Request, null);
+            if (state == Expired) metrics.Count("messages.expired");
+            entry.Result.TrySetResult((error, now));
+            return true;
+        }
+    }
+
+    private static bool IsDue(Entry entry, long now) => now >= entry.ExpiresAtTicks;
+
+    private bool ExpireIfDue(Entry entry, long now) =>
+        IsDue(entry, now) && Close(entry, Expired, ExpiredError(), now);
+
+    private static PerfValidationException ExpiredError() =>
+        new("CorrelationExpired", "No return send arrived before the correlation deadline.");
 
     // The final result once the first send has ended: the first result of the correlation, or its expiry. The time is
     // when that result was fixed, so an echo seen before the first send's terminal keeps its own time.
     public async ValueTask<(Exception? Error, long CompletedTicks)> CompleteAsync(Entry entry)
     {
-        try
+        while (true)
         {
-            var remaining = Math.Max(0, entry.ExpiresAtTicks - PerfClock.Now);
-            var error = await entry.Result.Task.WaitAsync(TimeSpan.FromTicks(remaining / 100)).ConfigureAwait(false);
-            return (error, entry.ClosedTicks);
-        }
-        catch (TimeoutException)
-        {
-            if (entry.Close(Expired, new PerfValidationException("CorrelationExpired", "No return send arrived before the correlation deadline.")))
-                metrics.Count("messages.expired");
-            return (await entry.Result.Task.ConfigureAwait(false), entry.ClosedTicks);
+            var now = PerfClock.Now;
+            ExpireIfDue(entry, now);
+            if (entry.Result.Task.IsCompleted) return await entry.Result.Task.ConfigureAwait(false);
+            var remaining = Math.Max(0, entry.ExpiresAtTicks - now);
+            try { return await entry.Result.Task.WaitAsync(TimeSpan.FromTicks((remaining + 99) / 100)).ConfigureAwait(false); }
+            catch (TimeoutException) { }
         }
     }
 }

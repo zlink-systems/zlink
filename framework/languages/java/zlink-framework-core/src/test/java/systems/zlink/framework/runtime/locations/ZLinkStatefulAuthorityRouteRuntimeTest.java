@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.locations;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -40,6 +41,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
@@ -57,6 +60,77 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
     private static final RoutingId SPOT_RID = RoutingId.from("instance-room");
     private static final RoutingId NODE_RID = RoutingId.from("node-a");
     private static final String AUTHORITY_KEY = ZLinkAuthorityKeyCodec.spot(SPOT_RID.toString());
+
+    @Test
+    void providerCompletionDoesNotWaitForAuthorityStateLane() throws Exception {
+        var page = new CompletableFuture<ZLinkAuthorityPage>();
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var recorded = new RecordedNode();
+        var delegate = recorded.proxy();
+        var node =
+                (ZLinkInternalMeshNode)
+                        Proxy.newProxyInstance(
+                                ZLinkInternalMeshNode.class.getClassLoader(),
+                                new Class<?>[] {ZLinkInternalMeshNode.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("rememberSpotAuthority")) {
+                                        entered.countDown();
+                                        assertTrue(release.await(10, TimeUnit.SECONDS));
+                                    }
+                                    return method.invoke(delegate, arguments);
+                                });
+        var store =
+                (ZLinkLocationRepository)
+                        Proxy.newProxyInstance(
+                                ZLinkLocationRepository.class.getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("list")) {
+                                        return page;
+                                    }
+                                    throw new UnsupportedOperationException(method.getName());
+                                });
+        var codec = new ZLinkServiceAuthorityPayloadCodec();
+        var ready =
+                entry(
+                        "ready",
+                        ZLinkPlacementAllocationState.ACTIVE,
+                        codec.encodeInstance(
+                                ZLinkServiceAuthorityPayloadCodec.State.READY,
+                                STABLE_TYPE,
+                                SPOT_RID.toString(),
+                                OWNER_ID,
+                                OWNER_LEASE_GENERATION,
+                                MESH_NAME,
+                                NODE_RID,
+                                NODE_GENERATION));
+        try (var runtime =
+                new ZLinkStatefulAuthorityRouteRuntime(
+                        store,
+                        Map.of(MESH_NAME, node),
+                        Duration.ofHours(1),
+                        failure -> {
+                            throw new AssertionError(failure);
+                        })) {
+            var reconciliation = runtime.reconcile().toCompletableFuture();
+            var providerCompletion =
+                    CompletableFuture.runAsync(
+                            () ->
+                                    page.complete(
+                                            new ZLinkAuthorityPage(
+                                                    List.of(ready), Optional.empty())));
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                providerCompletion.get(5, TimeUnit.SECONDS);
+                assertFalse(reconciliation.isDone());
+            } finally {
+                release.countDown();
+            }
+            reconciliation.get(5, TimeUnit.SECONDS);
+            assertEquals(1, recorded.remembered.size());
+        }
+    }
 
     @Test
     void pendingInstanceAuthorityRegistersIntentBeforeReadyRoutePublication() {

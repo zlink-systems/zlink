@@ -10,23 +10,16 @@ internal sealed class ZLinkLocationReadiness(IZLinkLocationRuntimeQuery query)
         CancellationToken cancellationToken = default
     )
     {
-        try
-        {
-            var page = await query
-                .ListTopologyAsync(
-                    new ZLinkLocationTopologyFilter(
-                        MeshName: meshName,
-                        NodeRid: nodeRid,
-                        State: ZLinkLocationTopologyState.Ready
-                    ),
-                    cancellationToken: cancellationToken
-                )
-                .ConfigureAwait(false);
-            return page.Items.Count > 0;
-        }
-        catch
-        {
-            return false;
-        }
+        var page = await query
+            .ListTopologyAsync(
+                new ZLinkLocationTopologyFilter(
+                    MeshName: meshName,
+                    NodeRid: nodeRid,
+                    State: ZLinkLocationTopologyState.Ready
+                ),
+                cancellationToken: cancellationToken
+            )
+            .ConfigureAwait(false);
+        return page.Items.Count > 0;
     }
 }

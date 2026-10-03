@@ -120,7 +120,8 @@ internal sealed class ZLinkChannelRuntimeManager(
                                                 ),
                                             state.ApplicationJobQueue,
                                             state.ErrorSink,
-                                            ct
+                                            ct,
+                                            state.ForceStopTokenSource.Token
                                         )
                                     )
                                 )
@@ -153,6 +154,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                                     fanoutRuntime,
                                     state.ErrorSink,
                                     state.StopTokenSource.Token,
+                                    state.ForceStopTokenSource.Token,
                                     applicationJobQueue: state.ApplicationJobQueue
                                 )
                             )
@@ -178,7 +180,8 @@ internal sealed class ZLinkChannelRuntimeManager(
                                             (ISubSocket)bundle.Socket,
                                             state.ApplicationJobQueue,
                                             state.ErrorSink,
-                                            ct
+                                            ct,
+                                            state.ForceStopTokenSource.Token
                                         )
                                     )
                                 )
@@ -209,6 +212,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                         .Value,
                     state.StopTokenSource.Token,
                     state.ApplicationJobQueue,
+                    state.ErrorSink,
                     outboundFlow?.Invoke(),
                     registration.TimeProvider
                 );

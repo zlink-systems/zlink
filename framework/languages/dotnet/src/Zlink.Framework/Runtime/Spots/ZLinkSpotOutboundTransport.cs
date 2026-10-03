@@ -64,7 +64,9 @@ internal sealed class ZLinkSpotOutboundTransport(
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     )
     {
         try
@@ -85,7 +87,8 @@ internal sealed class ZLinkSpotOutboundTransport(
                     parts,
                     SendFlags.None,
                     cancellationToken,
-                    metadata
+                    metadata,
+                    readyRoute
                 )
                 .ConfigureAwait(false);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
@@ -179,11 +182,7 @@ internal sealed class ZLinkSpotOutboundTransport(
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"spot_authority_observe target_node={targetNodeRid} "
-                + $"spot={targetSpotId} object_gen={targetSpotGeneration} "
-                + $"node_gen={targetNodeGeneration} "
-                + $"authority_gen={authorityOwnerGeneration} "
-                + $"lease_gen={ownerLeaseGeneration}"
+            $"spot_authority_observe target_node={targetNodeRid} spot={targetSpotId} object_gen={targetSpotGeneration} node_gen={targetNodeGeneration} authority_gen={authorityOwnerGeneration} lease_gen={ownerLeaseGeneration}"
         );
         if (
             targetNodeRid == default
@@ -298,7 +297,9 @@ internal sealed class ZLinkSpotOutboundTransport(
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
+            null
     )
     {
         try
@@ -320,7 +321,8 @@ internal sealed class ZLinkSpotOutboundTransport(
                     SendFlags.None,
                     timeout,
                     cancellationToken,
-                    metadata
+                    metadata,
+                    readyRoute
                 )
                 .ConfigureAwait(false);
         }

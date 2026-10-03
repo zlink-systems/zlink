@@ -141,7 +141,11 @@
 
 /* 헤더의 언어 선택기. 로케일(한국어/English) 선택기와 같은 `md-select` 마크업이라
    자리와 동작은 테마가 맡는다. 여기서는 아이콘 크기만 맞춘다.
-   zlink-lang.js가 자리를 잡기 전에는 hidden이라 깜박이지 않는다. */
+   zlink-lang.js가 자리를 잡기 전에는 hidden이라 깜박이지 않는다. 테마의
+   `.md-header__option { display: flex }`가 hidden 속성을 덮어쓰므로 여기서 되살린다. */
+.md-header__option.zlink-lang[hidden] {
+  display: none;
+}
 .zlink-lang .md-header__button svg {
   width: 1.2rem;
   height: 1.2rem;

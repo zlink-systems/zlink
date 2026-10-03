@@ -6,6 +6,7 @@
 #include <zlink/framework/contracts/locations/rows.hpp>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -14,6 +15,8 @@
 
 namespace zlink::framework
 {
+
+inline constexpr std::size_t mesh_descriptor_list_item_limit = 1024;
 
 // Framework-private records encoded into the opaque Location Store SPI.
 // Providers only receive store_key_t and byte payloads.

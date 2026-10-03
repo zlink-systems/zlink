@@ -6,6 +6,7 @@ import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntimeConfiguration;
 import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.locations.ZLinkLiveLocationRows;
 import systems.zlink.framework.runtime.locations.ZLinkLocationAutoConnectHost;
@@ -21,9 +22,11 @@ import systems.zlink.framework.spots.ActorSpotHandleResolver;
 import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.ZLinkStoreSpotHandleResolver;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 final class ZLinkFrameworkLocationSubsystem {
@@ -57,7 +60,9 @@ final class ZLinkFrameworkLocationSubsystem {
 
     static ZLinkFrameworkLocationSubsystem create(
             ZLinkFrameworkRegistration registration,
-            ZLinkHandlerActivator.MutableServices runtimeHandlers) {
+            ZLinkHandlerActivator.MutableServices runtimeHandlers,
+            ZLinkRuntimeEventDispatcher runtimeEvents,
+            Supplier<Instant> cleanupDeadline) {
         ZLinkRegisteredLocationStores locationStores =
                 ZLinkLocationStoreResolver.resolve(registration.locations(), runtimeHandlers);
         if (locationStores == null) {
@@ -73,7 +78,7 @@ final class ZLinkFrameworkLocationSubsystem {
                         registration.locations().options().ownerLeaseRenewTimeout(),
                         registration.locations().options().ownerLeaseFencingMargin());
         CompletionStage<Void> startup =
-                locationRuntime.start(RoutingId.from(locationRuntime.ownerId()));
+                locationRuntime.start(RoutingId.from(locationRuntime.ownerId()), cleanupDeadline);
 
         ZLinkLiveLocationRows liveLocationRows =
                 ZLinkLiveLocationRows.create(locationStores, registration.locations().options());
@@ -104,7 +109,8 @@ final class ZLinkFrameworkLocationSubsystem {
                         storeLocationResolvers,
                         registration.locations().options(),
                         clientServerConfiguration,
-                        fanoutConfiguration);
+                        fanoutConfiguration,
+                        runtimeEvents);
         ZLinkStoreLocationResolvers.AddressResolvers locationAddressResolvers =
                 new ZLinkStoreLocationResolvers.AddressResolvers(
                         spotMeshNames(registration), storeLocationResolvers);

@@ -11,7 +11,7 @@
         <PackageReference Include="Microsoft.Extensions.DependencyInjection"/>
         <PackageReference Include="Microsoft.Extensions.Hosting"/>
         <PackageReference Include="Microsoft.NET.Test.Sdk"/>
-        <PackageReference Include="Zlink"/>
+        <PackageReference Include="Zlink" Condition="'$(ZLinkUseBindingsSource)' != 'true'"/>
         <PackageReference Include="coverlet.collector">
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
             <PrivateAssets>all</PrivateAssets>
@@ -59,6 +59,7 @@
         <Compile Include="Support/Relocation/InMemoryRelocationStore.cs"/>
         <Compile Include="Support/Sessions/TestSession.cs"/>
         <Compile Include="Runtime/AutoConnectLoopTests.cs"/>
+        <Compile Include="Runtime/AutoConnectRejectionTests.cs"/>
         <Compile Include="Runtime/AutoConnectLifecycleCoordinatorTests.cs"/>
         <Compile Include="Runtime/AutoConnectReconcilerTests.cs"/>
         <Compile Include="Runtime/AuthorityKeyCodecTests.cs"/>
@@ -69,6 +70,7 @@
         <Compile Include="Runtime/CanonicalActorJoinWireAdmissionNegativeTests.cs"/>
         <Compile Include="Runtime/RemoteJoinerCanonicalReplyTests.cs"/>
         <Compile Include="Runtime/SameNodeActorJoinTests.cs"/>
+        <Compile Include="Runtime/SourceMembershipLeaveCompletionTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
         <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>
@@ -108,6 +110,7 @@
         <Compile Include="Runtime/DirectReplyCompletionRegistryTests.cs"/>
         <Compile Include="Runtime/DescriptorOwnerLeaseSelectionTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
+        <Compile Include="Runtime/EntrySpotActorDispatchTests.SourceRetirement.cs"/>
         <Compile Include="Runtime/EntrySpotIdentityStoreTests.cs"/>
         <Compile Include="Runtime/RuntimeIdentifierTests.cs"/>
         <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
@@ -153,6 +156,7 @@
         <Compile Include="Runtime/MeshCompletionTableConvergenceTests.cs"/>
         <Compile Include="Runtime/MeshNodeRouteDispatcherTests.cs"/>
         <Compile Include="Runtime/MeshNodeShutdownSealTests.cs"/>
+        <Compile Include="Runtime/MeshNodeHelloSubmissionTests.cs"/>
         <Compile Include="Runtime/PublicContractSnapshotTests.cs"/>
         <Compile Include="Runtime/SerialExecutionQueueBenchmarkTests.cs"/>
         <Compile Include="Runtime/SerialExecutorLayerContractTests.cs"/>
@@ -162,6 +166,7 @@
         <Compile Include="Runtime/ZLinkMeshPeerAdmissionTests.cs"/>
         <Compile Include="Runtime/ServiceWireActorJoinReplyCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireActorDestroyCodecTests.cs"/>
+        <Compile Include="Runtime/ServiceWireInstanceReadyCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireRelocationCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireSessionRelocationCodecTests.cs"/>
         <Compile Include="Runtime/StatefulServiceRuntimeTests.cs"/>
@@ -169,6 +174,8 @@
         <Compile Include="Runtime/GatedTaskScheduler.cs"/>
         <Compile Include="Runtime/DurableSenderRuntimeTests.cs"/>
         <Compile Include="Runtime/DurableRequestTests.cs"/>
+        <Compile Include="Runtime/SessionBindDurableTests.cs"/>
+        <Compile Include="Runtime/NativeSessionBindDurableTests.cs"/>
         <Compile Include="Runtime/StoreRecordGoldenTests.cs"/>
         <Compile Include="Runtime/SessionActorCoordinatorTests.cs"/>
         <Compile Include="Runtime/StreamWireInteropTests.cs"/>
@@ -189,6 +196,8 @@
         <Compile Include="Runtime/RemoteRelayFrameAssemblerTests.cs"/>
         <Compile Include="Runtime/ReconciliationRunnerTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.cs"/>
+        <Compile Include="Runtime/AuditRuntimeFailureReporter.cs"/>
+        <Compile Include="Runtime/ActorMembershipOwnershipTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.cs"/>
         <Compile Include="Runtime/SpotCloseAdmissionSealTests.cs"/>

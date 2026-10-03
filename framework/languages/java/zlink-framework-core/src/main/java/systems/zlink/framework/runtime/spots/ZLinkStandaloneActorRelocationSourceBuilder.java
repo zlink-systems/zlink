@@ -8,6 +8,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableActorFactory;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
@@ -34,6 +35,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 
 /**
  * Builds the reversible source half of one Entry Spot Actor relocation from the live Actor and its
@@ -459,9 +461,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                 relocationReplies
                                                         .resumeActorTimersAfterRelocationAbort(
                                                                 admission.owned().actorId());
-                                                actors.abortActorRelocation(
-                                                        admission.owned().actorId(), seal);
-                                                return failed(unwrap(failure));
+                                                return actors.abortActorRelocationAsync(
+                                                                admission.owned().actorId(), seal)
+                                                        .thenCompose(
+                                                                ignored -> failed(unwrap(failure)));
                                             });
                         });
     }
@@ -1191,7 +1194,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                             () -> {
                                                 if (terminal || committed) {
                                                     throw new IllegalStateException(
-                                                            "Actor relocation relay boundary is terminal");
+                                                            "Actor relocation relay boundary is"
+                                                                    + " terminal");
                                                 }
                                                 return relayed;
                                             }))
@@ -1322,7 +1326,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             () -> {
                                 if (relocationCommit == null || !committed && !captureFinished) {
                                     throw new IllegalStateException(
-                                            "Actor relocation source queue is not durably committed");
+                                            "Actor relocation source queue is not durably"
+                                                    + " committed");
                                 }
                                 committed = true;
                                 return relocationCommit;
@@ -1372,8 +1377,15 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             } catch (RuntimeException failure) {
                 return failed(failure);
             }
-            relocationReplies.closeActorTimersAfterRelocation(owned.actorId());
-            return actors.completeRelocationSource(List.of(owned.actorId()));
+            return ZLinkHandlerStages.completeAll(
+                    List.of(
+                            () ->
+                                    ZLinkHandlerStages.fromRunnable(
+                                            () ->
+                                                    relocationReplies
+                                                            .closeActorTimersAfterRelocation(
+                                                                    owned.actorId())),
+                            () -> actors.completeRelocationSource(List.of(owned.actorId()))));
         }
 
         /**
@@ -1498,7 +1510,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     });
         }
 
-        private <T> T inStateLane(java.util.function.Supplier<T> work) {
+        private <T> T inStateLane(Supplier<T> work) {
             try {
                 return stateLane.runAsync(work).toCompletableFuture().join();
             } catch (CompletionException failure) {

@@ -78,7 +78,7 @@ inline framework_exception_t restore_failure_origin (const envelope_header_t &he
     const auto origin = failure_origin_from_wire (found->second);
     return origin == detail::failure_origin_t::none
              ? error
-             : detail::make_origin_exception (error.kind (), origin, error.what ());
+             : detail::with_failure_origin (std::move (error), origin);
 }
 
 } // namespace zlink::framework::runtime::messaging

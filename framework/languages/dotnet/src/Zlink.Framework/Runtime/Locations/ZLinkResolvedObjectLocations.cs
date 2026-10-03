@@ -11,7 +11,8 @@ internal sealed record ZLinkResolvedSpotLocation(
     string OwnerId,
     long LeaseGeneration,
     DateTimeOffset UpdatedAt,
-    ulong AuthorityOwnerGeneration
+    ulong AuthorityOwnerGeneration,
+    string StoreVersion = ""
 )
 {
     internal ZLinkSpotLocation ToPublic() =>

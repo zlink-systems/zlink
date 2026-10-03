@@ -1464,8 +1464,11 @@ void verify_client_server_independent_raw_path ()
     }
     assert (server.mailbox ().release (*send_claim));
 
-    auto request_task =
-      client.request ({"ClientServerRequest", "application/json", bytes ("request")}, 2s);
+    /* request() reads its borrowed payload after the first suspension, so the
+     * payload must outlive the returned task. */
+    const protocol::application_payload_t request_payload{"ClientServerRequest", "application/json",
+                                                          bytes ("request")};
+    auto request_task = client.request (request_payload, 2s);
     client_server::client_server_pump_result_t request_pump =
       client_server::client_server_pump_result_t::no_data;
     while (request_pump != client_server::client_server_pump_result_t::application
@@ -1477,8 +1480,11 @@ void verify_client_server_independent_raw_path ()
       server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
     assert (request_claim->records.front ().reply_token);
-    assert (server.reply (request_claim->records.front (),
-                          {"ClientServerReply", "application/json", bytes ("reply")}));
+    assert (server
+              .reply (request_claim->records.front (),
+                      {"ClientServerReply", "application/json", bytes ("reply")})
+              .result ()
+              .value ());
     assert (server.mailbox ().release (*request_claim));
     while (!request_task.await_ready () && std::chrono::steady_clock::now () < deadline) {
         const auto pump = client.pump_one (std::chrono::steady_clock::now ()).result ().value ();
@@ -1492,8 +1498,9 @@ void verify_client_server_independent_raw_path ()
     assert (result.content_type == "application/json");
     assert (result.payload == bytes ("reply"));
 
-    auto rejected_task =
-      client.request ({"RejectedRequest", "application/json", bytes ("request")}, 2s);
+    const protocol::application_payload_t rejected_payload{"RejectedRequest", "application/json",
+                                                           bytes ("request")};
+    auto rejected_task = client.request (rejected_payload, 2s);
     request_pump = client_server::client_server_pump_result_t::no_data;
     while (request_pump != client_server::client_server_pump_result_t::application
            && std::chrono::steady_clock::now () < deadline) {
@@ -1503,10 +1510,13 @@ void verify_client_server_independent_raw_path ()
     request_claim =
       server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
-    assert (server.reply (
-      request_claim->records.front (),
-      zlink::framework::framework_exception_t (zlink::framework::framework_error_kind_t::rejected,
-                                               "ClientServer request was rejected.")));
+    assert (server
+              .reply (request_claim->records.front (),
+                      zlink::framework::framework_exception_t (
+                        zlink::framework::framework_error_kind_t::rejected,
+                        "ClientServer request was rejected."))
+              .result ()
+              .value ());
     assert (server.mailbox ().release (*request_claim));
     while (!rejected_task.await_ready () && std::chrono::steady_clock::now () < deadline) {
         const auto pump = client.pump_one (std::chrono::steady_clock::now ()).result ().value ();
@@ -1522,8 +1532,9 @@ void verify_client_server_independent_raw_path ()
     // is larger than the core automatic HWM default.
     const auto large_payload =
       std::vector<std::uint8_t> (1024u * 1024u, static_cast<std::uint8_t> ('p'));
-    auto large_task =
-      client.request ({"LargePayloadRequest", "application/json", large_payload}, 3s);
+    const protocol::application_payload_t large_request{"LargePayloadRequest", "application/json",
+                                                        large_payload};
+    auto large_task = client.request (large_request, 3s);
     const auto large_deadline = std::chrono::steady_clock::now () + 5s;
     auto large_claim = server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
                                                     2u * 1024u * 1024u);
@@ -1537,8 +1548,11 @@ void verify_client_server_independent_raw_path ()
     }
     assert (large_claim && large_claim->records.size () == 1);
     const auto large_reply = bytes ("large payload accepted");
-    assert (server.reply (large_claim->records.front (),
-                          {"LargePayloadReply", "application/json", large_reply}));
+    assert (server
+              .reply (large_claim->records.front (),
+                      {"LargePayloadReply", "application/json", large_reply})
+              .result ()
+              .value ());
     assert (server.mailbox ().release (*large_claim));
     while (!large_task.await_ready () && std::chrono::steady_clock::now () < large_deadline) {
         const auto pump = client.pump_one (std::chrono::steady_clock::now ()).result ().value ();
@@ -3058,18 +3072,15 @@ int main (int argc, char **argv)
         verify_actor_join_ends_after_unexpected_admitted_peer_loss (false);
         return 0;
     }
-    using zlink::framework::detail::backend::raw_request_failure_phase_t;
-    using zlink::framework::detail::backend::transient_route_failure;
-    assert (transient_route_failure (zlink::submit_result_t::not_connected, EHOSTUNREACH,
-                                     raw_request_failure_phase_t::initial_admission));
-    assert (transient_route_failure (zlink::submit_result_t::not_connected, ENOTCONN,
-                                     raw_request_failure_phase_t::initial_admission));
-    assert (transient_route_failure (zlink::submit_result_t::not_admitted, ECONNREFUSED,
-                                     raw_request_failure_phase_t::initial_admission));
-    assert (!transient_route_failure (zlink::submit_result_t::not_found, ENOENT,
-                                      raw_request_failure_phase_t::completion_terminal));
-    assert (!transient_route_failure (zlink::submit_result_t::not_connected, EINVAL,
-                                      raw_request_failure_phase_t::initial_admission));
+    using zlink::framework::runtime::messaging::map_submit_request_result;
+    assert (map_submit_request_result (zlink::submit_result_t::not_connected, false)
+            == zlink::request_result_t::not_connected);
+    assert (map_submit_request_result (zlink::submit_result_t::not_admitted, false)
+            == zlink::request_result_t::rejected);
+    assert (map_submit_request_result (zlink::submit_result_t::not_found, true)
+            == zlink::request_result_t::not_found);
+    assert (map_submit_request_result (zlink::submit_result_t::not_connected, true)
+            == zlink::request_result_t::not_connected);
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
     verify_bound_session_bind_permanent_absence_is_bounded ();

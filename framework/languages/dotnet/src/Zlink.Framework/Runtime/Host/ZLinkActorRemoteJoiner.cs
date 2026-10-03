@@ -47,11 +47,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(null)
         );
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"entry_target_resolved node={target.Rid} spot={target.EntrySpotId} "
-                + $"spot_gen={snapshot.Generation} node_gen={snapshot.NodeGeneration} "
-                + $"authority_gen={snapshot.AuthorityOwnerGeneration} "
-                + $"lease_gen={snapshot.OwnerLeaseGeneration} "
-                + $"descriptor_revision={target.DescriptorRevision}"
+            $"entry_target_resolved node={target.Rid} spot={target.EntrySpotId} spot_gen={snapshot.Generation} node_gen={snapshot.NodeGeneration} authority_gen={snapshot.AuthorityOwnerGeneration} lease_gen={snapshot.OwnerLeaseGeneration} descriptor_revision={target.DescriptorRevision}"
         );
         var effectiveDeadline =
             absoluteDeadline ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
@@ -541,12 +537,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                                 (frames, remaining, token) =>
                                 {
                                     ZLinkFrameworkDebugLog.SpotDiscovery(
-                                        $"admit_request_sent actor={actor.Context.ActorId} "
-                                            + $"target_node={snapshot.NodeRid} spot={snapshot.SpotId} "
-                                            + $"spot_gen={snapshot.Generation} "
-                                            + $"node_gen={snapshot.NodeGeneration} "
-                                            + $"authority_gen={snapshot.AuthorityOwnerGeneration} "
-                                            + $"lease_gen={snapshot.OwnerLeaseGeneration}"
+                                        $"admit_request_sent actor={actor.Context.ActorId} target_node={snapshot.NodeRid} spot={snapshot.SpotId} spot_gen={snapshot.Generation} node_gen={snapshot.NodeGeneration} authority_gen={snapshot.AuthorityOwnerGeneration} lease_gen={snapshot.OwnerLeaseGeneration}"
                                     );
                                     return runtime.RequestToSpotViaRouterChannelAsync(
                                         snapshot.RouterChannelId,
@@ -591,7 +582,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 $"source_rejected site={1} token_empty={{string.IsNullOrEmpty(admissionReply.ReservationToken)}}"
             );
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                "actor_join_rejected site=remote_admission"
+                $"actor_join_rejected site=remote_admission"
             );
             return new ZLinkActorJoinResult.Rejected(admissionReplyMessage);
         }
@@ -1099,7 +1090,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                             sourceCleanupCancellation.Cancel();
                         else
                             sourceCleanupCancellation.CancelAfter(sourceCleanupRemaining);
-                        await ReconcileCommittedSourceHandoffAsync(
+                        await FinalizeCommittedSourceHandoffAsync(
                                 actorState,
                                 actorRef,
                                 resultActorRef,
@@ -1321,7 +1312,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         );
     }
 
-    private async ValueTask ReconcileCommittedSourceHandoffAsync(
+    private async ValueTask FinalizeCommittedSourceHandoffAsync(
         ZLinkActorRuntimeState actorState,
         ZLinkBackendActorRef sourceActorRef,
         ZLinkBackendActorRef targetActorRef,
@@ -1333,7 +1324,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             ZLinkBoundSessionDispatchScope.TryDefer(
                 actorState.ActorId,
                 ct =>
-                    ReconcileCommittedSourceHandoffCoreAsync(
+                    FinalizeCommittedSourceHandoffCoreAsync(
                         actorState,
                         sourceActorRef,
                         targetActorRef,
@@ -1344,7 +1335,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         )
             return;
 
-        await ReconcileCommittedSourceHandoffCoreAsync(
+        await FinalizeCommittedSourceHandoffCoreAsync(
                 actorState,
                 sourceActorRef,
                 targetActorRef,
@@ -1354,7 +1345,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             .ConfigureAwait(false);
     }
 
-    private async ValueTask ReconcileCommittedSourceHandoffCoreAsync(
+    private async ValueTask FinalizeCommittedSourceHandoffCoreAsync(
         ZLinkActorRuntimeState actorState,
         ZLinkBackendActorRef sourceActorRef,
         ZLinkBackendActorRef targetActorRef,
@@ -1362,31 +1353,18 @@ internal sealed class ZLinkActorRemoteJoiner(
         CancellationToken cancellationToken
     )
     {
-        var migrationApplied = false;
-        await ZLinkReconciliationRunner
-            .RunAsync(
-                async token =>
-                {
-                    if (!migrationApplied)
-                    {
-                        await ApplyRemoteActorMigrationCoreAsync(
-                                actorState,
-                                targetActorRef,
-                                sourceAuthoritySnapshot,
-                                token
-                            )
-                            .ConfigureAwait(false);
-                        migrationApplied = true;
-                    }
-
-                    await actorSessionManager
-                        .FinalizeMigratedSourceAsync(actorState, sourceActorRef, token)
-                        .ConfigureAwait(false);
-                },
-                exception =>
-                    ReportCommittedHandoffFailure("actor-source-handoff-cleanup", exception),
+        await actorSessionManager
+            .FinalizeMigratedSourceAsync(
+                actorState,
+                sourceActorRef,
                 cancellationToken,
-                static exception => exception is OperationCanceledException
+                () =>
+                    ApplyRemoteActorMigrationCoreAsync(
+                        actorState,
+                        targetActorRef,
+                        sourceAuthoritySnapshot,
+                        cancellationToken
+                    )
             )
             .ConfigureAwait(false);
     }
@@ -1568,8 +1546,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         //  made its absence read as "never reached" when it only meant the
         //  other arm ran.
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"bound_seal_begin actor={actorId} session_node={sessionOwnerNode} "
-                + $"local={sessionOwnerNode == runtime.GetMeshNodeRuntime(meshName).Node.RoutingId}"
+            $"bound_seal_begin actor={actorId} session_node={sessionOwnerNode} local={sessionOwnerNode == runtime.GetMeshNodeRuntime(meshName).Node.RoutingId}"
         );
         _ = await runtime
             .SealSessionRelocationAsync(
@@ -1609,10 +1586,14 @@ internal sealed class ZLinkActorRemoteJoiner(
                 .ConfigureAwait(false);
             actorState.ForgetSourceSessionRelocation(handoffId);
         }
-        catch
+        catch (Exception exception)
         {
             // The session connection or exact binding may already be gone.
             // Its physical cleanup owns the remaining tombstone.
+            runtime.ErrorSink.ReportRuntimeTaskException(
+                nameof(AbortBoundSessionRouteSealBestEffortAsync),
+                exception
+            );
         }
     }
 
@@ -1647,32 +1628,10 @@ internal sealed class ZLinkActorRemoteJoiner(
         // callback. Fence new operations now, but retain the exact source
         // activation until FinalizeMigratedSourceAsync retires both together.
         actorState.FenceRuntimeGeneration();
-        await ReconcileActorLocationAfterMoveAsync(
+        await actorSessionManager
+            .ReleaseActorLocationAfterMoveAsync(
                 actorState,
                 sourceAuthoritySnapshot,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-    }
-
-    private async ValueTask ReconcileActorLocationAfterMoveAsync(
-        ZLinkActorRuntimeState actorState,
-        ZLinkAuthoritySnapshot sourceAuthoritySnapshot,
-        CancellationToken cancellationToken
-    )
-    {
-        await ZLinkReconciliationRunner
-            .RunAsync(
-                token =>
-                    actorSessionManager.ReleaseActorLocationAfterMoveAsync(
-                        actorState,
-                        sourceAuthoritySnapshot,
-                        token
-                    ),
-                exception =>
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"remote actor move cleanup retry for '{actorState.ActorId}': {exception.Message}"
-                    ),
                 cancellationToken
             )
             .ConfigureAwait(false);

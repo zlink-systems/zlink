@@ -1,6 +1,8 @@
+import { constants as osConstants } from 'node:os';
+import { requireOneWayCompletion, ZLinkSubmitStatus } from '../../messaging/submission-result';
 import { loadBinding } from '../node-backend-adapter';
 import { SubmitResult, ZLinkBackendResultError } from '../runtime-values';
-import { requireOneWayCompletion, ZLinkSubmitStatus } from '../../messaging/submission-result';
+const nativeErrnoValues = osConstants.errno;
 
 export type ZLinkBindingModule = typeof import('@zlink-systems/zlink');
 export const zlink = loadBinding() as ZLinkBindingModule;
@@ -64,7 +66,10 @@ export function isRouteRecvRetryable(error: unknown): boolean {
 }
 
 function isNativeBadAddress(error: { nativeErrno?: unknown; message?: unknown }): boolean {
-  return error.nativeErrno === 14 || /Bad address/i.test(String(error.message ?? ''));
+  return (
+    error.nativeErrno === nativeErrnoValues.EFAULT ||
+    /Bad address/i.test(String(error.message ?? ''))
+  );
 }
 
 export function submitBindingPublish(
@@ -189,7 +194,13 @@ function isSuccessfulOrAlreadyShutdownCloseError(error: unknown): boolean {
     isContextTerminatedError(error) ||
     (error instanceof Error &&
       'code' in error &&
-      [0, 402, 403].includes((error as { code: number }).code))
+      (
+        [
+          zlink.CloseResult.Ok,
+          zlink.CloseResult.Shutdown,
+          zlink.CloseResult.InvalidHandle
+        ] as readonly number[]
+      ).includes((error as { code: number }).code))
   );
 }
 
@@ -239,9 +250,15 @@ function toNativeMessageLike(message: unknown): unknown {
   return message;
 }
 
-export function translateBindingResultError(error: unknown): unknown {
+export function translateBindingResultError(
+  error: unknown,
+  phase: 'submit' | 'completion' = 'completion'
+): unknown {
   if (error instanceof zlink.SubmitError) {
-    return new ZLinkBackendResultError('submit', error.result, error.nativeErrno, { cause: error });
+    return new ZLinkBackendResultError('submit', error.result, error.nativeErrno, {
+      cause: error,
+      phase
+    });
   }
   if (error instanceof zlink.RequestError) {
     return new ZLinkBackendResultError('request', error.result, error.nativeErrno, {

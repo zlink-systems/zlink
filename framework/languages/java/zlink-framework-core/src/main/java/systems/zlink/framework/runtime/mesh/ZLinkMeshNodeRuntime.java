@@ -11,6 +11,8 @@ import java.util.function.Consumer;
 
 /** Configures and starts one MeshNode that {@link ZLinkMeshNodesRuntime} already owns. */
 final class ZLinkMeshNodeRuntime {
+    private static final int DEFAULT_SEND_PENDING_FRAME_LIMIT = 4096;
+
     private ZLinkMeshNodeRuntime() {}
 
     static void start(
@@ -44,7 +46,7 @@ final class ZLinkMeshNodeRuntime {
         node.setRouterPendingAdmissionCapacity(
                 routerSendHighWaterMark > 0
                         ? (int) Math.min(routerSendHighWaterMark, Integer.MAX_VALUE)
-                        : 4096);
+                        : DEFAULT_SEND_PENDING_FRAME_LIMIT);
         registration
                 .configureRouterSocket()
                 .receiveTimeout()

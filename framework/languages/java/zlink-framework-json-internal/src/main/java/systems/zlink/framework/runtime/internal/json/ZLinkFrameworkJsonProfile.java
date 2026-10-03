@@ -20,12 +20,17 @@ import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
+import systems.zlink.contracts.core.RoutingId;
+
 import java.io.IOException;
 import java.lang.annotation.Annotation;
 import java.util.Base64;
 
 /** Owns the framework-json-v1 mapper decisions shared by JVM transports. */
 public final class ZLinkFrameworkJsonProfile {
+    public static final String CONTENT_TYPE = "application/json";
+    private static final String KOTLIN_METADATA_CLASS_NAME = "kotlin.Metadata";
+
     private ZLinkFrameworkJsonProfile() {}
 
     public static ObjectMapper mapper(Module... transportModules) {
@@ -41,11 +46,38 @@ public final class ZLinkFrameworkJsonProfile {
                         .propertyNamingStrategy(new KotlinAwareLowerCamelCaseStrategy())
                         .findAndAddModules()
                         .addModule(new JavaTimeModule())
-                        .addModule(profileModule());
+                        .addModule(profileModule())
+                        .addModule(routingIdModule());
         for (Module module : transportModules) {
             builder.addModule(module);
         }
         return builder.build();
+    }
+
+    private static SimpleModule routingIdModule() {
+        SimpleModule module = new SimpleModule("zlink-routing-id");
+        module.addSerializer(
+                RoutingId.class,
+                new JsonSerializer<>() {
+                    @Override
+                    public void serialize(
+                            RoutingId value,
+                            JsonGenerator generator,
+                            SerializerProvider serializers)
+                            throws IOException {
+                        generator.writeString(value.toHex());
+                    }
+                });
+        module.addDeserializer(
+                RoutingId.class,
+                new JsonDeserializer<>() {
+                    @Override
+                    public RoutingId deserialize(JsonParser parser, DeserializationContext context)
+                            throws IOException {
+                        return RoutingId.fromHex(parser.getValueAsString());
+                    }
+                });
+        return module;
     }
 
     private static SimpleModule profileModule() {
@@ -158,7 +190,7 @@ public final class ZLinkFrameworkJsonProfile {
 
         private static boolean isKotlinClass(Class<?> type) {
             for (Annotation annotation : type.getDeclaredAnnotations()) {
-                if (annotation.annotationType().getName().equals("kotlin.Metadata")) {
+                if (annotation.annotationType().getName().equals(KOTLIN_METADATA_CLASS_NAME)) {
                     return true;
                 }
             }

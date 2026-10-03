@@ -1,6 +1,7 @@
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-values';
 import { randomUUID } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,
@@ -20,6 +21,7 @@ import { selectSerializerWithContentType } from '../messaging/payload-codec';
 import { isCanonicalCodecContentType } from '../../contracts/Configuration/CodecContentType';
 import { parseFrameworkJsonV1, stringifyFrameworkJsonV1 } from '../messaging/framework-json-v1';
 import { currentOrCreateFlow } from '../diagnostics/flow-context';
+import { SERVICE_WIRE_METADATA_BYTES } from '../foundation/service-wire-constants.generated';
 import { codecsForFrameworkPacket } from './channel-framework-packets';
 import { readZLinkPacketJsonContract } from '../../contracts/Handlers/Attributes';
 import type { ZLinkJsonSchema } from '../../contracts/Handlers/JsonContract';
@@ -614,7 +616,24 @@ function writeChannelHeader(
     writer.append(',"source":');
     writer.nullableString(source);
   }
-  writer.append(',"metadata":{');
+  writer.append(',"metadata":');
+  writeApplicationMetadata(writer, metadata);
+  if (flowId !== undefined) {
+    writer.append(',"flowId":');
+    writer.string(flowId);
+  }
+  if (flowOrigin !== undefined) {
+    writer.append(',"flowOrigin":');
+    writer.append(String(encodeFlowOrigin(flowOrigin)));
+  }
+  writer.append('}');
+}
+
+function writeApplicationMetadata(
+  writer: ChannelHeaderWriter,
+  metadata: Readonly<Record<string, string>>
+): void {
+  writer.append('{');
   let first = true;
   for (const name in metadata) {
     if (!Object.prototype.hasOwnProperty.call(metadata, name)) continue;
@@ -623,15 +642,6 @@ function writeChannelHeader(
     writer.string(name);
     writer.append(':');
     writer.string(metadata[name]!);
-  }
-  writer.append('}');
-  if (flowId !== undefined) {
-    writer.append(',"flowId":');
-    writer.string(flowId);
-  }
-  if (flowOrigin !== undefined) {
-    writer.append(',"flowOrigin":');
-    writer.append(String(encodeFlowOrigin(flowOrigin)));
   }
   writer.append('}');
 }
@@ -744,14 +754,20 @@ function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
 }
 
 function parseChannelHeaderBytes(payload: Buffer): unknown {
-  return tryParseCanonicalChannelHeader(payload) ?? parseWireJson(payload.toString());
+  if (!isUtf8(payload)) {
+    throw new ZLinkFrameworkException(
+      ZLinkFrameworkErrorKind.ProtocolError,
+      'Channel envelope header must contain valid UTF-8.'
+    );
+  }
+  return tryParseCanonicalChannelHeader(payload) ?? parseFrameworkJsonV1(payload.toString());
 }
 
 /**
  * Accept the byte layout emitted by writeChannelHeader without materializing
  * the enclosing JSON text. Any variation falls through to the established
  * framework-json-v1 parser, which remains the sole authority for JSON
- * failures, unknown properties, and prototype-key rejection.
+ * failures and unknown properties. Header metadata accepts every valid string key.
  */
 function tryParseCanonicalChannelHeader(payload: Buffer): Record<string, unknown> | undefined {
   const reader = new CanonicalChannelHeaderReader(payload);
@@ -1019,38 +1035,51 @@ const EMPTY_APPLICATION_METADATA: Readonly<Record<string, string>> = Object.free
 function applicationMetadataRecord(
   metadata: ReadonlyMap<string, string>
 ): Readonly<Record<string, string>> {
-  //  The common case carries no metadata; skip the record + JSON.stringify
-  //  byte-limit walk entirely.
   if (metadata.size === 0) return EMPTY_APPLICATION_METADATA;
-  const record: Record<string, string> = {};
-  for (const [key, value] of metadata) {
-    if (key.length === 0 || key.includes('\0') || value.includes('\0')) {
+  const record: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const [key, value] of metadata) record[key] = value;
+  return validateApplicationMetadata(record);
+}
+
+const INVALID_METADATA_UNICODE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+
+function validateApplicationMetadata(
+  metadata: Record<string, unknown>
+): Readonly<Record<string, string>> {
+  const keys = Object.keys(metadata);
+  if (keys.length === 0) return EMPTY_APPLICATION_METADATA;
+  for (const key of keys) {
+    const value = requireString(metadata[key], `metadata.${key}`);
+    if (
+      key.length === 0 ||
+      key.includes('\0') ||
+      value.includes('\0') ||
+      INVALID_METADATA_UNICODE.test(key) ||
+      INVALID_METADATA_UNICODE.test(value)
+    ) {
       throw new ZLinkConfigurationException(
-        'Channel application metadata keys must be non-empty and keys and values must not contain NUL.'
+        'Channel application metadata keys must be non-empty and keys and values must be valid Unicode without NUL.'
       );
     }
-    record[key] = value;
   }
-  if (Buffer.byteLength(JSON.stringify(record), 'utf8') > 1024) {
+  const record = metadata as Record<string, string>;
+  const writer = new ChannelHeaderWriter();
+  writeApplicationMetadata(writer, record);
+  if (writer.byteLength > SERVICE_WIRE_METADATA_BYTES) {
     throw new ZLinkConfigurationException(
-      'Channel application metadata exceeds the 1024-byte limit.'
+      `Channel application metadata exceeds the ${SERVICE_WIRE_METADATA_BYTES}-byte limit.`
     );
   }
   return Object.freeze(record);
 }
 
 function requireApplicationMetadata(value: unknown): Readonly<Record<string, string>> {
-  if (value === undefined) {
-    return Object.freeze({});
-  }
+  if (value === undefined) return EMPTY_APPLICATION_METADATA;
   if (!isRecord(value)) {
     throw new ZLinkConfigurationException('Channel application metadata must be a JSON object.');
   }
-  const metadata = new Map<string, string>();
-  for (const [key, selectedValue] of Object.entries(value)) {
-    metadata.set(key, requireString(selectedValue, `metadata.${key}`));
-  }
-  return applicationMetadataRecord(metadata);
+  return validateApplicationMetadata(value);
 }
 
 function optionalFlowId(value: unknown): string | undefined {

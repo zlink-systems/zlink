@@ -1,28 +1,20 @@
 import { createHash } from 'node:crypto';
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkActor,
-  ZLinkActorJoinOperationId,
-  ZLinkMessageSerializer,
-  ZLinkSpot
-} from '../../contracts';
-import { ZLinkEncodedPayload, ZLinkMessage, ZLinkSpotKind } from '../../contracts';
-import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import type {
-  ZLinkAggregateId,
-  ZLinkAuthoritySnapshot,
-  ZLinkLocationOwnerToken
-} from '../locations/internal-location-contracts';
-import type {
-  ZLinkAuthorityStore,
-  ZLinkObjectCreationStore,
-  ZLinkOwnerLeaseStore
-} from '../locations/internal-store-contracts';
-import { encodeAuthorityKey } from '../locations/authority-key-codec';
-import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend';
 import {
+  type ActorRef,
+  type RoutingId,
+  type ZLinkActor,
+  type ZLinkActorJoinOperationId,
+  type ZLinkMessageSerializer,
+  type ZLinkSpot,
+  ZLinkEncodedPayload,
+  ZLinkMessage,
+  ZLinkSpotKind
+} from '../../contracts';
+
+import type { Message } from '../../contracts/Common/Message';
+import {
+  createDeferredJoinCompletion,
+  rewriteActorAuthorityRoute,
   toFrameworkActorRef,
   type ZLinkActorHandoffCoordinator,
   type ZLinkActorHandoffPrefixAdmission,
@@ -30,18 +22,9 @@ import {
   type ZLinkActorHandoffReplayPreparation,
   type ZLinkActorRoutedJoinTransport,
   type ZLinkActorTransferRegistry,
-  createDeferredJoinCompletion,
-  rewriteActorAuthorityRoute,
   type ZLinkDeferredJoinCompletion,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
-import type { ZLinkActorRuntimeState } from '../actors/actor-runtime-state';
-import { ZLinkActorRetryDelay } from '../actors/actor-retry-delay';
-import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
-import type { ZLinkLocationLifecycle } from '../locations';
-import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
-import type { DefaultZLinkSpotManager } from '../spots';
-import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import type {
   ZLinkActorHandoffPacket,
   ZLinkActorHandoffResult,
@@ -52,15 +35,38 @@ import {
   ownerFence,
   type ZLinkActorMessageFollowOwnerFence
 } from '../actors/actor-message-follow-context';
-import type {
-  ServiceSessionRelocationRoute,
-  ServiceSessionRelocationSeal,
-  ServiceSessionRelocationSealed,
-  ServiceWireOperationId
-} from '../foundation/service-stateful-wire-codec';
-import { serviceSessionRelocationIdentityKey } from '../foundation/service-stateful-wire-codec';
+import type { ZLinkActorRuntimeState } from '../actors/actor-runtime-state';
+import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend';
+import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
+import { isRelocationDebugEnabled, relocationDebug } from '../diagnostics';
 import { operationIdentityKey } from '../foundation/operation-identity';
+import {
+  type ServiceSessionRelocationRoute,
+  type ServiceSessionRelocationSeal,
+  type ServiceSessionRelocationSealed,
+  type ServiceWireOperationId,
+  serviceSessionRelocationIdentityKey
+} from '../foundation/service-stateful-wire-codec';
+
+import type { ZLinkLocationLifecycle } from '../locations';
+import { encodeAuthorityKey } from '../locations/authority-key-codec';
+import type {
+  ZLinkAggregateId,
+  ZLinkAuthoritySnapshot,
+  ZLinkLocationOwnerToken
+} from '../locations/internal-location-contracts';
+import type {
+  ZLinkAuthorityStore,
+  ZLinkObjectCreationStore,
+  ZLinkOwnerLeaseStore
+} from '../locations/internal-store-contracts';
+import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+import type { DefaultZLinkSpotManager } from '../spots';
+import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import { BoundedReplayMap } from './bounded-replay-map';
+const TRANSFER_RESOLUTION_TIMEOUT_MS = 5_000;
+const TRANSFER_POLL_INTERVAL_MS = 10;
 
 const DEFERRED_JOIN_TERMINAL_CAPACITY = 4096;
 
@@ -162,7 +168,7 @@ export interface ZLinkActorTransferRuntimeActorManager {
     actorType: string,
     objectGeneration: bigint,
     authorityOwnerGeneration: bigint,
-    spotId: RoutingId,
+    spotId: RoutingId | undefined,
     spotGeneration: bigint,
     membershipEpoch: bigint,
     signal?: AbortSignal,
@@ -209,7 +215,6 @@ export interface ZLinkActorTransferRuntimeOptions {
 }
 
 export class ZLinkActorTransferRuntime {
-  private readonly sourceDepartureTasks = new Map<string, Promise<void>>();
   private readonly coreSourceLeaves = new Map<
     string,
     {
@@ -421,15 +426,19 @@ export class ZLinkActorTransferRuntime {
     }
     try {
       if (state.spotId !== undefined) {
-        relocationDebug('source_actor_move.await_spot_transfer', {
-          actorId: actor.context.actorId,
-          spotId: String(state.spotId)
-        });
+        if (isRelocationDebugEnabled()) {
+          relocationDebug('source_actor_move.await_spot_transfer', {
+            actorId: actor.context.actorId,
+            spotId: String(state.spotId)
+          });
+        }
         await this.options.spotManager()?.beginActorTransfer(state.spotId, actor.context.actorId);
-        relocationDebug('source_actor_move.spot_transfer_complete', {
-          actorId: actor.context.actorId,
-          spotId: String(state.spotId)
-        });
+        if (isRelocationDebugEnabled()) {
+          relocationDebug('source_actor_move.spot_transfer_complete', {
+            actorId: actor.context.actorId,
+            spotId: String(state.spotId)
+          });
+        }
       }
     } catch (error) {
       if (!deferredJoin) {
@@ -672,8 +681,7 @@ export class ZLinkActorTransferRuntime {
               void sourceLeaveCompletion.then(
                 () => this.scheduleSourceDeparture(actor, sourceSpotId, true),
                 (error) => {
-                  this.options.reportPostCommitError?.(error);
-                  this.scheduleSourceDeparture(actor, sourceSpotId, true);
+                  this.scheduleSourceDeparture(actor, sourceSpotId, true, [error]);
                 }
               );
             } else {
@@ -738,10 +746,12 @@ export class ZLinkActorTransferRuntime {
     rollback(): Promise<void>;
     discard(reason: unknown): void;
   }> {
-    relocationDebug('maintenance_session.begin', {
-      actorId: actor.context.actorId,
-      spotId: state.spotId === undefined ? undefined : String(state.spotId)
-    });
+    if (isRelocationDebugEnabled()) {
+      relocationDebug('maintenance_session.begin', {
+        actorId: actor.context.actorId,
+        spotId: state.spotId === undefined ? undefined : String(state.spotId)
+      });
+    }
     if (manageMembership) {
       await this.beginSourceActorMove(actor, state);
     } else {
@@ -751,9 +761,11 @@ export class ZLinkActorTransferRuntime {
         requireSourceObjectGeneration(actor.context.actorId, state)
       );
     }
-    relocationDebug('maintenance_session.source_move_complete', {
-      actorId: actor.context.actorId
-    });
+    if (isRelocationDebugEnabled()) {
+      relocationDebug('maintenance_session.source_move_complete', {
+        actorId: actor.context.actorId
+      });
+    }
     let sealedSession: ZLinkRemoteBoundSessionTarget | undefined;
     try {
       if (state.boundSession !== undefined) {
@@ -772,8 +784,10 @@ export class ZLinkActorTransferRuntime {
           if (terminal === 'prepared') replayResults = [...results];
         },
         commit: async (target, targetActorRef, targetOwnerFence) => {
-          if (terminal === 'rolledBack') return;
-          if (terminal === 'prepared') {
+          if (terminal !== 'prepared') return;
+          terminal = 'committed';
+          const failures: unknown[] = [];
+          try {
             this.options.actorHandoff.complete(
               actor.context.actorId,
               target,
@@ -781,13 +795,27 @@ export class ZLinkActorTransferRuntime {
               replayResults,
               targetOwnerFence
             );
+          } catch (error) {
+            failures.push(error);
+          }
+          try {
             if (manageMembership && state.spotId !== undefined) {
               await this.options
                 .spotManager()
                 ?.commitActorLeaveAfterTransfer(state.spotId, actor.context.actorId);
             }
+          } catch (error) {
+            failures.push(error);
+          }
+          try {
             state.endMove();
-            terminal = 'committed';
+          } catch (error) {
+            failures.push(error);
+          }
+          if (failures.length > 0) {
+            throw failures.length === 1
+              ? failures[0]
+              : new AggregateError(failures, 'Actor source retirement failed.');
           }
         },
         discard: (reason) => {
@@ -1126,48 +1154,57 @@ export class ZLinkActorTransferRuntime {
   private scheduleSourceDeparture(
     actor: ZLinkActor,
     sourceSpotId: RoutingId | undefined,
-    releaseLocation: boolean
+    releaseLocation: boolean,
+    failures: unknown[] = []
   ): void {
-    if (this.sourceDepartureTasks.has(actor.context.actorId)) return;
-    const task = this.finishSourceDeparture(actor, sourceSpotId, releaseLocation).finally(() =>
-      this.sourceDepartureTasks.delete(actor.context.actorId)
-    );
-    this.sourceDepartureTasks.set(actor.context.actorId, task);
+    void this.finishSourceDeparture(actor, sourceSpotId, releaseLocation, failures);
   }
 
   private async finishSourceDeparture(
     actor: ZLinkActor,
     sourceSpotId: RoutingId | undefined,
-    releaseLocation: boolean
+    releaseLocation: boolean,
+    failures: unknown[]
   ): Promise<void> {
-    const retry = new ZLinkActorRetryDelay();
-    while (this.options.shutdownSignal?.()?.aborted !== true) {
+    if (sourceSpotId !== undefined) {
       try {
-        if (sourceSpotId !== undefined) {
-          await this.options
-            .spotManager()
-            ?.commitActorLeaveAfterTransfer(sourceSpotId, actor.context.actorId);
-        }
-        if (releaseLocation) {
-          const state = this.options.actorManager()?.getState(actor.context.actorId);
-          if (state?.actorType !== undefined && state.ownsLocation) {
-            await this.options
-              .locationLifecycle()
-              ?.releaseActor(state.actorType, actor.context.actorId);
-            state.markLocationReleased();
-          }
-          // Message Follow owns the bounded stale route after the native leave.
-          // The source Actor shell must therefore be removed from the process
-          // registry so a later relocation can materialize the same Actor ID on
-          // this node without colliding with its previous incarnation.
-          await this.options.actorManager()?.completeCoreRelocationSource(actor.context.actorId);
-        }
-        this.options.onSourceDepartureCompleted?.(actor.context.actorId);
-        return;
+        await this.options
+          .spotManager()
+          ?.commitActorLeaveAfterTransfer(sourceSpotId, actor.context.actorId);
       } catch (error) {
-        this.options.reportPostCommitError?.(error);
-        if (!(await retry.wait(this.options.shutdownSignal?.()))) return;
+        failures.push(error);
       }
+    }
+    if (releaseLocation) {
+      try {
+        const state = this.options.actorManager()?.getState(actor.context.actorId);
+        if (state?.actorType !== undefined && state.ownsLocation) {
+          await this.options
+            .locationLifecycle()
+            ?.releaseActor(state.actorType, actor.context.actorId);
+          state.markLocationReleased();
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    try {
+      // Message Follow keeps its route separately from the retired application instance.
+      await this.options.actorManager()?.completeCoreRelocationSource(actor.context.actorId);
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      this.options.onSourceDepartureCompleted?.(actor.context.actorId);
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length > 0) {
+      this.options.reportPostCommitError?.(
+        failures.length === 1
+          ? failures[0]
+          : new AggregateError(failures, 'Actor source retirement failed.')
+      );
     }
   }
 
@@ -1485,7 +1522,7 @@ export class ZLinkActorTransferRuntime {
         `Actor '${actor.context.actorId}' Core location does not match the committed target SPOT.`
       );
     }
-    const deadline = performance.now() + 5_000;
+    const deadline = performance.now() + TRANSFER_RESOLUTION_TIMEOUT_MS;
     const ownerNodeGeneration = node.status().lifecycleGeneration;
     if (ownerNodeGeneration <= 0n) {
       throw new Error(
@@ -1523,7 +1560,7 @@ export class ZLinkActorTransferRuntime {
       if (claim.status !== 'conflict' || performance.now() >= deadline) {
         break;
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      await new Promise<void>((resolve) => setTimeout(resolve, TRANSFER_POLL_INTERVAL_MS));
     }
     if (claim.status === 'conflict') {
       throw new Error(`Actor '${actor.context.actorId}' target location takeover was rejected.`);
@@ -1598,7 +1635,6 @@ export class ZLinkActorTransferRuntime {
         state.markLocationReleased();
       } catch (error) {
         locationError = error;
-        void lifecycle.releaseActorEventually(actorType, actor.context.actorId);
       }
     }
     try {
@@ -1697,11 +1733,6 @@ export class ZLinkActorTransferRuntime {
   }
 }
 
-function relocationDebug(marker: string, detail: Record<string, unknown>): void {
-  if (process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION !== '1') return;
-  console.error('[zlink.runtime.relocation]', marker, detail);
-}
-
 function deferredJoinTerminalKey(completion: ZLinkDeferredJoinCompletion): string {
   return (
     `${completion.actor.actorId}:${completion.actor.objectGeneration.toString()}:` +
@@ -1759,7 +1790,7 @@ async function waitForActorAuthorityRetry(
     throw new Error('Actor target authority deadline expired.', { cause });
   }
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, Math.min(10, remaining));
+    const timer = setTimeout(resolve, Math.min(TRANSFER_POLL_INTERVAL_MS, remaining));
     timer.unref();
     const abort = () => {
       clearTimeout(timer);

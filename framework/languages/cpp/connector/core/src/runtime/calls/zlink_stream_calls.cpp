@@ -2,6 +2,8 @@
 
 #include "runtime/connector_runtime.hpp"
 
+#include <zlink/framework/detail/binary_text_codec.hpp>
+
 #include "runtime/protocol/compression/lz4_compression_codec.hpp"
 #include "runtime/protocol/framing.hpp"
 #include "runtime/protocol/framing/frame_codec.hpp"
@@ -10,6 +12,7 @@
 #include "runtime/transport/stream_connection.hpp"
 
 #include <nlohmann/json.hpp>
+#include <zlink/detail/stream_packet_name.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -36,29 +39,22 @@ namespace
 // Process-wide monotonic correlation id for outbound stream packets, mirroring
 // the framework channel codec. The sending client generates it; the server only
 // echoes it back, so a request and its reply share one id end to end.
+constexpr std::size_t transport_read_chunk_size = 8192;
+
 std::string next_correlation_id ()
 {
     static std::atomic_uint64_t next{1};
     std::uint64_t value = next.fetch_add (1, std::memory_order_relaxed);
     // Cheap uint->hex (no ostringstream): this runs per outbound packet, so it
     // must stay light even when tracing is off.
-    char buffer[17];
+    char buffer[sizeof (std::uint64_t) * 2 + 1];
     int index = static_cast<int> (sizeof (buffer));
     buffer[--index] = '\0';
     do {
-        buffer[--index] = "0123456789abcdef"[value & 0xfu];
+        buffer[--index] = zlink::framework::detail::lowercase_hex_digits[value & 0xfu];
         value >>= 4u;
     } while (value != 0);
     return std::string (buffer + index);
-}
-
-bool stream_trace_enabled ()
-{
-    static const bool enabled = [] {
-        const char *value = std::getenv ("ZLINK_CPP_STREAM_TRACE");
-        return value != nullptr && value[0] != '\0' && std::string (value) != "0";
-    }();
-    return enabled;
 }
 
 const char *message_kind_name (message_kind_t kind)
@@ -146,14 +142,17 @@ result_t<void> validate_packet_limits (const connector_state_t &state, const pac
 result_t<std::string> decode_remote_error_message (const packet_t &packet)
 {
     try {
+        constexpr char code_field[] = "code";
+        constexpr char message_field[] = "message";
         const auto payload = nlohmann::json::parse (packet.payload.begin (), packet.payload.end ());
-        if (!payload.is_object () || !payload.contains ("code") || !payload["code"].is_string ()
-            || !payload.contains ("message") || !payload["message"].is_string ()) {
+        if (!payload.is_object () || !payload.contains (code_field)
+            || !payload[code_field].is_string () || !payload.contains (message_field)
+            || !payload[message_field].is_string ()) {
             return result_t<std::string>::failure (
               error_code_t::frame_decode_failed,
               "Remote error payload must contain string code and message fields.");
         }
-        return result_t<std::string>::success (payload["message"].get<std::string> ());
+        return result_t<std::string>::success (payload[message_field].get<std::string> ());
     }
     catch (const nlohmann::json::exception &) {
         return result_t<std::string>::failure (error_code_t::frame_decode_failed,
@@ -217,7 +216,7 @@ result_t<dispatch_envelope_t> decode_packet (connector_state_t &state,
               "decompressed stream payload exceeds maximum stream payload size");
         }
     }
-    if (header.kind == message_kind_t::control && header.name == "$zlink.heartbeat.ping") {
+    if (header.kind == message_kind_t::control && header.name == heartbeat_ping_name) {
         /* Server liveness ping (graceful-drain-handoff §7.2): answer with a
      * pong on the next pump pass. Control packets stay out of the
      * application inbound surface. */
@@ -395,7 +394,7 @@ bool wait_name_matches (const pending_wait_t &wait, const packet_t &packet)
 
 bool is_control_packet (const packet_t &packet)
 {
-    return packet.name.rfind ("$zlink.", 0) == 0;
+    return packet.name.starts_with (zlink::detail::stream_wire::reserved_packet_name_prefix);
 }
 
 void cancel_timer (const std::shared_ptr<boost::asio::steady_timer> &timer)
@@ -584,7 +583,7 @@ std::optional<result_t<inbound_frame_t>>
 try_take_inbound_frame (connector_state_t &state,
                         const std::unordered_set<std::uint64_t> &claimed_replies)
 {
-    if (state.inbound_buffer.size () < 6) {
+    if (state.inbound_buffer.size () < frame_codec_t::prefix_size) {
         return std::nullopt;
     }
     const auto header_size =
@@ -598,16 +597,18 @@ try_take_inbound_frame (connector_state_t &state,
           limits.error ()->code,
           limits.error () ? limits.error ()->message : "stream connector frame is too large");
     }
-    const auto frame_size = 6 + header_size + payload_size;
+    const auto frame_size = frame_codec_t::prefix_size + header_size + payload_size;
     if (state.inbound_buffer.size () < frame_size) {
         return std::nullopt;
     }
 
-    std::vector<std::uint8_t> header_bytes (state.inbound_buffer.begin () + 6,
-                                            state.inbound_buffer.begin () + 6
-                                              + static_cast<std::ptrdiff_t> (header_size));
+    std::vector<std::uint8_t> header_bytes (
+      state.inbound_buffer.begin () + frame_codec_t::prefix_size,
+      state.inbound_buffer.begin () + frame_codec_t::prefix_size
+        + static_cast<std::ptrdiff_t> (header_size));
     std::vector<std::uint8_t> payload_bytes (
-      state.inbound_buffer.begin () + 6 + static_cast<std::ptrdiff_t> (header_size),
+      state.inbound_buffer.begin () + frame_codec_t::prefix_size
+        + static_cast<std::ptrdiff_t> (header_size),
       state.inbound_buffer.begin () + static_cast<std::ptrdiff_t> (frame_size));
     state.inbound_buffer.erase (state.inbound_buffer.begin (),
                                 state.inbound_buffer.begin ()
@@ -670,8 +671,18 @@ void complete_pending_request (std::shared_ptr<connector_state_t> state,
         callback = std::move (found->second.callback);
         reply_hook_ids = found->second.reply_hook_ids;
         deliver_direct = found->second.deliver_direct;
+        const auto write_id = found->second.write_id;
         cancel_timer (found->second.timeout_timer);
         state->pending_requests.erase (found);
+        if (!succeeded) {
+            std::erase_if (state->write_queue, [write_id] (const pending_write_t &write) {
+                return write.write_id == write_id;
+            });
+            state->state_changed.notify_all ();
+        }
+    }
+    if (!succeeded) {
+        kick_async_write (state, "request-terminal");
     }
     trace_request ("pending-complete", request_seq, packet_name, [&] {
         return std::string (succeeded ? "result=success"
@@ -796,7 +807,7 @@ void run_heartbeat_maintenance (std::shared_ptr<connector_state_t> state, std::u
         } else if (state->last_heartbeat_sent == steady_clock_t::time_point{}
                    || now - state->last_heartbeat_sent >= state->options.heartbeat.interval) {
             packet_t heartbeat;
-            heartbeat.name = "$zlink.heartbeat.ping";
+            heartbeat.name = heartbeat_ping_name;
             heartbeat.codec = codec_t::raw;
             heartbeat.payload.clear ();
             auto encoded =
@@ -809,7 +820,6 @@ void run_heartbeat_maintenance (std::shared_ptr<connector_state_t> state, std::u
     }
     if (timed_out_connection) {
         if (connection_ended (state, *timeout_error, timed_out_connection)) {
-            timed_out_connection->shutdown_and_close_async ();
             schedule_reconnect (state);
         }
         return;
@@ -850,7 +860,7 @@ void queue_due_pong (const std::shared_ptr<connector_state_t> &state)
         state->heartbeat_pong_due = false;
     }
     packet_t pong;
-    pong.name = "$zlink.heartbeat.pong";
+    pong.name = heartbeat_pong_name;
     pong.codec = codec_t::raw;
     pong.payload.clear ();
     auto encoded = encode_packet_frame (*state, message_kind_t::control, pong, std::nullopt);
@@ -996,7 +1006,6 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
         // cancellation completion can otherwise overwrite the original
         // protocol or transport error with Operation canceled.
         if (connection_ended (state, *transport_error, observed_connection)) {
-            observed_connection->shutdown_and_close_async ();
             schedule_reconnect (state);
         }
     } else if (reschedule) {
@@ -1024,8 +1033,8 @@ void schedule_request_pump (std::shared_ptr<connector_state_t> state)
     }
     trace_connector_write (*state, "read-start", [] { return std::string (); });
     connection->async_read_some (
-      8192, [state, connection] (boost::system::error_code error,
-                                 std::vector<std::uint8_t> bytes) mutable {
+      transport_read_chunk_size, [state, connection] (boost::system::error_code error,
+                                                      std::vector<std::uint8_t> bytes) mutable {
           trace_connector_write (*state, "read-completion", [&] {
               return std::string (error ? "result=failure error=" + error.message ()
                                         : "result=success bytes=" + std::to_string (bytes.size ()));
@@ -1159,7 +1168,6 @@ void finish_async_write (std::shared_ptr<connector_state_t> state,
    * next fails every other operation as Disconnected (spec 32 §9). */
     if (write_failure && expected_connection
         && connection_ended (state, *write_failure, expected_connection)) {
-        expected_connection->shutdown_and_close_async ();
         schedule_reconnect (state);
     }
     kick_async_write (std::move (state), "completion");
@@ -1377,6 +1385,9 @@ bool connection_ended (const std::shared_ptr<connector_state_t> &state,
     }
     cancel_timer (heartbeat_timer);
     fail_connection_operations (state, std::move (operations), error.message);
+    observed_connection->shutdown_and_close_async ([state] (boost::system::error_code close_error) {
+        publish_close_error (*state, close_error);
+    });
     return true;
 }
 
@@ -1579,8 +1590,8 @@ void submit_request_async (std::shared_ptr<void> state_handle,
                                                         "stream connector request timed out"));
               });
             state->pending_requests.emplace (
-              seq, pending_request_t{seq, packet, std::move (callback), timeout_timer,
-                                     deliver_direct, reply_hook_ids});
+              seq, pending_request_t{state->next_write_id, packet, std::move (callback),
+                                     timeout_timer, deliver_direct, reply_hook_ids});
             write_id = reserve_write_locked (*state, [state, seq, request_packet_name] (
                                                        result_t<void> written) mutable {
                 trace_request ("request-write-completion", seq, request_packet_name, [&] {
@@ -1712,8 +1723,12 @@ void start_wait (const std::shared_ptr<connector_state_t> &state,
         std::unique_lock<std::mutex> lock (state->transport_mutex);
         /* The predicate is the caller's own code and runs with transport_mutex
      * released; it may call back into the connector surface. */
-        if (auto matched =
-              take_matching_queued_packet (*state, lock, wait.packet_name, wait.predicate)) {
+        if (zlink::detail::stream_wire::validate_packet_name (wait.packet_name)
+            != zlink::detail::stream_wire::packet_name_error_t::none) {
+            immediate_result = result_t<packet_t>::failure (error_code_t::validation_failed,
+                                                            "Packet name is invalid.");
+        } else if (auto matched =
+                     take_matching_queued_packet (*state, lock, wait.packet_name, wait.predicate)) {
             immediate_result = result_t<packet_t>::success (std::move (*matched));
         } else if (state->close_requested.load ()) {
             immediate_result = result_t<packet_t>::failure (error_code_t::disconnected,

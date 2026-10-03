@@ -41,7 +41,7 @@ export class S2sSpotToChannelSendSendEchoScenario {
       const probes: unknown[] = [];
       for (let target = 0; target < config.spotIds.length; target++) {
         const echo = measurement.request(target, ++this.sequences[target % this.sequences.length], true).with({ returnSpotId: config.spotIds[target] });
-        const driven = await this.spots.requestToSpot(config.spotIds[target], new PerfDriveRequest(echo)).timeout(config.workload.requestTimeoutMs * 2).submit<PerfDriveReply>();
+        const driven = await this.spots.requestToSpot(config.spotIds[target], new PerfDriveRequest(echo)).timeout(config.workload.driverTimeoutMs).submit<PerfDriveReply>();
         if (!driven.started) throw new Error('The setup probe was not started.');
         const entry = this.correlations.find(echo.correlationId);
         if (!entry) throw new Error('The setup probe registered no correlation.');
@@ -65,19 +65,28 @@ export class S2sSpotToChannelSendSendEchoScenario {
       const echo = measurement.request(stream, ++this.sequences[stream]).with({ returnSpotId: spotId });
       const driverStarted = PerfClock.now();
       metrics.count('driver.issued');
+      let driven: PerfDriveReply | undefined;
+      let driverError: unknown;
+      let driverCompletedTicks: bigint | undefined;
       try {
-        const driven = await this.spots.requestToSpot(spotId, new PerfDriveRequest(echo)).timeout(config.workload.requestTimeoutMs * 2).submit<PerfDriveReply>();
-        if (!driven.started) { metrics.count('driver.notStarted'); continue; }
-        // Outside the Spot turn: the final result of the correlation the handler registered (§13).
-        const entry = this.correlations.find(echo.correlationId);
-        if (!entry) throw new Error('The started drive registered no correlation.');
-        const { error, completedTicks } = await this.correlations.completeAsync(entry);
-        measurement.completeOperation(entry.startedTicks, error, completedTicks);
-        if (error === undefined) metrics.record('driverLatencyMs', driverStarted, PerfClock.now());
+        driven = await this.spots.requestToSpot(spotId, new PerfDriveRequest(echo)).timeout(config.workload.driverTimeoutMs).submit<PerfDriveReply>();
+        driverCompletedTicks = PerfClock.now();
       } catch (error) {
         metrics.count('driver.failed');
         measurement.recordDiagnostic(error);
+        driverError = error;
       }
+      if (driven && !driven.started) { metrics.count('driver.notStarted'); continue; }
+      const entry = this.correlations.find(echo.correlationId);
+      if (!entry) {
+        if (driven?.started) measurement.recordDiagnostic(new Error('The started drive registered no correlation.'));
+        continue;
+      }
+      // Outside the Spot turn: the final result of the correlation the handler registered (§13).
+      const { error, completedTicks } = await this.correlations.completeAsync(entry);
+      const operationSucceeded = measurement.completeOperation(entry.startedTicks, error, completedTicks);
+      if (driverError === undefined && driven?.started && operationSucceeded && driverCompletedTicks !== undefined)
+        metrics.record('driverLatencyMs', driverStarted, driverCompletedTicks, completedTicks);
     }
   }
 }
@@ -99,7 +108,7 @@ export class S2sSendDriveHandler implements ZLinkSpotRequestHandler<S2sSendSendS
     measurement.handlerEnter();
     try {
       let request = drive.echo;
-      measurement.validateRequest(request, null, request.returnSpotId);
+      measurement.validateRequest(request, null, spot.context.spotId);
       if (!request.returnSpotId) throw new Error('No return SpotId in the request.');
       if (request.phase === 'measured') metrics.count('spot.applicationHandlerEntries');
       const probe = measurement.phase === 'setup'; // the setup probe is no measured operation

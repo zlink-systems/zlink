@@ -20,13 +20,11 @@ public sealed class MeshMonitorHotPathTests
                 .GetValue(node)!;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Assert.True(
-            lane.TryPost(async () =>
-            {
-                entered.SetResult();
-                await release.Task;
-            })
-        );
+        _ = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Task? publication = null;
         try

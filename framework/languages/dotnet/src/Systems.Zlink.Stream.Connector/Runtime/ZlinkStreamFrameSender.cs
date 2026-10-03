@@ -10,6 +10,9 @@ internal sealed class ZlinkStreamFrameSender(
     Func<IZlinkStreamConnection?> connectionProvider
 )
 {
+    private const int CorrelationIdCharacterCount = sizeof(long) * 2;
+    private const string CorrelationIdFormat = "x";
+
     public ZlinkStreamOutboundFrame BuildOutboundFrame(
         ZlinkStreamMessageKind kind,
         string name,
@@ -34,13 +37,13 @@ internal sealed class ZlinkStreamFrameSender(
         ZlinkStreamFrameCodec.ValidateSendPayload(payloadBytes.Length, options.MaxSendPayloadSize);
 
         // Correlation ids link requests with their terminal replies.
-        Span<char> correlationId = stackalloc char[16];
+        Span<char> correlationId = stackalloc char[CorrelationIdCharacterCount];
         var correlationLength = 0;
         if (kind == ZlinkStreamMessageKind.Request)
             // Every Int64, including counter wraparound, fits in 16 hex digits.
             ZlinkStreamCorrelation
                 .NextValue()
-                .TryFormat(correlationId, out correlationLength, "x");
+                .TryFormat(correlationId, out correlationLength, CorrelationIdFormat);
 
         var header = new ZlinkStreamHeader(
             kind,
@@ -100,16 +103,19 @@ internal sealed class ZlinkStreamFrameSender(
             {
                 if (connection.CanWriteSegments)
                 {
-                    var prefix = ArrayPool<byte>.Shared.Rent(6);
+                    var prefix = ArrayPool<byte>.Shared.Rent(ZlinkStreamFrameCodec.PrefixSize);
                     try
                     {
                         ZlinkStreamFrameCodec.WritePrefix(
-                            prefix.AsSpan(0, 6),
+                            prefix.AsSpan(0, ZlinkStreamFrameCodec.PrefixSize),
                             header.Length,
                             payload.Length
                         );
                         await connection
-                            .WriteAsync(prefix.AsMemory(0, 6), cancellationToken)
+                            .WriteAsync(
+                                prefix.AsMemory(0, ZlinkStreamFrameCodec.PrefixSize),
+                                cancellationToken
+                            )
                             .ConfigureAwait(false);
                     }
                     finally

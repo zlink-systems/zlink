@@ -82,27 +82,44 @@ final class ZLinkChannelSubmitTurnTest {
     }
 
     @Test
-    void clientServerStillRejectsExplicitMetadataIncludingAnEmptyMapBeforeReadinessWait()
-            throws Exception {
+    void clientServerMetadataIncludingAnEmptyMapUsesNormalReadinessAdmission() throws Exception {
         try (Fixture f = new Fixture()) {
             ChannelRegistration channel =
                     new ChannelRegistration("orders", ChannelKind.CLIENT_SERVER);
             channel.enableClient();
             f.sockets.registerChannel(channel);
+            // 02-channel-transport/02-channel-messaging.ko.md: ClientServer readiness admission
+            // completes with DeadlineExceeded when the configured send timeout expires.
             for (Map<String, String> values :
                     java.util.List.of(Map.<String, String>of(), Map.of("key", "value"))) {
                 ZLinkSendCall send = f.send().metadata(values);
                 ZLinkRequestCall request = f.request().metadata(values);
-                assertThrows(UnsupportedOperationException.class, send::submit);
-                assertInstanceOf(
-                        UnsupportedOperationException.class,
-                        assertThrows(
-                                        CompletionException.class,
-                                        () ->
-                                                request.submit(String.class)
-                                                        .toCompletableFuture()
-                                                        .join())
-                                .getCause());
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        assertInstanceOf(
+                                        systems.zlink.framework.errors.ZLinkFrameworkException
+                                                .class,
+                                        assertThrows(
+                                                        CompletionException.class,
+                                                        () ->
+                                                                send.submit()
+                                                                        .toCompletableFuture()
+                                                                        .join())
+                                                .getCause())
+                                .kind());
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        assertInstanceOf(
+                                        systems.zlink.framework.errors.ZLinkFrameworkException
+                                                .class,
+                                        assertThrows(
+                                                        CompletionException.class,
+                                                        () ->
+                                                                request.submit(String.class)
+                                                                        .toCompletableFuture()
+                                                                        .join())
+                                                .getCause())
+                                .kind());
             }
         }
     }
@@ -233,7 +250,6 @@ final class ZLinkChannelSubmitTurnTest {
                                             "orders",
                                             null,
                                             DEFAULT_TIMEOUT,
-                                            false,
                                             (target, remaining) -> {
                                                 assertSame(dealer, target);
                                                 assertSame(f.lane, ZLinkStateLane.current());
@@ -244,7 +260,8 @@ final class ZLinkChannelSubmitTurnTest {
                                             },
                                             (node, timeout) -> {
                                                 throw new AssertionError("expected ClientServer");
-                                            }));
+                                            },
+                                            failure -> {}));
             try {
                 await(bindingEntered);
                 var removal =

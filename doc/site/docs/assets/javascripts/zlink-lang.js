@@ -9,8 +9,9 @@
   Spec·Bindings·Core·Samples는 언어가 아니므로 손대지 않는다. 1차 메뉴에 그대로 남는다.
 
   언어는 주소에서 읽는다. `/ko/dotnet/guide/server/20-…` 또는 `/dotnet/…` 꼴이고,
-  로케일 구간(`ko`)은 있을 수도 없을 수도 있다. 가이드 밖 문서를 보고 있으면 주소에
-  언어가 없으므로 마지막으로 고른 값을 사용하고, 선택기는 감춘다.
+  로케일 구간(`ko`)은 있을 수도 없을 수도 있다. 가이드 밖 문서(첫 화면 등)를 보고
+  있으면 주소에 언어가 없으므로 마지막으로 고른 값을 쓰고, 선택기에서 언어를 고르면
+  그 언어 가이드의 첫 장으로 보낸다.
 */
 (function () {
   "use strict";
@@ -107,27 +108,31 @@
     });
   }
 
+  /*  그 언어 가이드의 첫 장. 가이드 밖 문서(첫 화면 등)에서 언어를 고르면 여기로 간다. */
+  function guideHome(lang) {
+    var locale = currentLocale();
+    return (locale === "en" ? "" : "/" + locale) + "/" + lang + "/guide/server/01-overview/";
+  }
+
   function fillSelector(lang) {
     var box = document.querySelector(".zlink-lang");
     if (!box) return;
     var links = box.querySelectorAll("a[data-zlink-lang]");
-    var any = false;
+    /*  가이드 안이면 같은 장의 다른 언어로, 가이드 밖이면 그 언어의 가이드로 보낸다. */
+    var inGuide = pathLang() !== null;
     var label = "";
     Array.prototype.forEach.call(links, function (a) {
       var value = a.getAttribute("data-zlink-lang");
-      var target = swapped(value);
-      if (target) {
-        a.setAttribute("href", target);
-        any = true;
-      }
+      a.setAttribute("href", (inGuide && swapped(value)) || guideHome(value));
       if (value === lang) label = a.textContent;
-      a.parentNode.hidden = value === lang;
+      /*  가이드 안에서는 지금 언어로 다시 갈 이유가 없어 목록에서 뺀다. */
+      a.parentNode.hidden = inGuide && value === lang;
     });
     /*  버튼에 지금 언어의 이름을 적는다. 아이콘만 두면 무엇을 고르는 자리인지
         처음 보는 독자가 알 수 없다. */
     var name = box.querySelector(".zlink-lang__label");
     if (name) name.textContent = label;
-    box.hidden = !any;                      /*  가이드 밖에서는 선택기를 감춘다 */
+    box.hidden = false;
   }
 
   /*  지금 주소의 로케일. 기본(en)은 접두사가 없다. */

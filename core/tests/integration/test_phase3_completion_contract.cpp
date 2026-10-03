@@ -507,11 +507,11 @@ void test_send_wait_token_uses_snapshotted_sndtimeo ()
                            zlink_set_option (sender, ZLINK_OPT_LINGER,
                                              &zero_linger, sizeof (zero_linger)));
 
-    const int receive_timeout = 150;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
-                           zlink_set_option (sender, ZLINK_OPT_RCVTIMEO,
-                                             &receive_timeout,
-                                             sizeof (receive_timeout)));
+    // An expiring token has no delivery deadline in the contract, so the
+    // receive waits without a limit. Only the never-expiring token is
+    // observed for a bounded window to show that no completion appears.
+    const int expiring_receive_timeout = -1;
+    const int absent_receive_timeout = 150;
 
     const int timeouts[] = {0, 40, -1};
     for (size_t i = 0; i != 3; ++i) {
@@ -535,6 +535,12 @@ void test_send_wait_token_uses_snapshotted_sndtimeo ()
                                zlink_set_option (sender, ZLINK_OPT_SNDTIMEO,
                                                  &changed_timeout,
                                                  sizeof (changed_timeout)));
+        const int receive_timeout =
+          timeouts[i] < 0 ? absent_receive_timeout : expiring_receive_timeout;
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                               zlink_set_option (sender, ZLINK_OPT_RCVTIMEO,
+                                                 &receive_timeout,
+                                                 sizeof (receive_timeout)));
         zlink_completion_t completion;
         init_empty_completion (&completion);
         if (timeouts[i] < 0) {

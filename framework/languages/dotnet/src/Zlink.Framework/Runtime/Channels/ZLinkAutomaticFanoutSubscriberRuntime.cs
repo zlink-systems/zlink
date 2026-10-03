@@ -14,12 +14,14 @@ internal sealed record ZLinkFanoutConnectionPlan(
 /// </summary>
 internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
 {
+    private static readonly TimeSpan InboundLivenessPollInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(1);
     private readonly ZLinkChannelName _channelName;
     private readonly IZLinkBackendRuntimeContext _context;
     private readonly IZLinkSocketConfig _socketConfig;
     private readonly IReadOnlySet<string> _applicationTopics;
     private readonly ZLinkChannelReceiveLoop _receiveLoop;
+    private readonly ZLinkChannelApplicationDispatchQueue<ZLinkChannelReceiveLoop.FanoutDispatchWork> _applicationDispatch;
     private readonly ZLinkFanoutRuntimeService _monitoring;
     private readonly ZLinkApplicationJobQueue _applicationJobQueue;
     private readonly bool _ownsApplicationJobQueue;
@@ -33,7 +35,11 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
     > _connections = [];
     private IReadOnlyList<ZLinkFanoutPublisherConnectionSnapshot> _excluded =
         Array.Empty<ZLinkFanoutPublisherConnectionSnapshot>();
-    private ZLinkLocationRuntimeSnapshot _location = new("unknown", null, null);
+    private ZLinkLocationRuntimeSnapshot _location = new(
+        ZLinkLocationRuntimeSnapshot.UnknownState,
+        null,
+        null
+    );
     private int _disposed;
     private long _socketCreationCount;
 
@@ -48,6 +54,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         ZLinkFanoutRuntimeService monitoring,
         IZLinkRuntimeFailureReporter errorSink,
         CancellationToken runtimeStopToken,
+        CancellationToken forceStopToken = default,
         TimeProvider? timeProvider = null,
         ZLinkApplicationJobQueue? applicationJobQueue = null
     )
@@ -71,6 +78,12 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         _errorSink = errorSink;
         _runtimeStopToken = runtimeStopToken;
         _time = timeProvider ?? TimeProvider.System;
+        _applicationDispatch = receiveLoop.CreateFanoutDispatchQueue(
+            channelName,
+            errorSink,
+            runtimeStopToken,
+            forceStopToken
+        );
     }
 
     internal async ValueTask ReplaceAsync(
@@ -153,7 +166,11 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                _location = new ZLinkLocationRuntimeSnapshot("degraded", lastSuccessAt, failureAt);
+                _location = new ZLinkLocationRuntimeSnapshot(
+                    ZLinkLocationRuntimeSnapshot.DegradedState,
+                    lastSuccessAt,
+                    failureAt
+                );
                 PublishSnapshotNoLock();
             })
         );
@@ -173,10 +190,13 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
                 return connections;
             })
             .ConfigureAwait(false);
+        var failures = new ZLinkFailureCollector();
         foreach (var connection in connections)
-            await connection.DisposeAsync().ConfigureAwait(false);
+            await failures.CaptureAsync(connection.DisposeAsync).ConfigureAwait(false);
+        await failures.CaptureAsync(_applicationDispatch.DisposeAsync).ConfigureAwait(false);
         if (_ownsApplicationJobQueue)
-            _applicationJobQueue.Dispose();
+            failures.Capture(_applicationJobQueue.Dispose);
+        failures.ThrowIfAny();
     }
 
     private void ConnectionChanged()
@@ -349,7 +369,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
                     OnActivity,
                     () => SetFailure("invalid fanout liveness beacon"),
                     owner._applicationJobQueue,
-                    owner._errorSink,
+                    owner._applicationDispatch,
                     attempt.Token
                 );
                 var watchdog = WatchInboundAsync(attempt);
@@ -383,7 +403,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         {
             while (!attempt.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(250), owner._time, attempt.Token)
+                await Task.Delay(InboundLivenessPollInterval, owner._time, attempt.Token)
                     .ConfigureAwait(false);
                 var lastActivity = await _lane.RunAsync(() => _lastActivity).ConfigureAwait(false);
                 if (

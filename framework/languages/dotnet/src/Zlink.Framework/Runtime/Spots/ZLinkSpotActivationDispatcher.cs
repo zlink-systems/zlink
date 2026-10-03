@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -420,8 +421,7 @@ internal sealed class ZLinkSpotActivationDispatcher
         ZLinkBackendRouteReceived received,
         string channelName,
         ZLinkAcceptedWorkAdmission admission,
-        bool localTarget,
-        bool validateFlow
+        ZLinkFrameworkRuntime runtime
     )
     {
         using (received)
@@ -430,10 +430,17 @@ internal sealed class ZLinkSpotActivationDispatcher
                 return;
             try
             {
-                var header = DecodeRejectionHeader(received, channelName, validateFlow);
+                var header = DecodeRejectionHeader(
+                    received,
+                    channelName,
+                    runtime.Flow.CaptureEnabled
+                );
                 if (header is null)
                     return;
-                var errorKind = admission.ErrorKind();
+                var errorKind =
+                    admission == ZLinkAcceptedWorkAdmission.Closing
+                        ? ZLinkFrameworkErrorKind.NotFound
+                        : admission.ErrorKind();
                 //  Sealed/rejected admission is framework-generated
                 //  (zlink.origin marker on the error reply).
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(
@@ -457,14 +464,17 @@ internal sealed class ZLinkSpotActivationDispatcher
                 );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
-            catch { }
+            catch (Exception exception)
+            {
+                ReportRejectionReplyFailure(runtime, exception);
+            }
         }
     }
 
     internal static void RejectApplicationRouteForRelocation(
         ZLinkBackendRouteReceived received,
         string channelName,
-        bool validateFlow
+        ZLinkFrameworkRuntime runtime
     )
     {
         using (received)
@@ -473,7 +483,11 @@ internal sealed class ZLinkSpotActivationDispatcher
                 return;
             try
             {
-                var header = DecodeRejectionHeader(received, channelName, validateFlow);
+                var header = DecodeRejectionHeader(
+                    received,
+                    channelName,
+                    runtime.Flow.CaptureEnabled
+                );
                 if (header is null)
                     return;
                 //  Relocation ingress refusal is framework-generated
@@ -493,14 +507,17 @@ internal sealed class ZLinkSpotActivationDispatcher
                 );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
-            catch { }
+            catch (Exception exception)
+            {
+                ReportRejectionReplyFailure(runtime, exception);
+            }
         }
     }
 
     internal static void RejectApplicationRouteForStaleMessageFollow(
         ZLinkBackendRouteReceived received,
         string channelName,
-        bool validateFlow
+        ZLinkFrameworkRuntime runtime
     )
     {
         using (received)
@@ -509,7 +526,11 @@ internal sealed class ZLinkSpotActivationDispatcher
                 return;
             try
             {
-                var header = DecodeRejectionHeader(received, channelName, validateFlow);
+                var header = DecodeRejectionHeader(
+                    received,
+                    channelName,
+                    runtime.Flow.CaptureEnabled
+                );
                 if (header is null)
                     return;
                 //  Stale route fence refusal is framework-generated
@@ -528,7 +549,78 @@ internal sealed class ZLinkSpotActivationDispatcher
                 );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
-            catch { }
+            catch (Exception exception)
+            {
+                ReportRejectionReplyFailure(runtime, exception);
+            }
+        }
+    }
+
+    private static void ReportRejectionReplyFailure(
+        ZLinkFrameworkRuntime runtime,
+        Exception exception
+    ) =>
+        runtime.ErrorSink.ReportRuntimeTaskException(
+            nameof(ReportRejectionReplyFailure),
+            exception
+        );
+
+    internal void RejectApplicationRouteForFailure(
+        ZLinkBackendRouteReceived received,
+        string channelName,
+        Exception error,
+        bool validateFlow
+    )
+    {
+        using (received)
+        {
+            if (received.Parts.Count == 0)
+                return;
+            if (!received.CanReply && !_dispatchErrors.Enabled)
+                return;
+            var header = DecodeRejectionHeader(received, channelName, validateFlow);
+            if (header is null)
+                return;
+            if (_dispatchErrors.Enabled)
+            {
+                var captured = ZLinkEnvelopeCodec.ValidFlow(header);
+                using var flow = ZLinkFlowContext.Enter(
+                    captured.FlowId,
+                    captured.FlowOrigin,
+                    _dispatchErrors.Flow.CaptureEnabled,
+                    ZLinkFlowOrigin.Inbound,
+                    createIfAbsent: false
+                );
+                _dispatchErrors.Report(
+                    new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.InstanceSpot,
+                        received.CanReply
+                            ? ZLinkDispatchMessageKind.Request
+                            : ZLinkDispatchMessageKind.Send,
+                        ZLinkDispatchErrorReporter.ReasonFrom(error),
+                        received.CanReply
+                            ? ZLinkDispatchErrorAction.ReplyError
+                            : ZLinkDispatchErrorAction.Drop,
+                        header.MessageName,
+                        channelName,
+                        SpotId: received.SpotId,
+                        CorrelationId: header.CorrelationId,
+                        Exception: error
+                    )
+                );
+            }
+            if (!received.CanReply)
+                return;
+            ZLinkSpotReplySubmitter.SubmitAndDispose(
+                received,
+                ZLinkSpotReplyEnvelope.EncodeErrorParts(
+                    channelName,
+                    header.MessageName,
+                    header.CorrelationId,
+                    error,
+                    forceFrameworkOrigin: true
+                )
+            );
         }
     }
 

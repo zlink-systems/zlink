@@ -78,32 +78,43 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
     }
     auto messages = materialize_binding_parts (parts);
     std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> pending;
-    {
-        std::lock_guard lock (*_socket_mutex);
-        if (!_socket) {
-            co_return raw_request_completion_t{raw_request_result_t::terminated, {}};
+    try {
+        {
+            std::lock_guard lock (*_socket_mutex);
+            if (!_socket) {
+                co_return raw_request_completion_t{zlink::request_result_t::terminated, {}};
+            }
+            auto operation = std::move (_socket->request ()).message (messages[0]);
+            for (std::size_t index = 1; index < messages.size (); ++index) {
+                operation = std::move (operation).message (messages[index]);
+            }
+            pending.emplace (std::move (operation).timeout (timeout).async ().reply);
         }
-        auto operation = std::move (_socket->request ()).message (messages[0]);
-        for (std::size_t index = 1; index < messages.size (); ++index) {
-            operation = std::move (operation).message (messages[index]);
-        }
-        pending.emplace (std::move (operation).timeout (timeout).async ().reply);
+    }
+    catch (const zlink::submit_error_t &error) {
+        co_return raw_request_completion_t{
+          runtime::messaging::map_submit_request_result (error.result (), false),
+          {},
+          raw_request_failure_t{raw_request_failure_phase_t::initial_admission, error.result (),
+                                error.internal_errno ()}};
     }
     try {
         auto reply = co_await std::move (*pending);
-        co_return raw_request_completion_t{raw_request_result_t::ok, copy_binding_parts (reply)};
+        co_return raw_request_completion_t{zlink::request_result_t::ok, copy_binding_parts (reply)};
     }
     catch (const zlink::request_error_t &error) {
-        co_return raw_request_completion_t{map_binding_request_result (error.result ()), {}};
+        co_return raw_request_completion_t{
+          error.result (),
+          {},
+          raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, std::nullopt,
+                                error.internal_errno ()}};
     }
     catch (const zlink::submit_error_t &error) {
-        const auto result =
-          error.result () == zlink::submit_result_t::backpressured ? raw_request_result_t::timed_out
-          : error.result () == zlink::submit_result_t::not_connected
-            ? raw_request_result_t::not_connected
-          : error.result () == zlink::submit_result_t::terminated ? raw_request_result_t::terminated
-                                                                  : raw_request_result_t::failed;
-        co_return raw_request_completion_t{result, {}};
+        co_return raw_request_completion_t{
+          runtime::messaging::map_submit_request_result (error.result (), true),
+          {},
+          raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, error.result (),
+                                error.internal_errno ()}};
     }
 }
 

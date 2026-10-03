@@ -1,6 +1,8 @@
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 
 namespace Systems.Zlink.Stream.Connector.Runtime;
 
@@ -30,8 +32,9 @@ internal static class ZlinkStreamTransportFactory
         var webSocket = new ClientWebSocket();
         try
         {
-            if (options.SkipServerCertificateValidation)
-                webSocket.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+            webSocket.Options.RemoteCertificateValidationCallback = CertificateValidationCallback(
+                options.SkipServerCertificateValidation
+            );
 
             await webSocket.ConnectAsync(options.Endpoint, cancellationToken).ConfigureAwait(false);
             return new WebSocketConnection(webSocket, options.MaxReceivePayloadSize);
@@ -49,21 +52,21 @@ internal static class ZlinkStreamTransportFactory
         CancellationToken cancellationToken
     )
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var tcp = new TcpClient();
         try
         {
             tcp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-            using (cancellationToken.Register(tcp.Dispose))
-                await tcp.ConnectAsync(options.Endpoint.Host, options.Endpoint.Port)
-                    .WaitAsync(cancellationToken)
-                    .ConfigureAwait(false);
+            await tcp.ConnectAsync(options.Endpoint.Host, options.Endpoint.Port)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
             System.IO.Stream stream = tcp.GetStream();
             if (transport == ZlinkStreamTransport.Tls)
             {
                 var ssl = new SslStream(
                     stream,
                     false,
-                    options.SkipServerCertificateValidation ? (_, _, _, _) => true : null
+                    CertificateValidationCallback(options.SkipServerCertificateValidation)
                 );
                 try
                 {
@@ -88,14 +91,35 @@ internal static class ZlinkStreamTransportFactory
         }
     }
 
+    private const string TcpScheme = "tcp";
+    private const string TlsScheme = "tls";
+
+    private static RemoteCertificateValidationCallback CertificateValidationCallback(bool skip) =>
+        skip ? static (_, _, _, _) => true : ValidateServerCertificate;
+
+    private static bool ValidateServerCertificate(
+        object sender,
+        X509Certificate? certificate,
+        X509Chain? chain,
+        SslPolicyErrors errors
+    )
+    {
+        if (errors != SslPolicyErrors.None)
+            throw new CertificateValidationException(errors);
+        return true;
+    }
+
+    internal sealed class CertificateValidationException(SslPolicyErrors errors)
+        : AuthenticationException($"TLS server certificate validation failed ({errors}).");
+
     private static ZlinkStreamTransport ResolveTransport(ZlinkStreamConnectorOptions options)
     {
         var inferred = options.Endpoint.Scheme.ToLowerInvariant() switch
         {
-            "tcp" => ZlinkStreamTransport.Tcp,
-            "tls" => ZlinkStreamTransport.Tls,
-            "ws" => ZlinkStreamTransport.WebSocket,
-            "wss" => ZlinkStreamTransport.WebSocketSecure,
+            TcpScheme => ZlinkStreamTransport.Tcp,
+            TlsScheme => ZlinkStreamTransport.Tls,
+            var scheme when scheme == Uri.UriSchemeWs => ZlinkStreamTransport.WebSocket,
+            var scheme when scheme == Uri.UriSchemeWss => ZlinkStreamTransport.WebSocketSecure,
             _ => throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ConfigurationError,
                 "Endpoint scheme is not supported."

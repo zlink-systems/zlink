@@ -57,15 +57,25 @@ class channel_echo_only_scenario_t
     {
         auto &measurement = _role.measurement;
         const auto &config = _role.config;
+        json channel_target_status;
         wait_for_public (_role, stopping, [&] {
             if (config.topology == "routemesh") {
                 const auto status = _role.mesh.load ()->snapshot (*config.mesh_name);
-                return status.is_ready && std::any_of (status.channels.begin (), status.channels.end (), [&] (const auto &c) {
-                           return c.channel_name == config.channel_name && c.is_ready && c.ready_target_count > 0;
-                       });
+                const auto channel = std::find_if (status.channels.begin (), status.channels.end (), [&] (const auto &item) {
+                    return item.channel_name == config.channel_name;
+                });
+                if (!status.is_ready || channel == status.channels.end () || !channel->is_ready || channel->ready_target_count == 0)
+                    return false;
+                channel_target_status = {{"channelName", channel->channel_name}, {"isReady", channel->is_ready},
+                                         {"readyTargetCount", channel->ready_target_count}};
+                return true;
             }
             const auto status = _role.client_server.load ()->snapshot (*config.channel_name);
-            return status.selectable && status.ready_server_count > 0;
+            if (!status.is_ready || status.ready_target_count == 0)
+                return false;
+            channel_target_status = {{"channelName", status.channel_name}, {"isReady", status.is_ready},
+                                     {"readyTargetCount", status.ready_target_count}};
+            return true;
         }, "a ready Channel target");
         auto &route = _role.service<fw::route_client_t> ();
         const auto request = measurement.request (0, _sequences.next (0), true);
@@ -79,6 +89,9 @@ class channel_echo_only_scenario_t
         measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeEcho"}, {"source", "route_client_t.request_to_channel.async<PerfEchoReply>"},
                                                        {"observedValue", {{"correlationId", request.correlation_id}, {"receivedTicks", reply.received_ticks},
                                                                           {"clockDomainId", reply.clock_domain_id}}}}}));
+        _role.objects->set (true, "", json::array ({{{"kind", "channelTarget"},
+                                                      {"source", config.topology == "routemesh" ? "route_mesh_runtime_t.snapshot" : "client_server_runtime_t.snapshot"},
+                                                      {"observedValue", channel_target_status}}}));
     }
 
     void run (const loops_t &loops)

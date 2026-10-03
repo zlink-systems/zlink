@@ -323,7 +323,7 @@ enum class error_code_t
 **connector core는 값으로 전달하며 던지지 않는다.** 예외가 비활성인 게임 엔진 빌드가 core를
 그대로 사용하기 때문이다. 실패할 수 있는 동기 작업은 `result_t<T>` 또는 `result_t<void>`를
 반환한다. 성공 여부는 명시적 bool 변환으로 확인하고, 실패 시 `error()`와 `error_code()`로
-`error_t`를 읽는다. callback 방식도 같은 `result_t`를 전달한다.
+`error_t`를 읽는다. callback 방식도 같은 `result_t`를 전달한다. `result_t`를 반환하지 않는 표면(`received_count`, `on`)이 입력을 거부하면 `ValidationFailed` 오류 event로 알리고, `received_count`는 0을, `on`은 `active()`가 false인 `subscription_t`를 반환한다.
 
 ```cpp
 struct error_t {

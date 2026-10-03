@@ -80,6 +80,7 @@ public sealed class MaintenanceRuntimeTests
         using var drain = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
         var safeToShutdown = false;
         using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             drain,
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
@@ -102,6 +103,7 @@ public sealed class MaintenanceRuntimeTests
         var safeToShutdown = false;
         Action? changeHandler = null;
         using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             drain,
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
@@ -167,6 +169,7 @@ public sealed class MaintenanceRuntimeTests
         var executor = new MaintenanceExecutor();
         using var drain = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
         using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             drain,
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
@@ -307,11 +310,42 @@ public sealed class MaintenanceRuntimeTests
     }
 
     [Fact]
+    public async Task RelocatingPublicationFailureReportsCauseWithoutLogger()
+    {
+        var failures = new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter();
+        var expected = new IOException("descriptor publication failed");
+        var executor = new MaintenanceExecutor();
+        using var drain = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            failures,
+            drain,
+            new ZLinkFrameworkHostLifecycleState(),
+            static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
+            _ => ValueTask.FromException<bool>(expected),
+            static (_, _) => throw new NotSupportedException(),
+            sourceApplicationVersion: 7
+        );
+        runtime.MarkServing();
+
+        var result = await runtime.RelocateAsync(
+            new ZLinkFrameworkRelocationOptions
+            {
+                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            }
+        );
+
+        Assert.Equal(ZLinkFrameworkRelocationReason.StoreUnavailable, result.Reason);
+        Assert.Equal(ZLinkFrameworkRuntimeState.Serving, runtime.Status.State);
+        Assert.Same(expected, Assert.Single(failures.Failures));
+    }
+
+    [Fact]
     public async Task Partial_retiring_publication_failure_keeps_the_host_fail_closed()
     {
         var executor = new MaintenanceExecutor();
         using var drain = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
         using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             drain,
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
@@ -518,6 +552,52 @@ public sealed class MaintenanceRuntimeTests
     }
 
     [Fact]
+    public async Task Shutdown_cancellation_callback_can_observe_runtime_while_preflight_finishes()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var finishPreflight = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        ZLinkFrameworkMaintenanceRuntime? runtime = null;
+        using var fixture = Create(
+            async (_, _, cancellationToken) =>
+            {
+                using var registration = cancellationToken.Register(() =>
+                {
+                    Assert.Equal(ZLinkFrameworkRuntimeState.Draining, runtime!.Status.State);
+                    cancelled.TrySetResult();
+                });
+                entered.TrySetResult();
+                await finishPreflight.Task;
+                cancellationToken.ThrowIfCancellationRequested();
+                return null;
+            }
+        );
+        runtime = fixture.Runtime;
+        runtime.MarkServing();
+        var relocation = runtime
+            .RelocateAsync(
+                new ZLinkFrameworkRelocationOptions
+                {
+                    Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                }
+            )
+            .AsTask();
+        await entered.Task;
+
+        var shutdown = runtime.ShutdownAsync().AsTask();
+        await cancelled.Task;
+        finishPreflight.TrySetResult();
+        fixture.Executor.Complete.TrySetResult(null);
+
+        Assert.Equal(ZLinkFrameworkRelocationReason.ShutdownRequested, (await relocation).Reason);
+        Assert.Equal(ZLinkFrameworkTerminationOutcome.Stopped, (await shutdown).Outcome);
+    }
+
+    [Fact]
     public async Task Shutdown_cancels_only_the_shared_relocation_operation_not_its_waiters()
     {
         var preflightEntered = new TaskCompletionSource(
@@ -711,6 +791,7 @@ public sealed class MaintenanceRuntimeTests
         var executor = new MaintenanceExecutor();
         var drain = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
         var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
             drain,
             new ZLinkFrameworkHostLifecycleState(),
             preflight

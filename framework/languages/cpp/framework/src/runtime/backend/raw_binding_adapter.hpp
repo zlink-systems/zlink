@@ -4,9 +4,8 @@
 #include "runtime/backend/raw_route_port.hpp"
 
 #include <zlink/Contracts/Messaging/message.hpp>
-#include <zlink/Contracts/Messaging/request_result.hpp>
 
-#include <cerrno>
+#include <utility>
 #include <vector>
 
 namespace zlink::framework::detail::backend
@@ -75,39 +74,6 @@ inline std::vector<zlink::message_t> materialize_binding_parts (raw_message_t pa
         result.push_back (std::move (message));
     }
     return result;
-}
-
-inline raw_request_result_t map_binding_request_result (zlink::request_result_t result) noexcept
-{
-    switch (result) {
-        case zlink::request_result_t::ok:
-            return raw_request_result_t::ok;
-        case zlink::request_result_t::timed_out:
-            return raw_request_result_t::timed_out;
-        case zlink::request_result_t::not_connected:
-            // Core completes requests pinned to a superseded handover pair
-            // immediately; the durable operation owner may replay them.
-            return raw_request_result_t::route_unavailable;
-        case zlink::request_result_t::terminated:
-            return raw_request_result_t::terminated;
-        default:
-            return raw_request_result_t::failed;
-    }
-}
-
-// Core socket README "submit retry" owns this table. Only an initial local
-// submit failure can be a transient route absence. Request completions use the
-// typed mapping above. A submit completion with ENOENT means disconnect_rid
-// retired an already-issued WRITABLE token and must not be replayed.
-inline bool transient_route_failure (zlink::submit_result_t result,
-                                     int error,
-                                     raw_request_failure_phase_t phase) noexcept
-{
-    if (phase != raw_request_failure_phase_t::initial_admission)
-        return false;
-    if (result == zlink::submit_result_t::not_connected)
-        return error == ENOTCONN || error == EHOSTUNREACH;
-    return result == zlink::submit_result_t::not_admitted && error == ECONNREFUSED;
 }
 
 } // namespace zlink::framework::detail::backend

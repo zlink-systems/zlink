@@ -7,8 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import static systems.zlink.framework.runtime.channels.ZLinkChannelSubmissionAssertions.assertSubmitFailure;
+
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRecvException;
@@ -143,10 +147,13 @@ final class ZLinkChannelRuntimeTest {
     void copiedTransportPartsPreserveTheCallerPayloadForFallback() {
         try (Message payload = Message.from("payload")) {
             List<Message> copied =
-                    ZLinkChannelCallRuntime.copyParts(
+                    ZLinkChannelCallRuntime.copyEnvelopeParts(
+                            ZLinkChannelEnvelope.KIND_COMMAND,
+                            "work",
                             Optional.of("Packet"),
                             payload,
-                            ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE);
+                            ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
+                            Map.of());
             try {
                 assertEquals("payload", payload.toUtf8String());
                 assertEquals("payload", copied.get(1).toUtf8String());
@@ -168,7 +175,8 @@ final class ZLinkChannelRuntimeTest {
                         handlers())) {
             var call = runtime.requestToChannel("missing", new TestRequest("missing"));
             ZLinkFrameworkException failure =
-                    assertThrows(ZLinkFrameworkException.class, () -> call.submit(TestReply.class));
+                    assertSubmitFailure(
+                            ZLinkFrameworkException.class, () -> call.submit(TestReply.class));
 
             assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failure.kind());
         }
@@ -204,11 +212,13 @@ final class ZLinkChannelRuntimeTest {
                     .toCompletableFuture()
                     .join();
 
-            assertEquals("BaseOutbound", backend.dealer.lastSendParts.get(0).toUtf8String());
+            assertEquals(2, backend.dealer.lastSendParts.size());
+            var header =
+                    ZLinkChannelEnvelope.decodeHeader(
+                            backend.dealer.lastSendParts.getFirst(), false);
+            assertEquals("BaseOutbound", header.messageName());
             assertEquals("BASE", backend.dealer.lastSendParts.get(1).toUtf8String());
-            assertEquals(
-                    "application/x-base",
-                    ZLinkChannelContentTypeFrame.decode(backend.dealer.lastSendParts));
+            assertEquals("application/x-base", header.contentType());
         }
     }
 
@@ -230,7 +240,8 @@ final class ZLinkChannelRuntimeTest {
             // missing target (NotFound).
             var call = runtime.requestToChannel("api", new TestRequest("server-only"));
             ZLinkFrameworkException failure =
-                    assertThrows(ZLinkFrameworkException.class, () -> call.submit(TestReply.class));
+                    assertSubmitFailure(
+                            ZLinkFrameworkException.class, () -> call.submit(TestReply.class));
 
             assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, failure.kind());
         }
@@ -249,7 +260,7 @@ final class ZLinkChannelRuntimeTest {
                         handlers())) {
             var call = runtime.sendToChannel("api", new TestRequest("server-only"));
             ZLinkFrameworkException failure =
-                    assertThrows(ZLinkFrameworkException.class, () -> call.submit());
+                    assertSubmitFailure(ZLinkFrameworkException.class, () -> call.submit());
 
             assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, failure.kind());
         }
@@ -660,7 +671,8 @@ final class ZLinkChannelRuntimeTest {
                                 String contentType,
                                 Map<String, String> metadata,
                                 Duration timeout) {
-                            throw new AssertionError("ready route must not activate");
+                            return CompletableFuture.completedFuture(
+                                    backend.bridge.requestReplyParts);
                         }
                     });
 
@@ -681,7 +693,7 @@ final class ZLinkChannelRuntimeTest {
                                     .submit(TestReply.class)
                                     .toCompletableFuture()
                                     .join());
-            assertThrows(
+            assertSubmitFailure(
                     ZLinkConfigurationException.class,
                     () ->
                             runtime.requestToChannel("not-registered", new TestRequest("invalid"))
@@ -1180,13 +1192,16 @@ final class ZLinkChannelRuntimeTest {
         }
     }
 
-    @Test
-    void instanceSpotSendMapsLostReadyOwnerRouteWithoutColdActivation() {
+    @ParameterizedTest
+    // 01-execution/01-submit-and-completion.ko.md:193: the NOT_ADMITTED case maps to Rejected.
+    @CsvSource({"NOT_CONNECTED, UNAVAILABLE", "NOT_ADMITTED, REJECTED"})
+    void instanceSpotSendPreservesTypedAdmissionFailureWithoutColdActivation(
+            SubmitResult submitResult, ZLinkFrameworkErrorKind expectedKind) {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.spotNode.entrySpot.sendFailuresRemaining = 1;
-        backend.spotNode.entrySpot.sendFailureResult = SubmitResult.NOT_ADMITTED;
+        backend.spotNode.entrySpot.sendFailureResult = submitResult;
         backend.spotNode.entrySpot.sendFailureErrno = 113;
         AtomicInteger activationAttempts = new AtomicInteger();
         SpotTransportAddressResolver resolver =
@@ -1220,8 +1235,17 @@ final class ZLinkChannelRuntimeTest {
                                 Optional<String> packetName,
                                 String contentType,
                                 Map<String, String> metadata) {
-                            activationAttempts.incrementAndGet();
-                            return CompletableFuture.completedFuture(null);
+                            return resolver.resolve(spotId)
+                                    .thenCompose(
+                                            address -> {
+                                                var route = address.orElseThrow();
+                                                return runtime.sendToSpotViaRouterChannel(
+                                                        route.routerChannelId(),
+                                                        route.targetNodeRid(),
+                                                        route.spotId(),
+                                                        route.spotGeneration(),
+                                                        java.util.List.of(payload));
+                                            });
                         }
 
                         @Override
@@ -1250,7 +1274,7 @@ final class ZLinkChannelRuntimeTest {
                                             .join());
 
             assertEquals(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    expectedKind,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             assertEquals(1, backend.spotNode.entrySpot.sendAttempts);
             assertEquals(0, activationAttempts.get());
@@ -1700,6 +1724,7 @@ final class ZLinkChannelRuntimeTest {
                             "room-spot",
                             List.of(Message.from("raw-request".getBytes())),
                             Duration.ofMillis(300));
+            backend.router.readable.release();
             assertTrue(backend.bridge.firstDrainFailed.await(1, TimeUnit.SECONDS));
 
             backend.router.inbound.add(
@@ -1708,6 +1733,7 @@ final class ZLinkChannelRuntimeTest {
                             Optional.empty(),
                             Optional.empty(),
                             List.of(Message.from("{\"ok\":true}".getBytes()))));
+            backend.router.readable.release();
             assertTrue(backend.bridge.nextDrainAfterFailure.await(1, TimeUnit.SECONDS));
             backend.bridge.completePendingRequest(
                     List.of(Message.from("{\"ok\":true}".getBytes())));
@@ -1749,6 +1775,7 @@ final class ZLinkChannelRuntimeTest {
                             "room-spot",
                             List.of(Message.from("raw-request".getBytes())),
                             Duration.ofMillis(300));
+            backend.router.readable.release();
             assertTrue(backend.bridge.firstDrainFailed.await(1, TimeUnit.SECONDS));
 
             backend.router.inbound.add(
@@ -1757,6 +1784,7 @@ final class ZLinkChannelRuntimeTest {
                             Optional.empty(),
                             Optional.empty(),
                             List.of(Message.from("{\"ok\":true}".getBytes()))));
+            backend.router.readable.release();
             assertTrue(backend.bridge.nextDrainAfterFailure.await(1, TimeUnit.SECONDS));
             backend.bridge.completePendingRequest(
                     List.of(Message.from("{\"ok\":true}".getBytes())));
@@ -2007,9 +2035,8 @@ final class ZLinkChannelRuntimeTest {
                         @Override
                         public boolean waitForReadable(Duration timeout) {
                             try {
-                                return readable.tryAcquire(
-                                                timeout.toMillis(), TimeUnit.MILLISECONDS)
-                                        && !closed;
+                                readable.acquire();
+                                return !closed;
                             } catch (InterruptedException interrupted) {
                                 Thread.currentThread().interrupt();
                                 return false;
@@ -2381,7 +2408,9 @@ final class ZLinkChannelRuntimeTest {
     }
 
     private static final class FakeRouterSocket implements ZLinkBackendRouterSocket {
-        final ArrayDeque<ZLinkBackendReceived> inbound = new ArrayDeque<>();
+        final java.util.concurrent.Semaphore readable = new java.util.concurrent.Semaphore(0);
+        final java.util.Queue<ZLinkBackendReceived> inbound =
+                new java.util.concurrent.ConcurrentLinkedQueue<>();
         long maxMessageSize;
         int peerWeight = 100;
         int replyCount;
@@ -2445,7 +2474,14 @@ final class ZLinkChannelRuntimeTest {
 
         @Override
         public boolean waitForReadable(Duration timeout) {
-            return !inbound.isEmpty();
+            if (!inbound.isEmpty()) return true;
+            try {
+                return readable.tryAcquire(
+                        timeout.toNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
         }
 
         @Override

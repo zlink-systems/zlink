@@ -66,12 +66,7 @@ struct operation_completion_item_t
 
     void finish_metrics (operation_terminal_t terminal) noexcept
     {
-        const auto outcome = terminal == operation_terminal_t::completed   ? "completed"
-                             : terminal == operation_terminal_t::timed_out ? "timed_out"
-                             : terminal == operation_terminal_t::cancelled ? "cancelled"
-                             : terminal == operation_terminal_t::shutdown  ? "shutdown"
-                                                                           : "failed";
-        request_metric.complete (outcome);
+        request_metric.complete (terminal);
     }
 
     operation_registry_t::callback_t callback;

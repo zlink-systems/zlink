@@ -277,6 +277,13 @@ new-work blocking conditions of
 Activation concurrency's current value and limit aren't exposed as a separate
 field in public status.
 
+When `IsAvailable` is `false`, the placement's unavailable reason is the first match in this order.
+
+1. `draining` when the host is `relocating`, `relocated` or `draining`
+2. `runtime_not_ready` when the host is otherwise not `serving`
+3. `location_unavailable` when the host meets the new-work blocking conditions of Location runtime §5
+4. `capacity_exceeded` otherwise (not an Object Server, placement weight `0`, or exhausted capacity or activation concurrency)
+
 The [weight](../00-foundation/02-glossary.en.md#weight) used for the new-target selection
 ratio is a signed integer `0..10000`. A value of `0` excludes it from being
 chosen as a new placement target.
@@ -293,6 +300,15 @@ the first application record or
 [liveness beacon](../00-foundation/02-glossary.en.md#liveness-beacon) received
 and ends with a disconnect or 15 seconds without a record is that document's
 rule. A connection plan or `connect` acceptance alone doesn't make it ready.
+
+The peer state and unavailable reason of a ClientServer target and an automatic fanout publisher follow the first
+matching rule in this order. When the target's host has announced `relocating`, `relocated` or `draining`, both the
+state and the reason are `draining`. Otherwise a ready target has state `ready` and no reason. Readiness follows
+[transport liveness §3](../02-channel-transport/05-transport-liveness.en.md#3-routemesh-and-clientserver) for ClientServer and the owner named in the
+paragraph above for a fanout publisher. While a connection is starting or reconnecting, or is connected but its ready
+judgment hasn't started yet, the state is `connecting`. Otherwise it's `not_connected`. The reason of a non-ready target
+that isn't `draining` is `no_ready_target` for a ClientServer target and `no_ready_peer` for a fanout publisher. A
+ClientServer target's weight is a separate field and doesn't change its peer state or unavailable reason.
 
 ## 6. Observing State Changes — Sequence and the Complete Status
 
@@ -313,13 +329,27 @@ await foreach (var observed in routeMeshRuntime.ObserveAsync("game-mesh", cancel
 
 Status includes a `Sequence` that monotonically increases within the
 runtime instance, and an observation time. Within the same source, a
-larger `Sequence` is a later state. Values from different sources aren't
-compared. `Sequence` can restart from 0 when the process restarts.
+larger `Sequence` is a later state. For each source defined in §7.1,
+`Sequence` increases by 1 only when the source publishes a status whose public
+field values, excluding `Sequence` and the observation time, differ from the
+last published status. If those values are unchanged, the last published status
+is reused. Queries and observations use the same published status, so
+`Sequence` does not depend on whether an observer exists. Values from different
+sources aren't compared. `Sequence` can restart from 1 when the process restarts.
 
 **Each item in the change stream is a complete status, not an event
 carrying only some fields.** A general-purpose event DTO combining
 nullable fields isn't provided. If an observer notices a `Sequence` gap, it
 re-queries the current status to restore every field.
+
+**An observation delivers the current status at the moment the
+subscription is registered as its first item.** A change made before the
+subscription is already reflected in the first item, so an observer does
+not need to query the current status separately before observing. The
+first item is also subject to coalescing in
+[§7](#7-when-the-observer-is-slow--source-coalescing-and-the-lost-update-count),
+so if a change happens before the first item is consumed, the first item
+can be a newer status.
 
 ## 7. When the Observer Is Slow — Source, Coalescing, and the Lost-Update Count
 

@@ -494,7 +494,7 @@ length.
 
 | Kind | Purpose | Contents |
 |---|---|---|
-| `1` | Delivers to an existing [Ready](../00-foundation/02-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work |
+| `1` | Delivers to an existing [Ready](../00-foundation/02-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work, and whether the call carries [Instance intent](../00-foundation/02-glossary.en.md#instance-intent) (`instanceIntent`) |
 | `2` | Missing cold activation only | The target Mesh/node RID/lifecycle, Spot RID, stable type, descriptor version, and deadline — an authority fence is forbidden |
 
 If a kind `2` route's operation identity or metadata presence/bytes differ
@@ -701,7 +701,7 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   (cpp, dotnet, java, node) decode identically. **All four runtimes** originate a canonical
   `actorJoin`(28) as `[request]` — wiring `receiveChunkLimitBytes` into the command 20
   reply, this request's `[reply]` leg — once the
-  target's canonical capability is observed (an authority fence plus a peer admitted at
+  canonical capability of a target on a different node is observed (an authority fence plus a peer admitted at
   that generation); when it is not observed for a target on a different node, each runtime
   keeps its language-internal admission path (a transitional fallback).
   [Spot and Actor membership §4](../03-spot-actor/05-spot-actor-membership.en.md#4-actor-join-and-commit-order)

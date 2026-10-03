@@ -4,11 +4,146 @@ using System.Net.Sockets;
 using System.Text;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
+using Systems.Zlink.Stream.Connector.Runtime.Protocol.Framing;
 using Systems.Zlink.Stream.Connector.Runtime.Transport;
 using Xunit;
 
 public sealed partial class StreamConnectorTests
 {
+    [Fact]
+    public async Task ResponseRejectsUnknownActorSlotBeforeMatchingSequence()
+    {
+        await AssertActorProtocolErrorAsync(
+            async (stream, codec) =>
+            {
+                var response = new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Response,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.HasRequestSeq,
+                    new ZlinkStreamRequestSeq(1),
+                    string.Empty,
+                    ZlinkStreamMetadata.Empty,
+                    ActorSlot: 99
+                );
+                await WritePacketAsync(stream, codec.Encode(response).ToArray(), [1]);
+            }
+        );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ClosedActorDoesNotSelectOrInvokeRegisteredHandlers(bool unbind)
+    {
+        var options = new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") };
+        await using var connector = new ZlinkStreamConnector(options);
+        var received = new ZlinkStreamReceivedMessages();
+        var callbacks = new ZlinkStreamConnectorCallbacks(
+            new ZlinkStreamTaskRunner(CancellationToken.None),
+            ZlinkStreamDispatchMode.Manual,
+            received
+        );
+        var actors = new ZlinkStreamActors(connector, callbacks);
+        await actors.DispatchControlAsync(
+            ZlinkStreamActors.BoundControlName,
+            BoundPayload(1, "actor-a"),
+            CancellationToken.None
+        );
+        var actor = actors.Resolve(1);
+        var codec = new ZlinkStreamHeaderCodec();
+        using var sendGate = new SemaphoreSlim(1, 1);
+        var dispatcher = new ZlinkStreamReceiveDispatcher(
+            codec,
+            new ZlinkStreamPendingRequests(),
+            new ZlinkStreamTypedHandlerRegistry(),
+            received,
+            new ZlinkStreamFrameSender(options, codec, null, sendGate, static () => null),
+            callbacks,
+            actors,
+            static (_, _, _) => ValueTask.CompletedTask
+        );
+        var invoked = 0;
+        using var registration = actor.On(
+            "queued",
+            (_, _) =>
+            {
+                invoked++;
+                return ValueTask.CompletedTask;
+            }
+        );
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Send,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            "queued",
+            ZlinkStreamMetadata.Empty,
+            ActorSlot: 1
+        );
+        await dispatcher.DispatchPacketAsync(
+            new ZlinkStreamFrame(codec.Encode(header), ReadOnlyMemory<byte>.Empty),
+            CancellationToken.None
+        );
+        Assert.Equal(1, callbacks.PendingDispatchCount);
+        Assert.Equal(0, invoked);
+        if (unbind)
+            await actors.DispatchControlAsync(
+                ZlinkStreamActors.UnboundControlName,
+                new byte[] { 1, 0, 1 },
+                CancellationToken.None
+            );
+        Assert.Equal(!unbind, actor.IsBound);
+        Assert.Equal(unbind ? 0 : 1, callbacks.PendingDispatchCount);
+        await callbacks.DispatchAsync(CancellationToken.None);
+        Assert.Equal(unbind ? 0 : 1, invoked);
+        Assert.Equal(0, callbacks.PendingDispatchCount);
+        callbacks.Complete();
+    }
+
+    [Fact]
+    public async Task ActorDisconnectUsesIssuanceOrderAfterRegistryRemoval()
+    {
+        await using var connector = new ZlinkStreamConnector(
+            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+        );
+        var callbacks = new ZlinkStreamConnectorCallbacks(
+            new ZlinkStreamTaskRunner(CancellationToken.None),
+            ZlinkStreamDispatchMode.Immediate,
+            new ZlinkStreamReceivedMessages()
+        );
+        var actors = new ZlinkStreamActors(connector, callbacks);
+        await actors.DispatchControlAsync(
+            ZlinkStreamActors.BoundControlName,
+            BoundPayload(1, "a"),
+            CancellationToken.None
+        );
+        await actors.DispatchControlAsync(
+            ZlinkStreamActors.BoundControlName,
+            BoundPayload(2, "b"),
+            CancellationToken.None
+        );
+        await actors.DispatchControlAsync(
+            ZlinkStreamActors.UnboundControlName,
+            new byte[] { 1, 0, 1 },
+            CancellationToken.None
+        );
+        await actors.DispatchControlAsync(
+            ZlinkStreamActors.BoundControlName,
+            BoundPayload(3, "c"),
+            CancellationToken.None
+        );
+        var closed = new List<string>();
+        using var registration = actors.OnUnbound(
+            (actor, _) =>
+            {
+                closed.Add(actor.ActorId);
+                return ValueTask.CompletedTask;
+            }
+        );
+        await actors.ConnectionEndedAsync();
+        Assert.Equal(new[] { "b", "c" }, closed);
+    }
+
     [Fact]
     public async Task ActorHandlersIsolateMatchingNamesAndRequestHooksReportActorId()
     {
@@ -258,107 +393,39 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public async Task UnknownActorSlotEndsConnectionAsFrameDecodeFailed()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var endpoint = (IPEndPoint)listener.LocalEndpoint;
-        var codec = new ZlinkStreamHeaderCodec();
-        var server = Task.Run(async () =>
-        {
-            using var tcp = await listener.AcceptTcpClientAsync();
-            await using var stream = tcp.GetStream();
-            await WritePacketAsync(
-                stream,
-                codec
-                    .Encode(
-                        new ZlinkStreamHeader(
-                            ZlinkStreamMessageKind.Send,
-                            ZlinkStreamCodec.Raw,
-                            ZlinkStreamHeaderFlags.None,
-                            null,
-                            "actor.unknown",
-                            ZlinkStreamMetadata.Empty,
-                            ActorSlot: 99
+        await AssertActorProtocolErrorAsync(
+            async (stream, codec) =>
+                await WritePacketAsync(
+                    stream,
+                    codec
+                        .Encode(
+                            new ZlinkStreamHeader(
+                                ZlinkStreamMessageKind.Send,
+                                ZlinkStreamCodec.Raw,
+                                ZlinkStreamHeaderFlags.None,
+                                null,
+                                "actor.unknown",
+                                ZlinkStreamMetadata.Empty,
+                                ActorSlot: 99
+                            )
                         )
-                    )
-                    .ToArray(),
-                [1]
-            );
-        });
-
-        await using var connector = ZlinkStreamConnectorFactory.Create(
-            new ZlinkStreamConnectorOptions
-            {
-                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-                Heartbeat = DisabledHeartbeat(),
-                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-                DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            }
+                        .ToArray(),
+                    [1]
+                )
         );
-        var error = new TaskCompletionSource<ZlinkStreamError>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        connector.OnErrorReceived(
-            (received, _) =>
-            {
-                error.TrySetResult(received);
-                return ValueTask.CompletedTask;
-            }
-        );
-
-        await connector.Connect.Async();
-        var observed = await error.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await server;
-
-        Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, observed.Code);
-        await WaitUntilAsync(
-            () => connector.State == ZlinkStreamConnectionState.Disconnected,
-            TimeSpan.FromSeconds(5)
-        );
-        Assert.Equal(ZlinkStreamCloseReason.ProtocolError, connector.CloseReason);
     }
 
     [Fact]
     public async Task DuplicateActorBoundEndsConnectionAsFrameDecodeFailed()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var endpoint = (IPEndPoint)listener.LocalEndpoint;
-        var codec = new ZlinkStreamHeaderCodec();
-        var server = Task.Run(async () =>
-        {
-            using var tcp = await listener.AcceptTcpClientAsync();
-            await using var stream = tcp.GetStream();
-            var header = ControlHeader(codec, "$zlink.actor.bound");
-            await WritePacketAsync(stream, header, BoundPayload(1, "actor-a"));
-            await WritePacketAsync(stream, header, BoundPayload(1, "actor-b"));
-        });
-
-        await using var connector = ZlinkStreamConnectorFactory.Create(
-            new ZlinkStreamConnectorOptions
+        await AssertActorProtocolErrorAsync(
+            async (stream, codec) =>
             {
-                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-                Heartbeat = DisabledHeartbeat(),
-                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                var header = ControlHeader(codec, "$zlink.actor.bound");
+                await WritePacketAsync(stream, header, BoundPayload(1, "actor-a"));
+                await WritePacketAsync(stream, header, BoundPayload(1, "actor-b"));
             }
         );
-        var error = new TaskCompletionSource<ZlinkStreamError>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        connector.OnErrorReceived(
-            (received, _) =>
-            {
-                error.TrySetResult(received);
-                return ValueTask.CompletedTask;
-            }
-        );
-
-        await connector.Connect.Async();
-        var observed = await error.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await server;
-
-        Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, observed.Code);
-        Assert.Equal(ZlinkStreamCloseReason.ProtocolError, connector.CloseReason);
     }
 
     [Fact]
@@ -682,6 +749,16 @@ public sealed partial class StreamConnectorTests
         var error = new TaskCompletionSource<ZlinkStreamError>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var disconnectSubscription = connector.OnDisconnected(
+            (closed, _) =>
+            {
+                disconnected.TrySetResult(closed);
+                return ValueTask.CompletedTask;
+            }
+        );
         connector.OnErrorReceived(
             (received, _) =>
             {
@@ -692,9 +769,12 @@ public sealed partial class StreamConnectorTests
 
         await connector.Connect.Async();
         var observed = await error.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var closed = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await server;
 
         Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, observed.Code);
+        Assert.Equal(ZlinkStreamCloseReason.ProtocolError, closed.CloseReason);
+        Assert.Equal(ZlinkStreamConnectionState.Disconnected, connector.State);
         Assert.Equal(ZlinkStreamCloseReason.ProtocolError, connector.CloseReason);
     }
 

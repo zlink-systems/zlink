@@ -5,6 +5,7 @@
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/messaging/submit_result_mapper.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
@@ -47,6 +48,14 @@ namespace zlink::framework::runtime::mesh
 
 namespace
 {
+
+detail::backend::raw_message_t request_failure_reply_parts (std::uint64_t correlation,
+                                                            zlink::request_result_t terminal)
+{
+    const auto result = static_cast<std::uint32_t> (terminal);
+    return {protocol::encode_reply_header (
+      correlation, result, messaging::request_failure_mapper_t{}.reply_failure_code (result))};
+}
 
 // The same bounded surface axis serves accumulation and metric/flow projection.
 struct inbound_surface_t
@@ -248,21 +257,31 @@ class infrastructure_request_retry_state_t final
             fail (foundation::operation_terminal_t::transport_failed);
             return;
         }
-        auto completion = settled.value ();
-        _admitted |= completion.failure && completion.failure->request_result.has_value ();
+        const auto &completion = settled.value ();
+        _admitted |= completion.failure
+                     && completion.failure->phase
+                          == detail::backend::raw_request_failure_phase_t::completion_terminal
+                     && !completion.failure->submit_result;
         trace_mesh ("infrastructure-request-result correlation=" + std::to_string (_correlation)
-                    + " result=" + std::to_string (static_cast<int> (completion.result)));
-        if (completion.result == detail::backend::raw_request_result_t::route_unavailable
-            || completion.result == detail::backend::raw_request_result_t::timed_out) {
+                    + " result=" + std::to_string (static_cast<int> (completion.terminal)));
+        if ((completion.terminal == zlink::request_result_t::not_connected
+             && !(completion.failure
+                  && completion.failure->phase
+                       == detail::backend::raw_request_failure_phase_t::initial_admission
+                  && completion.failure->submit_result == zlink::submit_result_t::backpressured))
+            || completion.terminal == zlink::request_result_t::timed_out) {
             schedule_retry ();
             return;
         }
-        if (completion.result != detail::backend::raw_request_result_t::ok) {
-            const auto terminal =
-              completion.result == detail::backend::raw_request_result_t::terminated
-                ? foundation::operation_terminal_t::shutdown
-                : foundation::operation_terminal_t::transport_failed;
-            fail (terminal);
+        if (completion.terminal != zlink::request_result_t::ok) {
+            if (const auto terminal =
+                  messaging::request_failure_mapper_t{}.transport_terminal (completion.terminal)) {
+                fail (*terminal);
+            } else {
+                auto payload =
+                  _decode_reply (request_failure_reply_parts (_correlation, completion.terminal));
+                (void) _operations->complete (_operation, std::move (payload));
+            }
             return;
         }
         try {
@@ -374,17 +393,18 @@ task_t<bool> submit_registered_infrastructure_request (
                                        foundation::operation_terminal_t::transport_failed);
               return;
           }
-          auto completion = settled.value ();
+          const auto &completion = settled.value ();
           trace_mesh ("infrastructure-request-result correlation=" + std::to_string (correlation)
-                      + " result=" + std::to_string (static_cast<int> (completion.result)));
-          if (completion.result != detail::backend::raw_request_result_t::ok) {
-              const auto terminal =
-                completion.result == detail::backend::raw_request_result_t::timed_out
-                  ? foundation::operation_terminal_t::timed_out
-                : completion.result == detail::backend::raw_request_result_t::terminated
-                  ? foundation::operation_terminal_t::shutdown
-                  : foundation::operation_terminal_t::transport_failed;
-              (void) operations->fail (operation, terminal);
+                      + " result=" + std::to_string (static_cast<int> (completion.terminal)));
+          if (completion.terminal != zlink::request_result_t::ok) {
+              if (const auto terminal = messaging::request_failure_mapper_t{}.transport_terminal (
+                    completion.terminal)) {
+                  (void) operations->fail (operation, *terminal);
+              } else {
+                  auto payload =
+                    decode_reply (request_failure_reply_parts (correlation, completion.terminal));
+                  (void) operations->complete (operation, std::move (payload));
+              }
               return;
           }
           try {
@@ -510,35 +530,15 @@ void raw_mesh_node_owner_t::start ()
 
 task_t<void> raw_mesh_node_owner_t::publish_draining ()
 {
-    const auto publication =
-      _lane
-        .run ([this] {
-            auto descriptor = _topology.local_descriptor ();
-            if (descriptor.state != service_node_state_t::draining) {
-                if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
-                    throw std::overflow_error ("service descriptor revision is exhausted");
-                descriptor.state = service_node_state_t::draining;
-                ++descriptor.descriptor_revision;
-                _topology.publish_local (descriptor);
-            }
-            return std::pair{std::move (descriptor), _topology.peers ()};
-        })
-        .get ();
+    const auto publication = co_await _topology.publish_draining_snapshot ();
     send_descriptor_update (publication.first, publication.second);
-    co_return;
 }
 
 void raw_mesh_node_owner_t::publish_descriptor_update (service_node_descriptor_t descriptor)
 {
-    const auto publication = _lane
-                               .run ([this, descriptor = std::move (descriptor)] () mutable {
-                                   _topology.publish_local (descriptor);
-                                   return std::pair{std::move (descriptor), _topology.peers ()};
-                               })
-                               .get ();
-    send_descriptor_update (publication.first, publication.second);
+    const auto peers = _topology.publish_local_snapshot (descriptor);
+    send_descriptor_update (descriptor, peers);
 }
-
 void raw_mesh_node_owner_t::send_descriptor_update (const service_node_descriptor_t &descriptor,
                                                     const std::vector<admitted_peer_t> &peers)
 {
@@ -954,15 +954,13 @@ task_t<bool> raw_mesh_node_owner_t::observe_request (
           }
           const auto &completion = settled.value ();
           trace_mesh ("request-completion correlation=" + std::to_string (correlation)
-                      + " result=" + std::to_string (static_cast<int> (completion.result))
+                      + " result=" + std::to_string (static_cast<int> (completion.terminal))
                       + " parts=" + std::to_string (completion.parts.size ()));
-          if (completion.result != detail::backend::raw_request_result_t::ok) {
+          if (completion.terminal != zlink::request_result_t::ok) {
               const auto terminal =
-                completion.result == detail::backend::raw_request_result_t::timed_out
-                  ? foundation::operation_terminal_t::timed_out
-                : completion.result == detail::backend::raw_request_result_t::terminated
-                  ? foundation::operation_terminal_t::shutdown
-                  : foundation::operation_terminal_t::transport_failed;
+                messaging::request_failure_mapper_t{}
+                  .transport_terminal (completion.terminal)
+                  .value_or (foundation::operation_terminal_t::transport_failed);
               (void) operations->fail (operation, terminal);
               return;
           }
@@ -1013,9 +1011,13 @@ task_t<bool> raw_mesh_node_owner_t::observe_request (
               //  ProtocolError, not a transport failure. Carry a synthesized
               //  protocolError header; complete_operation decodes it into
               //  terminal 104 instead of collapsing to internal_error.
-              (void) operations->fail (operation,
-                                       foundation::operation_terminal_t::transport_failed,
-                                       protocol::encode_reply_header (correlation, 104, 16));
+              (void) operations->fail (
+                operation, foundation::operation_terminal_t::transport_failed,
+                protocol::encode_reply_header (
+                  correlation,
+                  static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
+                  static_cast<std::uint32_t> (
+                    protocol::framework_error_code::requestProtocolError)));
           }
       });
     co_return true;
@@ -1121,7 +1123,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
 
 struct raw_mesh_node_owner_t::send_completion_state_t
 {
-    std::shared_ptr<detail::task_completion_source_t<zlink::submit_result_t>> source;
+    std::shared_ptr<task_completion_source_t<zlink::submit_result_t>> source;
     std::optional<zlink::submit_result_t> result;
 };
 
@@ -1170,7 +1172,7 @@ raw_mesh_node_owner_t::start_send (std::vector<std::uint8_t> target_routing_id,
             auto completion = std::make_shared<send_completion_state_t> ();
             if (needs_public_completion) {
                 completion->source =
-                  std::make_shared<detail::task_completion_source_t<zlink::submit_result_t>> ();
+                  std::make_shared<task_completion_source_t<zlink::submit_result_t>> ();
                 value.public_completion =
                   std::make_shared<task_t<zlink::submit_result_t>> (completion->source->task ());
             }
@@ -1421,8 +1423,7 @@ task_t<relocation_prepare_response_t> raw_mesh_node_owner_t::request_relocation_
         parts.emplace_back (protocol::encode_session_relocation_route (route));
     auto pending = port->request (target_routing_id, std::move (parts), timeout);
     const auto completed = co_await pending;
-    if (completed.result != detail::backend::raw_request_result_t::ok
-        || completed.parts.size () != 1)
+    if (completed.terminal != zlink::request_result_t::ok || completed.parts.size () != 1)
         co_return relocation_prepare_response_t{};
     // Exact-identity fencing (spec 15 §4.2 / spec 28): a reply whose
     // identity fields do not match the prepare this call sent is a stale
@@ -2043,7 +2044,7 @@ task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
         throw protocol::service_wire_error_t ("invalid Actor join request");
     }
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
-    auto completion = std::make_shared<detail::task_completion_source_t<completion_t>> ();
+    auto completion = std::make_shared<task_completion_source_t<completion_t>> ();
     auto pending = completion->task ();
     foundation::call_id_t id{};
     {
@@ -2197,31 +2198,37 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
               (void) operations->fail (id, foundation::operation_terminal_t::transport_failed);
               return;
           }
-          auto completion = settled.value ();
-          if (completion.result != detail::backend::raw_request_result_t::ok) {
-              const auto terminal =
-                completion.result == detail::backend::raw_request_result_t::timed_out
-                  ? foundation::operation_terminal_t::timed_out
-                : completion.result == detail::backend::raw_request_result_t::terminated
-                  ? foundation::operation_terminal_t::shutdown
-                  : foundation::operation_terminal_t::transport_failed;
-              (void) operations->fail (id, terminal);
+          const auto &completion = settled.value ();
+          if (completion.terminal != zlink::request_result_t::ok) {
+              if (const auto terminal = messaging::request_failure_mapper_t{}.transport_terminal (
+                    completion.terminal)) {
+                  (void) operations->fail (id, *terminal);
+              } else {
+                  (void) operations->complete (
+                    id, protocol::pack_infrastructure_reply (
+                          request_failure_reply_parts (correlation, completion.terminal)));
+              }
               return;
           }
           try {
-              auto &reply_parts = completion.parts;
-              if (reply_parts.empty () || reply_parts.size () > 2)
+              constexpr std::size_t header_part_count = 1;
+              constexpr std::size_t reply_with_payload_part_count = 2;
+              const auto &reply_parts = completion.parts;
+              if (reply_parts.empty () || reply_parts.size () > reply_with_payload_part_count)
                   throw protocol::service_wire_error_t (
                     "Instance Spot activation reply has an invalid part count");
               const auto reply = protocol::decode_reply_header (reply_parts.front ());
               if (reply.correlation != correlation)
                   throw protocol::service_wire_error_t (
                     "Instance Spot activation reply correlation does not match");
-              if (reply.terminal_result != 0 && reply_parts.size () != 1)
+              if (reply.terminal_result
+                    != static_cast<std::uint32_t> (protocol::request_terminal_result::ok)
+                  && reply_parts.size () != header_part_count)
                   throw protocol::service_wire_error_t (
                     "failed Instance Spot activation reply carries a payload");
-              if (reply_parts.size () == 2)
-                  (void) protocol::decode_application_payload (reply_parts[1], false);
+              if (reply_parts.size () == reply_with_payload_part_count)
+                  (void) protocol::decode_application_payload (reply_parts[header_part_count],
+                                                               false);
               (void) operations->complete (id, protocol::pack_infrastructure_reply (reply_parts),
                                            {}, request_metric_terminal (reply));
           }
@@ -2232,8 +2239,12 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
               //  and sink classify it via reply_header_exception.
               (void) operations->complete (
                 id,
-                protocol::pack_infrastructure_reply (detail::backend::raw_message_t{
-                  protocol::encode_reply_header (correlation, 104, 16)}),
+                protocol::pack_infrastructure_reply (
+                  detail::backend::raw_message_t{protocol::encode_reply_header (
+                    correlation,
+                    static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
+                    static_cast<std::uint32_t> (
+                      protocol::framework_error_code::requestProtocolError))}),
                 {}, foundation::operation_terminal_t::protocol_error);
           }
       });
@@ -2448,7 +2459,7 @@ bool raw_mesh_node_owner_t::reply_instance_spot_activation (
   std::optional<protocol::application_payload_t> application_reply)
 {
     if (!request.correlation) {
-        throw std::invalid_argument ("Instance Spot activation reply requires correlation");
+        return true;
     }
     if (terminal_result != 0 && application_reply) {
         throw std::invalid_argument (

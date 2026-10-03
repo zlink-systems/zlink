@@ -93,7 +93,8 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
                     channel.Server.AdvertiseHost,
                     channel.Server.BindHost,
                     registration.NetworkOptions
-                )
+                ),
+                state.ErrorSink
             );
             bundle = new ZLinkChannelRuntimeBundle(
                 router,

@@ -2,7 +2,10 @@
 
 #include "runtime/stateful/stateful_object_runtime.hpp"
 
+#include <zlink/framework/contracts/placement.hpp>
+
 #include <algorithm>
+#include <service_wire_constants.hpp>
 #include <limits>
 #include <stdexcept>
 #include <tuple>
@@ -13,16 +16,18 @@ namespace zlink::framework::runtime::stateful
 namespace
 {
 
-constexpr std::size_t max_creation_request_bytes = 1024u * 1024u;
+constexpr std::uint64_t stable_hash_offset_basis = 1469598103934665603ull;
+constexpr std::uint64_t stable_hash_prime = 1099511628211ull;
+
 constexpr std::size_t max_restored_timers = 4096;
 constexpr std::size_t max_application_state_bytes = 64u * 1024u * 1024u;
 
 std::uint64_t stable_hash (const std::string &value)
 {
-    std::uint64_t hash = 1469598103934665603ull;
+    std::uint64_t hash = stable_hash_offset_basis;
     for (const auto byte : value) {
         hash ^= static_cast<unsigned char> (byte);
-        hash *= 1099511628211ull;
+        hash *= stable_hash_prime;
     }
     return hash;
 }
@@ -119,7 +124,7 @@ create_result_t stateful_object_runtime_t::begin_create (const create_request_t 
     return _lane
       .run ([&, this] () -> create_result_t {
           if (!valid_text (request.key) || !valid_text (request.stable_type)
-              || request.creation_request.size () > max_creation_request_bytes) {
+              || request.creation_request.size () > protocol::creationIntentBytes) {
               return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
           }
           if (_maintenance_inventory_active) {
@@ -201,7 +206,7 @@ stateful_object_runtime_t::begin_reserved_object (const object_ref_t &reserved,
               || !valid_text (reserved.key) || !valid_text (stable_type)
               || reserved.object_generation == 0 || reserved.authority_owner_generation == 0
               || !valid_text (reserved.mesh_name) || !valid_text (reserved.node_id)
-              || creation_request.size () > max_creation_request_bytes) {
+              || creation_request.size () > protocol::creationIntentBytes) {
               return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
           }
           if (_maintenance_inventory_active) {
@@ -224,8 +229,7 @@ stateful_object_runtime_t::begin_reserved_object (const object_ref_t &reserved,
                           existing->second.reference, false};
               }
               if (existing->second.state == object_state_t::moving
-                  || existing->second.state == object_state_t::recovering
-                  || existing->second.state == object_state_t::closing) {
+                  || existing->second.state == object_state_t::recovering) {
                   return {create_status_t::failed, stateful_error_t::moving, 0, {}, false};
               }
               return {create_status_t::existing, stateful_error_t::none, 0,
@@ -632,140 +636,66 @@ stateful_error_t stateful_object_runtime_t::destroy_actor (const object_ref_t &a
       .get ();
 }
 
-std::pair<stateful_error_t, bool> stateful_object_runtime_t::close_spot (const object_ref_t &spot)
+const stateful_object_runtime_t::object_record_t *
+stateful_object_runtime_t::find_closeable_spot_locked (const object_ref_t &spot,
+                                                       stateful_error_t &error) const
 {
-    const auto [error, token] = begin_close_spot (spot);
-    if (error != stateful_error_t::none || !token)
-        return {error, false};
-    const auto committed = commit_close_spot (*token);
-    return {committed, committed == stateful_error_t::none};
-}
-
-std::pair<stateful_error_t, std::optional<spot_close_token_t>>
-stateful_object_runtime_t::begin_close_spot (const object_ref_t &spot)
-{
-    auto [error, token, quiet] =
-      _lane
-        .run ([&, this] {
-            if (_maintenance_inventory_active)
-                return std::tuple{stateful_error_t::moving, std::optional<spot_close_token_t>{},
-                                  true};
-            stateful_error_t error = stateful_error_t::none;
-            auto *record = find_record_locked (spot, error);
-            if (record == nullptr)
-                return std::tuple{error, std::optional<spot_close_token_t>{}, true};
-            if (spot.kind == object_kind_t::actor)
-                return std::tuple{stateful_error_t::invalid, std::optional<spot_close_token_t>{},
-                                  true};
-            if (record->state == object_state_t::moving
-                || record->state == object_state_t::recovering
-                || record->state == object_state_t::closing)
-                return std::tuple{stateful_error_t::moving, std::optional<spot_close_token_t>{},
-                                  true};
-            if (spot.kind == object_kind_t::user_spot) {
-                for (const auto &[key, candidate] : _objects) {
-                    (void) key;
-                    if (candidate.reference.kind == object_kind_t::actor
-                        && candidate.membership == spot.key)
-                        return std::tuple{stateful_error_t::none,
-                                          std::optional<spot_close_token_t>{}, true};
-                }
-            }
-            if (_next_spot_close_token == 0)
-                return std::tuple{stateful_error_t::invalid, std::optional<spot_close_token_t>{},
-                                  true};
-            spot_close_token_t token{_next_spot_close_token++, spot};
-            record->state = object_state_t::closing;
-            record->barrier_generation = token.value;
-            _spot_closes.emplace (token.value, token);
-            const auto quiet = !record->queue.application_active
-                               && !record->queue.infrastructure_active
-                               && !record->queue.yielded_continuation;
-            return std::tuple{stateful_error_t::none, std::optional{token}, quiet};
-        })
-        .get ();
-    if (error != stateful_error_t::none || quiet)
-        return {error, std::move (token)};
-    while (true) {
-        const auto observed = _quiescence_epoch.load (std::memory_order_acquire);
-        quiet = _lane
-                  .run ([this, &token] {
-                      const auto closing = _spot_closes.find (token->value);
-                      const auto record = _objects.find (key_for (token->spot));
-                      return closing != _spot_closes.end () && closing->second == *token
-                             && record != _objects.end ()
-                             && record->second.state == object_state_t::closing
-                             && record->second.barrier_generation == token->value
-                             && !record->second.queue.application_active
-                             && !record->second.queue.infrastructure_active
-                             && !record->second.queue.yielded_continuation;
-                  })
-                  .get ();
-        if (quiet)
-            return {stateful_error_t::none, std::move (token)};
-        wait_for_quiescence_change (observed);
+    if (_maintenance_inventory_active) {
+        error = stateful_error_t::moving;
+        return nullptr;
     }
+    const auto *record = find_record_locked (spot, error);
+    if (!record)
+        return nullptr;
+    if (spot.kind == object_kind_t::actor) {
+        error = stateful_error_t::invalid;
+        return nullptr;
+    }
+    if (record->state == object_state_t::moving || record->state == object_state_t::recovering) {
+        error = stateful_error_t::moving;
+        return nullptr;
+    }
+    if (spot.kind == object_kind_t::user_spot) {
+        for (const auto &[key, candidate] : _objects) {
+            (void) key;
+            if (candidate.reference.kind == object_kind_t::actor
+                && candidate.membership == spot.key)
+                return nullptr;
+        }
+    }
+    return record;
 }
 
-stateful_error_t stateful_object_runtime_t::commit_close_spot (const spot_close_token_t &token)
+std::pair<stateful_error_t, bool>
+stateful_object_runtime_t::can_close_spot (const object_ref_t &spot) const
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
-          const auto closing = _spot_closes.find (token.value);
-          const auto record = _objects.find (key_for (token.spot));
-          if (closing == _spot_closes.end () || closing->second != token
-              || record == _objects.end () || !same_exact_ref (record->second.reference, token.spot)
-              || record->second.state != object_state_t::closing
-              || record->second.barrier_generation != token.value)
-              return stateful_error_t::generation_stale;
+      .run ([&, this] {
+          stateful_error_t error = stateful_error_t::none;
+          const auto *record = find_closeable_spot_locked (spot, error);
+          return std::pair{error, record != nullptr};
+      })
+      .get ();
+}
+
+std::pair<stateful_error_t, bool> stateful_object_runtime_t::close_spot (const object_ref_t &spot)
+{
+    return _lane
+      .run ([&, this] () -> std::pair<stateful_error_t, bool> {
+          stateful_error_t error = stateful_error_t::none;
+          const auto *record = find_closeable_spot_locked (spot, error);
+          if (!record)
+              return {error, false};
           for (auto &candidate : _candidates) {
-              if (candidate.mesh_name == record->second.reference.mesh_name
-                  && candidate.node_id == record->second.reference.node_id
+              if (candidate.mesh_name == record->reference.mesh_name
+                  && candidate.node_id == record->reference.node_id
                   && candidate.active_count != 0) {
                   --candidate.active_count;
                   break;
               }
           }
-          _objects.erase (record);
-          _spot_closes.erase (closing);
-          return stateful_error_t::none;
-      })
-      .get ();
-}
-
-std::optional<spot_close_token_t>
-stateful_object_runtime_t::closing_spot_token (const object_ref_t &spot)
-{
-    return _lane
-      .run ([&, this] () -> std::optional<spot_close_token_t> {
-          const auto record = _objects.find (key_for (spot));
-          if (record == _objects.end () || !same_exact_ref (record->second.reference, spot)
-              || record->second.state != object_state_t::closing)
-              return std::nullopt;
-          const auto closing = _spot_closes.find (record->second.barrier_generation);
-          if (closing == _spot_closes.end ())
-              return std::nullopt;
-          return closing->second;
-      })
-      .get ();
-}
-
-stateful_error_t stateful_object_runtime_t::abort_close_spot (const spot_close_token_t &token)
-{
-    return _lane
-      .run ([&, this] () -> stateful_error_t {
-          const auto closing = _spot_closes.find (token.value);
-          const auto record = _objects.find (key_for (token.spot));
-          if (closing == _spot_closes.end () || closing->second != token
-              || record == _objects.end () || !same_exact_ref (record->second.reference, token.spot)
-              || record->second.state != object_state_t::closing
-              || record->second.barrier_generation != token.value)
-              return stateful_error_t::generation_stale;
-          move_held_application_locked (record->second);
-          record->second.state = object_state_t::ready;
-          record->second.barrier_generation = 0;
-          _spot_closes.erase (closing);
-          return stateful_error_t::none;
+          _objects.erase (key_for (spot));
+          return {stateful_error_t::none, true};
       })
       .get ();
 }
@@ -839,8 +769,7 @@ stateful_error_t stateful_object_runtime_t::enqueue_locked (object_record_t &obj
     const auto bytes = retained_bytes (record);
     const auto application = domain == turn_domain_t::application;
     if (application
-        && (object.state == object_state_t::moving || object.state == object_state_t::recovering
-            || object.state == object_state_t::closing)) {
+        && (object.state == object_state_t::moving || object.state == object_state_t::recovering)) {
         queue.held_application.push_back (std::move (record));
         queue.application_bytes += bytes;
         queue.held_application_bytes += bytes;
@@ -874,8 +803,7 @@ stateful_object_runtime_t::try_claim (const object_ref_t &owner, turn_domain_t d
               return {stateful_error_t::none, std::move (continuation)};
           }
           if ((object->state == object_state_t::moving
-               || object->state == object_state_t::recovering
-               || object->state == object_state_t::closing)) {
+               || object->state == object_state_t::recovering)) {
               return {stateful_error_t::moving, std::nullopt};
           }
           auto &queue = domain == turn_domain_t::application ? object->queue.application
@@ -1090,8 +1018,7 @@ stateful_error_t stateful_object_runtime_t::register_timer (const object_ref_t &
               return error;
           }
           if ((object->state == object_state_t::moving && object->barrier_generation != 0)
-              || object->state == object_state_t::recovering
-              || object->state == object_state_t::closing)
+              || object->state == object_state_t::recovering)
               return stateful_error_t::moving;
           if (!object->timers.emplace (timer.timer_id, timer).second) {
               return stateful_error_t::conflict;
@@ -1112,8 +1039,7 @@ stateful_error_t stateful_object_runtime_t::cancel_timer (const object_ref_t &ow
               return error;
           }
           if ((object->state == object_state_t::moving && object->barrier_generation != 0)
-              || object->state == object_state_t::recovering
-              || object->state == object_state_t::closing)
+              || object->state == object_state_t::recovering)
               return stateful_error_t::moving;
           return object->timers.erase (timer_id) == 1 ? stateful_error_t::none
                                                       : stateful_error_t::not_found;
@@ -1133,8 +1059,7 @@ stateful_error_t stateful_object_runtime_t::enqueue_timer_tick (const object_ref
               return error;
           }
           if ((object->state == object_state_t::moving && object->barrier_generation != 0)
-              || object->state == object_state_t::recovering
-              || object->state == object_state_t::closing)
+              || object->state == object_state_t::recovering)
               return stateful_error_t::moving;
           const auto timer = object->timers.find (timer_id);
           if (timer == object->timers.end ()) {
@@ -2241,7 +2166,7 @@ stateful_object_runtime_t::restore_relocation_aggregate (std::vector<frozen_obje
 
 bool stateful_object_runtime_t::valid_text (const std::string &value)
 {
-    return !value.empty () && value.size () <= 255;
+    return !value.empty () && value.size () <= zlink::framework::detail::identifier_max_bytes;
 }
 
 bool stateful_object_runtime_t::same_exact_ref (const object_ref_t &left, const object_ref_t &right)

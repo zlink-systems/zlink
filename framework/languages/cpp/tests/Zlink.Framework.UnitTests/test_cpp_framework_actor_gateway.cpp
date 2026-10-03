@@ -15,6 +15,7 @@
 #include "runtime/streams/stream_runtime.hpp"
 
 #include <zlink/codecs/protobuf.hpp>
+#include <zlink/framework.hpp>
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 
 #include <google/protobuf/wrappers.pb.h>
@@ -23,6 +24,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <exception>
 #include <future>
 #include <iostream>
 #include <limits>
@@ -1038,7 +1040,7 @@ int bound_session_route_preserves_private_fences ()
                                         zlink::routing_id_t::from (std::string ("session-node")),
                                         std::nullopt, 11, 13, 17, 19, 23, 29);
 
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     if (!route || route->object_generation != 7 || route->node_generation != 11
         || route->authority_owner_generation != 13 || route->owner_lease_generation != 17
         || route->binding_generation != 19 || route->binding_token != 23
@@ -1049,8 +1051,73 @@ int bound_session_route_preserves_private_fences ()
                                               zlink::message_t{})) {
         return 2;
     }
-    const auto advanced = gateway.bound_session_route (actor);
+    const auto advanced = gateway.bound_session_route_async (actor).result ().value ();
     return advanced && advanced->session_sequence == 29 ? 0 : 3;
+}
+
+zlink::framework::task_t<std::optional<zlink::framework::detail::actor_bound_session_route_t>>
+read_bound_session_route_for_actor_join (
+  std::shared_ptr<zlink::framework::detail::actor_gateway_state_t> state,
+  zlink::framework::actor_ref_t actor)
+{
+    zlink::framework::detail::actor_gateway_runtime_t gateway (std::move (state));
+    co_return co_await gateway.bound_session_route_async (std::move (actor));
+}
+
+int bound_session_route_suspends_until_owner_lane_runs ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    const auto actor = test_actor_ref ("actor-node", "player", "pending-route", 7);
+    {
+        actor_gateway_runtime_t gateway (state);
+        gateway.bind_session_sink (actor,
+                                   [] (std::string, stream_codec_t, const zlink::message_t &) {
+                                       return task_t<void> (result_t<void>::success ());
+                                   });
+        gateway.record_bound_session_route (actor, zlink::routing_id_t::from ("session-node"),
+                                            std::nullopt, 11, 13, 17, 19, 23, 29);
+    }
+
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ().share ();
+    if (!state->lane.try_post ([&entered, released] {
+            entered.set_value ();
+            released.wait ();
+        }))
+        return 1;
+    entered.get_future ().wait ();
+
+    using route_task_t = task_t<std::optional<actor_bound_session_route_t>>;
+    std::promise<std::pair<route_task_t, bool>> submitted;
+    auto submission = submitted.get_future ();
+    std::promise<void> progressed;
+    auto progress = progressed.get_future ();
+    runtime::offload_executor_t infrastructure (1);
+    if (!infrastructure.try_submit_internal ([state, actor, &submitted] {
+            auto query = read_bound_session_route_for_actor_join (state, actor);
+            const bool pending = !query.await_ready ();
+            submitted.set_value (std::make_pair (std::move (query), pending));
+        })) {
+        release.set_value ();
+        return 2;
+    }
+    if (!infrastructure.try_submit_internal ([&progressed] { progressed.set_value (); })) {
+        release.set_value ();
+        return 3;
+    }
+    const bool progressed_while_lane_held =
+      progress.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    release.set_value ();
+    auto [query, pending] = submission.get ();
+    progress.wait ();
+    if (!progressed_while_lane_held || !pending)
+        return 4;
+    const auto route = query.result ().value ();
+    return route && route->binding_generation == 19 && route->session_sequence == 29 ? 0 : 5;
 }
 
 int bound_session_send_does_not_publish_caller_location ()
@@ -1094,6 +1161,131 @@ int bound_session_send_does_not_publish_caller_location ()
         return 3;
     }
     return 0;
+}
+
+zlink::framework::task_t<zlink::framework::result_t<void>>
+invoke_app_bound_session_sender_with_temporary_arguments (
+  const zlink::framework::detail::actor_gateway_state_t::bound_session_sender_t &sender,
+  const zlink::framework::node_rid_t &node_rid,
+  const std::string &actor_id)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto actor =
+      std::make_unique<actor_ref_t> (actor_ref_access_t::make (node_rid, "player", actor_id, 7));
+    auto header = std::make_unique<stream_header_t> (
+      stream_message_kind_t::send, stream_codec_t::json, stream_header_flags_t::none, std::nullopt,
+      std::string (96, 'h'));
+    auto payload =
+      std::make_unique<zlink::message_t> (zlink::message_t::from (std::string (256, 'p')));
+    auto local_sender = sender;
+    return local_sender (*actor, 19, *header, *payload);
+}
+
+int app_bound_session_sender_keeps_arguments_alive_after_route_lookup_suspends ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto app = app_t::create ();
+    const auto node_id = "bound-session-lifetime-node";
+    const auto framework_node_rid = node_rid_t::from_string (node_id);
+    const auto node_rid = zlink::routing_id_t::from (node_id);
+    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
+        options.add_route_mesh ("bound-session-lifetime-mesh")
+          .set_object_role (object_role_t::none)
+          .set_routing_id (node_rid)
+          .listen (0);
+    });
+
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &gateway = provider.get_required<actor_gateway_runtime_t> ();
+    const auto state = gateway.weak_state ().lock ();
+    if (!state || !state->bound_session_sender) {
+        provider.close ();
+        return 1;
+    }
+
+    const std::string actor_id = "bound-session-lifetime-actor-" + std::string (48, 'a');
+    const auto actor = actor_ref_access_t::make (framework_node_rid, "player", actor_id, 7);
+    if (!gateway.record_bound_session_route (
+          actor, node_rid, zlink::routing_id_t::from ("bound-session-lifetime-session"), 11, 13, 17,
+          19)) {
+        provider.close ();
+        return 2;
+    }
+
+    const char *const raw_arguments[] = {"actor-gateway-coroutine-lifetime"};
+    auto **const arguments = const_cast<char **> (raw_arguments);
+    int app_exit_code = -1;
+    std::exception_ptr app_failure;
+    std::thread app_thread ([&] {
+        try {
+            app_exit_code = app.run (1, arguments);
+        }
+        catch (const std::exception &) {
+            app_failure = std::current_exception ();
+        }
+    });
+    const auto app_ready_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (!app.is_ready () && app.runtime_state () != framework_runtime_state_t::error
+           && std::chrono::steady_clock::now () < app_ready_deadline) {
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    if (!app.is_ready ()) {
+        app.stop ();
+        app_thread.join ();
+        provider.close ();
+        return 3;
+    }
+
+    std::promise<void> lane_entered;
+    auto lane_has_entered = lane_entered.get_future ();
+    std::promise<void> lane_release;
+    auto release_lane = lane_release.get_future ().share ();
+    std::exception_ptr lane_failure;
+    std::thread lane_thread ([&] {
+        try {
+            state->lane
+              .run ([&] {
+                  lane_entered.set_value ();
+                  release_lane.wait ();
+              })
+              .get ();
+        }
+        catch (const std::exception &) {
+            lane_failure = std::current_exception ();
+        }
+    });
+    if (lane_has_entered.wait_for (std::chrono::seconds (1)) != std::future_status::ready) {
+        lane_release.set_value ();
+        lane_thread.join ();
+        app.stop ();
+        app_thread.join ();
+        provider.close ();
+        return 4;
+    }
+
+    const auto sender = state->bound_session_sender;
+    auto pending = invoke_app_bound_session_sender_with_temporary_arguments (
+      sender, framework_node_rid, actor_id);
+    const bool suspended_on_route_lookup = !pending.result_for (std::chrono::milliseconds (0));
+    lane_release.set_value ();
+    lane_thread.join ();
+    const auto sent = pending.result ();
+
+    app.stop ();
+    app_thread.join ();
+    provider.close ();
+    if (app_failure || app_exit_code != 0 || lane_failure) {
+        return 5;
+    }
+    // The native Session may not exist in this unit scenario. The send outcome
+    // is immaterial here: the registered app callback must resume and consume
+    // its actor, header, and payload after route lookup has yielded.
+    (void) sent;
+    return suspended_on_route_lookup ? 0 : 6;
 }
 
 int generated_protobuf_bound_session_uses_typed_serializer_codec ()
@@ -1267,7 +1459,7 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
     if (gateway.prepare_session_relocation_target_route (stale, 41))
         return 8;
 
-    auto replacement = *gateway.bound_session_route (target);
+    auto replacement = *gateway.bound_session_route_async (target).result ().value ();
     ++replacement.binding_generation;
     if (!gateway.record_bound_session_route_transition (target, replacement))
         return 9;
@@ -1369,7 +1561,8 @@ int bound_session_ref_normalization_preserves_type_and_rejects_conflicts ()
     if (stale_route || stale_route.error_kind () != framework_error_kind_t::invalid_operation) {
         return 8;
     }
-    const auto route_after_rejections = gateway.bound_session_route (public_ref);
+    const auto route_after_rejections =
+      gateway.bound_session_route_async (public_ref).result ().value ();
     if (!route_after_rejections || route_after_rejections->node_rid.to_string () != "session-node"
         || route_after_rejections->session_sequence != 0) {
         return 9;
@@ -1415,7 +1608,7 @@ int bound_session_route_installs_sink_and_fence_together ()
     });
     if (!route_is_installed)
         return 2;
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     if (!route || route->node_rid.to_string () != "session-node" || !route->session_rid
         || route->session_rid->to_string () != "session-rid") {
         return 3;
@@ -1428,7 +1621,7 @@ int bound_session_route_installs_sink_and_fence_together ()
     if (!non_replacing) {
         return 4;
     }
-    const auto retained = gateway.bound_session_route (actor);
+    const auto retained = gateway.bound_session_route_async (actor).result ().value ();
     if (!retained || retained->node_rid.to_string () != "session-node" || !retained->session_rid
         || retained->session_rid->to_string () != "session-rid") {
         return 5;
@@ -1441,7 +1634,7 @@ int bound_session_route_installs_sink_and_fence_together ()
     if (rejected || rejected.error_kind () != framework_error_kind_t::type_mismatch) {
         return 6;
     }
-    const auto preserved = gateway.bound_session_route (actor);
+    const auto preserved = gateway.bound_session_route_async (actor).result ().value ();
     return preserved && preserved->node_rid.to_string () == "session-node" && preserved->session_rid
                && preserved->session_rid->to_string () == "session-rid"
              ? 0
@@ -1715,7 +1908,7 @@ int bound_session_transition_is_atomic_and_idempotent ()
     authority_update.session_sequence = 0;
     const auto retained = gateway.record_bound_session_route_transition (
       test_actor_ref ("actor-target", "game.actor", "actor-a", 1), authority_update);
-    const auto retained_route = gateway.bound_session_route (actor);
+    const auto retained_route = gateway.bound_session_route_async (actor).result ().value ();
     if (!retained || retained.value ().changed || retained.value ().previous || !retained_route
         || retained_route->authority_owner_generation != 11
         || retained_route->owner_lease_generation != 13 || retained_route->binding_token != 7
@@ -1774,7 +1967,7 @@ int authority_only_route_update_keeps_physical_session_current ()
     relocated.session_sequence = 0;
     const auto updated =
       gateway.replace_session_route (target, target_sink, relocated, stream_codec_t::message_pack);
-    const auto current = gateway.bound_session_route (target);
+    const auto current = gateway.bound_session_route_async (target).result ().value ();
     if (!updated || updated.value ().changed || updated.value ().previous || !current
         || current->authority_owner_generation != 41 || current->owner_lease_generation != 43
         || current->binding_token != 31 || current->session_sequence != 37
@@ -1903,7 +2096,7 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
         || gateway.complete_session_relay (actor, session_owner, session_rid, 17, 4)) {
         return 10;
     }
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     if (!route || route->session_sequence != 2)
         return 11;
 
@@ -2196,7 +2389,7 @@ zlink::framework::task_t<std::optional<zlink::message_t>> inspect_pending_relay_
   const zlink::framework::actor_ref_t &actor,
   const zlink::framework::detail::stream_header_t &header,
   const zlink::message_t &payload,
-  const std::shared_ptr<zlink::framework::detail::task_completion_source_t<void>> &pending,
+  const std::shared_ptr<zlink::framework::task_completion_source_t<void>> &pending,
   const std::shared_ptr<std::atomic_bool> &started,
   std::string expected_actor_id,
   std::string expected_packet_name,
@@ -2214,7 +2407,7 @@ zlink::framework::task_t<std::optional<zlink::message_t>> inspect_pending_relay_
 
 zlink::framework::task_t<void> inspect_pending_disconnect_argument (
   const zlink::framework::actor_ref_t &actor,
-  const std::shared_ptr<zlink::framework::detail::task_completion_source_t<void>> &pending,
+  const std::shared_ptr<zlink::framework::task_completion_source_t<void>> &pending,
   const std::shared_ptr<std::atomic_bool> &started,
   std::string expected_actor_id)
 {
@@ -2223,6 +2416,25 @@ zlink::framework::task_t<void> inspect_pending_disconnect_argument (
     if (actor.actor_id ().value () != expected_actor_id) {
         throw std::runtime_error ("pending actor disconnect did not retain its actor argument");
     }
+    co_return;
+}
+
+zlink::framework::task_t<void> inspect_pending_manager_disconnect_argument (
+  const zlink::framework::actor_ref_t &actor,
+  const std::shared_ptr<zlink::framework::task_completion_source_t<void>> &pending,
+  const std::shared_ptr<std::atomic_bool> &started,
+  const std::shared_ptr<std::promise<bool>> &observed,
+  std::string expected_actor_id)
+{
+    started->store (true, std::memory_order_release);
+    co_await pending->task ();
+    bool retained = false;
+    try {
+        retained = actor.actor_id ().value () == expected_actor_id;
+    }
+    catch (const std::exception &) {
+    }
+    observed->set_value (retained);
     co_return;
 }
 
@@ -2267,6 +2479,42 @@ int disconnect_notification_survives_pending_dispatcher_completion ()
                  ? 0
                  : 3;
     });
+}
+
+int session_manager_disconnect_survives_pending_dispatcher_completion ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_gateway_runtime_t gateway;
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, stream_t{});
+    const std::string actor_id (96, 'm');
+    const auto actor = test_actor_ref ("actor-owner", "game.actor", actor_id, 1);
+    (void) manager.bind (actor).async ().result ().value ();
+    auto pending = std::make_shared<task_completion_source_t<void>> ();
+    auto disconnect_started = std::make_shared<std::atomic_bool> (false);
+    auto observed = std::make_shared<std::promise<bool>> ();
+    auto actor_retained = observed->get_future ();
+    gateway.on_disconnect ([pending, disconnect_started, observed,
+                            actor_id] (const actor_ref_t &disconnected_actor) {
+        return inspect_pending_manager_disconnect_argument (disconnected_actor, pending,
+                                                            disconnect_started, observed, actor_id);
+    });
+
+    session_actor_manager_access_t::disconnect (manager);
+    if (!disconnect_started->load (std::memory_order_acquire))
+        return 1;
+
+    std::vector<std::string> reclaimed_storage;
+    reclaimed_storage.reserve (8192);
+    for (std::size_t index = 0; index < 8192; ++index) {
+        reclaimed_storage.emplace_back (96, static_cast<char> ('A' + (index % 26)));
+    }
+    std::thread completion ([pending] { pending->complete (result_t<void>::success ()); });
+    completion.join ();
+    actor_retained.wait ();
+    return actor_retained.get () ? 0 : 2;
 }
 
 int relay_request_survives_pending_dispatcher_completion ()
@@ -2802,7 +3050,9 @@ class fixed_reconcile_authority_store_t final
              std::uint32_t,
              zlink::framework::runtime::stateful::inventory_digest_t,
              std::vector<std::byte> = {},
-             std::string = {}) override
+             std::string = {},
+             zlink::framework::runtime::protocol::relocation_id_t = {},
+             zlink::framework::location_owner_token_t = {}) override
     {
         return {};
     }
@@ -3514,15 +3764,18 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
       public:
         std::optional<stateful::authority_relocation_reference_t> record;
 
-        stateful::authority_publish_result_t publish (const stateful::object_ref_t &,
-                                                      const stateful::object_ref_t &,
-                                                      location_owner_token_t,
-                                                      object_creation_target_t,
-                                                      std::string,
-                                                      std::uint32_t,
-                                                      stateful::inventory_digest_t,
-                                                      std::vector<std::byte> = {},
-                                                      std::string = {}) override
+        stateful::authority_publish_result_t
+        publish (const stateful::object_ref_t &,
+                 const stateful::object_ref_t &,
+                 location_owner_token_t,
+                 object_creation_target_t,
+                 std::string,
+                 std::uint32_t,
+                 stateful::inventory_digest_t,
+                 std::vector<std::byte> = {},
+                 std::string = {},
+                 zlink::framework::runtime::protocol::relocation_id_t = {},
+                 location_owner_token_t = {}) override
         {
             return {};
         }
@@ -3825,15 +4078,18 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
       public:
         std::optional<stateful::authority_relocation_reference_t> record;
 
-        stateful::authority_publish_result_t publish (const stateful::object_ref_t &,
-                                                      const stateful::object_ref_t &,
-                                                      location_owner_token_t,
-                                                      object_creation_target_t,
-                                                      std::string,
-                                                      std::uint32_t,
-                                                      stateful::inventory_digest_t,
-                                                      std::vector<std::byte> = {},
-                                                      std::string = {}) override
+        stateful::authority_publish_result_t
+        publish (const stateful::object_ref_t &,
+                 const stateful::object_ref_t &,
+                 location_owner_token_t,
+                 object_creation_target_t,
+                 std::string,
+                 std::uint32_t,
+                 stateful::inventory_digest_t,
+                 std::vector<std::byte> = {},
+                 std::string = {},
+                 zlink::framework::runtime::protocol::relocation_id_t = {},
+                 location_owner_token_t = {}) override
         {
             return {};
         }
@@ -4332,7 +4588,7 @@ int old_stream_disconnect_does_not_retire_reconnected_binding ()
         return 3;
     }
     const auto current = sessions.current_binding (native_actor.key);
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     const auto delivered = gateway.dispatch_bound_session_send (
       actor, "after-reconnect", stream_codec_t::message_pack, zlink::message_t::from ("payload"));
     return current && *current == new_binding && route && route->session_rid == new_rid
@@ -4394,7 +4650,7 @@ int command_38_rebind_is_owned_only_by_new_connection ()
       bind_through_native_and_38 (new_connection, zlink::routing_id_t::from ("session-new"), 2);
     if (!old_binding || !new_binding)
         return 1;
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     return sessions.bindings (old_connection).empty ()
                && sessions.bindings (new_connection).size () == 1
                && !sessions.is_current_for_connection (old_connection, *new_binding)
@@ -4506,7 +4762,7 @@ int late_lower_generation_bind_and_publish_are_ignored ()
       actor_bound_session_route_t{session_owner, stale_rid, 7, 11, 13, 17, 21, 0, 0});
     const auto stale_record = gateway.record_bound_session_route_transition (
       actor, actor_bound_session_route_t{session_owner, stale_rid, 7, 11, 13, 17, 20, 0, 0});
-    const auto route = gateway.bound_session_route (actor);
+    const auto route = gateway.bound_session_route_async (actor).result ().value ();
     const auto delivered = gateway.dispatch_bound_session_send (actor, "after-stale-publish",
                                                                 stream_codec_t::message_pack,
                                                                 zlink::message_t::from ("payload"));
@@ -5100,10 +5356,8 @@ int parked_request_reply_case (const std::string &requester_rid,
     const auto park_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     bool pending_recorded = false;
     while (std::chrono::steady_clock::now () < park_deadline) {
-        {
-            std::lock_guard<std::recursive_mutex> lock (node->mutex);
-            pending_recorded = !node->pending_handoff_requests.empty ();
-        }
+        pending_recorded =
+          node->lane.run_checked ([&] { return !node->pending_handoff_requests.empty (); }).get ();
         if (pending_recorded)
             break;
         std::this_thread::yield ();
@@ -5127,13 +5381,16 @@ int parked_request_reply_case (const std::string &requester_rid,
                 break;
         }
         if (std::chrono::steady_clock::now () >= reply_deadline) {
-            std::lock_guard<std::recursive_mutex> lock (node->mutex);
-            std::cerr << "parked-replay debug: handler_ran=" << handler_ran.load ()
-                      << " pending=" << node->pending_handoff_requests.size () << " phase="
-                      << (node->actor_transfer_coordinator.phase (key)
-                            ? static_cast<int> (*node->actor_transfer_coordinator.phase (key))
-                            : -1)
-                      << '\n';
+            node->lane
+              .run_checked ([&] {
+                  std::cerr << "parked-replay debug: handler_ran=" << handler_ran.load ()
+                            << " pending=" << node->pending_handoff_requests.size () << " phase="
+                            << (node->actor_transfer_coordinator.phase (key)
+                                  ? static_cast<int> (*node->actor_transfer_coordinator.phase (key))
+                                  : -1)
+                            << '\n';
+              })
+              .get ();
             return 4;
         }
         std::this_thread::yield ();
@@ -5154,15 +5411,16 @@ int parked_request_reply_case (const std::string &requester_rid,
     const auto reply_body = codec.decode_body (reply_envelope);
     if (!reply_body || reply_body.value ().to_string () != "pong")
         return 9;
-    {
-        std::lock_guard<std::recursive_mutex> lock (node->mutex);
-        if (test_case == parked_request_case_t::replay) {
-            if (!node->pending_handoff_requests.empty ())
-                return 8;
-        } else if (node->pending_handoff_requests.size () != pending_handoff_capacity) {
-            return 8;
-        }
-    }
+    const auto pending_settled =
+      node->lane
+        .run_checked ([&] {
+            return test_case == parked_request_case_t::replay
+                     ? node->pending_handoff_requests.empty ()
+                     : node->pending_handoff_requests.size () == pending_handoff_capacity;
+        })
+        .get ();
+    if (!pending_settled)
+        return 8;
     return 0;
 }
 
@@ -5844,6 +6102,10 @@ int main (int argc, char **argv)
         pending != 0) {
         return 190 + pending;
     }
+    if (const auto pending = session_manager_disconnect_survives_pending_dispatcher_completion ();
+        pending != 0) {
+        return 195 + pending;
+    }
     if (const auto pending = relay_request_survives_pending_dispatcher_completion ();
         pending != 0) {
         return 160 + pending;
@@ -5888,9 +6150,18 @@ int main (int argc, char **argv)
         route_fence != 0) {
         return 100 + route_fence;
     }
+    if (const auto pending_route = bound_session_route_suspends_until_owner_lane_runs ();
+        pending_route != 0) {
+        return 100 + pending_route;
+    }
     if (const auto bound_send = bound_session_send_does_not_publish_caller_location ();
         bound_send != 0) {
         return 95 + bound_send;
+    }
+    if (const auto lifetime =
+          app_bound_session_sender_keeps_arguments_alive_after_route_lookup_suspends ();
+        lifetime != 0) {
+        return 390 + lifetime;
     }
     if (const auto relocation_prewarm =
           relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_atomically ();

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -60,6 +61,7 @@ internal sealed class ZLinkRelocationPublicationConflictException(ZLinkAuthority
 }
 
 internal sealed class ZLinkRelocationPublicationCoordinator(
+    IZLinkRuntimeFailureReporter failureReporter,
     IZLinkLocationRepository authorityStore,
     IZLinkRelocationRepository relocationStore
 )
@@ -226,17 +228,23 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
         {
             throw;
         }
-        catch
+        catch (Exception publicationFailure)
         {
             // A provider exception or waiter cancellation can happen after the
             // CAS committed. Reconcile against the authority before deleting the
             // immutable root, because deleting a published root is data loss.
-            var current = await TryReadAuthorityWithoutCancellationAsync(request.AuthorityKey)
-                .ConfigureAwait(false);
-            if (
-                current is not null
-                && TryReconcilePublished(current, request, stored, out var reconciled)
-            )
+            ZLinkAuthorityReadResult current;
+            try
+            {
+                current = await authorityStore
+                    .ReadAuthorityAsync(request.AuthorityKey, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception reconciliationFailure)
+            {
+                throw new AggregateException(publicationFailure, reconciliationFailure);
+            }
+            if (TryReconcilePublished(current, request, stored, out var reconciled))
             {
                 return new ZLinkPublishedRelocation(reconciled, stored, request.Envelope);
             }
@@ -386,22 +394,6 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
         return envelope;
     }
 
-    private async ValueTask<ZLinkAuthorityReadResult?> TryReadAuthorityWithoutCancellationAsync(
-        ZLinkAuthorityKey key
-    )
-    {
-        try
-        {
-            return await authorityStore
-                .ReadAuthorityAsync(key, CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
     private async ValueTask DeleteOrphanAsync(string reference)
     {
         try
@@ -410,9 +402,9 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
                 .DeleteTreeAsync(relocationStore, reference, CancellationToken.None)
                 .ConfigureAwait(false);
         }
-        catch
+        catch (Exception exception)
         {
-            // The fixed 24-hour retention remains the final orphan cleanup.
+            failureReporter.ReportRuntimeTaskException(nameof(DeleteOrphanAsync), exception);
         }
     }
 
@@ -425,10 +417,13 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
                 nameof(request),
                 "The target owner lease generation must be positive."
             );
-        if (request.ApplicationAuthorityPayload.Length > 1024 * 1024)
+        if (
+            request.ApplicationAuthorityPayload.Length
+            > (int)ServiceWireConstants.AuthorityEnvelopeBytes
+        )
             throw new ArgumentOutOfRangeException(
                 nameof(request),
-                "The application authority payload cannot exceed 1 MiB."
+                $"The application authority payload cannot exceed {ServiceWireConstants.AuthorityEnvelopeBytes} bytes."
             );
     }
 
@@ -569,9 +564,9 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
         writer.Write(payload.TargetOwnerLeaseGeneration);
         WriteBytes(writer, payload.ApplicationPayload.Span);
         writer.Flush();
-        if (stream.Length > 1024 * 1024)
+        if (stream.Length > (int)ServiceWireConstants.AuthorityEnvelopeBytes)
             throw new InvalidOperationException(
-                "The authority relocation payload cannot exceed 1 MiB."
+                $"The authority relocation payload cannot exceed {ServiceWireConstants.AuthorityEnvelopeBytes} bytes."
             );
         return stream.ToArray();
     }
@@ -672,7 +667,7 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
     private static byte[] ReadBytes(BinaryReader reader)
     {
         var size = reader.ReadInt32();
-        if (size < 0 || size > 1024 * 1024)
+        if (size < 0 || size > (int)ServiceWireConstants.AuthorityEnvelopeBytes)
             throw new InvalidDataException();
         return ReadExact(reader, size);
     }

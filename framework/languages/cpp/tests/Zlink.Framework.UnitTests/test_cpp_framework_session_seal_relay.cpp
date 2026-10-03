@@ -225,8 +225,9 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
             });
         }));
         lock.unlock ();
-        ASSERT_TRUE (gateway.bound_session_route (actor));
-        EXPECT_EQ (gateway.bound_session_route (actor)->session_sequence, 2u);
+        ASSERT_TRUE (gateway.bound_session_route_async (actor).result ().value ());
+        EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->session_sequence,
+                   2u);
         EXPECT_EQ (native->pending_operation_count (), 0u);
     } else {
         EXPECT_TRUE (terminal) << "delivery failure must not change accepted caller completion";
@@ -250,7 +251,8 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         }
         lock.unlock ();
         EXPECT_TRUE (sessions.remote_route_sealed ("seal-other-actor"));
-        EXPECT_EQ (gateway.bound_session_route (actor)->session_sequence, 2u);
+        EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->session_sequence,
+                   2u);
         ASSERT_EQ (sessions.abort_barrier (other_barrier), stateful::stateful_error_t::none);
         lock.lock ();
         ASSERT_TRUE (events_changed.wait_for (lock, 2s, [&] {

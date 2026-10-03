@@ -1,4 +1,5 @@
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -135,6 +136,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 );
             }
             var nextAllocation = current.Allocation;
+            var nextObjectGeneration = current.ObjectGeneration;
             var nextAuthorityOwnerGeneration = current.AuthorityOwnerGeneration;
             if (needsOwner)
             {
@@ -188,6 +190,16 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 }
                 nextAllocation = targetAllocation;
             }
+            if (put.GenerationTransition == ZLinkAuthorityGenerationTransition.Reincarnate)
+            {
+                if (
+                    !CanIncrement(_authorityObjectGeneration)
+                    || !CanIncrement(_authorityOwnerGeneration)
+                )
+                    return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
+                nextObjectGeneration = checked((ulong)(_authorityObjectGeneration + 1));
+                nextAuthorityOwnerGeneration = checked((ulong)(_authorityOwnerGeneration + 1));
+            }
             if (!CanIncrement(_authorityRevision))
                 return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
 
@@ -197,20 +209,24 @@ internal sealed partial class ZLinkInMemoryLocationStore
             var stored = new ZLinkAuthoritySnapshot(
                 Next(ref _authorityRevision).ToString(),
                 put.Payload.ToArray(),
-                current.ObjectGeneration,
-                needsOwner ? nextAuthorityOwnerGeneration : current.AuthorityOwnerGeneration,
+                nextObjectGeneration,
+                nextAuthorityOwnerGeneration,
                 owner.OwnerId,
                 owner.LeaseGeneration,
                 nextAllocation,
                 current.ReservedCreation,
                 now
             );
+            _authorityObjectGeneration = Math.Max(
+                _authorityObjectGeneration,
+                checked((long)nextObjectGeneration)
+            );
+            _authorityOwnerGeneration = Math.Max(
+                _authorityOwnerGeneration,
+                checked((long)nextAuthorityOwnerGeneration)
+            );
             if (needsOwner)
             {
-                _authorityOwnerGeneration = Math.Max(
-                    _authorityOwnerGeneration,
-                    checked((long)nextAuthorityOwnerGeneration)
-                );
                 MoveAuthorityAllocationCapacity(current.Allocation, nextAllocation);
             }
             _authorities[key.Value] = stored;
@@ -226,7 +242,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
     )
     {
         ArgumentNullException.ThrowIfNull(prefix);
-        if (limit is < 1 or > 1000)
+        if (limit is < 1 or > ZLinkPageRequestPolicy.MaximumPageSize)
             throw new ArgumentOutOfRangeException(nameof(limit));
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync<ZLinkAuthorityScanResult>(() =>
@@ -1224,13 +1240,16 @@ internal sealed partial class ZLinkInMemoryLocationStore
 
     private static void ValidateAuthorityPayload(ReadOnlyMemory<byte> payload)
     {
-        if (payload.Length > 1024 * 1024)
+        if (payload.Length > (int)ServiceWireConstants.AuthorityEnvelopeBytes)
             throw new ArgumentOutOfRangeException(nameof(payload));
     }
 
     private static void ValidateAuthorityMutation(ZLinkAuthorityMutation.Put put)
     {
-        var preserve = put.GenerationTransition == ZLinkAuthorityGenerationTransition.Preserve;
+        var preserve =
+            put.GenerationTransition
+            is ZLinkAuthorityGenerationTransition.Preserve
+                or ZLinkAuthorityGenerationTransition.Reincarnate;
         var newOwner = put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
         if (!preserve && !newOwner)
             throw new ArgumentOutOfRangeException(nameof(put));
@@ -1272,8 +1291,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
         ArgumentException.ThrowIfNullOrWhiteSpace(request.CreationIntentReference);
         if (
             request.CreationIntentHash.Length != 32
-            || request.CreationIntentEncodedSize is < 0 or > 1024 * 1024
-            || request.CreatingPayload.Length > 1024 * 1024
+            || request.CreationIntentEncodedSize
+                is < 0
+                    or > (int)ServiceWireConstants.CreationIntentBytes
+            || request.CreatingPayload.Length > (int)ServiceWireConstants.AuthorityEnvelopeBytes
             || !IsAllocationCapacityValid(request.ObjectKind, request.StableType, request.Capacity)
             || request.TargetNodeLifecycleGeneration == 0
             || request.TargetOwner.LeaseGeneration <= 0
@@ -1299,7 +1320,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
     {
         ArgumentNullException.ThrowIfNull(publication);
         ValidateCreationOperation(publication.Operation);
-        if (publication.TerminalEnvelope.Length > 1024 * 1024)
+        if (
+            publication.TerminalEnvelope.Length
+            > (int)ServiceWireConstants.CreationTerminalEnvelopeBytes
+        )
             throw new ArgumentException(
                 "The creation terminal publication does not match its reservation.",
                 nameof(publication)
@@ -1336,6 +1360,13 @@ internal sealed partial class ZLinkInMemoryLocationStore
             || request.Participants.Count < 1
             || request.InventoryDigest.Length != 32
             || request.TargetDescriptorLifecycleGeneration == 0
+            || request.Participants.Any(static participant =>
+                participant.OwnerTransition
+                    is not (
+                        ZLinkAuthorityGenerationTransition.Preserve
+                        or ZLinkAuthorityGenerationTransition.NewOwner
+                    )
+            )
             || !IsAggregateCapacityValid(request)
             || request.TargetOwner.LeaseGeneration <= 0
         )

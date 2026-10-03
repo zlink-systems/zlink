@@ -257,6 +257,8 @@ connector owns a per-connector-instance typed codec option
 The session error callback is limited to surfacing a monitor-observable
 transport error at the session level.
 
+A server STREAM session follows the heartbeat rule and defaults of [Stream Connector §6](../../stream-connector/32-stream-connector.en.md#6-connection-lifecycle). On the server, the result of the no-inbound timeout is closing the session with `heartbeat_timeout`, not reconnecting.
+
 The termination reason when a session closes matches the closed set in
 [Stream Connector §6.2](../../stream-connector/32-stream-connector.en.md#62-close-reason),
 and the corresponding instrument is owned by

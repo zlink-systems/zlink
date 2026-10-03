@@ -1,33 +1,34 @@
 import type { ActorRef, RoutingId } from '../../contracts/Common';
-import type { ZLinkActorLocation, ZLinkLocationWriteStatus } from './internal-location-contracts';
-import type { ZLinkActorLocationStore, ZLinkSpotLocationStore } from './internal-store-contracts';
 import { ZLinkSpotKind } from '../../contracts/Spots';
 import {
   ZLinkActorLocationClaims,
   type ZLinkActorClaimActivation,
   type ZLinkActorClaimResult
 } from './actor-location-claims';
+import { ZLinkActorSessionRouteClaims } from './actor-session-route-claims';
+import type { ZLinkActorLocation, ZLinkLocationWriteStatus } from './internal-location-contracts';
+import type {
+  ZLinkActorLocationStore,
+  ZLinkAuthorityStore,
+  ZLinkSpotLocationStore
+} from './internal-store-contracts';
+import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
+import {
+  type ZLinkInstanceClosingAuthority,
+  type ZLinkTrackedInstanceAuthority,
+  ZLinkSpotLocationClaims
+} from './spot-location-claims';
 export {
   ZLinkActorClaimStatus,
   type ZLinkActorClaimActivation,
   type ZLinkActorClaimResult
 } from './actor-location-claims';
-import { ZLinkActorSessionRouteClaims } from './actor-session-route-claims';
-import { ZLinkSpotLocationClaims } from './spot-location-claims';
-import type {
-  ZLinkInstanceClosingAuthority,
-  ZLinkTrackedInstanceAuthority
-} from './spot-location-claims';
-import type { ZLinkAuthorityStore } from './internal-store-contracts';
-import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 export type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 
 export class ZLinkLocationLifecycle {
   private readonly actorClaims: ZLinkActorLocationClaims;
-  private readonly actorCleanupTasks = new Map<string, Promise<void>>();
   private readonly spotClaims: ZLinkSpotLocationClaims;
   private readonly actorSessionRoutes: ZLinkActorSessionRouteClaims;
-  private disposed = false;
   private readonly ownershipLostHandler = (event: ZLinkOwnershipLostEvent) =>
     this.onOwnershipLost(event);
 
@@ -56,7 +57,6 @@ export class ZLinkLocationLifecycle {
   }
 
   dispose(): void {
-    this.disposed = true;
     this.runtime.removeOwnershipLostHandler(this.ownershipLostHandler);
   }
 
@@ -160,38 +160,12 @@ export class ZLinkLocationLifecycle {
     await this.actorClaims.release(actorType, actorId, actorRef);
   }
 
-  releaseActorEventually(actorType: string, actorId: string): Promise<void> {
-    const existing = this.actorCleanupTasks.get(actorId);
-    if (existing !== undefined) {
-      return existing;
-    }
-    const cleanup = this.retryActorRelease(actorType, actorId).finally(() =>
-      this.actorCleanupTasks.delete(actorId)
-    );
-    this.actorCleanupTasks.set(actorId, cleanup);
-    return cleanup;
-  }
-
   ownsActor(actorType: string, actorId: string): boolean {
     return this.actorClaims.owns(actorType, actorId);
   }
 
   actorLocationSnapshot(actorId: string): ZLinkActorLocation | undefined {
     return this.actorClaims.snapshot(actorId);
-  }
-
-  private async retryActorRelease(actorType: string, actorId: string): Promise<void> {
-    let retryDelayMs = 50;
-    while (!this.disposed) {
-      try {
-        await this.actorClaims.release(actorType, actorId);
-        return;
-      } catch {
-        await waitForRetry(retryDelayMs);
-        retryDelayMs = Math.min(retryDelayMs * 2, 1_000);
-      }
-    }
-    return;
   }
 
   async claimSpot(
@@ -271,8 +245,4 @@ function inferSpotStore(actorStore: ZLinkActorLocationStore): ZLinkSpotLocationS
     return actorStore as unknown as ZLinkSpotLocationStore;
   }
   return undefined;
-}
-
-function waitForRetry(delayMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }

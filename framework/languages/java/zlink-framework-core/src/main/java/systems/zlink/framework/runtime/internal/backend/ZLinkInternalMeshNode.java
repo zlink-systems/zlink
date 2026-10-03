@@ -269,6 +269,21 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         throw new UnsupportedOperationException("MeshNode monitor is not available");
     }
 
+    /** Reports an initial signal and later changes outside the source's state lane. */
+    default AutoCloseable onStateChanged(Runnable listener) {
+        throw new UnsupportedOperationException("MeshNode state notifications are not available");
+    }
+
+    default CompletionStage<Void> preparePeerConnectionAsync(
+            String endpoint,
+            RoutingId peerRid,
+            long lifecycleGeneration,
+            String securityIdentity,
+            java.time.Duration timeout) {
+        throw new UnsupportedOperationException(
+                "MeshNode peer admission completion is not available");
+    }
+
     List<Long> connectionIntentIds();
 
     void startDispatch(Consumer<ZLinkMeshDispatchRecord> receiver);
@@ -530,6 +545,12 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 String stableType,
                 ZLinkServiceM6BWireCodec.InstanceRouteFence route,
                 ZLinkBackendSpot backendSpot);
+
+        default CompletionStage<Void> admitExisting(
+                ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
+                ZLinkBackendReceived received) {
+            return null;
+        }
     }
 
     default CompletionStage<Void> submitInstanceSpotSend(

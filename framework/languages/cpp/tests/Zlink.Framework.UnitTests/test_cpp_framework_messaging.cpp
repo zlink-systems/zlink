@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
@@ -25,6 +26,7 @@
 #include <condition_variable>
 #include <ctime>
 #include <iomanip>
+#include <fstream>
 #include <sstream>
 #include <mutex>
 #include <string>
@@ -84,6 +86,8 @@ struct envelope_payload_t
 
 int main ()
 {
+    // This test drives runtime parts without a host.
+    zlink::framework::runtime::install_host_context_hooks ();
     {
         namespace msg = zlink::framework::runtime::messaging;
         const auto timeout = std::chrono::hours (27);
@@ -177,11 +181,9 @@ int main ()
             return 183;
 
         // The decoder remains a JSON parser: field order and unknown fields do
-        // not matter, duplicate members retain nlohmann's last-member result,
-        // and non-object metadata is ignored.  Keep these semantics pinned
-        // before replacing the DOM with a streaming parser.
+        // not matter and duplicate members retain nlohmann's last-member result.
         const auto reordered = codec.decode_header (zlink::message_t::from (
-          R"({"unknown":{"nested":[1,true]},"metadata":42,"channelName":1,"formatMarker":242,"kind":3,"messageName":false,"contentType":"application/custom","correlationId":null,"deadline":null,"errorCode":null,"errorMessage":null,"flowId":null,"flowOrigin":null,"source":null,"topic":null,"channelName":"last","messageName":"last-message"})"));
+          R"({"unknown":{"nested":[1,true]},"metadata":{},"channelName":1,"formatMarker":242,"kind":3,"messageName":false,"contentType":"application/custom","correlationId":null,"deadline":null,"errorCode":null,"errorMessage":null,"flowId":null,"flowOrigin":null,"source":null,"topic":null,"channelName":"last","messageName":"last-message"})"));
         if (!reordered || reordered.value ().kind != msg::message_kind_t::command
             || reordered.value ().channel_name != "last"
             || reordered.value ().message_name != "last-message"
@@ -191,6 +193,21 @@ int main ()
             || reordered.value ().error_code || reordered.value ().error_message
             || reordered.value ().flow_id || reordered.value ().flow_origin) {
             return 176;
+        }
+        const auto invalid_utf8 = codec.decode_header (zlink::message_t::from (
+          std::string (R"({"formatMarker":242,"kind":3,"channelName":"api","messageName":")")
+          + std::string ("\xc3\x28", 2) + R"(","contentType":"application/json","metadata":{}})"));
+        if (invalid_utf8
+            || invalid_utf8.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
+            return 1;
+        }
+        const auto scalar_metadata = codec.decode_header (zlink::message_t::from (
+          R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":42})"));
+        if (scalar_metadata
+            || scalar_metadata.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
+            return 189;
         }
         const auto invalid_kind = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":"3","channelName":"c","messageName":"m"})"));
@@ -215,9 +232,9 @@ int main ()
         }
         const auto empty_metadata_key = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":"value"}})"));
-        if (!empty_metadata_key
-            || empty_metadata_key.value ().metadata
-                 != std::map<std::string, std::string>{{"", "value"}}) {
+        if (empty_metadata_key
+            || empty_metadata_key.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
             return 185;
         }
         const auto invalid_empty_metadata_key = codec.decode_header (zlink::message_t::from (
@@ -229,9 +246,9 @@ int main ()
         }
         const auto restored_empty_metadata_key = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":1,"":"value"}})"));
-        if (!restored_empty_metadata_key
-            || restored_empty_metadata_key.value ().metadata
-                 != std::map<std::string, std::string>{{"", "value"}}) {
+        if (restored_empty_metadata_key
+            || restored_empty_metadata_key.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
             return 187;
         }
         const auto invalidated_empty_metadata_key = codec.decode_header (zlink::message_t::from (
@@ -625,6 +642,70 @@ int main ()
                  != framework_error_kind_t::unavailable) {
             return 26;
         }
+        for (const auto kind :
+             {framework_error_kind_t::not_found, framework_error_kind_t::already_exists,
+              framework_error_kind_t::type_mismatch, framework_error_kind_t::rejected,
+              framework_error_kind_t::unavailable, framework_error_kind_t::deadline_exceeded,
+              framework_error_kind_t::shutting_down, framework_error_kind_t::protocol_error,
+              framework_error_kind_t::invalid_operation, framework_error_kind_t::data_lost,
+              framework_error_kind_t::internal_failure}) {
+            const auto wire = mapper.target_failure_reply (kind);
+            if (!wire
+                || !zlink::framework::runtime::protocol::valid_terminal_failure (
+                  wire->terminal_result,
+                  static_cast<zlink::framework::runtime::protocol::framework_error_code> (
+                    wire->failure_code))
+                || mapper
+                       .reply_header_exception (wire->terminal_result, wire->failure_code,
+                                                "Instance activation")
+                       .kind ()
+                     != kind)
+                return 26;
+        }
+        {
+            std::ifstream input (ZLINK_ERROR_MAPPING_CONFORMANCE_PATH);
+            const auto fixture = nlohmann::json::parse (input);
+            const auto sent = mapper.target_failure_reply (framework_error_kind_t::not_configured);
+            const auto row = std::find_if (
+              fixture.at ("send").begin (), fixture.at ("send").end (),
+              [] (const auto &entry) { return entry.at ("kind") == "NotConfigured"; });
+            if (row == fixture.at ("send").end () || !sent
+                || sent->terminal_result != row->at ("terminalResult")
+                || sent->failure_code != row->at ("failureCode")
+                || mapper
+                       .reply_header_exception (sent->terminal_result, sent->failure_code,
+                                                "not configured")
+                       .kind ()
+                     != framework_error_kind_t::internal_failure)
+                return 26;
+        }
+        {
+            namespace wire = zlink::framework::runtime::protocol;
+            const auto alias = mapper.reply_header_exception (
+              static_cast<std::uint32_t> (wire::request_terminal_result::timedOut),
+              static_cast<std::uint32_t> (wire::framework_error_code::actorTypeMismatch), "alias");
+            const auto failed = mapper.reply_header_exception (
+              static_cast<std::uint32_t> (wire::request_terminal_result::ok),
+              static_cast<std::uint32_t> (wire::framework_error_code::requestFailed), "compound");
+            if (alias.kind () != framework_error_kind_t::type_mismatch
+                || std::string (alias.what ())
+                     != "alias failed because the object type did not match."
+                || failed.kind () != framework_error_kind_t::internal_failure
+                || std::string (failed.what ()) != "compound failed.")
+                return 26;
+        }
+        const auto target_timeout =
+          mapper.target_failure_reply (framework_error_kind_t::deadline_exceeded);
+        const auto target_unavailable =
+          mapper.target_failure_reply (framework_error_kind_t::unavailable);
+        if (!target_timeout || !target_unavailable
+            || zlink::framework::detail::boundary_state (mapper.reply_header_exception (
+                 target_timeout->terminal_result, target_timeout->failure_code, "target"))
+                 != zlink::framework::detail::boundary_error_t::none
+            || zlink::framework::detail::boundary_state (mapper.reply_header_exception (
+                 target_unavailable->terminal_result, target_unavailable->failure_code, "target"))
+                 != zlink::framework::detail::boundary_error_t::none)
+            return 26;
         {
             namespace ust = zlink::framework::runtime::user_spot_terminal;
             using zlink::framework::runtime::protocol::reply_header_t;
@@ -1141,7 +1222,7 @@ int main ()
          * registration even when the task completes from a flow-less thread,
          * and nothing leaks into the completing thread afterwards. */
         {
-            zlink::framework::detail::task_completion_source_t<int> source;
+            zlink::framework::task_completion_source_t<int> source;
             std::string observed_in_callback;
             bool leaked_on_completer = false;
             {

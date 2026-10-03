@@ -2,6 +2,8 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/locations/location_repository.hpp"
+#include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
 
@@ -21,6 +23,14 @@
 
 namespace zlink::framework::runtime
 {
+
+namespace location_store_limits
+{
+inline constexpr std::size_t key_bytes = 1024;
+inline constexpr std::size_t write_keys = 2048;
+inline constexpr std::size_t value_bytes = 1024u * 1024u;
+inline constexpr std::size_t write_bytes = 4u * 1024u * 1024u;
+}
 
 class in_memory_location_store_t final : public location_store_t
 {
@@ -88,7 +98,7 @@ class in_memory_location_store_t final : public location_store_t
     task_t<store_scan_result_t> scan (store_scan_request_t request) override
     {
         validate_prefix (request.prefix);
-        if (request.limit == 0 || request.limit > 1000)
+        if (request.limit == 0 || request.limit > location_page_item_limit)
             throw std::invalid_argument ("location scan limit must be 1..1000");
 
         return _lane
@@ -170,13 +180,13 @@ class in_memory_location_store_t final : public location_store_t
 
     static void validate_key (const std::string &key)
     {
-        if (key.empty () || key.size () > 1024)
+        if (key.empty () || key.size () > location_store_limits::key_bytes)
             throw std::invalid_argument ("location store key must contain 1..1024 bytes");
     }
 
     static void validate_prefix (const std::string &prefix)
     {
-        if (prefix.size () > 1024)
+        if (prefix.size () > location_store_limits::key_bytes)
             throw std::invalid_argument ("location scan prefix must contain at most 1024 bytes");
     }
 
@@ -195,12 +205,13 @@ class in_memory_location_store_t final : public location_store_t
             keys.insert (key.value);
             encoded_size += key.value.size ();
             if (const auto *version = std::get_if<store_version_condition_t> (&condition)) {
-                if (version->expected.value.empty () || version->expected.value.size () > 4096)
+                if (version->expected.value.empty ()
+                    || version->expected.value.size () > protocol::authorityStoreVersionBytes)
                     throw std::invalid_argument (
                       "location version condition requires 1..4096 bytes");
                 encoded_size += version->expected.value.size ();
             } else if (const auto *value = std::get_if<store_value_condition_t> (&condition)) {
-                if (value->expected.size () > 1024u * 1024u)
+                if (value->expected.size () > location_store_limits::value_bytes)
                     throw std::invalid_argument ("location value condition exceeds 1 MiB");
                 encoded_size += value->expected.size ();
             }
@@ -213,16 +224,16 @@ class in_memory_location_store_t final : public location_store_t
             keys.insert (key->value);
             encoded_size += key->value.size ();
             if (const auto *put = std::get_if<store_put_t> (&mutation)) {
-                if (put->bytes.size () > 1024u * 1024u)
+                if (put->bytes.size () > location_store_limits::value_bytes)
                     throw std::invalid_argument ("location value exceeds 1 MiB");
                 if (put->retention && *put->retention <= std::chrono::milliseconds::zero ())
                     throw std::invalid_argument ("location retention must be positive");
                 encoded_size += put->bytes.size ();
             }
         }
-        if (keys.size () > 2048)
+        if (keys.size () > location_store_limits::write_keys)
             throw std::invalid_argument ("location write exceeds 2048 unique keys");
-        if (encoded_size > 4u * 1024u * 1024u)
+        if (encoded_size > location_store_limits::write_bytes)
             throw std::invalid_argument ("location write exceeds 4 MiB");
     }
 
@@ -257,7 +268,7 @@ class in_memory_location_store_t final : public location_store_t
     std::map<std::string, store_value_t> _values;
     std::map<std::uint64_t, std::vector<store_scan_item_t>> _snapshots;
     static constexpr std::size_t max_scan_snapshots = 128;
-    static constexpr std::size_t max_scan_page_bytes = 4u * 1024u * 1024u;
+    static constexpr std::size_t max_scan_page_bytes = protocol::descriptorPageBytes;
     const std::uint64_t _scan_epoch = make_scan_epoch ();
     std::uint64_t _next_version = 0;
     std::uint64_t _next_snapshot = 0;
@@ -355,7 +366,8 @@ class in_memory_relocation_store_t final : public relocation_store_t
 
     static void validate_reference (const blob_reference_t &reference)
     {
-        if (reference.value.empty () || reference.value.size () > 4096)
+        if (reference.value.empty ()
+            || reference.value.size () > protocol::relocationReferenceBytes)
             throw std::invalid_argument ("relocation reference must contain 1..4096 bytes");
     }
 

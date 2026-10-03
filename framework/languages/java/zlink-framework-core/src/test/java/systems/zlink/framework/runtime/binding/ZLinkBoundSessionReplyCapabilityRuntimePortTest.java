@@ -13,6 +13,8 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceive
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -26,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
@@ -38,6 +41,7 @@ final class ZLinkBoundSessionReplyCapabilityRuntimePortTest {
         String endpoint = "inproc://jvm-reply-capability-" + System.nanoTime();
         CompletableFuture<List<ZLinkBackendActorReceived>> accepted = new CompletableFuture<>();
         CompletableFuture<String> originalReply = new CompletableFuture<>();
+        CompletableFuture<Void> acceptedHandling = new CompletableFuture<>();
         CopyOnWriteArrayList<String> replacementReplies = new CopyOnWriteArrayList<>();
 
         try (var context = Zlink.createContext();
@@ -81,9 +85,18 @@ final class ZLinkBoundSessionReplyCapabilityRuntimePortTest {
 
             ZLinkBackendSpot entry = actorNode.spotNode().entrySpot();
             entry.onDispatchEvent(
-                    info -> {
-                        if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
-                            accepted.complete(List.copyOf(info.actorMessages()));
+                    new ZLinkInternalAsyncSpotDispatchHandler() {
+                        @Override
+                        public CompletionStage<Void> handleAsync(
+                                ZLinkBackendSpotDispatchInfo info) {
+                            if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
+                                accepted.complete(List.copyOf(info.actorMessages()));
+                                // Spec 01-execution/02-handler-turn-and-execution-gate.ko.md:94 and
+                                // 01-execution/08-messaging-hot-path.ko.md:216 keep the dispatch
+                                // terminal after its reply operation.
+                                return acceptedHandling;
+                            }
+                            return CompletableFuture.completedFuture(null);
                         }
                     });
             ZLinkBackendActorRef actor;
@@ -151,6 +164,7 @@ final class ZLinkBoundSessionReplyCapabilityRuntimePortTest {
                                 List.of(reply));
             } finally {
                 frames.forEach(ZLinkBackendActorReceived::close);
+                acceptedHandling.complete(null);
             }
 
             assertEquals("original-reply", originalReply.get(1, TimeUnit.SECONDS));

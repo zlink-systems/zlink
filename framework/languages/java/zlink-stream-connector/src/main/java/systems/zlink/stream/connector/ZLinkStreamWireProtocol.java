@@ -9,6 +9,13 @@ import java.util.Map;
 
 final class ZLinkStreamWireProtocol {
     static final int FORMAT_MARKER = 0xF2;
+    static final int FRAME_PREFIX_BYTES = Short.BYTES + Integer.BYTES;
+    static final int MAX_UNSIGNED_BYTE = (1 << Byte.SIZE) - 1;
+    static final int MAX_UNSIGNED_SHORT = (1 << Short.SIZE) - 1;
+    private static final int FIXED_HEADER_BYTES = 4 * Byte.BYTES;
+    private static final int MIN_HEADER_BYTES = FIXED_HEADER_BYTES + Byte.BYTES;
+    private static final int FLOW_ID_TEXT_BYTES = 36;
+    private static final int FLOW_FIELDS_BYTES = FLOW_ID_TEXT_BYTES + Byte.BYTES;
     static final int CODEC_RAW = 0;
     static final int CODEC_JSON = 1;
     static final int CODEC_MESSAGE_PACK = 2;
@@ -34,15 +41,14 @@ final class ZLinkStreamWireProtocol {
                     | FLAG_HAS_CORRELATION_ID
                     | FLAG_HAS_FLOW_ID
                     | FLAG_HAS_ACTOR_SLOT;
-    private static final int MAX_PACKET_NAME_BYTES = 255;
+    static final int MAX_PACKET_NAME_BYTES = MAX_UNSIGNED_BYTE;
     private static final int MAX_METADATA_BYTES = 1024;
 
     private ZLinkStreamWireProtocol() {}
 
     static byte[] encodeHeader(Header header) {
         String wireName = isReply(header.kind()) ? "" : header.name();
-        validateHeader(header, wireName);
-        byte[] name = wireName.getBytes(StandardCharsets.UTF_8);
+        byte[] name = validateHeader(header, wireName);
         byte[] metadata =
                 header.metadata().isEmpty() ? new byte[0] : encodeMetadata(header.metadata());
         boolean hasCorrelationId =
@@ -51,7 +57,7 @@ final class ZLinkStreamWireProtocol {
                 hasCorrelationId
                         ? header.correlationId().getBytes(StandardCharsets.UTF_8)
                         : new byte[0];
-        if (correlation.length > 255) {
+        if (correlation.length > MAX_UNSIGNED_BYTE) {
             throw new IllegalArgumentException("correlation id is too long");
         }
         int flags = header.flags();
@@ -73,13 +79,13 @@ final class ZLinkStreamWireProtocol {
         flags = hasActorSlot ? flags | FLAG_HAS_ACTOR_SLOT : flags & ~FLAG_HAS_ACTOR_SLOT;
 
         int size =
-                4
+                FIXED_HEADER_BYTES
                         + (header.requestSeq() == null ? 0 : Long.BYTES)
-                        + 1
+                        + Byte.BYTES
                         + name.length
-                        + (metadata.length == 0 ? 0 : 2 + metadata.length)
-                        + (hasCorrelationId ? 1 + correlation.length : 0)
-                        + (hasFlow ? 37 : 0)
+                        + (metadata.length == 0 ? 0 : Short.BYTES + metadata.length)
+                        + (hasCorrelationId ? Byte.BYTES + correlation.length : 0)
+                        + (hasFlow ? FLOW_FIELDS_BYTES : 0)
                         + (hasActorSlot ? Short.BYTES : 0);
         ByteBuffer buffer = ByteBuffer.allocate(size);
         buffer.put((byte) FORMAT_MARKER);
@@ -110,7 +116,7 @@ final class ZLinkStreamWireProtocol {
     }
 
     static Header decodeHeader(byte[] header) {
-        if (header.length < 5) {
+        if (header.length < MIN_HEADER_BYTES) {
             throw new IllegalArgumentException("stream header is too short");
         }
         ByteBuffer buffer = ByteBuffer.wrap(header);
@@ -129,14 +135,14 @@ final class ZLinkStreamWireProtocol {
                 throw new IllegalArgumentException("request sequence must not be zero");
             }
         }
-        requireRemaining(buffer, 1, "packet name length");
+        requireRemaining(buffer, Byte.BYTES, "packet name length");
         int nameLength = Byte.toUnsignedInt(buffer.get());
         requireRemaining(buffer, nameLength, "packet name");
         byte[] nameBytes = new byte[nameLength];
         buffer.get(nameBytes);
         Map<String, String> metadata = Map.of();
         if ((flags & FLAG_HAS_METADATA) != 0) {
-            requireRemaining(buffer, 2, "metadata length");
+            requireRemaining(buffer, Short.BYTES, "metadata length");
             int metadataLength = Short.toUnsignedInt(buffer.getShort());
             requireRemaining(buffer, metadataLength, "metadata");
             byte[] metadataBytes = new byte[metadataLength];
@@ -145,7 +151,7 @@ final class ZLinkStreamWireProtocol {
         }
         String correlationId = null;
         if ((flags & FLAG_HAS_CORRELATION_ID) != 0) {
-            requireRemaining(buffer, 1, "correlation id length");
+            requireRemaining(buffer, Byte.BYTES, "correlation id length");
             int correlationLength = Byte.toUnsignedInt(buffer.get());
             if (correlationLength == 0) {
                 throw new IllegalArgumentException("correlation id is invalid");
@@ -156,8 +162,8 @@ final class ZLinkStreamWireProtocol {
             correlationId = new String(correlationBytes, StandardCharsets.UTF_8);
         }
         if ((flags & FLAG_HAS_FLOW_ID) != 0) {
-            requireRemaining(buffer, 37, "flow fields");
-            buffer.position(buffer.position() + 37);
+            requireRemaining(buffer, FLOW_FIELDS_BYTES, "flow fields");
+            buffer.position(buffer.position() + FLOW_FIELDS_BYTES);
         }
         Integer actorSlot = null;
         if ((flags & FLAG_HAS_ACTOR_SLOT) != 0) {
@@ -187,13 +193,14 @@ final class ZLinkStreamWireProtocol {
     }
 
     static byte[] encodeFrame(byte[] header, byte[] payload, int maxPayloadSize) {
-        if (header.length > 0xFFFF) {
+        if (header.length > MAX_UNSIGNED_SHORT) {
             throw new IllegalArgumentException("header exceeds u16 header_size");
         }
         if (payload.length > maxPayloadSize) {
             throw new IllegalArgumentException("payload exceeds max payload size");
         }
-        ByteBuffer buffer = ByteBuffer.allocate(6 + header.length + payload.length);
+        ByteBuffer buffer =
+                ByteBuffer.allocate(FRAME_PREFIX_BYTES + header.length + payload.length);
         buffer.putShort((short) header.length);
         buffer.putInt(payload.length);
         buffer.put(header);
@@ -202,11 +209,11 @@ final class ZLinkStreamWireProtocol {
     }
 
     static Frame decodeFrame(byte[] frame) {
-        return decodeFrame(frame, 64 * 1024);
+        return decodeFrame(frame, ZLinkStreamConnectorOptions.DEFAULT_MAX_PAYLOAD_SIZE);
     }
 
     static Frame decodeFrame(byte[] frame, int maxPayloadSize) {
-        if (frame.length < 6) {
+        if (frame.length < FRAME_PREFIX_BYTES) {
             throw ZLinkStreamException.of(
                     ZLinkStreamErrorCode.FRAME_DECODE_FAILED, "frame prefix is incomplete");
         }
@@ -214,7 +221,7 @@ final class ZLinkStreamWireProtocol {
         int headerLength = Short.toUnsignedInt(buffer.getShort());
         int payloadLength = buffer.getInt();
         int bodyLength = checkedBodyLength(headerLength, payloadLength, maxPayloadSize);
-        if (frame.length != 6L + bodyLength) {
+        if (frame.length != (long) FRAME_PREFIX_BYTES + bodyLength) {
             throw ZLinkStreamException.of(
                     ZLinkStreamErrorCode.FRAME_DECODE_FAILED, "frame length does not match prefix");
         }
@@ -245,26 +252,28 @@ final class ZLinkStreamWireProtocol {
     }
 
     static long maxFrameLength(int maxPayloadSize) {
-        return 6L + 0xFFFF + maxPayloadSize;
+        return (long) FRAME_PREFIX_BYTES + MAX_UNSIGNED_SHORT + maxPayloadSize;
     }
 
     private static byte[] encodeMetadata(Map<String, String> metadata) {
-        if (metadata.size() > 255) {
-            throw new IllegalArgumentException("metadata entry count must not exceed 255");
+        if (metadata.size() > MAX_UNSIGNED_BYTE) {
+            throw new IllegalArgumentException(
+                    "metadata entry count must not exceed " + MAX_UNSIGNED_BYTE);
         }
-        int size = 1;
+        int size = Byte.BYTES;
         for (Map.Entry<String, String> entry : metadata.entrySet()) {
             byte[] key = entry.getKey().getBytes(StandardCharsets.UTF_8);
             byte[] value = entry.getValue().getBytes(StandardCharsets.UTF_8);
-            if (key.length == 0 || key.length > 255) {
+            if (key.length == 0 || key.length > MAX_UNSIGNED_BYTE) {
                 throw new IllegalArgumentException("metadata key length is invalid");
             }
-            if (value.length > 0xFFFF) {
+            if (value.length > MAX_UNSIGNED_SHORT) {
                 throw new IllegalArgumentException("metadata value is too large");
             }
-            size += 1 + key.length + 2 + value.length;
+            size += Byte.BYTES + key.length + Short.BYTES + value.length;
             if (size > MAX_METADATA_BYTES) {
-                throw new IllegalArgumentException("metadata must not exceed 1024 bytes");
+                throw new IllegalArgumentException(
+                        "metadata must not exceed " + MAX_METADATA_BYTES + " bytes");
             }
         }
         ByteBuffer buffer = ByteBuffer.allocate(size);
@@ -288,7 +297,7 @@ final class ZLinkStreamWireProtocol {
         int count = Byte.toUnsignedInt(buffer.get());
         Map<String, String> values = new LinkedHashMap<>();
         for (int i = 0; i < count; i++) {
-            requireRemaining(buffer, 1, "metadata key length");
+            requireRemaining(buffer, Byte.BYTES, "metadata key length");
             int keyLength = Byte.toUnsignedInt(buffer.get());
             if (keyLength == 0) {
                 throw new IllegalArgumentException("metadata key is invalid");
@@ -296,7 +305,7 @@ final class ZLinkStreamWireProtocol {
             requireRemaining(buffer, keyLength, "metadata key");
             byte[] keyBytes = new byte[keyLength];
             buffer.get(keyBytes);
-            requireRemaining(buffer, 2, "metadata value length");
+            requireRemaining(buffer, Short.BYTES, "metadata value length");
             int valueLength = Short.toUnsignedInt(buffer.getShort());
             requireRemaining(buffer, valueLength, "metadata value");
             byte[] valueBytes = new byte[valueLength];
@@ -313,12 +322,61 @@ final class ZLinkStreamWireProtocol {
         return Collections.unmodifiableMap(values);
     }
 
-    private static void validateHeader(Header header, String packetName) {
-        validateEnum(header.kind(), header.codec(), header.flags());
+    static byte[] validatePacketName(String packetName) {
+        if (packetName == null || isWhiteSpaceOnly(packetName)) {
+            throw new IllegalArgumentException("packetName is required");
+        }
         byte[] name = packetName.getBytes(StandardCharsets.UTF_8);
-        if ((isReply(header.kind()) && name.length != 0)
-                || (!isReply(header.kind()) && name.length == 0)
-                || name.length > MAX_PACKET_NAME_BYTES) {
+        if (name.length > MAX_PACKET_NAME_BYTES) {
+            throw new IllegalArgumentException("packetName must not exceed 255 UTF-8 bytes");
+        }
+        return name;
+    }
+
+    // Spec 32 §4: Unicode White_Space defines the packet-name rejection set.
+    private static boolean isWhiteSpaceOnly(String name) {
+        for (int index = 0; index < name.length(); index++) {
+            switch (name.charAt(index)) {
+                case '\u0009',
+                '\n',
+                '\u000B',
+                '\u000C',
+                '\r',
+                '\u0020',
+                '\u0085',
+                '\u00A0',
+                '\u1680',
+                '\u2000',
+                '\u2001',
+                '\u2002',
+                '\u2003',
+                '\u2004',
+                '\u2005',
+                '\u2006',
+                '\u2007',
+                '\u2008',
+                '\u2009',
+                '\u200A',
+                '\u2028',
+                '\u2029',
+                '\u202F',
+                '\u205F',
+                '\u3000':
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private static byte[] validateHeader(Header header, String packetName) {
+        validateEnum(header.kind(), header.codec(), header.flags());
+        byte[] name =
+                isReply(header.kind())
+                        ? packetName.getBytes(StandardCharsets.UTF_8)
+                        : validatePacketName(packetName);
+        if (isReply(header.kind()) && name.length != 0) {
             throw new IllegalArgumentException("packet name is invalid");
         }
         boolean hasRequestSeq =
@@ -344,7 +402,7 @@ final class ZLinkStreamWireProtocol {
             throw new IllegalArgumentException("flow id and origin must be present together");
         }
         boolean hasActorSlot = header.actorSlot() != null;
-        if (hasActorSlot && (header.actorSlot() <= 0 || header.actorSlot() > 0xffff)) {
+        if (hasActorSlot && (header.actorSlot() <= 0 || header.actorSlot() > MAX_UNSIGNED_SHORT)) {
             throw new IllegalArgumentException("actor slot is invalid");
         }
         if (header.kind() == KIND_CONTROL
@@ -358,6 +416,7 @@ final class ZLinkStreamWireProtocol {
             throw new IllegalArgumentException(
                     "control packet must use raw codec and must not contain flags");
         }
+        return name;
     }
 
     private static boolean isReply(int kind) {

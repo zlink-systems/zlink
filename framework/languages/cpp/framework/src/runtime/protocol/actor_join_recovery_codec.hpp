@@ -2,6 +2,8 @@
 #pragma once
 
 #include "runtime/protocol/service_wire_codec.hpp"
+#include <zlink/framework/detail/binary_text_codec.hpp>
+#include <zlink/framework/detail/base64.hpp>
 
 #include <service_wire_pilot_codec.hpp>
 #include <nlohmann/json.hpp>
@@ -66,37 +68,61 @@ struct actor_join_recovery_t
 namespace actor_join_recovery_detail
 {
 
-inline std::string hex (std::span<const std::uint8_t> bytes)
+namespace recovery_field
 {
-    static constexpr char digits[] = "0123456789abcdef";
-    std::string result;
-    result.reserve (bytes.size () * 2);
-    for (const auto byte : bytes) {
-        result.push_back (digits[byte >> 4u]);
-        result.push_back (digits[byte & 0x0fu]);
-    }
-    return result;
-}
-
-inline std::string base64 (std::span<const std::uint8_t> bytes)
-{
-    static constexpr char alphabet[] =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string result;
-    result.reserve (((bytes.size () + 2) / 3) * 4);
-    for (std::size_t offset = 0; offset < bytes.size (); offset += 3) {
-        const auto remaining = bytes.size () - offset;
-        const auto value =
-          (static_cast<std::uint32_t> (bytes[offset]) << 16u)
-          | (remaining > 1 ? static_cast<std::uint32_t> (bytes[offset + 1]) << 8u : 0u)
-          | (remaining > 2 ? bytes[offset + 2] : 0u);
-        result.push_back (alphabet[(value >> 18u) & 0x3fu]);
-        result.push_back (alphabet[(value >> 12u) & 0x3fu]);
-        result.push_back (remaining > 1 ? alphabet[(value >> 6u) & 0x3fu] : '=');
-        result.push_back (remaining > 2 ? alphabet[value & 0x3fu] : '=');
-    }
-    return result;
-}
+inline constexpr char ActorAuthorityOwnerGeneration[] = "ActorAuthorityOwnerGeneration";
+inline constexpr char ActorGeneration[] = "ActorGeneration";
+inline constexpr char ActorId[] = "ActorId";
+inline constexpr char ActorNodeGeneration[] = "ActorNodeGeneration";
+inline constexpr char ActorType[] = "ActorType";
+inline constexpr char BoundSessionAcceptedHighWater[] = "BoundSessionAcceptedHighWater";
+inline constexpr char BoundSessionAuthorityOwnerGeneration[] =
+  "BoundSessionAuthorityOwnerGeneration";
+inline constexpr char BoundSessionBindingGeneration[] = "BoundSessionBindingGeneration";
+inline constexpr char BoundSessionBindingToken[] = "BoundSessionBindingToken";
+inline constexpr char BoundSessionMeshName[] = "BoundSessionMeshName";
+inline constexpr char BoundSessionNodeRid[] = "BoundSessionNodeRid";
+inline constexpr char BoundSessionObjectGeneration[] = "BoundSessionObjectGeneration";
+inline constexpr char BoundSessionOwnerLeaseGeneration[] = "BoundSessionOwnerLeaseGeneration";
+inline constexpr char BoundSessionOwnerNodeGeneration[] = "BoundSessionOwnerNodeGeneration";
+inline constexpr char BoundSessionRid[] = "BoundSessionRid";
+inline constexpr char BoundSessionSessionOwnerId[] = "BoundSessionSessionOwnerId";
+inline constexpr char BoundSessionSessionOwnerLeaseGeneration[] =
+  "BoundSessionSessionOwnerLeaseGeneration";
+inline constexpr char BoundSessionTargetNodeGeneration[] = "BoundSessionTargetNodeGeneration";
+inline constexpr char ExpectedOwnerLeaseGeneration[] = "ExpectedOwnerLeaseGeneration";
+inline constexpr char HandoffFrames[] = "HandoffFrames";
+inline constexpr char HandoffId[] = "HandoffId";
+inline constexpr char OperationIdHigh[] = "OperationIdHigh";
+inline constexpr char OperationIdLow[] = "OperationIdLow";
+inline constexpr char RelocationAggregateGeneration[] = "RelocationAggregateGeneration";
+inline constexpr char RelocationAggregateId[] = "RelocationAggregateId";
+inline constexpr char RelocationChecksumCrc32c[] = "RelocationChecksumCrc32c";
+inline constexpr char RelocationContentType[] = "RelocationContentType";
+inline constexpr char RelocationCoordinatorExpectedAuthorityStoreVersion[] =
+  "RelocationCoordinatorExpectedAuthorityStoreVersion";
+inline constexpr char RelocationCoordinatorLeaseGeneration[] =
+  "RelocationCoordinatorLeaseGeneration";
+inline constexpr char RelocationCoordinatorNodeGeneration[] = "RelocationCoordinatorNodeGeneration";
+inline constexpr char RelocationCoordinatorNodeRid[] = "RelocationCoordinatorNodeRid";
+inline constexpr char RelocationCoordinatorOwnerId[] = "RelocationCoordinatorOwnerId";
+inline constexpr char RelocationInventoryDigest[] = "RelocationInventoryDigest";
+inline constexpr char RelocationReference[] = "RelocationReference";
+inline constexpr char Reply[] = "Reply";
+inline constexpr char ReplyContentType[] = "ReplyContentType";
+inline constexpr char Request[] = "Request";
+inline constexpr char RequestContentType[] = "RequestContentType";
+inline constexpr char ReservationToken[] = "ReservationToken";
+inline constexpr char ReservedPayloadBytes[] = "ReservedPayloadBytes";
+inline constexpr char SourceNodeRid[] = "SourceNodeRid";
+inline constexpr char SourceSpotId[] = "SourceSpotId";
+inline constexpr char TargetAuthorityOwnerGeneration[] = "TargetAuthorityOwnerGeneration";
+inline constexpr char TargetNodeGeneration[] = "TargetNodeGeneration";
+inline constexpr char TargetNodeRid[] = "TargetNodeRid";
+inline constexpr char TargetSpotAuthorityOwnerGeneration[] = "TargetSpotAuthorityOwnerGeneration";
+inline constexpr char TargetSpotGeneration[] = "TargetSpotGeneration";
+inline constexpr char TargetSpotId[] = "TargetSpotId";
+} // namespace recovery_field
 
 inline std::vector<std::uint8_t> decode_base64 (std::string_view text)
 {
@@ -135,7 +161,9 @@ inline std::vector<std::uint8_t> decode_base64 (std::string_view text)
         if (d >= 0)
             result.push_back (static_cast<std::uint8_t> (packed));
     }
-    if (base64 (result) != text)
+    if (zlink::framework::detail::base64_encode (
+          std::as_bytes (std::span<const std::uint8_t> (result)))
+        != text)
         throw service_wire_error_t ("Actor Join recovery base64 is not canonical");
     return result;
 }
@@ -176,7 +204,6 @@ inline std::string required_text (const nlohmann::json &value, std::string_view 
 
 inline std::string relocation_text (const relocation_id_t &value)
 {
-    static constexpr char digits[] = "0123456789abcdef";
     std::array<std::uint8_t, 16> bytes{};
     for (std::size_t index = 0; index != 8; ++index) {
         bytes[index] =
@@ -184,21 +211,13 @@ inline std::string relocation_text (const relocation_id_t &value)
         bytes[index + 8] =
           static_cast<std::uint8_t> (value.low >> (56u - static_cast<unsigned> (index) * 8u));
     }
-    std::string result;
-    result.reserve (36);
-    for (std::size_t index = 0; index != bytes.size (); ++index) {
-        if (index == 4 || index == 6 || index == 8 || index == 10)
-            result.push_back ('-');
-        result.push_back (digits[bytes[index] >> 4u]);
-        result.push_back (digits[bytes[index] & 0x0fu]);
-    }
-    return result;
+    return zlink::framework::detail::encode_uuid (bytes);
 }
 
 inline std::string compact_uuid (std::string_view value)
 {
     std::string result;
-    result.reserve (32);
+    result.reserve (zlink::framework::detail::uuid_hex_length);
     for (const auto ch : value) {
         if (ch == '-')
             continue;
@@ -206,7 +225,7 @@ inline std::string compact_uuid (std::string_view value)
             throw service_wire_error_t ("Actor Join recovery UUID is invalid");
         result.push_back (static_cast<char> (std::tolower (static_cast<unsigned char> (ch))));
     }
-    if (result.size () != 32
+    if (result.size () != zlink::framework::detail::uuid_hex_length
         || std::all_of (result.begin (), result.end (), [] (char ch) { return ch == '0'; }))
         throw service_wire_error_t ("Actor Join recovery UUID is invalid");
     return result;
@@ -275,67 +294,79 @@ inline frozen_record_t encode_actor_join_recovery_saved_work (const actor_join_r
      * the .NET record.  Do not use nlohmann::json here: its default object
      * type sorts keys and changes the persisted bytes. */
     nlohmann::ordered_json request = {
-      {"ActorId", value.actor_id},
-      {"ActorType", value.actor_type},
-      {"HandoffId", value.handoff_id},
-      {"BoundSessionNodeRid", nullptr},
-      {"BoundSessionRid", nullptr},
-      {"RelocationContentType", value.relocation_content_type},
-      {"RelocationReference", "pending"},
-      {"RelocationChecksumCrc32c", 0},
-      {"RelocationAggregateId", relocation_text (value.relocation)},
-      {"RelocationAggregateGeneration", 1},
-      {"RelocationInventoryDigest", base64 (std::array<std::uint8_t, 32>{})},
-      {"RequestContentType", value.request_content_type},
-      {"Request", ""},
-      {"HandoffFrames", nlohmann::json::array ()},
-      {"SourceSpotId", value.source_spot_id},
-      {"SourceNodeRid", base64 (value.source_node_routing_id)},
-      {"ActorGeneration", value.actor_generation},
-      {"ActorAuthorityOwnerGeneration", value.actor_authority_owner_generation},
-      {"BoundSessionBindingToken", nullptr},
-      {"BoundSessionBindingGeneration", 0},
-      {"BoundSessionObjectGeneration", 0},
-      {"BoundSessionAuthorityOwnerGeneration", 0},
-      {"BoundSessionMeshName", nullptr},
-      {"BoundSessionTargetNodeGeneration", 0},
-      {"BoundSessionOwnerLeaseGeneration", 0},
-      {"BoundSessionOwnerNodeGeneration", 0},
-      {"BoundSessionAcceptedHighWater", 0},
-      {"BoundSessionSessionOwnerId", nullptr},
-      {"BoundSessionSessionOwnerLeaseGeneration", 0},
-      {"ReservationToken", value.reservation_token},
-      {"ReservedPayloadBytes", value.reserved_payload_bytes},
-      {"TargetNodeRid", base64 (value.target_node_routing_id)},
-      {"TargetNodeGeneration", value.target_node_generation},
-      {"TargetSpotGeneration", value.target_spot_generation},
-      {"TargetAuthorityOwnerGeneration", value.target_authority_owner_generation},
-      {"TargetSpotAuthorityOwnerGeneration", value.target_spot_authority_owner_generation},
-      {"RelocationCoordinatorOwnerId", value.coordinator.owner_id},
-      {"RelocationCoordinatorLeaseGeneration", value.coordinator.lease_generation},
-      {"RelocationCoordinatorNodeRid", base64 (value.coordinator.node_routing_id)},
-      {"RelocationCoordinatorNodeGeneration", value.coordinator.node_generation},
-      {"RelocationCoordinatorExpectedAuthorityStoreVersion",
+      {recovery_field::ActorId, value.actor_id},
+      {recovery_field::ActorType, value.actor_type},
+      {recovery_field::HandoffId, value.handoff_id},
+      {recovery_field::BoundSessionNodeRid, nullptr},
+      {recovery_field::BoundSessionRid, nullptr},
+      {recovery_field::RelocationContentType, value.relocation_content_type},
+      {recovery_field::RelocationReference, "pending"},
+      {recovery_field::RelocationChecksumCrc32c, 0},
+      {recovery_field::RelocationAggregateId, relocation_text (value.relocation)},
+      {recovery_field::RelocationAggregateGeneration, 1},
+      {recovery_field::RelocationInventoryDigest,
+       zlink::framework::detail::base64_encode (
+         std::as_bytes (std::span<const std::uint8_t> (std::array<std::uint8_t, 32>{})))},
+      {recovery_field::RequestContentType, value.request_content_type},
+      {recovery_field::Request, ""},
+      {recovery_field::HandoffFrames, nlohmann::json::array ()},
+      {recovery_field::SourceSpotId, value.source_spot_id},
+      {recovery_field::SourceNodeRid,
+       zlink::framework::detail::base64_encode (
+         std::as_bytes (std::span<const std::uint8_t> (value.source_node_routing_id)))},
+      {recovery_field::ActorGeneration, value.actor_generation},
+      {recovery_field::ActorAuthorityOwnerGeneration, value.actor_authority_owner_generation},
+      {recovery_field::BoundSessionBindingToken, nullptr},
+      {recovery_field::BoundSessionBindingGeneration, 0},
+      {recovery_field::BoundSessionObjectGeneration, 0},
+      {recovery_field::BoundSessionAuthorityOwnerGeneration, 0},
+      {recovery_field::BoundSessionMeshName, nullptr},
+      {recovery_field::BoundSessionTargetNodeGeneration, 0},
+      {recovery_field::BoundSessionOwnerLeaseGeneration, 0},
+      {recovery_field::BoundSessionOwnerNodeGeneration, 0},
+      {recovery_field::BoundSessionAcceptedHighWater, 0},
+      {recovery_field::BoundSessionSessionOwnerId, nullptr},
+      {recovery_field::BoundSessionSessionOwnerLeaseGeneration, 0},
+      {recovery_field::ReservationToken, value.reservation_token},
+      {recovery_field::ReservedPayloadBytes, value.reserved_payload_bytes},
+      {recovery_field::TargetNodeRid,
+       zlink::framework::detail::base64_encode (
+         std::as_bytes (std::span<const std::uint8_t> (value.target_node_routing_id)))},
+      {recovery_field::TargetNodeGeneration, value.target_node_generation},
+      {recovery_field::TargetSpotGeneration, value.target_spot_generation},
+      {recovery_field::TargetAuthorityOwnerGeneration, value.target_authority_owner_generation},
+      {recovery_field::TargetSpotAuthorityOwnerGeneration,
+       value.target_spot_authority_owner_generation},
+      {recovery_field::RelocationCoordinatorOwnerId, value.coordinator.owner_id},
+      {recovery_field::RelocationCoordinatorLeaseGeneration, value.coordinator.lease_generation},
+      {recovery_field::RelocationCoordinatorNodeRid,
+       zlink::framework::detail::base64_encode (
+         std::as_bytes (std::span<const std::uint8_t> (value.coordinator.node_routing_id)))},
+      {recovery_field::RelocationCoordinatorNodeGeneration, value.coordinator.node_generation},
+      {recovery_field::RelocationCoordinatorExpectedAuthorityStoreVersion,
        value.coordinator.expected_authority_store_version},
-      {"ActorNodeGeneration", value.actor_node_generation},
-      {"ExpectedOwnerLeaseGeneration", value.expected_owner_lease_generation}};
+      {recovery_field::ActorNodeGeneration, value.actor_node_generation},
+      {recovery_field::ExpectedOwnerLeaseGeneration, value.expected_owner_lease_generation}};
     nlohmann::ordered_json metadata = {
-      {"Request", std::move (request)},
-      {"TargetSpotId", value.target_spot_id},
-      {"TargetNodeRid", base64 (value.target_node_routing_id)},
-      {"TargetNodeGeneration", value.target_node_generation},
-      {"TargetSpotGeneration", value.target_spot_generation},
-      {"TargetAuthorityOwnerGeneration", value.target_authority_owner_generation},
-      {"OperationIdHigh", value.operation.high},
-      {"OperationIdLow", value.operation.low},
-      {"ReplyContentType", value.reply_content_type},
-      {"Reply", ""}};
+      {recovery_field::Request, std::move (request)},
+      {recovery_field::TargetSpotId, value.target_spot_id},
+      {recovery_field::TargetNodeRid,
+       zlink::framework::detail::base64_encode (
+         std::as_bytes (std::span<const std::uint8_t> (value.target_node_routing_id)))},
+      {recovery_field::TargetNodeGeneration, value.target_node_generation},
+      {recovery_field::TargetSpotGeneration, value.target_spot_generation},
+      {recovery_field::TargetAuthorityOwnerGeneration, value.target_authority_owner_generation},
+      {recovery_field::OperationIdHigh, value.operation.high},
+      {recovery_field::OperationIdLow, value.operation.low},
+      {recovery_field::ReplyContentType, value.reply_content_type},
+      {recovery_field::Reply, ""}};
     const auto metadata_text = metadata.dump ();
     if (metadata_text.size () > 256u * 1024u)
         throw service_wire_error_t ("Actor Join recovery metadata exceeds 256 KiB");
 
     try {
-        const auto source_routing_id = hex (value.source_node_routing_id);
+        const auto source_routing_id =
+          zlink::framework::detail::encode_hex (value.source_node_routing_id);
         const auto frozen =
           encode_zljr_record_v1 ({{{source_routing_id.begin (), source_routing_id.end ()},
                                    value.actor_node_generation,
@@ -393,61 +424,78 @@ decode_actor_join_recovery_saved_work (const frozen_record_t &record)
         throw service_wire_error_t ("Actor Join recovery metadata is malformed");
     }
     actor_join_recovery_t result;
-    const auto &request = metadata.at ("Request");
-    result.actor_id = required_text (request.at ("ActorId"), "ActorId");
-    result.actor_type = required_text (request.at ("ActorType"), "ActorType");
-    result.handoff_id = required_text (request.at ("HandoffId"), "HandoffId");
-    result.source_spot_id = required_text (request.at ("SourceSpotId"), "SourceSpotId");
-    result.source_node_routing_id =
-      decode_base64 (required_text (request.at ("SourceNodeRid"), "SourceNodeRid"));
-    result.actor_generation = json_u64 (request.at ("ActorGeneration"), "ActorGeneration");
+    const auto &request = metadata.at (recovery_field::Request);
+    result.actor_id = required_text (request.at (recovery_field::ActorId), recovery_field::ActorId);
+    result.actor_type =
+      required_text (request.at (recovery_field::ActorType), recovery_field::ActorType);
+    result.handoff_id =
+      required_text (request.at (recovery_field::HandoffId), recovery_field::HandoffId);
+    result.source_spot_id =
+      required_text (request.at (recovery_field::SourceSpotId), recovery_field::SourceSpotId);
+    result.source_node_routing_id = decode_base64 (
+      required_text (request.at (recovery_field::SourceNodeRid), recovery_field::SourceNodeRid));
+    result.actor_generation =
+      json_u64 (request.at (recovery_field::ActorGeneration), recovery_field::ActorGeneration);
     result.actor_authority_owner_generation =
-      json_u64 (request.at ("ActorAuthorityOwnerGeneration"), "ActorAuthorityOwnerGeneration");
-    result.actor_node_generation =
-      json_u64 (request.at ("ActorNodeGeneration"), "ActorNodeGeneration");
+      json_u64 (request.at (recovery_field::ActorAuthorityOwnerGeneration),
+                recovery_field::ActorAuthorityOwnerGeneration);
+    result.actor_node_generation = json_u64 (request.at (recovery_field::ActorNodeGeneration),
+                                             recovery_field::ActorNodeGeneration);
     result.expected_owner_lease_generation =
-      json_u64 (request.at ("ExpectedOwnerLeaseGeneration"), "ExpectedOwnerLeaseGeneration");
-    result.relocation = actor_join_relocation_id (
-      required_text (request.at ("RelocationAggregateId"), "RelocationAggregateId"));
-    result.relocation_content_type =
-      required_text (request.at ("RelocationContentType"), "RelocationContentType");
-    result.request_content_type =
-      required_text (request.at ("RequestContentType"), "RequestContentType");
-    result.reservation_token = required_text (request.at ("ReservationToken"), "ReservationToken");
-    result.reserved_payload_bytes =
-      json_u64 (request.at ("ReservedPayloadBytes"), "ReservedPayloadBytes");
-    result.target_spot_id = required_text (metadata.at ("TargetSpotId"), "TargetSpotId");
-    result.target_node_routing_id =
-      decode_base64 (required_text (metadata.at ("TargetNodeRid"), "TargetNodeRid"));
-    result.target_node_generation =
-      json_u64 (metadata.at ("TargetNodeGeneration"), "TargetNodeGeneration");
-    result.target_spot_generation =
-      json_u64 (metadata.at ("TargetSpotGeneration"), "TargetSpotGeneration");
+      json_u64 (request.at (recovery_field::ExpectedOwnerLeaseGeneration),
+                recovery_field::ExpectedOwnerLeaseGeneration);
+    result.relocation = actor_join_relocation_id (required_text (
+      request.at (recovery_field::RelocationAggregateId), recovery_field::RelocationAggregateId));
+    result.relocation_content_type = required_text (
+      request.at (recovery_field::RelocationContentType), recovery_field::RelocationContentType);
+    result.request_content_type = required_text (request.at (recovery_field::RequestContentType),
+                                                 recovery_field::RequestContentType);
+    result.reservation_token = required_text (request.at (recovery_field::ReservationToken),
+                                              recovery_field::ReservationToken);
+    result.reserved_payload_bytes = json_u64 (request.at (recovery_field::ReservedPayloadBytes),
+                                              recovery_field::ReservedPayloadBytes);
+    result.target_spot_id =
+      required_text (metadata.at (recovery_field::TargetSpotId), recovery_field::TargetSpotId);
+    result.target_node_routing_id = decode_base64 (
+      required_text (metadata.at (recovery_field::TargetNodeRid), recovery_field::TargetNodeRid));
+    result.target_node_generation = json_u64 (metadata.at (recovery_field::TargetNodeGeneration),
+                                              recovery_field::TargetNodeGeneration);
+    result.target_spot_generation = json_u64 (metadata.at (recovery_field::TargetSpotGeneration),
+                                              recovery_field::TargetSpotGeneration);
     result.target_authority_owner_generation =
-      json_u64 (metadata.at ("TargetAuthorityOwnerGeneration"), "TargetAuthorityOwnerGeneration");
-    result.target_spot_authority_owner_generation = json_u64 (
-      request.at ("TargetSpotAuthorityOwnerGeneration"), "TargetSpotAuthorityOwnerGeneration");
+      json_u64 (metadata.at (recovery_field::TargetAuthorityOwnerGeneration),
+                recovery_field::TargetAuthorityOwnerGeneration);
+    result.target_spot_authority_owner_generation =
+      json_u64 (request.at (recovery_field::TargetSpotAuthorityOwnerGeneration),
+                recovery_field::TargetSpotAuthorityOwnerGeneration);
     result.coordinator.owner_id =
-      required_text (request.at ("RelocationCoordinatorOwnerId"), "RelocationCoordinatorOwnerId");
-    result.coordinator.lease_generation = json_u64 (
-      request.at ("RelocationCoordinatorLeaseGeneration"), "RelocationCoordinatorLeaseGeneration");
-    result.coordinator.node_routing_id = decode_base64 (
-      required_text (request.at ("RelocationCoordinatorNodeRid"), "RelocationCoordinatorNodeRid"));
-    result.coordinator.node_generation = json_u64 (
-      request.at ("RelocationCoordinatorNodeGeneration"), "RelocationCoordinatorNodeGeneration");
-    result.coordinator.expected_authority_store_version =
-      required_text (request.at ("RelocationCoordinatorExpectedAuthorityStoreVersion"),
-                     "RelocationCoordinatorExpectedAuthorityStoreVersion");
-    result.operation.high = json_u64 (metadata.at ("OperationIdHigh"), "OperationIdHigh");
-    result.operation.low = json_u64 (metadata.at ("OperationIdLow"), "OperationIdLow");
-    result.reply_content_type =
-      required_text (metadata.at ("ReplyContentType"), "ReplyContentType");
+      required_text (request.at (recovery_field::RelocationCoordinatorOwnerId),
+                     recovery_field::RelocationCoordinatorOwnerId);
+    result.coordinator.lease_generation =
+      json_u64 (request.at (recovery_field::RelocationCoordinatorLeaseGeneration),
+                recovery_field::RelocationCoordinatorLeaseGeneration);
+    result.coordinator.node_routing_id =
+      decode_base64 (required_text (request.at (recovery_field::RelocationCoordinatorNodeRid),
+                                    recovery_field::RelocationCoordinatorNodeRid));
+    result.coordinator.node_generation =
+      json_u64 (request.at (recovery_field::RelocationCoordinatorNodeGeneration),
+                recovery_field::RelocationCoordinatorNodeGeneration);
+    result.coordinator.expected_authority_store_version = required_text (
+      request.at (recovery_field::RelocationCoordinatorExpectedAuthorityStoreVersion),
+      recovery_field::RelocationCoordinatorExpectedAuthorityStoreVersion);
+    result.operation.high =
+      json_u64 (metadata.at (recovery_field::OperationIdHigh), recovery_field::OperationIdHigh);
+    result.operation.low =
+      json_u64 (metadata.at (recovery_field::OperationIdLow), recovery_field::OperationIdLow);
+    result.reply_content_type = required_text (metadata.at (recovery_field::ReplyContentType),
+                                               recovery_field::ReplyContentType);
     result.request = generated.request;
     result.reply = generated.reply;
 
-    const auto request_target =
-      decode_base64 (required_text (request.at ("TargetNodeRid"), "Request.TargetNodeRid"));
-    const auto expected_source_routing_id = hex (result.source_node_routing_id);
+    const auto request_target = decode_base64 (
+      required_text (request.at (recovery_field::TargetNodeRid), "Request.TargetNodeRid"));
+    const auto expected_source_routing_id =
+      zlink::framework::detail::encode_hex (result.source_node_routing_id);
     const std::vector<std::uint8_t> expected_source_storage (expected_source_routing_id.begin (),
                                                              expected_source_routing_id.end ());
     if (result.actor_generation == 0 || result.actor_authority_owner_generation == 0

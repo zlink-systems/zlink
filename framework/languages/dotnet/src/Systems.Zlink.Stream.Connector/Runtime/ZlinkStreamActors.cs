@@ -8,11 +8,12 @@ internal sealed class ZlinkStreamActors(
     ZlinkStreamConnectorCallbacks callbacks
 )
 {
-    internal const string BoundControlName = "$zlink.actor.bound";
-    internal const string UnboundControlName = "$zlink.actor.unbound";
+    internal const string BoundControlName = ZlinkStreamControlProtocol.BoundControlName;
+    internal const string UnboundControlName = ZlinkStreamControlProtocol.UnboundControlName;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly object _gate = new();
-    private readonly Dictionary<ushort, ZlinkStreamActor> _bySlot = [];
+    private readonly LinkedList<ZlinkStreamActor> _actors = new();
+    private readonly Dictionary<ushort, LinkedListNode<ZlinkStreamActor>> _bySlot = [];
     private readonly Dictionary<string, ZlinkStreamActor> _byId = new(StringComparer.Ordinal);
     private readonly ZlinkStreamHandlerList<
         Func<IZlinkStreamActor, CancellationToken, ValueTask>
@@ -24,7 +25,7 @@ internal sealed class ZlinkStreamActors(
     internal IReadOnlyList<IZlinkStreamActor> Snapshot()
     {
         lock (_gate)
-            return _bySlot.Values.Cast<IZlinkStreamActor>().ToArray();
+            return _actors.Cast<IZlinkStreamActor>().ToArray();
     }
 
     internal IZlinkStreamActor? Find(string actorId)
@@ -73,7 +74,7 @@ internal sealed class ZlinkStreamActors(
     {
         lock (_gate)
             if (_bySlot.TryGetValue(slot, out var actor))
-                return actor;
+                return actor.Value;
         throw ZlinkStreamConnector.Error(
             ZlinkStreamErrorCode.FrameDecodeFailed,
             $"Actor slot '{slot}' is not bound."
@@ -85,7 +86,8 @@ internal sealed class ZlinkStreamActors(
         ZlinkStreamActor[] actors;
         lock (_gate)
         {
-            actors = _bySlot.Values.ToArray();
+            actors = _actors.ToArray();
+            _actors.Clear();
             _bySlot.Clear();
             _byId.Clear();
             foreach (var actor in actors)
@@ -99,17 +101,31 @@ internal sealed class ZlinkStreamActors(
 
     private ZlinkStreamActor Bind(ReadOnlySpan<byte> payload)
     {
-        if (payload.Length < 5 || payload[0] != 1)
+        if (
+            payload.Length < ZlinkStreamControlProtocol.ActorBoundMinimumSize
+            || payload[0] != ZlinkStreamControlProtocol.ActorControlVersion
+        )
             throw DecodeError("Actor bound control payload is invalid.");
-        var slot = BinaryPrimitives.ReadUInt16BigEndian(payload.Slice(1, 2));
-        var idLength = payload[3];
-        if (slot == 0 || idLength == 0 || payload.Length != 4 + idLength)
+        var slot = BinaryPrimitives.ReadUInt16BigEndian(
+            payload.Slice(
+                ZlinkStreamControlProtocol.ActorSlotOffset,
+                ZlinkStreamControlProtocol.ActorSlotSize
+            )
+        );
+        var idLength = payload[ZlinkStreamControlProtocol.ActorIdLengthOffset];
+        if (
+            slot == 0
+            || idLength == 0
+            || payload.Length != ZlinkStreamControlProtocol.ActorBoundPrefixSize + idLength
+        )
             throw DecodeError("Actor bound control payload is invalid.");
 
         string actorId;
         try
         {
-            actorId = StrictUtf8.GetString(payload.Slice(4, idLength));
+            actorId = StrictUtf8.GetString(
+                payload.Slice(ZlinkStreamControlProtocol.ActorBoundPrefixSize, idLength)
+            );
         }
         catch (DecoderFallbackException error)
         {
@@ -121,7 +137,7 @@ internal sealed class ZlinkStreamActors(
             if (_bySlot.ContainsKey(slot) || _byId.ContainsKey(actorId))
                 throw DecodeError("Actor bound control duplicates an open binding.");
             var actor = new ZlinkStreamActor(connector, actorId, slot, callbacks.HandlerRegistered);
-            _bySlot.Add(slot, actor);
+            _bySlot.Add(slot, _actors.AddLast(actor));
             _byId.Add(actorId, actor);
             return actor;
         }
@@ -129,16 +145,26 @@ internal sealed class ZlinkStreamActors(
 
     private ZlinkStreamActor Unbind(ReadOnlySpan<byte> payload)
     {
-        if (payload.Length != 3 || payload[0] != 1)
+        if (
+            payload.Length != ZlinkStreamControlProtocol.ActorUnboundPayloadSize
+            || payload[0] != ZlinkStreamControlProtocol.ActorControlVersion
+        )
             throw DecodeError("Actor unbound control payload is invalid.");
-        var slot = BinaryPrimitives.ReadUInt16BigEndian(payload.Slice(1, 2));
+        var slot = BinaryPrimitives.ReadUInt16BigEndian(
+            payload.Slice(
+                ZlinkStreamControlProtocol.ActorSlotOffset,
+                ZlinkStreamControlProtocol.ActorSlotSize
+            )
+        );
         if (slot == 0)
             throw DecodeError("Actor unbound control payload is invalid.");
 
         lock (_gate)
         {
-            if (!_bySlot.Remove(slot, out var actor))
+            if (!_bySlot.Remove(slot, out var node))
                 throw DecodeError("Actor unbound control names an unknown slot.");
+            var actor = node.Value;
+            _actors.Remove(node);
             _byId.Remove(actor.ActorId);
             actor.Close();
             return actor;
@@ -219,7 +245,9 @@ internal sealed class ZlinkStreamActor(
     }
 
     internal IReadOnlyList<ZlinkStreamTypedHandlerRegistry.TypedHandler> Handlers(string name) =>
-        _handlers.Snapshot(name);
+        IsBound
+            ? _handlers.Snapshot(name)
+            : Array.Empty<ZlinkStreamTypedHandlerRegistry.TypedHandler>();
 
     internal void Close() => Volatile.Write(ref _bound, 0);
 

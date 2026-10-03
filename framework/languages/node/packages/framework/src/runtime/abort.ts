@@ -38,15 +38,15 @@ export function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
+export function macrotaskBoundary(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 export function awaitWithAbort<T>(
   operation: Promise<T>,
   signal: AbortSignal | undefined,
   abortOperation?: () => void
 ): Promise<T> {
-  if (signal?.aborted === true) {
-    abortOperation?.();
-    throw createAbortError();
-  }
   if (signal === undefined) {
     return operation;
   }
@@ -63,7 +63,6 @@ export function awaitWithAbort<T>(
       abortOperation?.();
       reject(createAbortError());
     };
-    signal.addEventListener('abort', abort, { once: true });
     operation.then(
       (value) => {
         if (settle()) resolve(value);
@@ -72,5 +71,7 @@ export function awaitWithAbort<T>(
         if (settle()) reject(error);
       }
     );
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
   });
 }

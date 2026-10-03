@@ -19,6 +19,7 @@ import type {
 } from '../locations/internal-store-contracts';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import { randomOperationId } from '../locations/creation-operation-id';
+import { diagnosticTextOrAbsent } from '../diagnostics/diagnostic-text';
 import type {
   ServiceActorCreateRecord,
   ServiceUserSpotReservationFence
@@ -84,9 +85,10 @@ export class ZLinkActorPlacementCoordinator {
     timeoutMs: number,
     signal?: AbortSignal
   ): Promise<ZLinkActorCreateResult> {
-    const deadline = createDeadline(timeoutMs, signal);
-    const deadlineMs = performance.now() + timeoutMs;
     const deadlineUnixMs = Date.now() + timeoutMs;
+    const remainingMs = Math.max(0, deadlineUnixMs - Date.now());
+    const deadline = createDeadline(remainingMs, signal);
+    const deadlineMs = performance.now() + remainingMs;
     const contentReference = encodeLocationCreationContent(requestPayload);
     const requestSha256 = createHash('sha256').update(requestPayload).digest();
     const excluded = new Set<string>();
@@ -130,7 +132,8 @@ export class ZLinkActorPlacementCoordinator {
             creatingPayload,
             capacity: { actors: 1, spots: 0 }
           },
-          deadline.signal
+          deadline.signal,
+          BigInt(deadlineUnixMs)
         );
         const existing = existingActor(reserved, actorId, stableType);
         if (existing !== undefined) {
@@ -204,7 +207,7 @@ export class ZLinkActorPlacementCoordinator {
             remote.terminalResult,
             remote.failureCode,
             `Remote Actor '${actorId}' creation failed with result ${remote.terminalResult}, ` +
-              `failure code ${remote.failureCode}, and tail ${remote.tail?.kind ?? 'none'}.`
+              `failure code ${remote.failureCode}, and tail ${diagnosticTextOrAbsent(remote.tail?.kind)}.`
           );
         }
         if (remote.tail?.kind !== 'actorCreate') {
@@ -213,7 +216,7 @@ export class ZLinkActorPlacementCoordinator {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.RequestProtocolError,
             `Remote Actor '${actorId}' create reply carried tail ` +
-              `${remote.tail?.kind ?? 'none'} on an OK terminal.`
+              `${diagnosticTextOrAbsent(remote.tail?.kind)} on an OK terminal.`
           );
         }
         if (remote.tail.createResult === 'rejected') {

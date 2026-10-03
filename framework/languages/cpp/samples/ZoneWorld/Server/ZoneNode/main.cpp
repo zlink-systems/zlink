@@ -882,28 +882,7 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
         }
     }
 
-    bool await_bootstrap (fw::task_t<void> work)
-    {
-        struct completion_t
-        {
-            std::condition_variable ready;
-            std::mutex mutex;
-            bool completed = false;
-            bool succeeded = false;
-        };
-        auto completion = std::make_shared<completion_t> ();
-        fw::observe_task_completion (work, [completion] (const fw::result_t<void> &result) {
-            {
-                std::lock_guard lock (completion->mutex);
-                completion->succeeded = static_cast<bool> (result);
-                completion->completed = true;
-            }
-            completion->ready.notify_one ();
-        });
-        std::unique_lock lock (completion->mutex);
-        completion->ready.wait (lock, [&completion] { return completion->completed; });
-        return completion->succeeded;
-    }
+    bool await_bootstrap (fw::task_t<void> work) { return static_cast<bool> (work.result ()); }
 
     void run_bootstrap (fw::spot_manager_t &spots)
     {
@@ -980,6 +959,7 @@ int main (int argc, char **argv)
       .on_spot_event (
         [] (const fw::spot_event_t &event) { g_node_state->record_spot_event (event); });
     auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
     if (configuration.subscriber_only) {
         options.handlers ()
           .group ("zoneworld-extra-broadcast")

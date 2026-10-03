@@ -13,6 +13,8 @@ import { ZLinkLocationKeyCodec } from './key-codec';
 import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
 import { ZLinkAutoConnectPlanner } from './auto-connect-planner';
 import { ZLinkStateLane } from '../execution/state-lane';
+import { ConnectError } from '@zlink-systems/zlink';
+import type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port';
 import type {
   IZLinkAutoConnectExecutor,
   IZLinkAutoConnectPeerPublisher,
@@ -33,6 +35,7 @@ export interface ZLinkAutoConnectReconcilerOptions {
   readonly events?: ZLinkAutoConnectEventSink;
   readonly options?: ZLinkLocationOptionOverrides;
   readonly monotonicNowMs?: () => number;
+  readonly errorSink: ZLinkDispatchErrorSink;
 }
 
 export class ZLinkAutoConnectReconciler {
@@ -46,6 +49,7 @@ export class ZLinkAutoConnectReconciler {
   private readonly events?: ZLinkAutoConnectEventSink;
   private readonly options: Required<ZLinkLocationOptionOverrides>;
   private readonly monotonicNowMs: () => number;
+  private readonly errorSink: ZLinkDispatchErrorSink;
   private readonly active = new Map<string, ZLinkAutoConnectTarget>();
   private readonly pendingDisconnects = new Map<string, ZLinkAutoConnectTarget>();
   private readonly failedEndpoints = new Set<string>();
@@ -73,6 +77,7 @@ export class ZLinkAutoConnectReconciler {
     this.events = options.events;
     this.options = { ...zlinkRuntimeDefaultLocationOptions, ...options.options };
     this.monotonicNowMs = options.monotonicNowMs ?? (() => performance.now());
+    this.errorSink = options.errorSink;
     this.executor.onDisconnected?.((endpoint) => this.recordDisconnectedEndpoint(endpoint));
   }
 
@@ -230,14 +235,13 @@ export class ZLinkAutoConnectReconciler {
         await this.lane.run(() => {
           this.pendingDisconnects.delete(key);
         });
-        const connected = await this.executor.connect(target);
-        if (connected) {
+        await this.connectTarget(target, async () => {
           connectedEndpoints.push(target.endpoint);
           await this.lane.run(() => {
             this.active.set(key, target);
             this.failedEndpoints.delete(target.endpoint);
           });
-        }
+        });
         continue;
       }
 
@@ -256,14 +260,13 @@ export class ZLinkAutoConnectReconciler {
         await this.lane.run(() => {
           this.pendingDisconnects.delete(key);
         });
-        const connected = await this.executor.connect(target);
-        if (connected) {
+        await this.connectTarget(target, async () => {
           connectedEndpoints.push(target.endpoint);
           await this.lane.run(() => {
             this.active.set(key, target);
             this.failedEndpoints.delete(target.endpoint);
           });
-        }
+        });
       }
     }
 
@@ -404,10 +407,25 @@ export class ZLinkAutoConnectReconciler {
     const retryTargets = await this.lane.run(() => this.beginStoreFailureCore());
     if (retryTargets === undefined) return;
     for (const [key, target] of retryTargets) {
-      if (await this.executor.connect(target)) {
+      await this.connectTarget(target, async () => {
         await this.lane.run(() => this.completeStoreFailureConnectCore(key, target));
-      }
+      });
     }
+  }
+
+  private async connectTarget(
+    target: ZLinkAutoConnectTarget,
+    accept: () => Promise<void>
+  ): Promise<void> {
+    let accepted: boolean;
+    try {
+      accepted = await this.executor.connect(target);
+    } catch (error) {
+      if (!(error instanceof ConnectError)) throw error;
+      this.errorSink.reportRuntimeTaskException('auto-connect', error);
+      return;
+    }
+    if (accepted) await accept();
   }
 
   private beginStoreFailureCore():

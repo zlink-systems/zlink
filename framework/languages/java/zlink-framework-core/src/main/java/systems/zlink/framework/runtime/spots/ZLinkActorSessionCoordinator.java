@@ -11,12 +11,14 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.spots.ZLinkSpot;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -27,6 +29,8 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 final class ZLinkActorSessionCoordinator {
+    private static final long RELOCATION_RECORD_OVERHEAD_BYTES = 512L;
+
     record ActorRoute(
             Optional<String> joinedSpotId,
             ZLinkBackendActorRef actorRef,
@@ -65,33 +69,8 @@ final class ZLinkActorSessionCoordinator {
         return actors == null ? List.of() : actors.actorIdsInSpot(spotId);
     }
 
-    Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealActorRelocation(String actorId) {
-        return requireActors().trySealActorRelocation(actorId);
-    }
-
-    ZLinkSerialExecutionQueue actorRelocationLane(String actorId) {
-        return requireActors().actorRelocationLane(actorId);
-    }
-
     CompletionStage<ZLinkSerialExecutionQueue> actorRelocationLaneAsync(String actorId) {
         return requireActors().actorRelocationLaneAsync(actorId);
-    }
-
-    boolean abortActorRelocation(String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return requireActors().abortActorRelocation(actorId, seal);
-    }
-
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitActorRelocation(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return requireActors().commitActorRelocation(actorId, seal);
-    }
-
-    Optional<
-                    systems.zlink.framework.runtime.internal.relocation
-                            .ZLinkRetainedSerialQueueCommit.Commit>
-            retainActorRelocationCommit(
-                    String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return requireActors().retainActorRelocationCommit(actorId, seal);
     }
 
     CompletionStage<
@@ -108,13 +87,14 @@ final class ZLinkActorSessionCoordinator {
         return requireActors().abortActorRelocationAsync(actorId, seal);
     }
 
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeActorRelocationIngress(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return requireActors().freezeActorRelocationIngress(actorId, seal);
-    }
-
     Optional<ZLinkActor> localActor(String actorId) {
         return actors == null ? Optional.empty() : actors.localActor(actorId);
+    }
+
+    CompletionStage<Optional<ZLinkActor>> localActorAsync(String actorId) {
+        return actors == null
+                ? CompletableFuture.completedFuture(Optional.empty())
+                : actors.localActorAsync(actorId);
     }
 
     void stageRelocationMessageFollow(
@@ -266,11 +246,10 @@ final class ZLinkActorSessionCoordinator {
     }
 
     CompletionStage<Void> completeRelocationSource(List<String> actorIds) {
-        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
-        for (String actorId : List.copyOf(actorIds)) {
-            chain = chain.thenCompose(ignored -> requireActors().completeRelocationSource(actorId));
-        }
-        return chain;
+        List<Supplier<? extends CompletionStage<Void>>> cleanups = new ArrayList<>();
+        for (String actorId : List.copyOf(actorIds))
+            cleanups.add(() -> requireActors().completeRelocationSource(actorId));
+        return ZLinkHandlerStages.completeAll(cleanups);
     }
 
     boolean isActorMember(String spotId, String actorId) {
@@ -573,7 +552,7 @@ final class ZLinkActorSessionCoordinator {
                         : runtime.submitActorDispatchLazyRecord(
                                 actorId,
                                 relocationRecord,
-                                headerPart.message().size() + 512L,
+                                headerPart.message().size() + RELOCATION_RECORD_OVERHEAD_BYTES,
                                 turn,
                                 () -> {
                                     relocationRelease.run();

@@ -142,6 +142,7 @@ class channel_runtime_state_t
     using instance_spot_send_t = std::function<task_t<result_t<void>> (
       const spot_id_t &,
       const spot_activation_intent_t &,
+      const std::optional<runtime::spot_address_t> &,
       const std::string &,
       std::type_index,
       std::function<serialized_payload_t (serializer_registry_t &)>,
@@ -149,6 +150,7 @@ class channel_runtime_state_t
     using instance_spot_request_t = std::function<task_t<zlink::message_t> (
       const spot_id_t &,
       const spot_activation_intent_t &,
+      const std::optional<runtime::spot_address_t> &,
       std::string,
       std::type_index,
       std::function<serialized_payload_t (serializer_registry_t &)>,
@@ -166,10 +168,17 @@ class channel_runtime_state_t
     using mesh_channel_request_t =
       std::function<task_t<result_t<runtime::messaging::message_parts_t>> (
         runtime::messaging::message_parts_t, std::chrono::milliseconds)>;
-    using client_server_send_t = std::function<task_t<void> (
-      std::string, std::string, zlink::message_t, std::chrono::milliseconds)>;
-    using client_server_request_t = std::function<task_t<zlink::message_t> (
-      std::string, std::string, zlink::message_t, std::chrono::milliseconds)>;
+    using client_server_send_t = std::function<task_t<void> (std::string,
+                                                             std::string,
+                                                             zlink::message_t,
+                                                             std::chrono::milliseconds,
+                                                             std::map<std::string, std::string>)>;
+    using client_server_request_t =
+      std::function<task_t<zlink::message_t> (std::string,
+                                              std::string,
+                                              zlink::message_t,
+                                              std::chrono::milliseconds,
+                                              std::map<std::string, std::string>)>;
     using fanout_publish_t = std::function<task_t<void> (
       std::string, std::string, std::string, zlink::message_t, std::chrono::milliseconds)>;
     using spot_mesh_send_t =

@@ -18,6 +18,8 @@ Actor와 session을 묶으면 수명이 다른 연결과 Actor가 서로 이어�
 <iframe class="zlink-diagram" src="/common/diagrams/24-actor-session-binding.html" title="연결 하나를 개체 하나에 묶는다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/24-actor-session-binding.html" target="_blank">↗ 크게 보기</a></p>
 
+<p><a href="/common/diagrams/zlink-tour.html#lobby" target="_blank">▶ 둘러보기에서 직접 눌러 보기 — 로비와 던전</a></p>
+
 묶은 뒤에도 session은 사라지지 않는다. session이 아는 packet은 session이 먼저 처리하고,
 **모르는 것만** Actor로 간다.
 

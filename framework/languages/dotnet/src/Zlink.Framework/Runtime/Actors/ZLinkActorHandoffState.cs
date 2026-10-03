@@ -166,7 +166,7 @@ internal sealed class ZLinkActorHandoffState(
                     diagnostic?.Invoke(
                         $"deferred_join_capture_refused actor={actorId} "
                             + $"source_phase={_sourcePhase} target_phase={_targetPhase} "
-                            + $"handoff={_handoffId ?? "none"} "
+                            + $"handoff={Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(_handoffId)} "
                             + $"deferred={_deferredJoinCapture}"
                     );
                     throw new InvalidOperationException(
@@ -179,7 +179,7 @@ internal sealed class ZLinkActorHandoffState(
                     _deferredJoinAwaitingTarget = true;
                     diagnostic?.Invoke(
                         $"deferred_join_waiting_for_target actor={actorId} "
-                            + $"target_phase={_targetPhase} handoff={_handoffId ?? "none"}"
+                            + $"target_phase={_targetPhase} handoff={Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(_handoffId)}"
                     );
                     return _targetCompletion?.Task
                         ?? throw new InvalidOperationException(

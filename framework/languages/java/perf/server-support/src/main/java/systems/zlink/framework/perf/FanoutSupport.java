@@ -26,11 +26,10 @@ public final class FanoutSupport {
     public record SequenceRange(String first, String last) {}
 
     public record PublisherSequences(String runId, String cellId, String resetSeq, String phase,
-            List<SequenceRange> attemptedRanges, List<SequenceRange> windowSuccessRanges,
-            List<SequenceRange> settleSuccessRanges) {}
+            List<SequenceRange> attemptedRanges, List<SequenceRange> windowSuccessRanges) {}
 
     public record SubscriberSequences(String runId, String cellId, String resetSeq, String phase, int subscriberId,
-            List<SequenceRange> windowRanges, List<SequenceRange> settleRanges, String duplicateEvents,
+            List<SequenceRange> windowRanges, String duplicateEvents,
             Map<String, NullReason> nullReasons, List<Object> timingEvidence) {}
 
     /** A set of U64 sequences kept as a chunked bit set: one bit per sequence, safe for concurrent writers. */
@@ -103,10 +102,10 @@ public final class FanoutSupport {
         }
     }
 
-    private static final List<String> INTERSECTION_KEYS = List.of("fanout.subscriberCount", "fanout.uniqueDelivered",
-            "fanout.deliveredInWindow", "fanout.settleDelivered", "fanout.outOfCohortEvents", "fanout.deliveryRatio",
+    private static final List<String> INTERSECTION_KEYS = List.of("fanout.subscriberCount",
+            "fanout.deliveredInWindow", "fanout.outOfCohortEvents", "fanout.deliveryRatio",
             "fanout.deliveryOpsPerSec");
-    private static final List<String> ECHO_KEYS = List.of("messages.completed", "messages.settleCompleted", "throughput.kops");
+    private static final List<String> ECHO_KEYS = List.of("messages.completed", "throughput.kops");
 
     public static void value(PerfSnapshot snapshot, String key, Object value) {
         snapshot.metrics.put(key, value);
@@ -123,12 +122,12 @@ public final class FanoutSupport {
             nullValue(snapshot, key, "NOT_APPLICABLE",
                     "Delivery counts come from the runner's intersection of the publisher and subscriber sequence originals (§15.4).");
         }
-        for (String prefix : List.of("latency", "settle.latency")) {
+        for (String prefix : List.of("latency")) {
             for (String suffix : MetricCatalog.LATENCY_SUFFIXES) {
                 nullValue(snapshot, prefix + "." + suffix, "NOT_APPLICABLE", "A fanout cell has no echo round trip (§10.11).");
             }
         }
-        for (String key : List.of("latencyMs", "settleLatencyMs")) {
+        for (String key : List.of("latencyMs")) {
             MetricCatalog.nullValue(snapshot.histograms, snapshot.nullReasons, "histograms", key, "NOT_APPLICABLE",
                     "A fanout cell has no echo round trip (§10.11).");
             snapshot.nullReasons.remove("/histograms/" + key + "/maxNs");
@@ -137,26 +136,26 @@ public final class FanoutSupport {
             nullValue(snapshot, key, "NOT_APPLICABLE", "A fanout cell records publish admission, not echo completion (§10.11).");
         }
         String latencyCode = hasDeliveryOwner ? "CLOCK_DOMAIN_UNVERIFIED" : "NOT_APPLICABLE";
-        for (String prefix : List.of("fanout.deliveryLatency", "fanout.settleDeliveryLatency")) {
+        for (String prefix : List.of("fanout.deliveryLatency")) {
             for (String suffix : MetricCatalog.LATENCY_SUFFIXES) {
                 nullValue(snapshot, prefix + "." + suffix, latencyCode, hasDeliveryOwner
                         ? "Publisher and Subscriber use process-local monotonic clocks; no shared clock domain is verified (§15.2)."
                         : "Delivery latency is observed by Subscriber processes.");
             }
         }
-        for (String key : List.of("fanoutDeliveryLatencyMs", "fanoutSettleDeliveryLatencyMs")) {
+        for (String key : List.of("fanoutDeliveryLatencyMs")) {
             MetricCatalog.nullValue(snapshot.histograms, snapshot.nullReasons, "histograms", key, latencyCode, hasDeliveryOwner
                     ? "No verified shared clock domain between Publisher and Subscriber processes (§15.2)."
                     : "Delivery latency is observed by Subscriber processes.");
         }
     }
 
-    /** The original of this cell is written once and never replaced. */
+    /** The original of this cell is written once; an existing path is a collection collision. */
     public static void writeOnce(Path path, Object original) {
         try (OutputStream stream = Files.newOutputStream(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
             stream.write((PerfJson.write(original) + "\n").getBytes(StandardCharsets.UTF_8));
         } catch (FileAlreadyExistsException exists) {
-            // the original of this cell is already written; it is never replaced
+            throw new IllegalStateException("Sequence original already exists: " + path, exists);
         } catch (IOException error) {
             throw new IllegalStateException("Cannot write " + path + ": " + error.getMessage(), error);
         }

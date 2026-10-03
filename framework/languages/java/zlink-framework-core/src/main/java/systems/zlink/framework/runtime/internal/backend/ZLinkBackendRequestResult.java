@@ -1,22 +1,30 @@
 package systems.zlink.framework.runtime.internal.backend;
 
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 
 public enum ZLinkBackendRequestResult {
-    OK,
-    TIMED_OUT,
-    NOT_FOUND,
-    TERMINATED,
-    PROTOCOL_ERROR,
-    INTERNAL_ERROR,
-    REJECTED,
-    CONFLICT,
-    BUSY,
-    NOT_CONNECTED,
-    INVALID_ARGUMENT,
-    INVALID_STATE,
-    NOT_SUPPORTED,
-    BACKPRESSURED;
+    OK(RequestResult.OK),
+    TIMED_OUT(RequestResult.TIMED_OUT),
+    NOT_FOUND(RequestResult.NOT_FOUND),
+    TERMINATED(RequestResult.TERMINATED),
+    PROTOCOL_ERROR(RequestResult.PROTOCOL_ERROR),
+    INTERNAL_ERROR(RequestResult.INTERNAL_ERROR),
+    REJECTED(RequestResult.REJECTED),
+    CONFLICT(RequestResult.CONFLICT),
+    BUSY(RequestResult.BUSY),
+    NOT_CONNECTED(RequestResult.NOT_CONNECTED),
+    INVALID_ARGUMENT(RequestResult.INVALID_ARGUMENT),
+    INVALID_STATE(RequestResult.INVALID_STATE),
+    NOT_SUPPORTED(RequestResult.NOT_SUPPORTED),
+    BACKPRESSURED(RequestResult.BACKPRESSURED);
+
+    private static final ZLinkBackendRequestResult[] VALUES = values();
+    private final RequestResult bindingResult;
+
+    ZLinkBackendRequestResult(RequestResult bindingResult) {
+        this.bindingResult = bindingResult;
+    }
 
     /**
      * Maps a non-OK backend request terminal (decoded from a remote reply) to the public framework
@@ -42,15 +50,14 @@ public enum ZLinkBackendRequestResult {
     }
 
     /**
-     * Ownership-aware remote-reply translator. A fine framework failure code (mirroring C++
-     * reply_header_exception's failure-code switch) refines the coarse terminal:
-     * worker/stale/moving/data-loss causes carried on a generic Conflict/Busy terminal are
-     * classified precisely instead of collapsing to the coarse kind. failureCode 0 (absent) falls
-     * back to the coarse terminal. Spec 32-framework-error-model:81-118, 99-103 (resource-owner
-     * rule).
+     * Ownership-aware remote-reply translator. The shared mapping table uses a fine framework
+     * failure code to refine the coarse terminal: worker/stale/moving/data-loss causes carried on a
+     * generic Conflict/Busy terminal are classified precisely instead of collapsing to the coarse
+     * kind. failureCode 0 (absent) falls back to the coarse terminal. Spec
+     * 32-framework-error-model:81-118, 99-103 (resource-owner rule).
      */
     public ZLinkFrameworkErrorKind toFrameworkErrorKind(int failureCode) {
-        ZLinkFrameworkErrorKind fine = failureCodeErrorKind(failureCode);
+        ZLinkFrameworkErrorKind fine = ZLinkRequestFailureMapping.incoming(failureCode);
         return fine != null ? fine : toFrameworkErrorKind();
     }
 
@@ -60,39 +67,11 @@ public enum ZLinkBackendRequestResult {
      * identically. An unknown terminal is a ProtocolError.
      */
     public static ZLinkBackendRequestResult fromWireTerminal(int wireTerminal) {
-        if (wireTerminal == 0) {
-            return OK;
-        }
-        for (ZLinkBackendRequestResult value : values()) {
-            if (value.ordinal() >= 1 && wireTerminal == 101 + value.ordinal() - 1) {
+        for (ZLinkBackendRequestResult value : VALUES) {
+            if (wireTerminal == value.bindingResult.value()) {
                 return value;
             }
         }
         return PROTOCOL_ERROR;
-    }
-
-    private static ZLinkFrameworkErrorKind failureCodeErrorKind(int failureCode) {
-        return switch (failureCode) {
-            //  actorAlreadyExists(3)
-            case 3 -> ZLinkFrameworkErrorKind.ALREADY_EXISTS;
-            //  actorTypeMismatch(4), spotTypeMismatch(7)
-            case 4, 7 -> ZLinkFrameworkErrorKind.TYPE_MISMATCH;
-            //  actorSessionNotBound(8)
-            case 8 -> ZLinkFrameworkErrorKind.INVALID_OPERATION;
-            //  routeHandlerNotFound(9), requestTargetNotFound(14)
-            case 9, 14 -> ZLinkFrameworkErrorKind.NOT_FOUND;
-            //  payloadDecodeFailed(12), requestProtocolError(16)
-            case 12, 16 -> ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
-            //  routeNotConnected(13), actorLocationStale(21), spotMoving(34),
-            //  workerQueueFull(18: remote queue full is Unavailable, spec 32:99)
-            case 13, 18, 21, 34 -> ZLinkFrameworkErrorKind.UNAVAILABLE;
-            case 15 -> ZLinkFrameworkErrorKind.REJECTED; // requestRejected
-            case 19 -> ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED; // workerTimedOut
-            //  requestFailed(17), workerFailed(20)
-            case 17, 20 -> ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
-            case 33 -> ZLinkFrameworkErrorKind.INVALID_OPERATION; // spotGenerationStale
-            case 35 -> ZLinkFrameworkErrorKind.DATA_LOST; // relocationDataLost
-            default -> null;
-        };
     }
 }

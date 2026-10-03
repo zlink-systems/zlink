@@ -149,6 +149,21 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     }
 
     @Override
+    public CompletionStage<ZLinkObjectCommitResult> commit(
+            ZLinkObjectReservation reservation, byte[] readyPayload, long deadlineUnixMs) {
+        return authority.commit(reservation, readyPayload, deadlineUnixMs);
+    }
+
+    @Override
+    public CompletionStage<ZLinkObjectCommitResult> commit(
+            ZLinkObjectReservation reservation,
+            byte[] readyPayload,
+            ZLinkCreationOperationTerminal terminal,
+            long deadlineUnixMs) {
+        return authority.commit(reservation, readyPayload, terminal, deadlineUnixMs);
+    }
+
+    @Override
     public CompletionStage<ZLinkObjectRejectResult> reject(
             ZLinkObjectReservation reservation,
             ZLinkCreationOperationTerminal terminal,

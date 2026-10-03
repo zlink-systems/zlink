@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Reflection;
 using Systems.Zlink;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 
@@ -9,13 +11,19 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class SpotPeerConnectorTests
 {
     [Fact]
-    public void Auto_Router_Connect_Retries_After_Busy()
+    public void Auto_Router_Connect_Preserves_Busy_And_Rolls_Back_Claim()
     {
         var node = DispatchProxy.Create<IZLinkBackendSpotNode, BusyOnceSpotNode>();
         var proxy = (BusyOnceSpotNode)(object)node;
         var connector = new ZLinkSpotPeerConnector(node, new ZLinkSpotPeerConnectionSet());
 
-        Assert.False(connector.ConnectPeerAuto(RoutingId.From("peer"), "tcp://peer:1", "none"));
+        var failure = Assert.Throws<ZlinkConnectException>(() =>
+            connector.ConnectPeerAuto(RoutingId.From("peer"), "tcp://peer:1", "none")
+        );
+        Assert.Same(proxy.ConnectFailure, failure);
+        Assert.Equal(1, proxy.ConnectAttempts);
+
+        // A separate explicit request must reach the backend after claim rollback.
         Assert.True(connector.ConnectPeerAuto(RoutingId.From("peer"), "tcp://peer:1", "none"));
         Assert.Equal(2, proxy.ConnectAttempts);
     }
@@ -60,9 +68,116 @@ public sealed class SpotPeerConnectorTests
         Assert.Equal((peerRid, "tcp://peer:1", 7UL), proxy.Cleanup);
     }
 
+    [Fact]
+    public void Auto_Router_Logs_None_For_An_Absent_Peer_Rid()
+    {
+        if (Environment.GetEnvironmentVariable("ZLINK_TEST_FRAMEWORK_DEBUG_LOG_PROBE") == "enabled")
+        {
+            var originalError = Console.Error;
+            using var capturedError = new StringWriter();
+            try
+            {
+                Console.SetError(capturedError);
+                var node = DispatchProxy.Create<IZLinkBackendSpotNode, BusyOnceSpotNode>();
+                var proxy = (BusyOnceSpotNode)(object)node;
+                var connector = new ZLinkSpotPeerConnector(node, new ZLinkSpotPeerConnectionSet());
+
+                var failure = Assert.Throws<ZlinkConnectException>(() =>
+                    connector.ConnectPeerAuto(null, "tcp://peer:1", "none")
+                );
+                Assert.Same(proxy.ConnectFailure, failure);
+                Assert.Equal(1, proxy.ConnectAttempts);
+                Assert.True(connector.ConnectPeerAuto(null, "tcp://peer:1", "none"));
+                Assert.Equal(2, proxy.ConnectAttempts);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+
+            Assert.Contains("spot_peer_claim peer=<none>", capturedError.ToString());
+            return;
+        }
+
+        RunIsolatedTraceProbe(nameof(Auto_Router_Logs_None_For_An_Absent_Peer_Rid), "enabled");
+    }
+
+    [Fact]
+    public void Spot_Discovery_Handler_Does_Not_Evaluate_Holes_When_Disabled()
+    {
+        if (
+            Environment.GetEnvironmentVariable("ZLINK_TEST_FRAMEWORK_DEBUG_LOG_PROBE") == "disabled"
+        )
+        {
+            Assert.False(ZLinkFrameworkDebugLog.SpotDiscoveryEnabled);
+            var evaluations = 0;
+
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"interpolation={Interlocked.Increment(ref evaluations)}"
+            );
+
+            Assert.Equal(0, evaluations);
+            return;
+        }
+
+        RunIsolatedTraceProbe(
+            nameof(Spot_Discovery_Handler_Does_Not_Evaluate_Holes_When_Disabled),
+            "disabled"
+        );
+    }
+
+    private static void RunIsolatedTraceProbe(string testName, string mode)
+    {
+        var projectPath = Path.GetFullPath(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "..",
+                "..",
+                "..",
+                "Zlink.Framework.UnitTests.csproj"
+            )
+        );
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = Path.GetDirectoryName(projectPath)!,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("test");
+        startInfo.ArgumentList.Add(projectPath);
+        startInfo.ArgumentList.Add("--no-build");
+        startInfo.ArgumentList.Add("--no-restore");
+        startInfo.ArgumentList.Add("--framework");
+        startInfo.ArgumentList.Add(new DirectoryInfo(AppContext.BaseDirectory).Name);
+        startInfo.ArgumentList.Add("--filter");
+        startInfo.ArgumentList.Add($"FullyQualifiedName~{testName}");
+        startInfo.ArgumentList.Add("--verbosity");
+        startInfo.ArgumentList.Add("quiet");
+        startInfo.Environment["ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY"] =
+            mode == "enabled" ? "1" : "0";
+        startInfo.Environment["ZLINK_TEST_FRAMEWORK_DEBUG_LOG_PROBE"] = mode;
+
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+        var output = process!.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        Task.WaitAll(output, error);
+
+        Assert.True(
+            process.ExitCode == 0,
+            $"Isolated trace probe '{testName}' failed.{Environment.NewLine}{output.Result}{error.Result}"
+        );
+    }
+
     private class BusyOnceSpotNode : DispatchProxy
     {
         internal int ConnectAttempts { get; private set; }
+
+        internal ZlinkConnectException ConnectFailure { get; } =
+            new(ZlinkConnectException.ErrorCode.Busy);
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
@@ -72,7 +187,7 @@ public sealed class SpotPeerConnectorTests
 
             ConnectAttempts++;
             if (ConnectAttempts == 1)
-                throw new ZlinkConnectException(ZlinkConnectException.ErrorCode.Busy);
+                throw ConnectFailure;
 
             return null;
         }

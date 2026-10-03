@@ -36,6 +36,8 @@ namespace detail
 {
 namespace
 {
+
+constexpr std::chrono::milliseconds actor_lookup_retry_interval{50};
 inline thread_local std::optional<bool> current_actor_request_release_turn;
 
 class actor_request_turn_intent_scope_t
@@ -598,7 +600,8 @@ class actor_client_impl_t final : public actor_client_t
                 co_return detail::propagate_failure<message_t> (actor, "actor route was not found");
             }
             policy = stale_policy_t::location_stale;
-            if (std::chrono::steady_clock::now () + std::chrono::milliseconds (50) >= deadline) {
+            if (std::chrono::steady_clock::now () + detail::actor_lookup_retry_interval
+                >= deadline) {
                 co_return on_deadline ();
             }
             // A stale-move retry only needs to wait out the admission
@@ -606,7 +609,7 @@ class actor_client_impl_t final : public actor_client_t
             // thread it runs on, so a serial lane or worker stays free for
             // other work in the meantime (session-actor-dispatch.en.md
             // 187,193).
-            co_await detail::delay (std::chrono::milliseconds (50));
+            co_await detail::delay (detail::actor_lookup_retry_interval);
         }
     }
 
@@ -873,10 +876,10 @@ class actor_client_impl_t final : public actor_client_t
                           detail::boundary_error_t::shutdown, "actor send runtime is stopped");
                     }
                     co_return result_t<std::optional<zlink::message_t>>::failure (
-                      runtime::messaging::map_submit_result_error_kind (submit),
+                      runtime::messaging::map_submit_result_exception (submit, "Actor submission")
+                        .kind (),
                       "actor send was not accepted (result "
-                        + std::to_string (static_cast<int> (submit)) + ", errno "
-                        + std::to_string (errno) + ")");
+                        + std::to_string (static_cast<int> (submit)) + ")");
                 }
                 co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
             }
@@ -890,7 +893,8 @@ class actor_client_impl_t final : public actor_client_t
                       detail::boundary_error_t::shutdown, "actor request runtime is stopped");
                 }
                 co_return result_t<std::optional<zlink::message_t>>::failure (
-                  runtime::messaging::map_submit_result_error_kind (submit),
+                  runtime::messaging::map_submit_result_exception (submit, "Actor submission")
+                    .kind (),
                   "actor request was not accepted");
             }
             auto reply = co_await wait_for_actor_completion (runtime, operation_id);
@@ -926,9 +930,9 @@ class actor_client_impl_t final : public actor_client_t
             co_return result_t<std::optional<zlink::message_t>>::success (
               std::make_optional (std::move (body.value ())));
         }
-        catch (const framework_exception_t &error) {
-            co_return result_t<std::optional<zlink::message_t>>::failure (error.kind (),
-                                                                          error.what ());
+        catch (const framework_exception_t &) {
+            co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
+              std::current_exception ());
         }
         catch (const std::exception &error) {
             co_return map_native_exception<std::optional<zlink::message_t>> (
@@ -1001,6 +1005,8 @@ class actor_client_impl_t final : public actor_client_t
     static result_t<TResult> map_native_exception (const std::exception &error,
                                                    const char *fallback)
     {
+        if (detail::is_cancellation_exception (error))
+            return detail::result_access_t::failure<TResult> (std::current_exception ());
         const std::string message = error.what () && *error.what () ? error.what () : fallback;
         const auto *system = dynamic_cast<const std::system_error *> (&error);
         if (system

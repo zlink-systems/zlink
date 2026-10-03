@@ -419,6 +419,84 @@ public sealed class StandaloneActorRelocationPrecommitTests
     }
 
     [Fact]
+    public async Task Precommit_propagates_caller_validation_without_reconciliation_read()
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var foreign = await PrepareForeignCutoverAsync(inner);
+        Assert.True(
+            ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                foreign.Steady.Payload.Span,
+                out var sourceAuthority
+            )
+        );
+        var validation = new ArgumentException("Invalid Store input.");
+        var store = new LostStoredResponseAuthorityStore(inner)
+        {
+            CompareExchangeValidation = validation,
+        };
+        var observed = await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store).BeginPreparingAsync(
+                foreign.Steady,
+                sourceAuthority,
+                Guid.NewGuid(),
+                applicationVersion: 1,
+                CancellationToken.None
+            )
+        );
+        Assert.Same(validation, observed);
+        Assert.Equal(1, store.CompareExchangeCount);
+        Assert.Equal(0, store.ReadCount);
+    }
+
+    [Fact]
+    public async Task Target_cas_propagates_public_store_invalid_expected_version()
+    {
+        var store = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(store);
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store).CommitTargetAsync(
+                source.Captured with
+                {
+                    StoreVersion = string.Empty,
+                },
+                source.Envelope,
+                source.Prepare,
+                source.TargetAuthority,
+                CancellationToken.None
+            )
+        );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Target_cas_propagates_caller_validation_without_retry(bool read)
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var cutover = await PrepareForeignCutoverAsync(inner);
+        var validation = new ArgumentException("Invalid Store input.");
+        var store = new LostStoredResponseAuthorityStore(inner)
+        {
+            ReadValidation = read ? validation : null,
+            CompareExchangeValidation = read ? null : validation,
+        };
+        if (read)
+            store.FailNextBeforeStore();
+
+        var observed = await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store).CommitTargetAsync(
+                cutover.Steady,
+                cutover.Envelope,
+                cutover.Prepare,
+                cutover.TargetAuthority,
+                CancellationToken.None
+            )
+        );
+        Assert.Same(validation, observed);
+        Assert.Equal(1, read ? store.ReadCount : store.CompareExchangeCount);
+    }
+
+    [Fact]
     public async Task Target_cas_resubmits_the_same_fence_after_an_uncertain_response()
     {
         //  Location runtime §10: a target CAS whose response is unknown is read
@@ -650,6 +728,78 @@ public sealed class StandaloneActorRelocationPrecommitTests
         );
 
         Assert.Equal(ZLinkSourceSettlement.TargetCommitted, settlement.Outcome);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Source_settlement_propagates_caller_validation_without_retry(bool preserve)
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(inner);
+        var validation = new ArgumentException("Invalid Store input.");
+        var store = new LostStoredResponseAuthorityStore(inner)
+        {
+            ReadValidation = preserve ? null : validation,
+            CompareExchangeValidation = preserve ? validation : null,
+        };
+
+        var observed = await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await ZLinkStandaloneActorRelocationRuntime.SettleSourceAsync(
+                store,
+                source.Key,
+                source.Steady,
+                new ZLinkRelocationStored(string.Empty, 0, default, default),
+                source.RelocationId,
+                source.Target,
+                source.Prepare.TargetAttemptGeneration,
+                Stopwatch.GetElapsedTime(0),
+                static () => true,
+                static _ => ValueTask.FromResult(true),
+                TimeSpan.Zero,
+                CancellationToken.None
+            )
+        );
+        Assert.Same(validation, observed);
+        Assert.Equal(1, preserve ? store.CompareExchangeCount : store.ReadCount);
+    }
+
+    [Fact]
+    public async Task Target_fence_reading_propagates_public_store_invalid_key()
+    {
+        var store = new ZLinkInMemoryLocationStore();
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await ZLinkRelocationTargetFence.ReadAsync(
+                store,
+                new ZLinkAuthorityKey(string.Empty),
+                "expected",
+                new ZLinkLocationOwnerToken("target", 1),
+                CancellationToken.None
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Target_fence_reading_propagates_caller_validation()
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(inner);
+        var validation = new ArgumentException("Invalid authority key.");
+        var store = new LostStoredResponseAuthorityStore(inner) { ReadValidation = validation };
+        var observed = await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await ZLinkRelocationTargetFence.ReadAsync(
+                store,
+                source.Key,
+                source.Captured.StoreVersion,
+                new ZLinkLocationOwnerToken(
+                    source.TargetAuthority.OwnerId,
+                    checked((long)source.TargetAuthority.OwnerLeaseGeneration)
+                ),
+                CancellationToken.None
+            )
+        );
+        Assert.Same(validation, observed);
+        Assert.Equal(1, store.ReadCount);
     }
 
     [Fact]
@@ -1052,6 +1202,11 @@ public sealed class StandaloneActorRelocationPrecommitTests
         private int _conflictNext;
         private int _failNext;
         private int _compareExchangeCount;
+        private int _readCount;
+
+        internal ArgumentException? ReadValidation { get; init; }
+        internal ArgumentException? CompareExchangeValidation { get; init; }
+        internal int ReadCount => _readCount;
 
         internal int CompareExchangeCount => Volatile.Read(ref _compareExchangeCount);
 
@@ -1071,10 +1226,14 @@ public sealed class StandaloneActorRelocationPrecommitTests
         public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
             ZLinkAuthorityKey key,
             CancellationToken cancellationToken = default
-        ) =>
-            Interlocked.Decrement(ref _failReads) >= 0
+        )
+        {
+            if (Interlocked.Increment(ref _readCount) == 1 && ReadValidation is not null)
+                throw ReadValidation;
+            return Interlocked.Decrement(ref _failReads) >= 0
                 ? throw new IOException("The Store read failed.")
                 : inner.ReadAuthorityAsync(key, cancellationToken);
+        }
 
         public override async ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
             ZLinkAuthorityKey key,
@@ -1084,6 +1243,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
         )
         {
             Interlocked.Increment(ref _compareExchangeCount);
+            if (_compareExchangeCount == 1 && CompareExchangeValidation is not null)
+                throw CompareExchangeValidation;
             if (Interlocked.Exchange(ref _failNext, 0) == 1)
                 throw new IOException("The CAS request failed before the Store applied it.");
             if (

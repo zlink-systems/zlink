@@ -61,8 +61,7 @@ internal sealed class ZLinkSpotPeerConnector(
             {
                 var claim = connections.AcquirePeerAuto(peerRid, endpoint);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"spot_peer_claim peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint} kind={claim.Kind} "
-                        + $"previous={claim.PreviousPeerRid?.ToString() ?? "<unknown>"}"
+                    $"spot_peer_claim peer={ZLinkFrameworkDebugLog.OrAbsent(peerRid)} endpoint={endpoint} kind={claim.Kind} previous={ZLinkFrameworkDebugLog.OrAbsent(claim.PreviousPeerRid)}"
                 );
                 if (
                     claim.Kind
@@ -76,7 +75,7 @@ internal sealed class ZLinkSpotPeerConnector(
                     if (claim.Kind == ZLinkSpotAutoPeerClaimKind.Replaced)
                     {
                         ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"spot_peer_replace peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint}"
+                            $"spot_peer_replace peer={ZLinkFrameworkDebugLog.OrAbsent(peerRid)} endpoint={endpoint}"
                         );
                         node.DisconnectPeer(endpoint);
                     }
@@ -93,7 +92,7 @@ internal sealed class ZLinkSpotPeerConnector(
                     // the old target can safely reuse. Remove the claim so the
                     // reconciler retries the currently desired target.
                     connections.RollbackPeerAuto(endpoint);
-                    return false;
+                    throw;
                 }
             })
         );
@@ -113,7 +112,7 @@ internal sealed class ZLinkSpotPeerConnector(
                     () => connections.RestorePeerAuto(endpoint, peerRid)
                 );
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"spot_peer_release peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint} result={result}"
+                    $"spot_peer_release peer={ZLinkFrameworkDebugLog.OrAbsent(peerRid)} endpoint={endpoint} result={result}"
                 );
                 return result;
             })
@@ -129,18 +128,7 @@ internal sealed class ZLinkSpotPeerConnector(
         return AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                try
-                {
-                    return node.DisconnectPeerBeforeAdmission(
-                        peerRid,
-                        endpoint,
-                        lifecycleGeneration
-                    );
-                }
-                catch
-                {
-                    return false;
-                }
+                return node.DisconnectPeerBeforeAdmission(peerRid, endpoint, lifecycleGeneration);
             })
         );
     }
@@ -221,7 +209,7 @@ internal sealed class ZLinkSpotPeerConnector(
         {
             if (released)
                 restore();
-            return false;
+            throw;
         }
     }
 

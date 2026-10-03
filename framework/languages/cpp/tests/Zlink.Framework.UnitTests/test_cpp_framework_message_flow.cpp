@@ -30,6 +30,8 @@ namespace
 using namespace zlink::framework;
 using zlink::framework::detail::dispatch_error_reporter_t;
 using zlink::framework::detail::message_flow_tracer_t;
+constexpr auto error_message_max_length =
+  zlink::framework::detail::diagnostic_event_sink_t::error_message_max_length;
 
 thread_local std::string *captured_logs = nullptr;
 
@@ -229,22 +231,36 @@ int main ()
     // they use the admitted phase shared by normal message-flow events.
     {
         zlink::framework::detail::actor_gateway_runtime_t gateway;
+        int detail_builds = 0;
+        const auto build_result = [&] {
+            ++detail_builds;
+            return std::string ("pending");
+        };
+
+        gateway.set_dispatch (options_with_mode (message_flow_log_mode_t::off));
+        const auto off = capture_logs ([&] {
+            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait",
+                                                    build_result, nullptr);
+        });
+        if (!off.empty () || detail_builds != 0)
+            return 44;
+
         gateway.set_dispatch (options_with_mode (message_flow_log_mode_t::normal));
         const auto normal = capture_logs ([&] {
-            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait", "pending",
-                                                    nullptr);
+            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait",
+                                                    build_result, nullptr);
         });
-        if (!normal.empty ())
+        if (!normal.empty () || detail_builds != 0)
             return 33;
 
         gateway.set_dispatch (options_with_mode (message_flow_log_mode_t::detailed));
         const auto detailed = capture_logs ([&] {
-            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait", "pending",
-                                                    nullptr);
+            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait",
+                                                    build_result, nullptr);
         });
         if (!contains (detailed, "phase=admitted") || !contains (detailed, "actor=player-1")
             || !contains (detailed, "stage=router_admission_wait")
-            || !contains (detailed, "result=pending")) {
+            || !contains (detailed, "result=pending") || detail_builds != 1) {
             return 34;
         }
     }
@@ -287,12 +303,12 @@ int main ()
     {
         const auto message =
           std::string ("Authorization: Bearer auth Bearer standalone password=p token=t ")
-          + std::string (513, 'x') + "\n at Secret.Handler";
+          + std::string (error_message_max_length + 1, 'x') + "\n at Secret.Handler";
         const auto expected =
           (std::string (
              "Authorization: <redacted> Bearer <redacted> password=<redacted> token=<redacted> ")
-           + std::string (513, 'x'))
-            .substr (0, 512);
+           + std::string (error_message_max_length + 1, 'x'))
+            .substr (0, error_message_max_length);
         auto options = options_with_mode (message_flow_log_mode_t::errors);
         std::optional<message_dispatch_error_event_t> observed;
         zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
@@ -306,9 +322,16 @@ int main ()
               .exception = std::make_exception_ptr (std::runtime_error (message))});
         });
         const auto type = std::string (typeid (std::runtime_error).name ());
-        if (!observed || observed->exception || observed->error_type != type
+        if (!observed || !observed->exception || observed->error_type != type
             || observed->error_message != expected)
             return 40;
+        try {
+            std::rethrow_exception (observed->exception);
+        }
+        catch (const std::runtime_error &error) {
+            if (std::string (error.what ()) != message)
+                return 40;
+        }
         if (!contains (out, "error_type=" + type) || !contains (out, "error_message=" + expected)
             || contains (out, "Bearer auth") || contains (out, "Bearer standalone")
             || contains (out, "password=p") || contains (out, "token=t")
@@ -337,6 +360,44 @@ int main ()
             return 42;
         if (!contains (out, "error_type=" + type) || !contains (out, "error_message="))
             return 43;
+    }
+
+    // 완료 단계의 예외도 정제한 두 필드를 structured log에 기록한다.
+    {
+        const auto message =
+          std::string ("Authorization: Bearer auth Bearer standalone password=p token=t ")
+          + std::string (error_message_max_length + 1, 'x') + "\n at Secret.Handler";
+        const auto expected =
+          (std::string (
+             "Authorization: <redacted> Bearer <redacted> password=<redacted> token=<redacted> ")
+           + std::string (error_message_max_length + 1, 'x'))
+            .substr (0, error_message_max_length);
+        for (const auto &[text, summary] :
+             {std::pair{message, expected}, std::pair{std::string{}, std::string{}}}) {
+            auto options = options_with_mode (message_flow_log_mode_t::errors);
+            const auto exception = std::make_exception_ptr (std::runtime_error (text));
+            auto event = flow_event (message_flow_outcome_t::completed);
+            event.result = message_flow_result_t::failed;
+            event.exception = exception;
+            const auto out = capture_logs ([&] { message_flow_tracer_t (options).trace (event); });
+            const auto type = std::string (typeid (std::runtime_error).name ());
+            if (!contains (out, "phase=completed outcome=failed")
+                || !contains (out, "error_type=" + type)
+                || !contains (out, "error_message=" + summary + "\n")
+                || occurrences (out, "error_type=") != 1 || occurrences (out, "error_message=") != 1
+                || contains (out, "Bearer auth") || contains (out, "Bearer standalone")
+                || contains (out, "password=p") || contains (out, "token=t")
+                || contains (out, "Secret.Handler")) {
+                std::cerr << "message-flow exception fields must preserve the sanitized pair\n";
+                return 45;
+            }
+        }
+        auto options = options_with_mode (message_flow_log_mode_t::errors);
+        auto event = flow_event (message_flow_outcome_t::completed);
+        event.result = message_flow_result_t::failed;
+        const auto out = capture_logs ([&] { message_flow_tracer_t (options).trace (event); });
+        if (contains (out, "error_type=") || contains (out, "error_message="))
+            return 47;
     }
 
     // Every processing point reads the live shared mode once; ambient entry
@@ -637,6 +698,10 @@ int main ()
             || enum_name (message_flow_reason_t::activation_rejected) != "activation_rejected"
             || enum_name (message_flow_reason_t::activation_timeout) != "activation_timeout") {
             return 38;
+        }
+        if (zlink::framework::detail::diagnostic_absent_value != "<none>"
+            || zlink::framework::detail::diagnostic_decoded_value != "<decoded>") {
+            return 39;
         }
     }
 

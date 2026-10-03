@@ -9,6 +9,7 @@
 #include "runtime/diagnostics/flow_context.hpp"
 
 #include <array>
+#include <limits>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -275,6 +276,14 @@ class message_flow_tracer_t
     /* Flow-consistent sampling. Without a flow id the key is the source MeshNode
      * generation plus that source's shared local sequence, never a process-global
      * stride counter. */
+    static constexpr std::uint32_t sampling_hash_offset_basis = 0x811c9dc5u;
+    static constexpr std::uint32_t sampling_hash_prime = 0x01000193u;
+    static void append_sampling_hash (std::uint32_t &hash, std::uint8_t byte) noexcept
+    {
+        hash ^= byte;
+        hash *= sampling_hash_prime;
+    }
+
     bool sample (double rate, const message_flow_event_t &event) const noexcept
     {
         if (rate >= 1.0) {
@@ -283,11 +292,8 @@ class message_flow_tracer_t
         if (rate <= 0.0) {
             return false;
         }
-        std::uint32_t hash = 0x811c9dc5u;
-        auto add = [&hash] (std::uint8_t byte) {
-            hash ^= static_cast<std::uint8_t> (byte);
-            hash *= 0x01000193u;
-        };
+        std::uint32_t hash = sampling_hash_offset_basis;
+        auto add = [&hash] (std::uint8_t byte) { append_sampling_hash (hash, byte); };
         if (event.flow_id) {
             for (const auto byte : *event.flow_id)
                 add (static_cast<std::uint8_t> (byte));
@@ -301,7 +307,9 @@ class message_flow_tracer_t
                     add (static_cast<std::uint8_t> (value >> shift));
             }
         }
-        return static_cast<double> (hash) / 4294967296.0 < rate;
+        return static_cast<double> (hash)
+                 / (static_cast<double> (std::numeric_limits<std::uint32_t>::max ()) + 1.0)
+               < rate;
     }
 
     bool sample_current (std::optional<std::string_view> explicit_flow_id) const noexcept
@@ -312,11 +320,8 @@ class message_flow_tracer_t
         if (rate <= 0.0)
             return false;
 
-        std::uint32_t hash = 0x811c9dc5u;
-        auto add = [&hash] (std::uint8_t byte) {
-            hash ^= byte;
-            hash *= 0x01000193u;
-        };
+        std::uint32_t hash = sampling_hash_offset_basis;
+        auto add = [&hash] (std::uint8_t byte) { append_sampling_hash (hash, byte); };
         if (explicit_flow_id && !explicit_flow_id->empty ()) {
             for (const auto byte : *explicit_flow_id)
                 add (static_cast<std::uint8_t> (byte));
@@ -333,7 +338,9 @@ class message_flow_tracer_t
                     add (static_cast<std::uint8_t> (value >> shift));
             }
         }
-        return static_cast<double> (hash) / 4294967296.0 < rate;
+        return static_cast<double> (hash)
+                 / (static_cast<double> (std::numeric_limits<std::uint32_t>::max ()) + 1.0)
+               < rate;
     }
 
     void log_default (const message_flow_event_t &event,
@@ -347,78 +354,82 @@ class message_flow_tracer_t
             auto add = [&fields] (const char *key, std::string value) {
                 diagnostic_event_sink_t::append_field (fields, key, std::move (value));
             };
-            add ("event_id", "zlink.message_flow");
-            add ("phase", std::string (enum_name (event.outcome)));
-            add ("outcome", event.result ? std::string (enum_name (*event.result))
-                                         : terminal_outcome_name (event.outcome));
-            add ("surface", std::string (enum_name (event.surface)));
-            add ("kind", std::string (enum_name (event.message_kind)));
+            add (dispatch_event_field::event_id, "zlink.message_flow");
+            add (dispatch_event_field::phase, std::string (enum_name (event.outcome)));
+            add (dispatch_event_field::outcome, event.result
+                                                  ? std::string (enum_name (*event.result))
+                                                  : terminal_outcome_name (event.outcome));
+            add (dispatch_event_field::surface, std::string (enum_name (event.surface)));
+            add (dispatch_event_field::kind, std::string (enum_name (event.message_kind)));
             if (event.packet_name) {
-                add ("packet", *event.packet_name);
+                add (dispatch_event_field::packet, *event.packet_name);
             }
             if (event.channel_name) {
-                add ("channel", *event.channel_name);
+                add (dispatch_event_field::channel, *event.channel_name);
             }
             if (event.channel_route_kind) {
-                add ("channel_route", *event.channel_route_kind);
-            } else if (event.surface == dispatch_error_surface_t::route_mesh_channel) {
-                add ("channel_route", "route_mesh");
-            } else if (event.surface == dispatch_error_surface_t::channel) {
-                add ("channel_route", "client_server");
+                add (dispatch_event_field::channel_route, *event.channel_route_kind);
+            } else if (const auto route_name = default_channel_route_name (event.surface)) {
+                add (dispatch_event_field::channel_route, std::string (*route_name));
             }
             if (event.mesh_name) {
-                add ("mesh", *event.mesh_name);
+                add (dispatch_event_field::mesh, *event.mesh_name);
             }
             if (event.topic) {
-                add ("topic", *event.topic);
+                add (dispatch_event_field::topic, *event.topic);
             }
             if (event.correlation_id) {
-                add ("corr", *event.correlation_id);
+                add (dispatch_event_field::corr, *event.correlation_id);
             }
             if (event.flow_id) {
-                add ("flow", *event.flow_id);
+                add (dispatch_event_field::flow, *event.flow_id);
             }
             if (event.flow_origin) {
-                add ("origin", std::string (enum_name (*event.flow_origin)));
+                add (dispatch_event_field::origin, std::string (enum_name (*event.flow_origin)));
             }
             if (event.source_rid) {
-                add ("source_rid", *event.source_rid);
+                add (dispatch_event_field::source_rid, *event.source_rid);
             }
             if (event.target_rid) {
-                add ("target_rid", *event.target_rid);
+                add (dispatch_event_field::target_rid, *event.target_rid);
             }
             if (event.server_rid) {
-                add ("server_rid", *event.server_rid);
+                add (dispatch_event_field::server_rid, *event.server_rid);
             }
             if (event.spot_id) {
-                add ("spot", *event.spot_id);
+                add (dispatch_event_field::spot, *event.spot_id);
             }
             if (event.actor_id) {
-                add ("actor", *event.actor_id);
+                add (dispatch_event_field::actor, *event.actor_id);
             }
             if (event.stream_session_id) {
-                add ("session", *event.stream_session_id);
+                add (dispatch_event_field::session, *event.stream_session_id);
             }
             if (event.instance_spot_type) {
-                add ("instance_type", *event.instance_spot_type);
+                add (dispatch_event_field::instance_type, *event.instance_spot_type);
             }
             if (event.activation_state) {
-                add ("activation_state", *event.activation_state);
+                add (dispatch_event_field::activation_state, *event.activation_state);
             }
             if (event.reason) {
-                add ("reason", std::string (enum_name (*event.reason)));
+                add (dispatch_event_field::reason, std::string (enum_name (*event.reason)));
             } else if (event.error_reason) {
-                add ("reason", std::string (enum_name (*event.error_reason)));
+                add (dispatch_event_field::reason, std::string (enum_name (*event.error_reason)));
             }
             if (event.message_size && effective_mode == message_flow_log_mode_t::detailed
                 && _options->diagnostics.include_message_sizes ()) {
-                add ("size", std::to_string (*event.message_size));
+                add (dispatch_event_field::size, std::to_string (*event.message_size));
             }
             if (effective_mode == message_flow_log_mode_t::detailed) {
                 if (event.detail_stage)
-                    add ("stage", *event.detail_stage);
+                    add (dispatch_event_field::stage, *event.detail_stage);
                 if (event.detail_result)
-                    add ("result", *event.detail_result);
+                    add (dispatch_event_field::result, *event.detail_result);
+            }
+            if (event.exception) {
+                auto error = diagnostic_event_sink_t::exception_summary (event.exception);
+                add (dispatch_event_field::error_type, std::move (error.type));
+                add (dispatch_event_field::error_message, std::move (error.message));
             }
             // Emit structured fields only through an explicitly configured
             // framework logger; observer-only and no-sink paths stay silent.

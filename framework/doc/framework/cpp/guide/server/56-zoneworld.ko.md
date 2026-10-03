@@ -182,6 +182,8 @@ zone Spot은 timer로 tick을 돌며 자기 zone과 인접 snapshot으로 state 
 각 player Actor로 보내지고, Actor의 handler가 bound session으로 push한다. bot은 bound session이
 없는 같은 type의 Actor다.
 
+<p><a href="/common/diagrams/zlink-tour.html#meshpubsub" target="_blank">▶ 둘러보기에서 직접 눌러 보기 — RouteMesh pub/sub</a></p>
+
 `Server/ZoneNode/main.cpp`
 
 ```cpp

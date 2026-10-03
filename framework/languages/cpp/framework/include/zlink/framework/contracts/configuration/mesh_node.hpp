@@ -587,8 +587,7 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
               }
           }
           catch (...) {
-              co_return detail::current_exception_to_message_result (
-                "MeshNode send handler threw an exception");
+              co_return detail::current_exception_result<zlink::message_t> ();
           }
       }});
 }
@@ -649,8 +648,7 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
               }
           }
           catch (...) {
-              co_return detail::current_exception_to_message_result (
-                "MeshNode request handler threw an exception");
+              co_return detail::current_exception_result<zlink::message_t> ();
           }
       }});
 }

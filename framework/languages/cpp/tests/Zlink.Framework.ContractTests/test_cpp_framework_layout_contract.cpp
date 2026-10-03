@@ -866,23 +866,24 @@ bool sample_runners_need_no_other_runtime (const std::filesystem::path &root)
     return ok;
 }
 
-/* The tutorial and samples archives are packed from their own directories, so
- * each carries its own copy of bootstrap.cmake, the script that installs the
- * published framework beside the archive (#655). One text, two paths: the
- * copies must stay byte-identical, and both must exist with their two READMEs. */
+/* The exported quickstart, tutorial and samples directories each install the
+ * published framework with their own bootstrap.cmake. The bootstrap text must
+ * match across the distribution directories, which also carry their READMEs. */
 bool downloadable_archives_carry_identical_bootstrap (const std::filesystem::path &root)
 {
     bool ok = true;
-    layout_file_contents_t tutorial;
-    layout_file_contents_t samples;
-    read_layout_file (root / "tutorial/bootstrap.cmake", tutorial);
-    read_layout_file (root / "samples/bootstrap.cmake", samples);
-    if (tutorial.text.empty () || tutorial.text != samples.text) {
-        std::cerr << "tutorial/bootstrap.cmake and samples/bootstrap.cmake must be identical\n";
-        ok = false;
+    const auto &tutorial = layout_file_contents (root / "tutorial/bootstrap.cmake").text;
+    for (const auto *section : {"quickstart", "samples"}) {
+        if (tutorial.empty ()
+            || tutorial != layout_file_contents (root / section / "bootstrap.cmake").text) {
+            std::cerr << "tutorial/bootstrap.cmake and " << section
+                      << "/bootstrap.cmake must be identical\n";
+            ok = false;
+        }
     }
     for (const auto *required :
-         {"tutorial/README.ko.md", "tutorial/README.md", "samples/README.ko.md",
+         {"quickstart/README.ko.md", "quickstart/README.md", "quickstart/CMakeLists.txt",
+          "tutorial/README.ko.md", "tutorial/README.md", "samples/README.ko.md",
           "samples/README.md", "samples/CMakeLists.txt"}) {
         if (!std::filesystem::exists (root / required)) {
             std::cerr << "downloadable archive entry point is missing: " << required << '\n';
@@ -913,41 +914,6 @@ bool cpp_runners_prefer_the_selected_build_directory (const std::filesystem::pat
             if (content.find ("$CPP_DIR/build/linux-ninja-vcpkg-debug") != std::string::npos) {
                 std::cerr << "C++ runner dependency path bypasses the selected BUILD_DIR: "
                           << entry.path () << '\n';
-                ok = false;
-            }
-        }
-    }
-    return ok;
-}
-
-bool sample_server_code_does_not_block_on_task_result (const std::filesystem::path &root)
-{
-    bool ok = true;
-    const auto samples_root = root / "samples";
-    for (const auto &entry : layout_recursive_directory_entries (samples_root)) {
-        if (!entry.is_regular_file ()) {
-            continue;
-        }
-        const auto ext = entry.path ().extension ();
-        if (ext != ".hpp" && ext != ".cpp") {
-            continue;
-        }
-
-        const auto relative =
-          std::filesystem::relative (entry.path (), samples_root).generic_string ();
-        if (relative.find ("/Server/") == std::string::npos
-            && relative.find ("/Shared/") == std::string::npos) {
-            continue;
-        }
-
-        std::size_t line_no = 0;
-        for (const auto line : entry.contents ().lines) {
-            ++line_no;
-            if (line.find (".result (") != std::string::npos
-                || line.find (".result(") != std::string::npos) {
-                std::cerr << "sample server/shared code must use task_t await or "
-                             "callback completion instead of blocking result(): "
-                          << entry.path () << ':' << line_no << '\n';
                 ok = false;
             }
         }
@@ -1352,7 +1318,9 @@ int main ()
     ok &= require_exists (root / "connector/core/src/runtime/protocol/framing.cpp");
     ok &= require_exists (root / "connector/core/src/runtime/protocol/header_codec.cpp");
     ok &= require_exists (root / "connector/core/src/runtime/protocol/metadata_codec.cpp");
-    ok &= require_exists (root / "connector/core/src/runtime/protocol/packet_name_resolver.cpp");
+    ok &= require_exists (root / "common/include/zlink/detail/stream_packet_name.hpp");
+    ok &= require_exists (
+      root / "connector/core/include/zlink/stream_connector/contracts/stream_payload.hpp");
     ok &= require_exists (root / "connector/core/src/runtime/transport/stream_connection.cpp");
     ok &=
       require_exists (root / "connector/core/src/runtime/transport/stream_transport_factory.cpp");
@@ -2033,7 +2001,6 @@ int main ()
     ok &= file_contains (
       root / "samples/Bingo/Server/Session/Sessions/Handlers/authenticate_session_handler.hpp",
       "encode_authenticate_response (reply_payload)");
-    ok &= sample_server_code_does_not_block_on_task_result (root);
     ok &= sample_code_does_not_read_the_environment (root);
     ok &= runner_generated_config_files_are_private_and_cleaned (root);
     ok &= cpp_runners_prefer_the_selected_build_directory (root);

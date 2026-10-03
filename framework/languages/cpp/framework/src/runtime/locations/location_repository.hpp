@@ -28,6 +28,10 @@ namespace zlink::framework
 // Framework-private domain repository contracts. Store providers implement
 // only the opaque location_store_t and relocation_store_t public SPI.
 
+inline constexpr std::size_t location_page_item_limit = 1000;
+inline constexpr auto creation_terminal_retention = std::chrono::minutes (5);
+inline constexpr std::size_t location_record_payload_limit = 1024u * 1024u;
+
 struct authority_key_t
 {
     std::string value;
@@ -114,13 +118,14 @@ class authority_scan_cursor_t final
   public:
     explicit authority_scan_cursor_t (std::string encoded) : _encoded (std::move (encoded))
     {
-        if (_encoded.empty () || _encoded.size () > 4096)
+        if (_encoded.empty () || _encoded.size () > maximum_encoded_bytes)
             throw std::invalid_argument ("authority scan cursor must contain 1..4096 bytes");
     }
 
     std::string_view encoded () const noexcept { return _encoded; }
 
   private:
+    static constexpr std::size_t maximum_encoded_bytes = 4096;
     std::string _encoded;
 };
 
@@ -138,6 +143,10 @@ struct authority_put_t
 {
     std::vector<std::byte> payload;
 };
+struct authority_reincarnate_t
+{
+    std::vector<std::byte> payload;
+};
 struct authority_retarget_t
 {
     std::vector<std::byte> payload;
@@ -151,8 +160,11 @@ struct authority_restore_t
 struct authority_delete_t
 {
 };
-using authority_mutation_t =
-  std::variant<authority_put_t, authority_retarget_t, authority_restore_t, authority_delete_t>;
+using authority_mutation_t = std::variant<authority_put_t,
+                                          authority_retarget_t,
+                                          authority_restore_t,
+                                          authority_delete_t,
+                                          authority_reincarnate_t>;
 
 struct authority_stored_t
 {
@@ -204,6 +216,7 @@ struct object_reserve_request_t
     object_creation_target_t target;
     std::vector<std::byte> creating_payload;
     placement_capacity_bundle_t capacity_bundle;
+    std::chrono::system_clock::time_point operation_deadline{};
 };
 struct object_reservation_fence_t
 {
@@ -504,10 +517,14 @@ class location_repository_t
     virtual task_t<object_complete_creation_result_t>
     complete_creation (object_complete_creation_request_t request,
                        std::stop_token cancellation = {}) = 0;
-    virtual task_t<object_commit_result_t> commit (object_commit_request_t request,
-                                                   std::stop_token cancellation = {}) = 0;
-    virtual task_t<object_abort_result_t> abort (object_abort_request_t request,
-                                                 std::stop_token cancellation = {}) = 0;
+    virtual task_t<object_commit_result_t>
+    commit (object_commit_request_t request,
+            std::stop_token cancellation = {},
+            std::chrono::system_clock::time_point operation_deadline = {}) = 0;
+    virtual task_t<object_abort_result_t>
+    abort (object_abort_request_t request,
+           std::stop_token cancellation = {},
+           std::chrono::system_clock::time_point operation_deadline = {}) = 0;
     virtual task_t<aggregate_prepare_result_t>
     prepare_aggregate (aggregate_prepare_request_t request, std::stop_token cancellation = {}) = 0;
     virtual task_t<aggregate_commit_result_t>
@@ -519,8 +536,9 @@ class location_repository_t
     {
         if (cancellation.stop_requested ())
             return task_t<std::optional<std::vector<aggregate_participant_t>>> (
-              detail::boundary_failure<std::optional<std::vector<aggregate_participant_t>>> (
-                detail::boundary_error_t::cancelled, "aggregate read cancelled"));
+              detail::result_access_t::failure<
+                std::optional<std::vector<aggregate_participant_t>>> (
+                detail::make_cancellation_exception ("aggregate read cancelled")));
         return task_t<std::optional<std::vector<aggregate_participant_t>>> (
           result_t<std::optional<std::vector<aggregate_participant_t>>>::success (std::nullopt));
     }
@@ -537,9 +555,11 @@ class relocation_repository_t
 {
   public:
     virtual ~relocation_repository_t () = default;
-    virtual task_t<relocation_stored_t> put_relocation (std::vector<std::byte> payload,
-                                                        std::chrono::hours retention,
-                                                        std::stop_token cancellation = {}) = 0;
+    virtual task_t<relocation_stored_t>
+    put_relocation (std::vector<std::byte> payload,
+                    std::chrono::hours retention,
+                    std::chrono::steady_clock::time_point operation_deadline,
+                    std::stop_token cancellation = {}) = 0;
     virtual task_t<relocation_read_result_t> get_relocation (std::string reference,
                                                              std::stop_token cancellation = {}) = 0;
     virtual task_t<relocation_renew_result_t> renew_relocation (

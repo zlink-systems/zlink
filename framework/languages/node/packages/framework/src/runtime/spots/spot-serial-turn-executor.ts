@@ -17,6 +17,11 @@ import {
   type ZLinkSerialWorkOptions,
   type ZLinkSerialWorkRecord
 } from '../execution/serial-execution-queue';
+import type { ZLinkSerialLifecycleContext } from '../execution/serial-execution-queue';
+
+export type ZLinkSpotApplicationTurnContext = ZLinkExecutionBarrierClaim & {
+  readonly replay?: (failure?: unknown) => Promise<unknown> | unknown;
+};
 import {
   bindApplicationJobPermit,
   hasApplicationJobPermit
@@ -63,8 +68,12 @@ export class ZLinkSpotSerialTurnExecutor {
   }
 
   /** Waits for turns admitted through the execution barrier to complete. */
-  close(): Promise<void> {
+  whenIdle(): Promise<void> {
     return this.scheduler.whenIdle();
+  }
+
+  closeAdmission(): void {
+    this.scheduler.closeAdmission();
   }
 
   /** Distinguishes a gate-owning turn from a suspended AsyncLocalStorage tail. */
@@ -86,14 +95,18 @@ export class ZLinkSpotSerialTurnExecutor {
   }
 
   /** Runs `operation` in serial order, one turn at a time. */
-  execute<T>(operation: () => Promise<T> | T, workOptions?: ZLinkSerialWorkOptions): Promise<T> {
+  execute<T>(
+    operation: () => Promise<T> | T,
+    workOptions?: ZLinkSerialWorkOptions,
+    replay?: (failure?: unknown) => Promise<T>
+  ): Promise<T> {
     if (this.isCurrentTurn) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.InvalidOperation,
         'A Spot serial turn cannot implicitly execute another turn for the same owner.'
       );
     }
-    return this.enqueueApplicationTurn(operation, workOptions);
+    return this.enqueueApplicationTurn(operation, workOptions, replay);
   }
 
   /**
@@ -115,12 +128,17 @@ export class ZLinkSpotSerialTurnExecutor {
     workOptions: ZLinkSerialWorkOptions = {},
     admission: {
       readonly signal?: AbortSignal;
-    } = {}
+    } = {},
+    replay?: (failure?: unknown) => Promise<unknown>
   ): Promise<void> {
     this.lastActivityAtMs = performance.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
     try {
-      barrierClaim = await this.executionBarrier?.enter();
+      const entry = this.executionBarrier?.enter();
+      barrierClaim = entry instanceof Promise ? await entry : entry;
+      if (barrierClaim !== undefined && replay !== undefined) {
+        Object.assign(barrierClaim, { replay: bindApplicationJobPermit(replay) });
+      }
       if (admission.signal?.aborted === true) {
         throw new DOMException('The operation was aborted.', 'AbortError');
       }
@@ -178,22 +196,34 @@ export class ZLinkSpotSerialTurnExecutor {
   }
 
   /** Runs owner control work that establishes or completes its own admission seal. */
-  executeControlLifecycleOperation<T>(operation: () => Promise<T> | T): Promise<T> {
+  executeControlLifecycleOperation<T>(
+    operation: () => Promise<T> | T,
+    context?: ZLinkSerialLifecycleContext
+  ): Promise<T> {
     try {
-      return this.scheduler.submitLifecycleOperation(operation);
+      return this.scheduler.submitLifecycleOperation(operation, context);
     } catch (error) {
       return Promise.reject(error);
     }
   }
 
+  visitPendingApplication(visitor: (record: ZLinkSerialWorkRecord<unknown>) => void): void {
+    this.scheduler.visitPendingApplication(visitor);
+  }
+
   private async enqueueApplicationTurn<T>(
     operation: () => Promise<T> | T,
-    workOptions: ZLinkSerialWorkOptions = {}
+    workOptions: ZLinkSerialWorkOptions = {},
+    replay?: (failure?: unknown) => Promise<T>
   ): Promise<T> {
     this.lastActivityAtMs = performance.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
     try {
-      barrierClaim = await this.executionBarrier?.enter();
+      const entry = this.executionBarrier?.enter();
+      barrierClaim = entry instanceof Promise ? await entry : entry;
+      if (barrierClaim !== undefined && replay !== undefined) {
+        Object.assign(barrierClaim, { replay: bindApplicationJobPermit(replay) });
+      }
       return await this.submitQueuedTurn(operation, workOptions, barrierClaim);
     } catch (error) {
       barrierClaim?.release();
@@ -235,6 +265,19 @@ export class ZLinkSpotSerialTurnExecutor {
   }
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
+    const context = record.context as ZLinkSpotApplicationTurnContext | undefined;
+    if (context?.replay !== undefined && record.operation === context.replay) {
+      context.release();
+      return Promise.resolve(this.executionBarrier?.enter()).then((claim) =>
+        this.runTurn(
+          record.operation,
+          (value) => record.resolve(value),
+          (error) => record.reject(error),
+          claim,
+          record.release
+        )
+      );
+    }
     return this.runTurn(
       record.operation,
       (value) => record.resolve(value),

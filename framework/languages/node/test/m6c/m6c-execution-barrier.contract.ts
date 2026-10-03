@@ -5,16 +5,26 @@ import {
   ZLinkSpotRelocationCoordinationMode,
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts/Configuration/ObjectRoles';
-import { ZLinkExecutionBarrier } from '../../packages/framework/src/runtime/execution';
+import {
+  ZLinkExecutionBarrier,
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} from '../../packages/framework/src/runtime/execution';
 import {
   ZLinkFrameworkInternalErrorKind,
   internalFrameworkErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
-import { ZLinkSpotActivationLifecycle } from '../../packages/framework/src/runtime/spots/spot-activation';
+import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
+import { ZLinkSpotActivationRegistry } from '../../packages/framework/src/runtime/spots/spot-activation-registry';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
 import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
 import { ZLinkSpotTimerRegistry } from '../../packages/framework/src/runtime/spots/spot-timer';
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 interface Deferred {
   readonly promise: Promise<void>;
@@ -189,19 +199,11 @@ test('Spot close invokes lifecycle cleanup only after its execution seal is quie
     actorHandlers: {} as never,
     handlers: {} as never
   });
-  const lifecycle = new ZLinkSpotActivationLifecycle({
-    locationClaim: {
-      async release() {
-        assert.fail('The lifecycle release port owns location cleanup.');
-      }
-    },
-    releaseLocation: async () => {
-      events.push('released');
-    },
-    leaveActor: async () => undefined,
-    closeSpot: async () => true,
-    registerActivation: () => undefined
-  } as never);
+  const manager = new DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: []
+  });
+  (manager as unknown as { activations: ZLinkSpotActivationRegistry }).activations.register(state);
 
   const active = serial.execute(async () => {
     events.push('active:start');
@@ -211,11 +213,18 @@ test('Spot close invokes lifecycle cleanup only after its execution seal is quie
   });
   await activeStarted.promise;
 
-  const seal = state.sealExecution();
-  const closing = (async () => {
-    await lifecycle.sealForClose(state, seal);
-    await lifecycle.cleanupClosedActivation(state);
-  })();
+  const closing = manager.closeUserWithAuthority(
+    state.meshName,
+    state.spotId,
+    async (onCommitted) => {
+      onCommitted();
+      return {
+        release: async () => {
+          events.push('released');
+        }
+      };
+    }
+  );
   await Promise.resolve();
   assert.deepEqual(events, ['active:start']);
 
@@ -226,9 +235,12 @@ test('Spot close invokes lifecycle cleanup only after its execution seal is quie
     () => serial.post(() => undefined),
     (error: unknown) => {
       assert.match((error as Error).message, /execution barrier is committed/);
+      // 07-framework-error-model.ko.md:32 (§2) defines runtime admission refusal as Rejected.
+      // 07-framework-error-model.ko.md:66 (§2.1) maps Rejected to requestRejected.
+      // 06-spot-address-messaging.ko.md:465–480 (§7) closes the old incarnation before release.
       assert.equal(
         internalFrameworkErrorKind(error as never),
-        ZLinkFrameworkInternalErrorKind.SpotMoving
+        ZLinkFrameworkInternalErrorKind.RequestRejected
       );
       return true;
     }

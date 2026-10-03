@@ -3,9 +3,11 @@
 #include "stream_runtime.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
+#include <zlink/detail/stream_packet_name.hpp>
 
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
+#include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
@@ -279,7 +281,7 @@ class stream_session_dispatcher_t
         task_completion_source_t<void> completion;
         auto task = completion.task ();
         auto shared_completion =
-          std::make_shared<detail::task_completion_source_t<void>> (std::move (completion));
+          std::make_shared<task_completion_source_t<void>> (std::move (completion));
         const auto submitted =
           dispatch_async (kind, std::move (operation), std::move (callback),
                           [shared_completion] (const result_t<void> &result) mutable {
@@ -1064,13 +1066,10 @@ bool known_codec (stream_codec_t codec)
 
 result_t<void> validate_name (std::string_view name, bool allow_reserved)
 {
-    if (name.empty () || name.size () > 255) {
+    if (zlink::detail::stream_wire::validate_packet_name (name, allow_reserved)
+        != zlink::detail::stream_wire::packet_name_error_t::none) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "STREAM packet name is invalid");
-    }
-    if (!allow_reserved && name.rfind ("__zlink.", 0) == 0) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "STREAM packet name uses a reserved prefix");
     }
     return result_t<void>::success ();
 }
@@ -1582,54 +1581,75 @@ void stream_runtime_t::send_actor_unbound (stream_t &stream, std::uint16_t actor
       .value ();
 }
 
-void stream_runtime_t::send_session_closing (stream_t &stream,
-                                             stream_close_reason_t reason,
-                                             std::string_view diagnostic) const noexcept
+void stream_runtime_t::send_control_frame (stream_t &stream,
+                                           const char *name,
+                                           std::optional<stream_close_reason_t> close_reason,
+                                           std::string_view diagnostic,
+                                           std::function<void ()> completed) const noexcept
 {
+    const auto report_error = [state = _state, name] (const result_t<void> *result,
+                                                      std::exception_ptr exception) {
+        dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
+            message_dispatch_error_event_t error{};
+            error.surface = dispatch_error_surface_t::stream_session;
+            error.message_kind = dispatch_message_kind_t::control;
+            error.reason = dispatch_error_reason_t::handler_exception;
+            error.action = dispatch_error_action_t::drop;
+            error.packet_name = name;
+            error.exception = result && result->error ()
+                                ? std::make_exception_ptr (*result->error ())
+                                : std::move (exception);
+            return error;
+        });
+    };
     try {
-        const auto payload_bytes = encode_session_closing_payload (reason, diagnostic);
-        stream_header_t closing (stream_message_kind_t::control, stream_codec_t::raw,
-                                 stream_header_flags_t::none, std::nullopt, "session-closing", {});
-        stream
-          .write_packet_with_header (
-            std::move (closing),
-            zlink::message_t::from (std::string (payload_bytes.begin (), payload_bytes.end ())))
-          .async ()
-          .result ()
-          .value ();
+        stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
+                                stream_header_flags_t::none, std::nullopt, name, {});
+        auto payload =
+          close_reason
+            ? zlink::message_t::from (encode_session_closing_payload (*close_reason, diagnostic))
+            : zlink::message_t{};
+        auto submission = std::make_shared<stream_write_call_t> (
+          stream.write_packet_with_header (std::move (header), std::move (payload)));
+        auto pending = submission->async ();
+        observe_task_completion (
+          pending, [submission, report_error, completed] (const result_t<void> &result) {
+              if (!result)
+                  report_error (&result, {});
+              if (completed)
+                  completed ();
+          });
     }
     catch (...) {
+        report_error (nullptr, std::current_exception ());
+        if (completed)
+            completed ();
     }
+}
+
+void stream_runtime_t::send_session_closing (stream_t &stream,
+                                             stream_close_reason_t reason,
+                                             std::string_view diagnostic,
+                                             std::function<void ()> completed) const noexcept
+{
+    send_control_frame (stream, "session-closing", reason, diagnostic, std::move (completed));
 }
 
 void stream_runtime_t::send_heartbeat_ping (stream_t &stream) const noexcept
 {
-    try {
-        stream_header_t ping (stream_message_kind_t::control, stream_codec_t::raw,
-                              stream_header_flags_t::none, std::nullopt, "$zlink.heartbeat.ping",
-                              {});
-        stream.write_packet_with_header (std::move (ping), zlink::message_t{})
-          .async ()
-          .result ()
-          .value ();
-    }
-    catch (...) {
-    }
+    send_control_frame (stream, detail::heartbeat_ping_name);
 }
 
 void stream_runtime_t::send_heartbeat_pong (stream_t &stream) const noexcept
 {
-    try {
-        stream_header_t pong (stream_message_kind_t::control, stream_codec_t::raw,
-                              stream_header_flags_t::none, std::nullopt, "$zlink.heartbeat.pong",
-                              {});
-        stream.write_packet_with_header (std::move (pong), zlink::message_t{})
-          .async ()
-          .result ()
-          .value ();
-    }
-    catch (...) {
-    }
+    send_control_frame (stream, detail::heartbeat_pong_name);
+}
+
+void stream_runtime_t::dispatch_control_frame (stream_t &stream,
+                                               const stream_header_t &header) const noexcept
+{
+    if (header.packet_name () == detail::heartbeat_ping_name)
+        send_heartbeat_pong (stream);
 }
 
 stream_t stream_runtime_t::open_session (std::string stream_name) const

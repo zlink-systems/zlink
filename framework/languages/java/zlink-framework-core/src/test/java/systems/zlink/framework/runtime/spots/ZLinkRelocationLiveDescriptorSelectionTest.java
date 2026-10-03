@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -94,8 +95,13 @@ final class ZLinkRelocationLiveDescriptorSelectionTest {
                                         .toCompletableFuture()
                                         .join());
 
+        // A Found owner lease without an expiry is corrupted Store data (Location runtime §4.1).
         assertEquals(
-                "Location Store owner lease record is invalid", failure.getCause().getMessage());
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                assertInstanceOf(
+                                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                failure.getCause())
+                        .kind());
     }
 
     private static Stream<Arguments> descriptorSources() {

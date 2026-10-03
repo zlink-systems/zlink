@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -65,7 +66,11 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         var hasHandler = actorJoins.TryResolve(out var descriptor) && descriptor is not null;
         if (!hasHandler && !acceptActorJoinWithoutHandler)
         {
-            ReplyRejected(joinRequest, payload.MessageName, "no-join-handler");
+            ReplyRejected(
+                joinRequest,
+                payload.MessageName,
+                ZLinkDispatchErrorReason.HandlerMissing
+            );
             return;
         }
 
@@ -79,13 +84,22 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
 
         if (actor is null)
         {
-            ReplyRejected(joinRequest, payload.MessageName, "no-target-actor");
+            ReplyRejected(
+                joinRequest,
+                payload.MessageName,
+                ZLinkDispatchErrorReason.HandlerMissing
+            );
             return;
         }
 
         if (payload.Error is { } payloadError)
         {
-            ReplyRejected(joinRequest, payload.MessageName, "payload-decode-failed", payloadError);
+            ReplyRejected(
+                joinRequest,
+                payload.MessageName,
+                ZLinkDispatchErrorReason.PayloadDecodeFailed,
+                payloadError
+            );
             return;
         }
 
@@ -105,7 +119,12 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         }
         catch (Exception ex)
         {
-            ReplyRejected(joinRequest, payload.MessageName, "handler-exception", ex);
+            ReplyRejected(
+                joinRequest,
+                payload.MessageName,
+                ZLinkDispatchErrorReason.HandlerException,
+                ex
+            );
             return;
         }
 
@@ -117,7 +136,12 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             }
             catch (Exception ex)
             {
-                ReplyRejected(joinRequest, payload.MessageName, "join-commit-failed", ex);
+                ReplyRejected(
+                    joinRequest,
+                    payload.MessageName,
+                    ZLinkDispatchErrorReason.HandlerException,
+                    ex
+                );
                 return;
             }
         }
@@ -216,20 +240,17 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                     null
                 );
             }
-            catch { }
-
-            return new JoinPayload(
-                false,
-                typeof(Message).Name,
-                ZLinkMessage.FromEnvelopePayload(
-                    ZLinkEnvelopeCodec.DefaultContentType,
-                    joinRequest.Parts[0],
-                    runtime.Registration.Codecs
-                ),
-                null,
-                null,
-                null
-            );
+            catch (Exception ex)
+            {
+                return new JoinPayload(
+                    true,
+                    typeof(ZLinkMessage).Name,
+                    ZLinkMessage.Empty,
+                    ex,
+                    null,
+                    null
+                );
+            }
         }
 
         ZLinkEnvelopeHeader? header = null;
@@ -274,17 +295,10 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
     private void ReplyRejected(
         ZLinkBackendActorJoinRequest joinRequest,
         string messageName,
-        string reason,
+        ZLinkDispatchErrorReason errorReason,
         Exception? exception = null
     )
     {
-        var errorReason = reason switch
-        {
-            "payload-decode-failed" => ZLinkDispatchErrorReason.PayloadDecodeFailed,
-            "handler-exception" or "join-commit-failed" =>
-                ZLinkDispatchErrorReason.HandlerException,
-            _ => ZLinkDispatchErrorReason.HandlerMissing,
-        };
         if (_dispatchErrors.Enabled)
             _dispatchErrors.Report(
                 new ZLinkDispatchFailure(
@@ -335,43 +349,8 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
     {
         if (joinRequest is not ZLinkMeshActorJoinRequest meshRequest)
             return;
-        var terminal = exception is ZLinkFrameworkException framework
-            ? framework.Kind switch
-            {
-                ZLinkFrameworkErrorKind.TypeMismatch => (
-                    RequestResult.Conflict,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
-                ),
-                ZLinkFrameworkErrorKind.ProtocolError => (
-                    RequestResult.ProtocolError,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
-                ),
-                ZLinkFrameworkErrorKind.InvalidOperation => (
-                    RequestResult.Conflict,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-                ),
-                ZLinkFrameworkErrorKind.NotFound => (
-                    RequestResult.NotFound,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
-                ),
-                ZLinkFrameworkErrorKind.Unavailable => (
-                    RequestResult.InternalError,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
-                ),
-                ZLinkFrameworkErrorKind.Rejected => (
-                    RequestResult.Rejected,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestRejected
-                ),
-                _ => (
-                    RequestResult.InternalError,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
-                ),
-            }
-            : (
-                RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
-            );
-        meshRequest.ReplyTerminal(terminal.Item1, terminal.Item2);
+        var terminal = ZLinkRequestFailureMapper.TargetFailureReply(exception);
+        meshRequest.ReplyTerminal(terminal.Result, (uint)terminal.FailureCode);
     }
 
     private readonly record struct JoinPayload(

@@ -445,7 +445,7 @@ Command 39 route는 첫 byte와 `u16` body length로 닫힌 union을 이룬다.
 
 | Kind | 용도 | 내용 |
 |---|---|---|
-| `1` | 기존 [Ready](../00-foundation/02-glossary.ko.md#ready) authority로 전달 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion |
+| `1` | 기존 [Ready](../00-foundation/02-glossary.ko.md#ready) authority로 전달 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion, 그 call의 [Instance intent](../00-foundation/02-glossary.ko.md#instance-intent) 유무(`instanceIntent`) |
 | `2` | Missing cold activation 전용 | target Mesh·node RID·lifecycle, Spot RID, stable type, descriptor version, deadline — authority fence는 금지 |
 
 Kind `2` route와 ZLIA의 target Mesh·stable type·descriptor version·deadline, operation identity와
@@ -630,7 +630,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   `JoinEntrySpot`은 32 KiB — Compact 일반 data 하한 — 를 유효 상한으로 사용한다. 이 형태와 상한은
   `actor-join-reply-tail` golden fixture
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`)가 고정하며 네 runtime(cpp,
-  dotnet, java, node) 모두 동일하게 decode한다. **네 runtime 모두** target의 canonical
+  dotnet, java, node) 모두 동일하게 decode한다. **네 runtime 모두** 다른 node에 있는 target의 canonical
   capability(observed authority fence + 그 generation에 admitted된 peer)가 확인되면 canonical
   `actorJoin`(28)을 `[request]`로 originate하고, command 20 reply — 이 request의 `[reply]`
   leg — 에 `receiveChunkLimitBytes`를 실어 보낸다.

@@ -4,12 +4,21 @@ const assert = require('node:assert/strict');
 const backend = require('../../../packages/framework/dist/runtime/backend');
 const framework = require('../../../packages/framework/dist/internal');
 const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../../packages/framework/dist/runtime/execution');
+const {
   ZLinkSubmitStatus
 } = require('../../../packages/framework/dist/runtime/messaging/submission-result');
 const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration
 } = require('../../../packages/framework/dist/runtime/host/application-job-queue');
+
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 
 async function waitFor(condition, label) {
   const deadline = Date.now() + 2000;
@@ -39,9 +48,11 @@ async function main() {
   subscriber.setSubscription('events', 'post-start');
   const publisher = node.createPublisher();
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
-    context: {}
+    context: {},
+    errorSink: { reportRuntimeTaskException() { assert.fail('unexpected runtime task error'); } }
   });
   runtime.publishers.set('play', publisher);
 

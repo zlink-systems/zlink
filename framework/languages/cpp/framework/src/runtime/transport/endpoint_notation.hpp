@@ -26,13 +26,32 @@
  * elsewhere keep comparing normalized strings with plain `==`.
  */
 
+#include <zlink/framework/contracts/configuration/transport.hpp>
+
 #include <algorithm>
+#include <array>
+#include <optional>
+#include <utility>
 #include <cctype>
 #include <string>
 #include <string_view>
 
 namespace zlink::framework::runtime::transport
 {
+
+inline constexpr std::array transport_schemes{
+  std::pair{"tcp", transport_scheme_t::tcp}, std::pair{"ipc", transport_scheme_t::ipc},
+  std::pair{"tls", transport_scheme_t::tls}, std::pair{"ws", transport_scheme_t::websocket},
+  std::pair{"wss", transport_scheme_t::websocket_tls}};
+
+inline std::optional<transport_scheme_t> parse_transport_scheme (std::string_view name) noexcept
+{
+    for (const auto &[token, scheme] : transport_schemes) {
+        if (name == token)
+            return scheme;
+    }
+    return std::nullopt;
+}
 
 namespace detail
 {
@@ -64,8 +83,8 @@ inline std::string lowercase_ascii (std::string_view value)
 
 inline bool is_authority_scheme (std::string_view scheme_lower) noexcept
 {
-    return scheme_lower == "tcp" || scheme_lower == "tls" || scheme_lower == "ws"
-           || scheme_lower == "wss";
+    const auto scheme = parse_transport_scheme (scheme_lower);
+    return scheme && *scheme != transport_scheme_t::ipc;
 }
 
 inline bool all_ascii_digits (std::string_view value) noexcept

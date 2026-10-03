@@ -66,7 +66,10 @@ public final class ZLinkCanonicalActorJoinReplyCodec {
         if (Byte.toUnsignedInt(bytes[4]) != 0) {
             throw invalid("flags");
         }
-        Reader r = new Reader(Arrays.copyOfRange(bytes, 5, bytes.length));
+        Reader r =
+                new Reader(
+                        Arrays.copyOfRange(
+                                bytes, ZLinkServiceWireCodec.PREFIX_BYTES, bytes.length));
         long correlation = r.nonzero64("correlation");
         long terminalResult = r.u32Unsigned();
         long failureCode = r.u32Unsigned();

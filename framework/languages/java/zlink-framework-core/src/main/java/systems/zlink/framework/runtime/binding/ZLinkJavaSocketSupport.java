@@ -10,8 +10,10 @@ import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.contracts.messaging.SendSubmitOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -20,6 +22,8 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BooleanSupplier;
 
@@ -36,9 +40,7 @@ final class ZLinkJavaSocketSupport {
         try {
             return receive.getAsBoolean();
         } catch (ZlinkRecvException ex) {
-            if (ex.getResult() == RecvResult.NO_DATA
-                    || ex.getResult() == RecvResult.BUSY
-                    || ex.getResult() == RecvResult.INTERNAL_ERROR) {
+            if (ex.getResult() == RecvResult.NO_DATA) {
                 return false;
             }
             throw ex;
@@ -95,21 +97,46 @@ final class ZLinkJavaSocketSupport {
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
         }
-        return submit.submit()
-                .reply()
-                .thenApply(
-                        replyParts -> {
-                            try {
-                                return new ZLinkBackendReceived(
-                                        ZLinkBackendRequestResult.OK,
-                                        Optional.empty(),
-                                        Optional.empty(),
-                                        Optional.empty(),
-                                        replyParts.stream().map(Message::from).toList());
-                            } finally {
-                                replyParts.forEach(Message::close);
-                            }
-                        });
+        try {
+            return submit.submit()
+                    .reply()
+                    .handle(
+                            (replyParts, failure) -> {
+                                if (failure != null) {
+                                    RequestResult terminal =
+                                            ZLinkJavaRawMeshNode.requestResult(failure, false);
+                                    throw new CompletionException(
+                                            terminal == null
+                                                    ? failure
+                                                    : new ZLinkFrameworkException(
+                                                            ZLinkJavaRawMeshNode.backendResult(
+                                                                            terminal)
+                                                                    .toFrameworkErrorKind(),
+                                                            failure.getMessage(),
+                                                            failure));
+                                }
+                                try {
+                                    return new ZLinkBackendReceived(
+                                            ZLinkBackendRequestResult.OK,
+                                            Optional.empty(),
+                                            Optional.empty(),
+                                            Optional.empty(),
+                                            replyParts.stream().map(Message::from).toList());
+                                } finally {
+                                    replyParts.forEach(Message::close);
+                                }
+                            });
+        } catch (RuntimeException failure) {
+            RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(failure, true);
+            return CompletableFuture.failedFuture(
+                    terminal == null
+                            ? failure
+                            : new ZLinkFrameworkException(
+                                    ZLinkJavaRawMeshNode.backendResult(terminal)
+                                            .toFrameworkErrorKind(),
+                                    failure.getMessage(),
+                                    failure));
+        }
     }
 
     static ZLinkBackendReceived fromReceived(Received received) {

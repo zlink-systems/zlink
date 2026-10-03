@@ -19,6 +19,9 @@ use zlink::{
 };
 
 const RECORD_HWM: u64 = 65_536 + 64;
+const SOCKET_TIMEOUT_MS: i32 = 5_000;
+const SHORT_SOCKET_TIMEOUT_MS: i32 = 2_000;
+const WAKE_TEST_RECEIVE_TIMEOUT_MS: i32 = 3_000;
 
 fn large_filler(byte: u8) -> Message {
     Message::try_from(vec![byte; 65_536].as_slice()).expect("filler message")
@@ -87,7 +90,7 @@ fn inline_admission_resolves_the_future_on_its_first_poll() {
 
     router
         .common_options()
-        .set_receive_timeout(Duration::from_secs(2))
+        .set_receive_timeout(SHORT_SOCKET_TIMEOUT_MS)
         .unwrap();
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
@@ -145,11 +148,11 @@ fn public_poller_drains_writable_and_retries_the_same_packet() {
     sender.common_options().set_immediate(true).unwrap();
     sender
         .common_options()
-        .set_send_timeout(Duration::from_secs(5))
+        .set_send_timeout(SOCKET_TIMEOUT_MS)
         .unwrap();
     receiver
         .common_options()
-        .set_receive_timeout(Duration::from_secs(5))
+        .set_receive_timeout(SOCKET_TIMEOUT_MS)
         .unwrap();
     receiver
         .bind("inproc://rust-writable-public-poller")
@@ -299,7 +302,7 @@ fn request_backpressure_retries_after_its_writable_then_receives_reply() {
         .unwrap();
     router
         .common_options()
-        .set_receive_timeout(Duration::from_secs(5))
+        .set_receive_timeout(SOCKET_TIMEOUT_MS)
         .unwrap();
     router.bind("inproc://rust-request-writable-hwm").unwrap();
     dealer
@@ -383,7 +386,7 @@ fn backpressured_request_resumes_from_public_owner_without_repolling() {
         .unwrap();
     router
         .common_options()
-        .set_receive_timeout(Duration::from_secs(5))
+        .set_receive_timeout(SOCKET_TIMEOUT_MS)
         .unwrap();
     router
         .bind("inproc://rust-request-writable-public-owner")
@@ -462,7 +465,7 @@ fn request_connect_before_bind_waits_for_writable_without_sleep() {
     dealer.common_options().set_immediate(true).unwrap();
     router
         .common_options()
-        .set_receive_timeout(Duration::from_secs(5))
+        .set_receive_timeout(SOCKET_TIMEOUT_MS)
         .unwrap();
     dealer
         .connect("inproc://rust-request-connect-before-bind")
@@ -549,7 +552,7 @@ fn request_and_send_wait_tokens_share_the_completion_lane() {
         .unwrap();
     router
         .common_options()
-        .set_receive_timeout(Duration::from_secs(5))
+        .set_receive_timeout(SOCKET_TIMEOUT_MS)
         .unwrap();
     router.bind("inproc://rust-request-send-token-mix").unwrap();
     dealer
@@ -810,7 +813,7 @@ fn blocked_router_target_does_not_delay_another_target() {
     let mut received_b = Received::empty();
     dealer_b
         .common_options()
-        .set_receive_timeout(Duration::from_secs(2))
+        .set_receive_timeout(SHORT_SOCKET_TIMEOUT_MS)
         .unwrap();
     assert!(dealer_b.recv(&mut received_b, RecvFlags::NONE).unwrap());
     assert_eq!(received_b.parts()[0].as_bytes(), b"ready-b");
@@ -1091,7 +1094,7 @@ fn backpressured_send_resumes_without_executor_repolls() {
         .unwrap();
     router
         .common_options()
-        .set_receive_timeout(Duration::from_secs(3))
+        .set_receive_timeout(WAKE_TEST_RECEIVE_TIMEOUT_MS)
         .unwrap();
     router.bind("inproc://rust-send-no-repoll").unwrap();
     dealer.connect("inproc://rust-send-no-repoll").unwrap();

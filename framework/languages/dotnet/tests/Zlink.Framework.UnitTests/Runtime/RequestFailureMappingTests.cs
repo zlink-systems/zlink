@@ -1,3 +1,6 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
+using FailureCode = Systems.Zlink.Framework.Runtime.Protocol.ServiceWireConstants.FrameworkErrorCode;
+
 namespace Zlink.Framework.UnitTests;
 
 public sealed class RequestFailureMappingTests
@@ -289,6 +292,11 @@ public sealed class RequestFailureMappingTests
     [InlineData(SubmitResult.NotAdmitted, ZLinkFrameworkErrorKind.Rejected)]
     [InlineData(SubmitResult.Terminated, ZLinkFrameworkErrorKind.ShuttingDown)]
     [InlineData(SubmitResult.NotFound, ZLinkFrameworkErrorKind.NotFound)]
+    [InlineData(SubmitResult.InvalidArgument, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(SubmitResult.InvalidHandle, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(SubmitResult.InvalidState, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(SubmitResult.ThreadViolation, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(SubmitResult.Backpressured, ZLinkFrameworkErrorKind.Unavailable)]
     public void Submit_Maps_Native_Result_To_Framework_Error(
         SubmitResult result,
         ZLinkFrameworkErrorKind expected
@@ -297,6 +305,24 @@ public sealed class RequestFailureMappingTests
         var error = ZLinkSubmitFailureMapper.CreateException(result, "request");
 
         Assert.Equal(expected, error.Kind);
+        var fromException = Assert.IsType<ZLinkFrameworkException>(
+            ZLinkRequestFailureMapper.CreateSubmitException(
+                new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result),
+                "request",
+                completionFailure: false
+            )
+        );
+        Assert.Equal(error.Kind, fromException.Kind);
+        if (result == SubmitResult.Backpressured)
+        {
+            var completed = Assert.IsType<ZLinkFrameworkException>(
+                ZLinkRequestFailureMapper.CreateSubmitException(
+                    new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.Backpressured),
+                    "WRITABLE completion"
+                )
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, completed.Kind);
+        }
     }
 
     [Theory]
@@ -565,5 +591,202 @@ public sealed class RequestFailureMappingTests
                 payload
             )
         );
+    }
+}
+
+public sealed class RequestWireFailureTableTests
+{
+    [Fact]
+    public void Every_mapping_row_obeys_schema_terminal_failure_integrity()
+    {
+        foreach (var mapping in ZLinkRequestFailureMapper.Mappings)
+            Assert.True(
+                ServiceWireConstants.ValidTerminalFailure((uint)mapping.Result, (uint)mapping.Code),
+                $"{mapping.Kind}: {mapping.Result}/{mapping.Code}"
+            );
+        Assert.False(
+            ServiceWireConstants.ValidTerminalFailure(
+                (uint)RequestResult.Conflict,
+                (uint)FailureCode.ActorCreateRejected
+            )
+        );
+    }
+
+    [Theory]
+    [InlineData(
+        ZLinkFrameworkErrorKind.NotFound,
+        RequestResult.NotFound,
+        (int)FailureCode.RequestTargetNotFound
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.AlreadyExists,
+        RequestResult.Conflict,
+        (int)FailureCode.ActorAlreadyExists
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.TypeMismatch,
+        RequestResult.Conflict,
+        (int)FailureCode.SpotTypeMismatch
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.Rejected,
+        RequestResult.Rejected,
+        (int)FailureCode.RequestRejected
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.Unavailable,
+        RequestResult.InternalError,
+        (int)FailureCode.RouteNotConnected
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.DeadlineExceeded,
+        RequestResult.InternalError,
+        (int)FailureCode.WorkerTimedOut
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.ShuttingDown,
+        RequestResult.Terminated,
+        (int)FailureCode.None
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.ProtocolError,
+        RequestResult.ProtocolError,
+        (int)FailureCode.RequestProtocolError
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.InvalidOperation,
+        RequestResult.InvalidState,
+        (int)FailureCode.None
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.DataLost,
+        RequestResult.InternalError,
+        (int)FailureCode.RelocationDataLost
+    )]
+    [InlineData(
+        ZLinkFrameworkErrorKind.InternalFailure,
+        RequestResult.InternalError,
+        (int)FailureCode.RequestFailed
+    )]
+    public void General_representatives_round_trip_with_coarse_terminal(
+        ZLinkFrameworkErrorKind kind,
+        RequestResult result,
+        int code
+    )
+    {
+        var reply = ZLinkRequestFailureMapper.TargetFailureReply(
+            new ZLinkFrameworkException(kind, "target")
+        );
+        Assert.Equal((result, (FailureCode)code), reply);
+        var received = Assert.IsType<ZLinkFrameworkException>(
+            ZLinkRequestFailureMapper.CreateCompletionException(result, (int)code, "source")
+        );
+        Assert.Equal(kind, received.Kind);
+    }
+
+    [Fact]
+    public void Existing_fallbacks_and_relocation_receive_kind_are_preserved()
+    {
+        Assert.Equal(
+            (RequestResult.InternalError, FailureCode.RequestFailed),
+            ZLinkRequestFailureMapper.TargetFailureReply(
+                new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NotConfigured, "target")
+            )
+        );
+        Assert.Equal(
+            (RequestResult.InternalError, FailureCode.RequestFailed),
+            ZLinkRequestFailureMapper.TargetFailureReply(new Exception("target"))
+        );
+        Assert.Null(ZLinkRequestFailureMapper.ClassifyFineFailure(0));
+        Assert.Null(ZLinkRequestFailureMapper.ClassifyFineFailure(int.MaxValue));
+        Assert.Equal(
+            ZLinkFrameworkErrorKind.InvalidOperation,
+            ZLinkRequestFailureMapper.RelocationFailureKind(FailureCode.SpotGenerationStale)
+        );
+        Assert.Equal(
+            FailureCode.RelocationDataLost,
+            ZLinkRequestFailureMapper.TargetFailureCode(
+                new Zlink.Framework.Runtime.Locations.ZLinkRelocationDataLostException("lost")
+            )
+        );
+    }
+
+    [Fact]
+    public void Error_model_fixture_matches_receive_and_send()
+    {
+        var root = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        const string relative = "framework/runtime/conformance/framework-error-mapping-v1.json";
+        while (
+            root is not null
+            && !System.IO.File.Exists(System.IO.Path.Combine(root.FullName, relative))
+        )
+            root = root.Parent;
+        using var fixture = System.Text.Json.JsonDocument.Parse(
+            System.IO.File.ReadAllText(System.IO.Path.Combine(root!.FullName, relative))
+        );
+        Assert.Equal(25, fixture.RootElement.GetProperty("receive").GetArrayLength());
+        foreach (var row in fixture.RootElement.GetProperty("receive").EnumerateArray())
+        {
+            var kind = Enum.Parse<ZLinkFrameworkErrorKind>(row.GetProperty("kind").GetString()!);
+            var code = row.GetProperty("failureCode").GetInt32();
+            var terminal = (RequestResult)row.GetProperty("terminalResult").GetInt32();
+            Assert.Equal(kind, ZLinkRequestFailureMapper.ClassifyFineFailure(code));
+            Assert.Equal(kind, ZLinkRequestFailureMapper.RelocationFailureKind((FailureCode)code));
+            var incoming = Assert.IsType<ZLinkFrameworkException>(
+                ZLinkRequestFailureMapper.CreateCompletionException(terminal, code, "fixture")
+            );
+            Assert.Equal(
+                (terminal, (FailureCode)code),
+                ZLinkRequestFailureMapper.TargetFailureReply(incoming)
+            );
+            Assert.Equal((FailureCode)code, ZLinkRequestFailureMapper.TargetFailureCode(incoming));
+            foreach (var target in fixture.RootElement.GetProperty("send").EnumerateArray())
+            {
+                var targetKind = Enum.Parse<ZLinkFrameworkErrorKind>(
+                    target.GetProperty("kind").GetString()!
+                );
+                var expected =
+                    targetKind == kind
+                        ? (terminal, (FailureCode)code)
+                        : (
+                            (RequestResult)target.GetProperty("terminalResult").GetInt32(),
+                            (FailureCode)target.GetProperty("failureCode").GetInt32()
+                        );
+                Assert.Equal(
+                    expected,
+                    ZLinkRequestFailureMapper.TargetFailureReply(
+                        new ZLinkFrameworkException(targetKind, "forward", innerException: incoming)
+                    )
+                );
+            }
+        }
+        Assert.Equal(12, fixture.RootElement.GetProperty("send").GetArrayLength());
+        foreach (var row in fixture.RootElement.GetProperty("send").EnumerateArray())
+        {
+            var error = new ZLinkFrameworkException(
+                Enum.Parse<ZLinkFrameworkErrorKind>(row.GetProperty("kind").GetString()!),
+                "fixture"
+            );
+            Assert.Equal(
+                (FailureCode)(
+                    row.TryGetProperty("codeOnlyFailureCode", out var codeOnly)
+                        ? codeOnly.GetInt32()
+                        : row.GetProperty("failureCode").GetInt32()
+                ),
+                ZLinkRequestFailureMapper.TargetFailureCode(error)
+            );
+            Assert.Equal(
+                (
+                    (RequestResult)row.GetProperty("terminalResult").GetInt32(),
+                    (FailureCode)row.GetProperty("failureCode").GetInt32()
+                ),
+                ZLinkRequestFailureMapper.TargetFailureReply(
+                    new ZLinkFrameworkException(
+                        Enum.Parse<ZLinkFrameworkErrorKind>(row.GetProperty("kind").GetString()!),
+                        "fixture"
+                    )
+                )
+            );
+        }
     }
 }

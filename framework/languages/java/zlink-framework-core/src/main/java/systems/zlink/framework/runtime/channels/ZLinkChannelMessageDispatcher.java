@@ -362,8 +362,13 @@ final class ZLinkChannelMessageDispatcher {
                                                                                                 channelName,
                                                                                                 registration,
                                                                                                 payload,
-                                                                                                Map
-                                                                                                        .of(),
+                                                                                                packet
+                                                                                                                        .header()
+                                                                                                                == null
+                                                                                                        ? Map
+                                                                                                                .of()
+                                                                                                        : packet.header()
+                                                                                                                .metadata(),
                                                                                                 contentType)))
                                                 .whenComplete(
                                                         (ignored, error) -> {
@@ -451,8 +456,13 @@ final class ZLinkChannelMessageDispatcher {
                                                                                                                                 channelName,
                                                                                                                                 registration,
                                                                                                                                 payload,
-                                                                                                                                Map
-                                                                                                                                        .of(),
+                                                                                                                                packet
+                                                                                                                                                        .header()
+                                                                                                                                                == null
+                                                                                                                                        ? Map
+                                                                                                                                                .of()
+                                                                                                                                        : packet.header()
+                                                                                                                                                .metadata(),
                                                                                                                                 contentType)))
                                                                         .whenComplete(
                                                                                 (reply, error) -> {
@@ -478,9 +488,11 @@ final class ZLinkChannelMessageDispatcher {
                                                                                     } else {
                                                                                         try {
                                                                                             ZLinkChannelDispatchReporter
-                                                                                                    .replyAndClose(
+                                                                                                    .replyPayloadAndClose(
                                                                                                             router,
                                                                                                             received,
+                                                                                                            packet
+                                                                                                                    .header(),
                                                                                                             reply);
                                                                                             traceFlow(
                                                                                                     ZLinkMessageFlowOutcome

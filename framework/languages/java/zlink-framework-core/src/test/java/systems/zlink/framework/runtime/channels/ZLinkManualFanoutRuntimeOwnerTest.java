@@ -232,7 +232,8 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
                             scheduler,
                             infrastructure,
                             (channel, message) -> message.parts().forEach(Message::close),
-                            applicationTopics);
+                            applicationTopics,
+                            () -> {});
         }
 
         private ControlledSubscriber awaitSubscriber() throws Exception {
@@ -461,7 +462,8 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
                 awaitUninterruptibly(releaseRegistration);
             }
             try {
-                return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS) && !closed;
+                readable.acquire();
+                return !closed;
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return false;

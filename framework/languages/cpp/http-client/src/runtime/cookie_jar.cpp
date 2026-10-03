@@ -14,6 +14,9 @@ namespace
 {
 
 constexpr std::size_t max_cookies_per_host = 128;
+constexpr char path_attribute[] = "path";
+constexpr char secure_attribute[] = "secure";
+constexpr char max_age_attribute[] = "max-age";
 
 bool path_matches_cookie (const std::string &request_path, const std::string &cookie_path)
 {
@@ -71,11 +74,11 @@ void cookie_jar_t::store (const std::string &host, const std::string &set_cookie
         const auto value = attr_equals == std::string::npos
                              ? std::string ()
                              : trim (std::string_view (*attribute).substr (attr_equals + 1));
-        if (iequals (name, "path") && !value.empty ()) {
+        if (iequals (name, path_attribute) && !value.empty ()) {
             cookie.path = value;
-        } else if (iequals (name, "secure")) {
+        } else if (iequals (name, secure_attribute)) {
             cookie.secure = true;
-        } else if (iequals (name, "max-age")) {
+        } else if (iequals (name, max_age_attribute)) {
             try {
                 expired = std::stol (value) <= 0;
             }

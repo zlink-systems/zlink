@@ -284,7 +284,7 @@ internal static partial class ZLinkServiceWireCodec
         if (route.Action == SessionRelocationRouteAction.Commit)
         {
             if (
-                senderRole != 2
+                senderRole != (byte)ServiceWireCodec.RelocationRole.Target
                 || route.PreviousAuthorityOwnerGeneration == 0
                 || route.TargetAuthorityOwnerGeneration <= route.PreviousAuthorityOwnerGeneration
                 || route.TargetNodeRid.IsEmpty
@@ -297,7 +297,7 @@ internal static partial class ZLinkServiceWireCodec
         }
         if (
             route.Action != SessionRelocationRouteAction.Abort
-            || senderRole != 1
+            || senderRole != (byte)ServiceWireCodec.RelocationRole.Source
             || route.CurrentAuthorityOwnerGeneration == 0
             || route.PreviousAuthorityOwnerGeneration != 0
             || route.TargetAuthorityOwnerGeneration != 0

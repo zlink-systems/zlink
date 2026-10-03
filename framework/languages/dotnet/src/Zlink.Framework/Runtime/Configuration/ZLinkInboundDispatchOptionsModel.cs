@@ -4,8 +4,8 @@ namespace Zlink.Framework.Runtime.Configuration;
 
 internal sealed class ZLinkInboundDispatchOptionsModel : IZLinkInboundDispatchOptions
 {
-    private const uint DefaultPauseThresholdPercent = 80;
-    private const uint DefaultResumeThresholdPercent = 60;
+    internal const uint DefaultPauseThresholdPercent = 80;
+    internal const uint DefaultResumeThresholdPercent = 60;
     private ZLinkCoreHwmProfile _coreHwmProfile = ZLinkCoreHwmProfile.Balanced;
     private ZLinkApplicationJobQueueProfile _applicationJobQueueProfile =
         ZLinkApplicationJobQueueProfile.Balanced;

@@ -1,41 +1,52 @@
 import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  wireReplyFailureException
-} from '../framework-errors-internal';
-import type {
-  ActorRef,
-  RoutingId,
-  SpotRef,
-  ZLinkActor,
-  ZLinkActorCreateCall,
-  ZLinkActorCreateResult,
-  ZLinkActorGetOrCreateCall,
-  ZLinkActorManager
+  type ActorRef,
+  type RoutingId,
+  type SpotRef,
+  type ZLinkActor,
+  type ZLinkActorCreateCall,
+  type ZLinkActorCreateResult,
+  type ZLinkActorGetOrCreateCall,
+  type ZLinkActorManager,
+  ZLinkEncodedPayload,
+  ZLinkFrameworkException,
+  ZLinkMessage
 } from '../../contracts';
-import { ZLinkEncodedPayload, ZLinkFrameworkException } from '../../contracts';
-import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import { ZLinkMessage } from '../../contracts';
-import { ZLinkConfigurationException } from '../configuration';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import { throwIfAborted } from '../abort';
 import type { ZLinkBackendActorRef, ZLinkBackendSpotNode } from '../backend/contracts';
 import { closeMeshCompletion } from '../backend/mesh-completion-table';
+import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
+import { ZLinkConfigurationException } from '../configuration';
+import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
 import {
   captureZLinkSpotSerialTurn,
   requireZLinkYieldTurn,
   type ZLinkSpotSerialTurn
 } from '../execution';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  wireReplyFailureException
+} from '../framework-errors-internal';
 import { disposeLifecycleHandlers } from '../handlers/handler-instance-scope';
+import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { ZLinkActorCreationCoordinator, type ZLinkActorCreateRequest } from './actor-creation';
+import type { ZLinkActorManagerOptions } from './actor-runtime-contracts';
+import {
+  ZLinkActorRuntimeState,
+  toFrameworkActorRef,
+  type ZLinkActorCreationAttemptResult
+} from './actor-runtime-state';
+import { ZLinkTransferredActorRollbackCoordinator } from './transferred-actor-rollback';
+const ACTOR_CREATION_RETRY_INTERVAL_MS = 5;
+const LOCAL_DIAGNOSTIC_NODE_RID = 'local';
 
 export {
   DefaultZLinkActorClient,
   forwardEncodedActorPacket,
   type ZLinkActorClientOptions
 } from './actor-client';
-
-import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
 export { DefaultZLinkActorContext, ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME } from './actor-context';
-import { ZLinkActorCreationCoordinator, type ZLinkActorCreateRequest } from './actor-creation';
 export { ZLinkActorSerialExecutor } from './actor-mailbox';
 export {
   DEFAULT_MESSAGE_FOLLOW_DURATION_MS,
@@ -80,11 +91,6 @@ export {
   publishInitialActorAuthority,
   type ZLinkActorAuthorityIdentity
 } from './actor-authority-publication';
-import {
-  ZLinkActorRuntimeState,
-  toFrameworkActorRef,
-  type ZLinkActorCreationAttemptResult
-} from './actor-runtime-state';
 export {
   ZLinkActorPacketKind,
   ZLinkSpotActorDispatcher,
@@ -102,8 +108,6 @@ export type {
   ZLinkActorJoinCoordinator,
   ZLinkActorManagerOptions
 } from './actor-runtime-contracts';
-import type { ZLinkActorManagerOptions } from './actor-runtime-contracts';
-import { ZLinkTransferredActorRollbackCoordinator } from './transferred-actor-rollback';
 export {
   ZLinkActorTransferRegistry,
   type ZLinkActorTransferPayloadState
@@ -141,11 +145,18 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
   private readonly creation: ZLinkActorCreationCoordinator;
   private readonly transferredActorRollback: ZLinkTransferredActorRollbackCoordinator;
 
-  constructor(private readonly options: ZLinkActorManagerOptions) {
+  constructor(
+    private readonly options: ZLinkActorManagerOptions,
+    private readonly detachedTaskRunner: import('../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner
+  ) {
+    if ((detachedTaskRunner as unknown) === undefined) {
+      throw new Error('Actor manager requires a detached task runner.');
+    }
     this.creation = new ZLinkActorCreationCoordinator(options);
     this.transferredActorRollback = new ZLinkTransferredActorRollbackCoordinator(
       this.states,
-      options
+      options,
+      (actorId, state) => this.finalizeDestroyedActor(actorId, state)
     );
   }
 
@@ -202,7 +213,6 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         `Actor '${actor.actorId}' is relocating.`
       );
     }
-    const actorInstance = state.actor;
     const node = this.options.nativeActorNodeProvider?.() ?? this.options.nativeActorNode;
     const completions = this.options.nativeActorCompletionTableProvider?.();
     const entryNodeRid = state.entryNodeRid ?? current.nodeRid;
@@ -231,14 +241,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       if (state.actorType !== undefined && state.ownsLocation) {
         await this.options.locationLifecycle?.releaseActor(state.actorType, actor.actorId, current);
       }
-      this.options.actorDestroyedCleanup?.(actor.actorId);
-      await disposeLifecycleHandlers(actorInstance);
-      state.clearAfterDestroy();
-      if (this.states.get(actor.actorId) === state) {
-        this.states.delete(actor.actorId);
-        this.actorMeshNames.delete(actor.actorId);
-      }
-      this.options.metrics?.change('zlink.actor.count', -1);
+      await this.finalizeDestroyedActor(actor.actorId, state);
     });
     try {
       await destroyTask;
@@ -260,7 +263,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     const state = this.getOrCreateState(actorId);
     this.rememberActorMeshFromType(actorId, actorType);
     if (state.actor !== undefined) {
-      await disposeLifecycleHandlers(state.actor);
+      await disposeLifecycleHandlers(state.actor, this.detachedTaskRunner);
     }
     state.prepareForRemoteReentry();
     const operation = state.getOrStartCreation(actorType, false, () =>
@@ -405,7 +408,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     actorType: string,
     objectGeneration: bigint,
     authorityOwnerGeneration: bigint,
-    spotId: RoutingId,
+    spotId: RoutingId | undefined,
     spotGeneration: bigint,
     membershipEpoch: bigint,
     signal?: AbortSignal,
@@ -431,7 +434,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         actorType,
         objectGeneration,
         authorityOwnerGeneration,
-        String(spotId),
+        spotId === undefined ? undefined : String(spotId),
         spotGeneration,
         membershipEpoch
       );
@@ -454,18 +457,13 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         await registry.restore(transfer.adapterKey, actor, transfer.state, signal);
       }
       state.setLocationGeneration(authorityOwnerGeneration);
-      state.setJoinedSpot(spotId, undefined, membershipEpoch);
+      if (spotId !== undefined) state.setJoinedSpot(spotId, undefined, membershipEpoch);
       return actor;
     } catch (error) {
       if (nativeRef !== undefined) node.discardRelocatedActor?.(nativeRef);
       this.relocationStaged.delete(actorId);
       const failedState = this.states.get(actorId);
-      if (failedState?.actor !== undefined) {
-        await disposeLifecycleHandlers(failedState.actor);
-      }
-      failedState?.clearAfterDestroy();
-      this.states.delete(actorId);
-      this.actorMeshNames.delete(actorId);
+      await this.finalizeActorState(actorId, failedState);
       throw error;
     }
   }
@@ -495,29 +493,61 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     const state = this.states.get(actorId);
     const node = this.options.nativeActorNodeProvider?.() ?? this.options.nativeActorNode;
     const nativeActorRef = exactNativeActorRef ?? state?.nativeActorRef;
-    if (nativeActorRef !== undefined) {
-      node?.discardRelocatedActor?.(nativeActorRef);
+    const failures: unknown[] = [];
+    try {
+      if (nativeActorRef !== undefined) {
+        node?.discardRelocatedActor?.(nativeActorRef);
+      }
+    } catch (error) {
+      failures.push(error);
     }
-    if (state?.actor !== undefined) {
-      await disposeLifecycleHandlers(state.actor);
+    try {
+      await this.completeCoreRelocationSource(actorId);
+    } catch (error) {
+      failures.push(error);
     }
-    state?.clearAfterDestroy();
-    this.states.delete(actorId);
-    this.actorMeshNames.delete(actorId);
-    this.relocationStaged.delete(actorId);
+    if (failures.length > 0) {
+      throw failures.length === 1
+        ? failures[0]
+        : new AggregateError(failures, 'Actor relocation cleanup failed.');
+    }
   }
 
   async completeCoreRelocationSource(actorId: string): Promise<void> {
     const state = this.states.get(actorId);
-    if (state?.actor !== undefined) {
-      await disposeLifecycleHandlers(state.actor);
-    }
-    state?.clearAfterDestroy();
-    this.states.delete(actorId);
-    this.actorMeshNames.delete(actorId);
-    this.relocationStaged.delete(actorId);
+    await this.finalizeActorState(actorId, state);
   }
 
+  private async finalizeActorState(
+    actorId: string,
+    state: ZLinkActorRuntimeState | undefined
+  ): Promise<void> {
+    if (state === undefined || this.states.get(actorId) !== state) return;
+    try {
+      if (state.actor !== undefined)
+        await disposeLifecycleHandlers(state.actor, this.detachedTaskRunner);
+    } finally {
+      state.clearAfterDestroy();
+      if (this.states.get(actorId) === state) {
+        this.states.delete(actorId);
+        this.actorMeshNames.delete(actorId);
+        this.relocationStaged.delete(actorId);
+      }
+    }
+  }
+
+  private async finalizeDestroyedActor(
+    actorId: string,
+    state: ZLinkActorRuntimeState
+  ): Promise<void> {
+    if (this.states.get(actorId) !== state) return;
+    try {
+      this.options.actorDestroyedCleanup?.(actorId);
+    } finally {
+      await this.finalizeActorState(actorId, state);
+      this.options.metrics?.change(METRIC_NAMES.ActorCount, -1);
+    }
+  }
   async getOrCreateActor(
     actorId: string,
     actorType: string,
@@ -567,7 +597,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       createRequest,
       signal,
       false,
-      30_000,
+      DEFAULT_REQUEST_TIMEOUT_MS,
       nativeActorRef
     );
   }
@@ -632,14 +662,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
           destroyedActorRef
         );
       }
-      this.options.actorDestroyedCleanup?.(actor.context.actorId);
-      await disposeLifecycleHandlers(actor);
-      state.clearAfterDestroy();
-      if (this.states.get(actor.context.actorId) === state) {
-        this.states.delete(actor.context.actorId);
-        this.actorMeshNames.delete(actor.context.actorId);
-      }
-      this.options.metrics?.change('zlink.actor.count', -1);
+      await this.finalizeDestroyedActor(actor.context.actorId, state);
     });
 
     try {
@@ -657,7 +680,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     request: unknown,
     signal?: AbortSignal,
     claimLocation = true,
-    timeoutMs = 30_000,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
     nativeActorRef?: ZLinkBackendActorRef
   ): Promise<ZLinkActorLocalCreateResult> {
     const deadline = performance.now() + timeoutMs;
@@ -764,7 +787,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     if (this.states.get(actorId) === state) {
       this.states.delete(actorId);
       this.actorMeshNames.delete(actorId);
-      this.options.metrics?.change('zlink.actor.count', -1);
+      this.options.metrics?.change(METRIC_NAMES.ActorCount, -1);
     }
   }
 
@@ -795,7 +818,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       state.rememberMeshName(remembered);
     }
     this.states.set(actorId, state);
-    this.options.metrics?.change('zlink.actor.count', 1);
+    this.options.metrics?.change(METRIC_NAMES.ActorCount, 1);
     return state;
   }
 
@@ -808,7 +831,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       actorId: state.actorId,
       objectGeneration: 1n,
       meshName: state.meshName ?? '',
-      nodeRid: this.options.actorCreatedNodeRidProvider?.() ?? 'local'
+      nodeRid: this.options.actorCreatedNodeRidProvider?.() ?? LOCAL_DIAGNOSTIC_NODE_RID
     };
   }
 }
@@ -828,7 +851,7 @@ class ZLinkActorCreateCallRuntime implements ZLinkActorCreateCall {
   private meshNameValue: string | undefined;
   private requestValue: unknown;
   private requestConfigured = false;
-  private timeoutMsValue = 30_000;
+  private timeoutMsValue: number = DEFAULT_REQUEST_TIMEOUT_MS;
   private timeoutConfigured = false;
   private submitted = false;
   private readonly turn: ZLinkSpotSerialTurn | undefined = captureZLinkSpotSerialTurn();
@@ -953,7 +976,7 @@ async function waitForCreationRetry(signal?: AbortSignal): Promise<void> {
       if (error === undefined) resolve();
       else reject(error);
     };
-    const timer = setTimeout(() => finish(), 5);
+    const timer = setTimeout(() => finish(), ACTOR_CREATION_RETRY_INTERVAL_MS);
     const onAbort = () => {
       finish(signal?.reason ?? new Error('Actor creation was aborted.'));
     };

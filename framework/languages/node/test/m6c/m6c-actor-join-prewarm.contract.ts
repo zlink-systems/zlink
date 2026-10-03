@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { frameworkErrorMappingFixture } from './framework-error-mapping-fixture';
 import { Message } from '@zlink-systems/zlink';
 import type { ActorRef, RoutingId } from '../../packages/framework/src/contracts';
 import { ZLinkUserSpotExecutionMode } from '../../packages/framework/src/contracts';
@@ -63,19 +64,19 @@ const NODE_RID = 'target' as unknown as RoutingId;
 const SPOT_ID = 'spot-1' as unknown as RoutingId;
 
 test('canonical Join public error kinds retain their exact wire terminals', () => {
-  const cases = [
-    [ZLinkFrameworkErrorKind.TypeMismatch, 107, 4],
-    [ZLinkFrameworkErrorKind.ProtocolError, 104, 16],
-    [ZLinkFrameworkErrorKind.InvalidOperation, 107, 21],
-    [ZLinkFrameworkErrorKind.NotFound, 102, 1],
-    [ZLinkFrameworkErrorKind.Unavailable, 105, 17],
-    [ZLinkFrameworkErrorKind.Rejected, 106, 15]
-  ] as const;
-  for (const [kind, terminalResult, failureCode] of cases) {
+  assert.equal(frameworkErrorMappingFixture.send.length, 12);
+  for (const { kind: name, terminalResult, failureCode } of frameworkErrorMappingFixture.send) {
+    const kind = ZLinkFrameworkErrorKind[name];
     assert.deepEqual(
       internalFrameworkWireReply(new ZLinkFrameworkException(kind, 'Join failed.')),
       { terminalResult, failureCode }
     );
+    if (kind === ZLinkFrameworkErrorKind.Unavailable) {
+      assert.equal(
+        wireReplyFailureException(terminalResult, failureCode, 'Join failed.').kind,
+        kind
+      );
+    }
   }
 });
 

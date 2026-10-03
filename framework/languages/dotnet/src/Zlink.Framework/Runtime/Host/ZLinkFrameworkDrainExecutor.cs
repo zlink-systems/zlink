@@ -4,6 +4,7 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
 {
+    private readonly IZLinkRuntimeFailureReporter _failureReporter;
     private readonly ZLinkDrainExecutionOperations _operations;
     private readonly ZLinkLocationOptions _locationOptions;
     private readonly ILogger<ZLinkFrameworkDrainExecutor>? _logger;
@@ -20,6 +21,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         ILogger<ZLinkFrameworkDrainExecutor>? logger = null
     )
         : this(
+            runtime.ErrorSink,
             ZLinkDrainExecutionOperations.Create(runtime, autoConnect, locationRuntime),
             locationOptions,
             logger,
@@ -27,12 +29,14 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         ) { }
 
     internal ZLinkFrameworkDrainExecutor(
+        IZLinkRuntimeFailureReporter failureReporter,
         ZLinkDrainExecutionOperations operations,
         ZLinkLocationOptions locationOptions,
         ILogger<ZLinkFrameworkDrainExecutor>? logger = null,
         Func<Task>? stopMeshMonitoring = null
     )
     {
+        _failureReporter = failureReporter;
         _operations = operations;
         _locationOptions = locationOptions;
         _logger = logger;
@@ -40,6 +44,8 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
     }
 
     private static Task Noop() => Task.CompletedTask;
+
+    public CancellationToken ShutdownCancellationToken => _shutdownDeadline.Token;
 
     public void RequestShutdown(TimeSpan deadline)
     {
@@ -49,7 +55,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             return;
         _shutdownDeadline.CancelAfter(deadline);
         Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            "admission_sealed site=request_shutdown"
+            $"admission_sealed site=request_shutdown"
         );
         _operations.SealApplicationAdmissions(_shutdownDeadline.Token);
     }
@@ -118,7 +124,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             {
                 ShutdownStep("seal_admissions");
                 Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    "admission_sealed site=shutdown_intent"
+                    $"admission_sealed site=shutdown_intent"
                 );
                 _operations.SealApplicationAdmissions(sealCancellationToken);
             }
@@ -213,7 +219,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                 }
 
                 Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    "admission_sealed site=relocate_completed"
+                    $"admission_sealed site=relocate_completed"
                 );
                 _operations.SealApplicationAdmissions(deadlineToken);
                 relocationDetached?.Invoke();
@@ -284,9 +290,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                     ? ZLinkDrainForceReason.DeadlineExceeded
                     : ZLinkDrainForceReason.TeardownFailed;
                 Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"stream_session_drain_failed cancellation_requested="
-                        + $"{deadlineToken.IsCancellationRequested} "
-                        + $"reason={forceReason}"
+                    $"stream_session_drain_failed cancellation_requested={deadlineToken.IsCancellationRequested} reason={forceReason}"
                 );
                 return Result(forceReason);
             }
@@ -386,8 +390,9 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                 ZLinkFrameworkRelocationReason.ShutdownRequested
             );
         }
-        catch
+        catch (Exception error)
         {
+            _failureReporter.ReportRuntimeTaskException(nameof(RollBackBlockedRetireAsync), error);
             return OwnershipLostResult();
         }
 
@@ -468,8 +473,12 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                     committedUnitCount
                 );
             }
-            catch
+            catch (Exception error)
             {
+                _failureReporter.ReportRuntimeTaskException(
+                    nameof(RestorePartialRelocationAsync),
+                    error
+                );
                 return ZLinkDrainExecutionResult.ForceStop(
                     ZLinkDrainForceReason.TeardownFailed,
                     committedUnitCount
@@ -490,7 +499,6 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         CancellationToken cancellationToken
     )
     {
-        _shutdownDeadline.Cancel();
         // The runtime force-stop owner sends the ServerDrain notification and
         // cancels session work before disposing the component state. Waiting
         // for the same sessions here would consume the entire force budget
@@ -522,13 +530,9 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             // Forced teardown still closes the remaining location resources.
             if (reason != ZLinkDrainForceReason.OwnerCleanupFailed)
             {
-                using var cleanupBound = CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken
-                );
-                cleanupBound.CancelAfter(TimeSpan.FromSeconds(2));
                 try
                 {
-                    await _operations.CleanupOwner(cleanupBound.Token).ConfigureAwait(false);
+                    await _operations.CleanupOwner(_shutdownDeadline.Token).ConfigureAwait(false);
                 }
                 catch (Exception error)
                 {
@@ -539,7 +543,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             }
             await CaptureAsync(
                     "stop_location",
-                    () => _operations.StopLocation(cancellationToken),
+                    () => _operations.StopLocation(_shutdownDeadline.Token),
                     failures
                 )
                 .ConfigureAwait(false);
@@ -622,10 +626,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
     private static void LogCleanupFailure(string stage, Exception error)
     {
         Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"force_stop_cleanup_failed stage={stage} "
-                + $"type={error.GetType().Name} "
-                + $"message={error.Message.Replace('\r', ' ').Replace('\n', ' ')} "
-                + $"detail={error.ToString().Replace('\r', ' ').Replace("\n", " | ")}"
+            $"force_stop_cleanup_failed stage={stage} type={error.GetType().Name} message={error.Message.Replace('\r', ' ').Replace('\n', ' ')} detail={error.ToString().Replace('\r', ' ').Replace("\n", " | ")}"
         );
     }
 }

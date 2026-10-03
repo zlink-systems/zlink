@@ -1,26 +1,52 @@
+import type { ActorRef, RoutingId, SpotId } from '../../contracts/Common';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts/Errors';
+import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
+import { ZLinkSpotKind } from '../../contracts/Spots';
+import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
+import { waitActorReply } from '../actors/actor-request-deadline';
+import { emitActorOwnerLeaseObservation, isRelocationDebugEnabled } from '../diagnostics';
+import { ZLinkStateLane } from '../execution/state-lane';
+import {
+  decodeServiceClosingSpotAuthority,
+  decodeServiceReadySpotAuthority
+} from '../foundation/service-authority-payload-codec';
+import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
   internalFrameworkErrorKind
 } from '../framework-errors-internal';
-import type { ActorRef, RoutingId, SpotId } from '../../contracts/Common';
+import { routingIdsEqual } from '../routing-id';
 import {
+  type SpotHandle,
+  type ZLinkActorSpotHandleResolver,
+  type ZLinkSpotHandleResolver,
+  createSpotHandle,
+  type ResolvedSpotHandle
+} from '../spots/spot-handle';
+
+import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import { encodeAuthorityKey } from './authority-key-codec';
+import { isKnownZLinkLocationAutoConnectType, isKnownZLinkLocationRole } from './canonical-codec';
+import {
+  type ZLinkAuthoritySnapshot,
+  ZLinkFrameworkRuntimeState,
   ZLinkLocationRole,
   ZLinkLocationTopologyState,
-  ZLinkFrameworkRuntimeState,
   ZLinkObjectRole,
-  type ZLinkLocationReadiness,
-  type ZLinkLocationRuntimeQuery,
-  type ZLinkPeerLocationResolver,
   type ZLinkActorLocation,
   type ZLinkActorLocationKey,
+  type ZLinkLocationReadiness,
+  type ZLinkLocationRuntimeQuery,
   type ZLinkPeerLocation,
   type ZLinkPeerLocationFilter,
+  type ZLinkPeerLocationResolver,
   type ZLinkRouteLocation,
   type ZLinkRouteLocationKey,
   type ZLinkSpotLocation,
   type ZLinkSpotLocationKey
 } from './internal-location-contracts';
+
 import type {
   ZLinkActorLocationStore,
   ZLinkAuthorityStore,
@@ -29,28 +55,7 @@ import type {
   ZLinkRouteLocationStore,
   ZLinkSpotLocationStore
 } from './internal-store-contracts';
-import {
-  decodeServiceClosingSpotAuthority,
-  decodeServiceReadySpotAuthority
-} from '../foundation/service-authority-payload-codec';
-import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
-import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
-import { encodeAuthorityKey } from './authority-key-codec';
-import { ZLinkSpotKind } from '../../contracts/Spots';
-import type { ZLinkAuthoritySnapshot } from './internal-location-contracts';
-import type {
-  SpotHandle,
-  ZLinkActorSpotHandleResolver,
-  ZLinkSpotHandleResolver
-} from '../spots/spot-handle';
-import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts/Errors';
-import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
-import { createSpotHandle, type ResolvedSpotHandle } from '../spots/spot-handle';
-import { isKnownZLinkLocationAutoConnectType, isKnownZLinkLocationRole } from './canonical-codec';
 import { ZLinkLiveRowFilter, ZLinkOwnerLeaseTracker } from './lease-tracker';
-import { routingIdsEqual } from '../routing-id';
-import { ZLinkStateLane } from '../execution/state-lane';
-import { emitActorOwnerLeaseObservation } from '../diagnostics';
 
 export interface ZLinkStoreLocationResolverStores {
   readonly authorityStore: ZLinkAuthorityStore;
@@ -177,7 +182,7 @@ export class ZLinkStoreLocationResolvers
   private nextActorPlacement = 0n;
 
   constructor(private readonly options: ZLinkStoreLocationResolversOptions) {
-    this.liveRows = new ZLinkLiveRowFilter(options.leaseTracker);
+    this.liveRows = new ZLinkLiveRowFilter();
     this.monotonicNowMs = options.monotonicNowMs ?? (() => performance.now());
     this.authoritySpotResolver = new ZLinkAuthoritySpotRouteResolver(
       options.stores.authorityStore,
@@ -196,7 +201,7 @@ export class ZLinkStoreLocationResolvers
     const rows = await this.options.stores.peerStore.listPeers(filter, signal);
     return await this.liveRows.filter(
       rows,
-      (row) => row.ownerId,
+      (row, signal) => this.options.leaseTracker.isOwnerLive(row.ownerId, signal),
       signal,
       (row) =>
         isKnownZLinkLocationAutoConnectType(row.autoConnectType) &&
@@ -222,7 +227,7 @@ export class ZLinkStoreLocationResolvers
     for (const meshName of meshNames) {
       const descriptors = await this.liveRows.filter(
         (await this.options.stores.locationStore.listMeshNodes(meshName, undefined, signal)).items,
-        (descriptor) => descriptor.ownerId,
+        (descriptor, signal) => this.options.leaseTracker.isOwnerTokenLive(descriptor, signal),
         signal
       );
       const descriptor = descriptors.find(
@@ -260,7 +265,7 @@ export class ZLinkStoreLocationResolvers
     ).items;
     const liveDescriptors = await this.liveRows.filter(
       descriptors,
-      (descriptor) => descriptor.ownerId,
+      (descriptor, signal) => this.options.leaseTracker.isOwnerTokenLive(descriptor, signal),
       signal
     );
     const candidates = liveDescriptors.filter((descriptor) => {
@@ -297,7 +302,7 @@ export class ZLinkStoreLocationResolvers
   ): Promise<ZLinkRouteLocation | undefined> {
     const row = await this.liveRows.resolve(
       await this.options.stores.routeStore.resolveRoute(key, signal),
-      (candidate) => candidate.ownerId,
+      (candidate, signal) => this.options.leaseTracker.isOwnerLive(candidate.ownerId, signal),
       signal
     );
     if (row === undefined) {
@@ -403,10 +408,23 @@ export class ZLinkStoreLocationResolvers
 
   async resolveDirectActorRoute(
     actorId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineMs?: number
   ): Promise<ZLinkDirectActorRouteResolution> {
     const cached = await this.lane.run(() => this.getCachedCore(this.directActorRoutes, actorId));
     if (cached !== undefined) return { kind: 'ready', route: cached };
+    return await waitActorReply(
+      this.resolveUncachedDirectActorRoute(actorId, signal),
+      actorId,
+      deadlineMs,
+      signal
+    );
+  }
+
+  private async resolveUncachedDirectActorRoute(
+    actorId: string,
+    signal?: AbortSignal
+  ): Promise<ZLinkDirectActorRouteResolution> {
     const current = await this.options.stores.authorityStore.readAuthority(
       encodeAuthorityKey('actor', actorId),
       signal
@@ -432,12 +450,14 @@ export class ZLinkStoreLocationResolvers
         authorityGeneration: current.authorityOwnerGeneration,
         remainingLeaseMs
       };
-      emitActorOwnerLeaseObservation({
-        actorId,
-        authorityGeneration: unavailable.authorityGeneration,
-        remainingLeaseMs,
-        decision: 'owner_unavailable'
-      });
+      if (isRelocationDebugEnabled()) {
+        emitActorOwnerLeaseObservation({
+          actorId,
+          authorityGeneration: unavailable.authorityGeneration,
+          remainingLeaseMs,
+          decision: 'owner_unavailable'
+        });
+      }
       return unavailable;
     }
     if (
@@ -495,7 +515,8 @@ export class ZLinkStoreLocationResolvers
   ): Promise<ZLinkResolvedActorRoute | undefined> {
     return await this.lane.run(() => {
       if (route === undefined) return undefined;
-      const maxAgeMs = this.options.routeCacheMaxAgeMs ?? 15000;
+      const maxAgeMs =
+        this.options.routeCacheMaxAgeMs ?? zlinkDefaultLocationOptions.routeCacheMaxAgeMs;
       if (maxAgeMs > 0) {
         this.directActorRoutes.set(actorId, {
           row: route,
@@ -535,7 +556,7 @@ export class ZLinkStoreLocationResolvers
     if (cached !== undefined) return cached;
     const row = await this.liveRows.resolve(
       await this.options.stores.spotStore.resolveSpot(key, signal),
-      (candidate) => candidate.ownerId,
+      (candidate, signal) => this.options.leaseTracker.isOwnerTokenLive(candidate, signal),
       signal
     );
     if (row === undefined) {
@@ -611,7 +632,7 @@ export class ZLinkStoreLocationResolvers
     }
     const row = await this.liveRows.resolve(
       stored,
-      (candidate) => candidate.ownerId,
+      (candidate, signal) => this.options.leaseTracker.isOwnerTokenLive(candidate, signal),
       signal,
       (candidate) =>
         candidate.actorRef.objectGeneration > 0n &&
@@ -732,7 +753,8 @@ export class ZLinkStoreLocationResolvers
     ownerLeaseGeneration: bigint,
     signal?: AbortSignal
   ): Promise<boolean> {
-    const maxAgeMs = this.options.routeCacheMaxAgeMs ?? 15000;
+    const maxAgeMs =
+      this.options.routeCacheMaxAgeMs ?? zlinkDefaultLocationOptions.routeCacheMaxAgeMs;
     const remainingLeaseMs = await this.options.leaseTracker.remainingOwnerTokenLeaseMs(
       { ownerId, leaseGeneration: ownerLeaseGeneration },
       signal
@@ -887,6 +909,7 @@ export class ZLinkLocationSpotRouteResolver implements ZLinkSpotRouteResolver {
         targetNodeRid: entrySpot.nodeRid,
         spotId: entrySpot.spotId,
         spotKind: ZLinkSpotKind.Entry,
+        targetSpotGeneration: entrySpot.targetNodeGeneration,
         targetNodeGeneration: entrySpot.targetNodeGeneration,
         targetOwnerId: entrySpot.targetOwnerId,
         ownerLeaseGeneration: entrySpot.ownerLeaseGeneration,
@@ -915,7 +938,7 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
     private readonly routerChannelIdForMesh: (meshName: string) => string,
     private readonly fallback?: ZLinkSpotRouteResolver,
     private readonly leaseTracker?: ZLinkOwnerLeaseTracker,
-    private readonly routeCacheMaxAgeMs = 15000,
+    private readonly routeCacheMaxAgeMs = zlinkDefaultLocationOptions.routeCacheMaxAgeMs,
     private readonly monotonicNowMs: () => number = () => performance.now(),
     private readonly targetNodeStateResolver?: (
       meshName: string,

@@ -5,18 +5,19 @@ namespace ZLink.Framework.Perf.Tests;
 // §13: the harness correlation of a send/send operation and the family metrics that hang off it.
 public sealed class SendSendCorrelationTests
 {
-    private static RoleConfig Config(int expiryMs = 60) => new("test", "s2s-channel-to-spot-send-send-echo/4096/test", new string('b', 64),
+    private const int TestCorrelationExpiryMs = 60;
+    private static RoleConfig Config(int testCorrelationExpiryMs = TestCorrelationExpiryMs) => new("test", "s2s-channel-to-spot-send-send-echo/4096/test", new string('b', 64),
         "channel", 0, "s2s-channel-to-spot-send-send-echo", "routemesh", "ch", "mesh", [], null, "", "", true, "ObjectClient", null, [], [],
-        "SpotWide", new(1024, .05, .05, 1, null, 1, 1, null, 1000, expiryMs, 5000, 30000, 5000, 1000), [], mode: "send-send");
+        "SpotWide", TestWorkload.Create(correlationExpiryMs: testCorrelationExpiryMs), [], mode: "send-send");
 
     private sealed class Fixture : IDisposable
     {
         public readonly Measurement Measurement;
         public readonly ScenarioMetrics Metrics;
         public readonly SendSendCorrelation Correlations;
-        public Fixture(int expiryMs = 60)
+        public Fixture(int testCorrelationExpiryMs = TestCorrelationExpiryMs)
         {
-            Measurement = new Measurement(Config(expiryMs), true);
+            Measurement = new Measurement(Config(testCorrelationExpiryMs), true);
             Metrics = new ScenarioMetrics(Measurement);
             Correlations = new SendSendCorrelation(Measurement, Metrics);
         }
@@ -44,6 +45,18 @@ public sealed class SendSendCorrelationTests
     }
 
     [Fact]
+    public void ClosingAValidReplyReleasesTheRequestDto()
+    {
+        using var f = new Fixture();
+        var request = f.Request(1);
+        var entry = f.Correlations.Register(request, PerfClock.Now);
+
+        f.Correlations.Reply(f.Reply(request));
+
+        Assert.Null(entry.Request);
+    }
+
+    [Fact]
     public async Task EchoBeforeTheFirstSendTerminalKeepsItsOwnTime()
     {
         using var f = new Fixture();
@@ -67,6 +80,7 @@ public sealed class SendSendCorrelationTests
         var (error, _) = await f.Correlations.CompleteAsync(entry);
         var expired = Assert.IsType<PerfValidationException>(error);
         Assert.Equal("CorrelationExpired", expired.Kind);
+        Assert.Null(entry.Request);
         f.Correlations.Reply(f.Reply(request));
         Assert.Equal("1", f.Count("messages.expired"));
         Assert.Equal("1", f.Count("messages.lateReply"));
@@ -86,6 +100,77 @@ public sealed class SendSendCorrelationTests
     }
 
     [Fact]
+    public async Task ReplyAfterDeadlineExpiresAtValidationCompletion()
+    {
+        const int TestReplyCorrelationExpiryMs = 30;
+        using var f = new Fixture(TestReplyCorrelationExpiryMs);
+        var request = f.Request(1);
+        var entry = f.Correlations.Register(request, PerfClock.Now);
+        while (PerfClock.Now < entry.ExpiresAtTicks) await Task.Delay(1);
+        f.Correlations.Reply(f.Reply(request));
+        var (error, completed) = await f.Correlations.CompleteAsync(entry);
+        Assert.Equal("CorrelationExpired", Assert.IsType<PerfValidationException>(error).Kind);
+        Assert.True(completed >= entry.ExpiresAtTicks);
+        Assert.Equal("1", f.Count("messages.expired"));
+        Assert.Equal("1", f.Count("messages.lateReply"));
+    }
+
+    [Fact]
+    public async Task FirstSendTerminalAfterDeadlineUsesTheSameExpiryDecision()
+    {
+        using var f = new Fixture(20);
+        var request = f.Request(1);
+        var entry = f.Correlations.Register(request, PerfClock.Now);
+        while (PerfClock.Now < entry.ExpiresAtTicks) await Task.Delay(1);
+        f.Correlations.FirstSendEnded(entry, new InvalidOperationException("late send failure"));
+        Assert.Equal("CorrelationExpired", Assert.IsType<PerfValidationException>(
+            (await f.Correlations.CompleteAsync(entry)).Error).Kind);
+        Assert.Equal("1", f.Count("messages.expired"));
+    }
+
+    [Fact]
+    public async Task SuccessfulFirstSendAfterDeadlineClosesExpiryBeforeCompletionWait()
+    {
+        using var f = new Fixture(20);
+        var request = f.Request(1);
+        var entry = f.Correlations.Register(request, PerfClock.Now);
+        while (PerfClock.Now < entry.ExpiresAtTicks) await Task.Delay(1);
+        f.Correlations.FirstSendEnded(entry, null);
+        Assert.Equal("1", f.Count("messages.expired"));
+        Assert.Equal("CorrelationExpired", Assert.IsType<PerfValidationException>(
+            (await f.Correlations.CompleteAsync(entry)).Error).Kind);
+    }
+
+    [Fact]
+    public async Task OperationOwnerAccountsTheCorrelationResultOnce()
+    {
+        using var f = new Fixture();
+        f.Metrics.Counters("driver.failed");
+        Assert.True(f.Measurement.Start(new PerfTriggerRequest { runId = "test", cellId = f.Measurement.Config.cellId,
+            phase = "warmup", resetSeq = "0" }, async () =>
+        {
+            var request = f.Measurement.Request(0, 1, probe: true);
+            Assert.True(f.Measurement.BeginOperation(out var started, "send"));
+            var entry = f.Correlations.Register(request, started);
+            f.Correlations.FirstSendEnded(entry, null);
+            f.Metrics.Count("driver.failed");
+            f.Correlations.Reply(f.Reply(request));
+            var (error, completed) = await f.Correlations.CompleteAsync(entry);
+            f.Measurement.CompleteOperation(started, error, completedTicks: completed);
+        }).accepted);
+        await f.Measurement.PhaseTask;
+
+        var snapshot = f.Measurement.Snapshot(null);
+        Assert.Equal("1", snapshot.metrics["messages.sent"]);
+        Assert.Equal("1", snapshot.metrics["messages.completed"]);
+        Assert.Equal("0", snapshot.metrics["messages.failed"]);
+        Assert.Equal("0", snapshot.metrics["messages.timeout"]);
+        Assert.Equal("0", snapshot.metrics["messages.cancelled"]);
+        Assert.Equal("0", snapshot.metrics["messages.inflightAtEnd"]);
+        Assert.Equal("1", snapshot.metrics["driver.failed"]);
+    }
+
+    [Fact]
     public async Task AFailedFirstSendIsTheFinalResultUnlessTheEchoWasFirst()
     {
         using var f = new Fixture();
@@ -93,6 +178,7 @@ public sealed class SendSendCorrelationTests
         var entry = f.Correlations.Register(failedSend, PerfClock.Now);
         var boom = new InvalidOperationException("send failed");
         f.Correlations.FirstSendEnded(entry, boom);
+        Assert.Null(entry.Request);
         f.Correlations.Reply(f.Reply(failedSend));
         Assert.Same(boom, (await f.Correlations.CompleteAsync(entry)).Error);
         Assert.Equal("1", f.Count("messages.lateReply"));

@@ -27,6 +27,93 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkSpringHandlerFactoryTest {
     @Test
+    void optionalServiceLookupPreservesCreationFailureAndReturnsNullOnlyForAbsence() {
+        var beans = new DefaultListableBeanFactory();
+        var factory = new ZLinkSpringHandlerFactory(beans);
+        org.junit.jupiter.api.Assertions.assertNull(factory.findService(FieldDependency.class));
+        var original = new IllegalStateException("service creation failed");
+        var definition =
+                new org.springframework.beans.factory.support.RootBeanDefinition(
+                        FieldDependency.class);
+        definition.setInstanceSupplier(
+                () -> {
+                    throw original;
+                });
+        beans.registerBeanDefinition("dependency", definition);
+        var failure =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        org.springframework.beans.factory.BeanCreationException.class,
+                        () -> factory.findService(FieldDependency.class));
+        assertSame(original, failure.getMostSpecificCause());
+    }
+
+    @Test
+    void ignoresUnrelatedAutowiredAnnotationWithTheSameSimpleName() throws Exception {
+        try (AnnotationConfigApplicationContext context =
+                new AnnotationConfigApplicationContext(ShortcutConfig.class)) {
+            var factory = new ZLinkSpringHandlerFactory(context.getBeanFactory());
+            try (var activation = factory.openActivation()) {
+                var handler =
+                        (AnnotationIdentityHandler)
+                                activation.create(AnnotationIdentityHandler.class);
+                assertTrue(handler.springConstructorSelected());
+            }
+        }
+    }
+
+    @Test
+    void unrelatedPreDestroyAnnotationDoesNotSuppressAutoCloseable() {
+        var factory = new ZLinkSpringHandlerFactory(new DefaultListableBeanFactory());
+        var handler =
+                (AnnotationIdentityCloseable) factory.create(AnnotationIdentityCloseable.class);
+        factory.destroy(handler);
+        assertEquals(1, handler.closeCount());
+    }
+
+    private static final class UnrelatedAnnotations {
+        @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+        @java.lang.annotation.Target(java.lang.annotation.ElementType.CONSTRUCTOR)
+        @interface Autowired {}
+
+        @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+        @java.lang.annotation.Target(java.lang.annotation.ElementType.METHOD)
+        @interface PreDestroy {}
+    }
+
+    public static final class AnnotationIdentityHandler {
+        private final boolean springConstructorSelected;
+
+        @Autowired
+        public AnnotationIdentityHandler(FieldDependency dependency) {
+            springConstructorSelected = true;
+        }
+
+        @UnrelatedAnnotations.Autowired
+        public AnnotationIdentityHandler(
+                FieldDependency dependency, @Qualifier("selected") ScopedDependency scoped) {
+            springConstructorSelected = false;
+        }
+
+        public boolean springConstructorSelected() {
+            return springConstructorSelected;
+        }
+    }
+
+    public static final class AnnotationIdentityCloseable implements AutoCloseable {
+        private int closeCount;
+
+        @Override
+        @UnrelatedAnnotations.PreDestroy
+        public void close() {
+            closeCount++;
+        }
+
+        public int closeCount() {
+            return closeCount;
+        }
+    }
+
+    @Test
     void preparesConstructorAndScalarDependencyBeforeFirstActivation() throws Exception {
         CountingBeanFactory beanFactory = new CountingBeanFactory();
         try (AnnotationConfigApplicationContext context =

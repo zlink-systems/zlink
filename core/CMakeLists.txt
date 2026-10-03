@@ -8,7 +8,7 @@ if(POLICY CMP0048)
   cmake_policy(SET CMP0048 NEW)
 endif()
 
-project(zlink VERSION 1.12.0 LANGUAGES C CXX)
+project(zlink VERSION 1.13.0 LANGUAGES C CXX)
 
 # Internal repo targets still include the public header from core/include.
 # Define a build-only macro so in-tree code can access private build-only
@@ -69,21 +69,13 @@ if(ENABLE_ASAN)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -fsanitize-address-use-after-scope")
 endif()
 
-# NOTE: Running libzlink under TSAN doesn't make much sense -- synchronization in libzlink is to some extent
-# handled by the code "knowing" what threads are allowed to do, rather than by enforcing those
-# restrictions, so TSAN generates a lot of (presumably) false positives from libzlink.
-# The settings below are intended to enable libzlink to be built with minimal support for TSAN
-# such that it can be used along with other code that is also built with TSAN.
 option(ENABLE_TSAN "Build with thread sanitizer" OFF)
 if(ENABLE_TSAN)
   message(STATUS "Instrumenting with Thread Sanitizer")
   set(CMAKE_BUILD_TYPE "RelWithDebInfo")
   set(TSAN_FLAGS "-fno-omit-frame-pointer -fsanitize=thread")
-  set(TSAN_CCFLAGS "${TSAN_CCFLAGS} -mllvm -tsan-instrument-memory-accesses=0")
-  set(TSAN_CCFLAGS "${TSAN_CCFLAGS} -mllvm -tsan-instrument-atomics=0")
-  set(TSAN_CCFLAGS "${TSAN_CCFLAGS} -mllvm -tsan-instrument-func-entry-exit=1")
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${TSAN_FLAGS} ${TSAN_CCFLAGS} -fPIE")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TSAN_FLAGS} ${TSAN_CCFLAGS} -fPIE")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${TSAN_FLAGS} -fPIE")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TSAN_FLAGS} -fPIE")
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${TSAN_FLAGS} -pie -Qunused-arguments")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${TSAN_FLAGS} -pie -Qunused-arguments")
 endif()

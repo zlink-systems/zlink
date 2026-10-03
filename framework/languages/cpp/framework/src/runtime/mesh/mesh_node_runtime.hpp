@@ -179,6 +179,7 @@ class mesh_node_runtime_t
     void start ();
     void request_stop () noexcept;
     void stop () noexcept;
+    void cancel_pending_dispatch_waits () noexcept;
     void signal_dispatch_activity ();
     void bind_serializers (serializer_registry_t &serializers) noexcept;
     void bind_descriptor_publisher (
@@ -223,7 +224,7 @@ class mesh_node_runtime_t
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
     void configure_bound_session_relocation_resolver (
-      std::function<std::optional<bound_session_relocation_route_t> (
+      std::function<task_t<std::optional<bound_session_relocation_route_t>> (
         const runtime::stateful::object_ref_t &)> resolver);
     void
     configure_stateful_dispatch (runtime::stateful::accepted_record_authority_resolver_t resolver);
@@ -569,7 +570,8 @@ class mesh_node_runtime_t
       std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
       runtime::protocol::relocation_id_t relocation,
       runtime::protocol::relocation_coordinator_fence_t coordinator,
-      std::chrono::milliseconds timeout);
+      std::chrono::milliseconds timeout,
+      std::chrono::steady_clock::time_point operation_deadline);
     task_t<std::optional<std::vector<runtime::protocol::session_relocation_route_t>>>
     capture_session_routes (
       std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
@@ -577,7 +579,8 @@ class mesh_node_runtime_t
       runtime::protocol::relocation_coordinator_fence_t coordinator,
       mesh_node_descriptor_t target,
       std::shared_ptr<session_relocation_seal_outcome_t> outcome,
-      std::shared_ptr<bool> attempted);
+      std::shared_ptr<bool> attempted,
+      std::chrono::steady_clock::time_point operation_deadline);
     runtime::protocol::session_relocation_route_t make_session_relocation_route (
       const session_relocation_checkpoint_t &checkpoint,
       const zlink::routing_id_t &target_node,
@@ -640,7 +643,7 @@ class mesh_node_runtime_t
     runtime::stateful::relocation_limits_t _relocation_limits;
     std::function<std::optional<location_owner_token_t> ()> _instance_spot_owner;
     std::function<std::optional<location_owner_token_t> ()> _session_route_owner_resolver;
-    std::function<std::optional<bound_session_relocation_route_t> (
+    std::function<task_t<std::optional<bound_session_relocation_route_t>> (
       const runtime::stateful::object_ref_t &)>
       _bound_session_relocation_resolver;
     runtime::stateful::accepted_record_authority_resolver_t _stateful_dispatch_resolver;

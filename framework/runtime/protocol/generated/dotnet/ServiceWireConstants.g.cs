@@ -6,9 +6,37 @@ internal static class ServiceWireConstants
     internal const byte Magic0 = 90;
     internal const byte Magic1 = 77;
     internal const byte WireMajor = 1;
+    internal const int MetadataBytes = 1024;
     internal const string RequiredCapability = "framework-service-v13";
     internal const string FrameworkMultipartPacketName = "ZLinkFrameworkMultipart";
     internal const string FrameworkMultipartContentType = "application/x-zlink-multipart";
+    internal const ulong RelocationReferenceBytes = 4096UL;
+    internal const ulong AuthorityEnvelopeBytes = 1048576UL;
+    internal const ulong RelocationChunkBytes = 67108864UL;
+    internal const ulong RelocationChunkCount = 4096UL;
+    internal const ulong RelocationLogicalBytes = 274877906944UL;
+    internal const ulong CreationIntentBytes = 1048576UL;
+    internal const ulong CreationTerminalEnvelopeBytes = 1048576UL;
+    internal const ulong MessageFollowHopCount = 8UL;
+    internal const ulong NodeActiveCapacityDefault = 10000UL;
+    internal const ulong NodePendingCapacityDefault = 128UL;
+    internal const int SortedText8VectorMaximumItems = 1024;
+    internal const int StatefulCapabilityVectorMaximumItems = 1024;
+    internal enum DescriptorExtensionField : byte
+    {
+        RuntimeState = 1,
+        ApplicationVersion = 2,
+        SpotTypes = 3,
+        StatefulCapabilities = 4,
+        MaintenanceWave = 5,
+        ProtocolCapabilities = 6,
+        ObjectRole = 7,
+        PlacementWeight = 8,
+        ActiveCapacityLimit = 9,
+        PendingCapacityLimit = 10,
+        ActiveCapacityUsed = 11,
+        PendingCapacityUsed = 12,
+    }
     internal enum Command : byte
     {
         Hello = 1,

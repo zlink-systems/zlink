@@ -27,7 +27,7 @@ internal object CsRemoteSessionActorEchoScenario {
     fun run(config: RoleConfig) {
         require(config.role() == "session" && !config.source() && config.scenario() == "cs-remote-session-actor-echo")
         val app = ServerApplication.create(config)
-            .bean(ObjectsReadiness::class.java) { ObjectsReadiness(false, "No Actor is bound to a session yet.") }
+            .bean(ObjectsReadiness::class.java) { ObjectsReadiness(true, "") }
             .bean(KotlinSessionActorSetup::class.java)
             .configure { options ->
                 ServerApplication.routeMesh(options, config, "perf-session").objects().client()
@@ -58,6 +58,10 @@ class KotlinPerfSessionActorRelayHandler(
         val actor = dispatch.actor() ?: binding ?: setup.bind(session, payload)
         binding = actor
         actor.kotlin().relay(dispatch, payload).await()
+        if (measurement.phase() == "setup") {
+            // The Session role has no typed reply of its own: its setup probe is the admitted relay.
+            measurement.setupEvidence(listOf(Evidence.of("relayAdmission", "ZLinkSessionActor.relay", true)))
+        }
     }
 }
 
@@ -132,13 +136,10 @@ class KotlinSessionActorSetup(
                 "bindMaxMs" to bindMaxNs / 1e6,
             )
             readiness.set(
-                bound > 0 && failed == 0L,
-                if (failed > 0) "Actor create or bind failed." else "No Actor is bound to a session yet.",
+                true,
+                "",
                 listOf(Evidence.of("actorCreateAndBind", "Kotlin getOrCreate(...).await + bindOrGetActor(ref)", observed)),
             )
-            if (bound > 0) {
-                measurement.setupEvidence(listOf(Evidence.of("relayAdmission", "ZLinkSessionActor.relay", mapOf("bound" to bound))))
-            }
         }
     }
 }

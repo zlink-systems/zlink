@@ -1,9 +1,13 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <zlink/framework/detail/utf8.hpp>
+
 #include <zlink/framework/contracts/actors/actor.hpp>
+#include <zlink/framework/detail/crc32c.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
+#include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
 #include <zlink/framework/contracts/spots/spot.hpp>
 
 #include <algorithm>
@@ -20,6 +24,8 @@
 
 namespace zlink::framework::runtime
 {
+
+inline constexpr char default_mesh_name[] = "default";
 
 enum class actor_authority_state_t : std::uint8_t
 {
@@ -116,66 +122,35 @@ struct instance_spot_authority_payload_t
 namespace actor_authority_detail
 {
 
-inline constexpr std::size_t actor_authority_maximum_bytes = 1024 * 1024;
+inline constexpr std::size_t actor_authority_maximum_bytes = protocol::authorityEnvelopeBytes;
 
-inline bool valid_utf8 (std::string_view value) noexcept
-{
-    for (std::size_t index = 0; index < value.size ();) {
-        const auto first = static_cast<std::uint8_t> (value[index]);
-        if (first < 0x80u) {
-            ++index;
-            continue;
-        }
-        const auto continuation = [&] (std::size_t count) {
-            if (index + count >= value.size ())
-                return false;
-            for (std::size_t offset = 1; offset <= count; ++offset)
-                if ((static_cast<std::uint8_t> (value[index + offset]) & 0xc0u) != 0x80u)
-                    return false;
-            return true;
-        };
-        if (first >= 0xc2u && first <= 0xdfu && continuation (1))
-            index += 2;
-        else if (first == 0xe0u && continuation (2)
-                 && static_cast<std::uint8_t> (value[index + 1]) >= 0xa0u)
-            index += 3;
-        else if (first >= 0xe1u && first <= 0xecu && continuation (2))
-            index += 3;
-        else if (first == 0xedu && continuation (2)
-                 && static_cast<std::uint8_t> (value[index + 1]) <= 0x9fu)
-            index += 3;
-        else if (first >= 0xeeu && first <= 0xefu && continuation (2))
-            index += 3;
-        else if (first == 0xf0u && continuation (3)
-                 && static_cast<std::uint8_t> (value[index + 1]) >= 0x90u)
-            index += 4;
-        else if (first >= 0xf1u && first <= 0xf3u && continuation (3))
-            index += 4;
-        else if (first == 0xf4u && continuation (3)
-                 && static_cast<std::uint8_t> (value[index + 1]) <= 0x8fu)
-            index += 4;
-        else
-            return false;
-    }
-    return true;
-}
 
 inline bool valid_text8 (std::string_view value) noexcept
 {
     return !value.empty () && value.size () <= std::numeric_limits<std::uint8_t>::max ()
-           && value.find ('\0') == std::string_view::npos && valid_utf8 (value);
+           && value.find ('\0') == std::string_view::npos
+           && zlink::framework::detail::is_valid_utf8 (value);
 }
 
-inline std::uint32_t crc32c (std::span<const std::byte> bytes) noexcept
+inline constexpr std::string_view canonical_envelope_magic = "ZLAU";
+inline constexpr std::uint8_t captured_relocation_phase = 2;
+
+struct relocation_capture_identity_t
 {
-    std::uint32_t value = 0xffffffffu;
-    for (const auto byte : bytes) {
-        value ^= std::to_integer<std::uint8_t> (byte);
-        for (int bit = 0; bit != 8; ++bit)
-            value = (value >> 1) ^ ((value & 1u) ? 0x82f63b78u : 0u);
-    }
-    return ~value;
-}
+    std::uint64_t high = 0;
+    std::uint64_t low = 0;
+    std::string source_owner_id;
+    std::uint64_t source_owner_lease_generation = 0;
+    std::string coordinator_owner_id;
+    std::uint64_t coordinator_lease_generation = 0;
+};
+inline constexpr std::size_t canonical_envelope_header_bytes =
+  canonical_envelope_magic.size () + sizeof (std::uint8_t) + sizeof (std::uint16_t)
+  + sizeof (std::uint32_t);
+inline constexpr std::size_t canonical_envelope_checksum_bytes = sizeof (std::uint32_t);
+inline constexpr std::size_t canonical_envelope_overhead =
+  canonical_envelope_header_bytes + canonical_envelope_checksum_bytes;
+inline constexpr std::string_view instance_closing_prefix = "zlink:instance-spot:closing:v1\n";
 
 inline void append_u8 (std::vector<std::byte> &bytes, std::uint8_t value)
 {
@@ -217,7 +192,8 @@ inline void append_text8 (std::vector<std::byte> &bytes, std::string_view value)
 inline void append_text16be (std::vector<std::byte> &bytes, std::string_view value)
 {
     if (value.empty () || value.size () > std::numeric_limits<std::uint16_t>::max ()
-        || value.find ('\0') != std::string_view::npos || !valid_utf8 (value))
+        || value.find ('\0') != std::string_view::npos
+        || !zlink::framework::detail::is_valid_utf8 (value))
         throw std::invalid_argument ("actor authority text16 is invalid");
     append_u16be (bytes, static_cast<std::uint16_t> (value.size ()));
     for (const auto character : value)
@@ -292,7 +268,8 @@ class reader_t
         text.reserve (value.size ());
         for (const auto byte : value)
             text.push_back (static_cast<char> (std::to_integer<std::uint8_t> (byte)));
-        if (text.empty () || text.find ('\0') != std::string::npos || !valid_utf8 (text))
+        if (text.empty () || text.find ('\0') != std::string::npos
+            || !zlink::framework::detail::is_valid_utf8 (text))
             throw std::invalid_argument ("actor relocation text is invalid");
         return text;
     }
@@ -332,7 +309,8 @@ inline bool read_actor_authority_relocation_state (
   std::optional<std::uint64_t> root_aggregate_generation = std::nullopt,
   bool *has_relocation_state = nullptr,
   std::uint8_t *relocation_phase = nullptr,
-  std::string *relocation_expected_store_version = nullptr)
+  std::string *relocation_expected_store_version = nullptr,
+  relocation_capture_identity_t *capture_identity = nullptr)
 {
     const auto has_relocation = body_reader.u8 ();
     if (has_relocation > 1)
@@ -356,8 +334,9 @@ inline bool read_actor_authority_relocation_state (
         return false;
     if (relocation_reader.u64be () == 0)
         return false;
-    (void) relocation_reader.text8 ();
-    if (relocation_reader.u64be () == 0)
+    const auto source_owner_id = relocation_reader.text8 ();
+    const auto source_owner_lease_generation = relocation_reader.u64be ();
+    if (source_owner_lease_generation == 0)
         return false;
     const auto target_node_rid = relocation_reader.take (relocation_reader.u8 ());
     const auto target_node_generation = relocation_reader.u64be ();
@@ -365,8 +344,10 @@ inline bool read_actor_authority_relocation_state (
     if (!read_optional_text8 (relocation_reader, &target_owner_present))
         return false;
     const auto target_owner_lease_generation = relocation_reader.u64be ();
-    (void) relocation_reader.text8 ();
-    if (relocation_reader.u64be () == 0 || relocation_reader.take (relocation_reader.u8 ()).empty ()
+    const auto coordinator_owner_id = relocation_reader.text8 ();
+    const auto coordinator_lease_generation = relocation_reader.u64be ();
+    if (coordinator_lease_generation == 0
+        || relocation_reader.take (relocation_reader.u8 ()).empty ()
         || relocation_reader.u64be () == 0)
         return false;
     std::string expected_version;
@@ -404,6 +385,10 @@ inline bool read_actor_authority_relocation_state (
             *relocation_phase = phase;
         if (relocation_expected_store_version)
             *relocation_expected_store_version = expected_version;
+        if (capture_identity)
+            *capture_identity = {relocation_high,      relocation_low,
+                                 source_owner_id,      source_owner_lease_generation,
+                                 coordinator_owner_id, coordinator_lease_generation};
     }
     return valid;
 }
@@ -425,17 +410,19 @@ inline node_rid_t actor_authority_node_rid (const zlink::routing_id_t &rid)
 inline std::vector<std::byte>
 encode_canonical_authority_payload (const canonical_authority_payload_t &value)
 {
-    if (value.body.size () > actor_authority_detail::actor_authority_maximum_bytes - 15)
+    if (value.body.size () > actor_authority_detail::actor_authority_maximum_bytes
+                               - actor_authority_detail::canonical_envelope_overhead)
         throw std::invalid_argument ("canonical authority payload is too large");
     std::vector<std::byte> result;
-    result.reserve (11 + value.body.size () + 4);
-    for (const char byte : std::string_view{"ZLAU"})
+    result.reserve (actor_authority_detail::canonical_envelope_overhead + value.body.size ());
+    for (const char byte : actor_authority_detail::canonical_envelope_magic)
         actor_authority_detail::append_u8 (result, static_cast<std::uint8_t> (byte));
     actor_authority_detail::append_u8 (result, 1);
     actor_authority_detail::append_u16be (result, 0);
     actor_authority_detail::append_u32be (result, static_cast<std::uint32_t> (value.body.size ()));
     actor_authority_detail::append_bytes (result, value.body);
-    actor_authority_detail::append_u32be (result, actor_authority_detail::crc32c (result));
+    actor_authority_detail::append_u32be (
+      result, zlink::framework::detail::crc32c (std::span<const std::byte> (result)));
     return result;
 }
 
@@ -443,20 +430,23 @@ inline std::optional<canonical_authority_payload_t>
 decode_canonical_authority_payload (std::span<const std::byte> encoded)
 {
     try {
-        if (encoded.size () < 15
+        if (encoded.size () < actor_authority_detail::canonical_envelope_overhead
             || encoded.size () > actor_authority_detail::actor_authority_maximum_bytes)
             return std::nullopt;
         actor_authority_detail::reader_t reader (encoded);
-        constexpr std::array<std::byte, 4> magic{
-          static_cast<std::byte> ('Z'), static_cast<std::byte> ('L'), static_cast<std::byte> ('A'),
-          static_cast<std::byte> ('U')};
-        const auto actual_magic = reader.take (4);
-        if (!std::equal (actual_magic.begin (), actual_magic.end (), magic.begin ())
+        const auto actual_magic =
+          reader.take (actor_authority_detail::canonical_envelope_magic.size ());
+        if (!std::equal (actual_magic.begin (), actual_magic.end (),
+                         actor_authority_detail::canonical_envelope_magic.begin (),
+                         [] (std::byte actual, char expected) {
+                             return std::to_integer<unsigned char> (actual)
+                                    == static_cast<unsigned char> (expected);
+                         })
             || reader.u8 () != 1 || reader.u16be () != 0)
             return std::nullopt;
         const auto body = reader.take (reader.u32be ());
         const auto checksum_offset = reader.offset ();
-        if (reader.u32be () != actor_authority_detail::crc32c (encoded.first (checksum_offset))
+        if (reader.u32be () != zlink::framework::detail::crc32c (encoded.first (checksum_offset))
             || !reader.done ())
             return std::nullopt;
         return canonical_authority_payload_t{std::vector<std::byte> (body.begin (), body.end ())};
@@ -819,13 +809,15 @@ inline std::vector<std::byte> encode_actor_authority_payload (const actor_ref_t 
       .current_spot_kind = actor_authority_spot_kind_t::user,
       .owner_id = std::string (node),
       .owner_lease_generation = 1,
-      .mesh_name = actor.mesh_name ().empty () ? "default" : std::string (actor.mesh_name ()),
+      .mesh_name =
+        actor.mesh_name ().empty () ? default_mesh_name : std::string (actor.mesh_name ()),
       .node_rid = actor.node_rid (),
       .node_generation = spot_generation});
 }
 
-inline std::optional<actor_authority_payload_t>
-decode_direct_actor_authority_payload (std::span<const std::byte> encoded)
+inline std::optional<actor_authority_payload_t> decode_direct_actor_authority_payload (
+  std::span<const std::byte> encoded,
+  actor_authority_detail::relocation_capture_identity_t *capture_identity = nullptr)
 {
     try {
         const auto canonical = decode_canonical_authority_payload (encoded);
@@ -864,7 +856,7 @@ decode_direct_actor_authority_payload (std::span<const std::byte> encoded)
         if (owner_lease_generation == 0 || node_generation == 0
             || !actor_authority_detail::read_actor_authority_relocation_state (
               body_reader, std::nullopt, &has_relocation_state, &relocation_phase,
-              &relocation_expected_store_version)
+              &relocation_expected_store_version, capture_identity)
             || body_reader.u8 () != 0 || body_reader.u32be () != 0 || !body_reader.done ())
             return std::nullopt;
         std::string node_rid;
@@ -923,9 +915,10 @@ struct instance_closing_state_t
 
 inline std::vector<std::byte> encode_instance_closing_state (const instance_closing_state_t &state)
 {
-    const std::string value = "zlink:instance-spot:closing:v1\n" + state.stable_type + "\n"
-                              + state.spot_id + "\n" + std::to_string (state.object_generation)
-                              + "\n" + std::to_string (state.authority_owner_generation);
+    const std::string value = std::string (actor_authority_detail::instance_closing_prefix)
+                              + state.stable_type + "\n" + state.spot_id + "\n"
+                              + std::to_string (state.object_generation) + "\n"
+                              + std::to_string (state.authority_owner_generation);
     std::vector<std::byte> result;
     result.reserve (value.size ());
     for (const auto character : value)
@@ -940,7 +933,7 @@ decode_instance_closing_state (const std::vector<std::byte> &payload)
     value.reserve (payload.size ());
     for (const auto character : payload)
         value.push_back (static_cast<char> (std::to_integer<unsigned char> (character)));
-    constexpr std::string_view prefix = "zlink:instance-spot:closing:v1\n";
+    constexpr auto prefix = actor_authority_detail::instance_closing_prefix;
     if (value.rfind (prefix, 0) != 0)
         return std::nullopt;
     std::vector<std::string> fields;

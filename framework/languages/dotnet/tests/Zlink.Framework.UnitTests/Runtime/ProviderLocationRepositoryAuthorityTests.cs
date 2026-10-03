@@ -14,6 +14,378 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReincarnateIssuesBothGenerationsAndPreservesOwnerCapacity(bool opaqueProvider)
+    {
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        IZLinkLocationRepository repository = opaqueProvider
+            ? new ZLinkProviderLocationRepository(provider)
+            : new ZLinkInMemoryLocationStore(time);
+        var owner = await ClaimAsync(repository, "reincarnate-owner");
+        var descriptor = Descriptor("source", owner, actorLimit: 1);
+        _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("actor:reincarnate", descriptor, owner);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request)
+        );
+        var before = Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(reserved.Reservation, new byte[] { 2 })
+            )
+            .Snapshot;
+        var capacityBefore = await provider.ReadAsync(CapacityKey(descriptor));
+
+        var competitors = await Task.WhenAll(
+            Enumerable
+                .Range(0, 2)
+                .Select(_ =>
+                    repository
+                        .CompareExchangeAuthorityAsync(
+                            request.Key,
+                            before.StoreVersion,
+                            new ZLinkAuthorityMutation.Put(
+                                new byte[] { 3 },
+                                ZLinkAuthorityGenerationTransition.Reincarnate,
+                                null,
+                                null
+                            )
+                        )
+                        .AsTask()
+                )
+        );
+        var after = Assert
+            .Single(competitors.OfType<ZLinkAuthorityCompareExchangeResult.Stored>())
+            .Snapshot;
+        Assert.Single(competitors.OfType<ZLinkAuthorityCompareExchangeResult.Conflict>());
+
+        Assert.True(after.ObjectGeneration > before.ObjectGeneration);
+        Assert.True(after.AuthorityOwnerGeneration > before.AuthorityOwnerGeneration);
+        Assert.NotEqual(before.StoreVersion, after.StoreVersion);
+        Assert.Equal(before.OwnerId, after.OwnerId);
+        Assert.Equal(before.OwnerLeaseGeneration, after.OwnerLeaseGeneration);
+        Assert.Equal(before.Allocation, after.Allocation);
+        Assert.Null(after.ReservedCreation);
+        Assert.Equal(new byte[] { 3 }, after.Payload.ToArray());
+        AssertAuthorityUnchanged(
+            after,
+            Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(request.Key)
+                )
+                .Snapshot
+        );
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(
+            await repository.CompareExchangeAuthorityAsync(
+                request.Key,
+                before.StoreVersion,
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
+        Assert.IsType<ZLinkObjectReserveResult.PlacementCapacityExhausted>(
+            await repository.ReserveAsync(Reservation("actor:capacity", descriptor, owner))
+        );
+        if (opaqueProvider)
+        {
+            var capacityAfter = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await provider.ReadAsync(CapacityKey(descriptor))
+            );
+            var originalCapacity = Assert.IsType<ZLinkStoreReadResult.Found>(capacityBefore);
+            Assert.Equal(originalCapacity.Value.Version, capacityAfter.Value.Version);
+            Assert.Equal(
+                originalCapacity.Value.Bytes.ToArray(),
+                capacityAfter.Value.Bytes.ToArray()
+            );
+            Assert.Equal("3", await ReadCounterAsync(provider, ObjectCounterKey));
+            Assert.Equal("3", await ReadCounterAsync(provider, AuthorityOwnerCounterKey));
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ReincarnateRejectsReservedAndExpiredOwnerWithoutChangingAuthority(
+        bool opaqueProvider,
+        bool expiredOwner
+    )
+    {
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        IZLinkLocationRepository repository = opaqueProvider
+            ? new ZLinkProviderLocationRepository(provider)
+            : new ZLinkInMemoryLocationStore(time);
+        var owner = await ClaimAsync(repository, "reincarnate-reject-owner");
+        var descriptor = Descriptor("source", owner);
+        _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("actor:reincarnate-reject", descriptor, owner);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request)
+        );
+        if (expiredOwner)
+        {
+            Assert.IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(reserved.Reservation, new byte[] { 2 })
+            );
+            time.Advance(TimeSpan.FromMinutes(2));
+        }
+        var before = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await repository.ReadAuthorityAsync(request.Key)
+            )
+            .Snapshot;
+        var capacityBefore = await provider.ReadAsync(CapacityKey(descriptor));
+
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(
+            await repository.CompareExchangeAuthorityAsync(
+                request.Key,
+                before.StoreVersion,
+                new ZLinkAuthorityMutation.Put(
+                    new byte[] { 3 },
+                    ZLinkAuthorityGenerationTransition.Reincarnate,
+                    null,
+                    null
+                )
+            )
+        );
+        AssertAuthorityUnchanged(
+            before,
+            Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(request.Key)
+                )
+                .Snapshot
+        );
+        if (opaqueProvider)
+        {
+            var capacityAfter = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await provider.ReadAsync(CapacityKey(descriptor))
+            );
+            var originalCapacity = Assert.IsType<ZLinkStoreReadResult.Found>(capacityBefore);
+            Assert.Equal(originalCapacity.Value.Version, capacityAfter.Value.Version);
+            Assert.Equal(
+                originalCapacity.Value.Bytes.ToArray(),
+                capacityAfter.Value.Bytes.ToArray()
+            );
+            Assert.Equal("2", await ReadCounterAsync(provider, ObjectCounterKey));
+            Assert.Equal("2", await ReadCounterAsync(provider, AuthorityOwnerCounterKey));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReincarnateCounterExhaustionLeavesBothCountersAndAuthorityUnchanged(
+        bool ownerCounterExhausted
+    )
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore(new ManualTimeProvider());
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "reincarnate-exhaust-owner");
+        var descriptor = Descriptor("source", owner);
+        _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("actor:reincarnate-exhaust", descriptor, owner);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request)
+        );
+        var before = Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(reserved.Reservation, new byte[] { 2 })
+            )
+            .Snapshot;
+        var exhaustedKey = ownerCounterExhausted ? AuthorityOwnerCounterKey : ObjectCounterKey;
+        var unchangedKey = ownerCounterExhausted ? ObjectCounterKey : AuthorityOwnerCounterKey;
+        await SeedCounterAsync(provider, exhaustedKey, long.MaxValue.ToString());
+
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.GenerationExhausted>(
+            await repository.CompareExchangeAuthorityAsync(
+                request.Key,
+                before.StoreVersion,
+                new ZLinkAuthorityMutation.Put(
+                    new byte[] { 3 },
+                    ZLinkAuthorityGenerationTransition.Reincarnate,
+                    null,
+                    null
+                )
+            )
+        );
+        AssertAuthorityUnchanged(
+            before,
+            Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(request.Key)
+                )
+                .Snapshot
+        );
+        Assert.Equal(long.MaxValue.ToString(), await ReadCounterAsync(provider, exhaustedKey));
+        Assert.Equal("2", await ReadCounterAsync(provider, unchangedKey));
+    }
+
+    [Fact]
+    public async Task ReincarnateCounterConditionsRejectPartialBatchChanges()
+    {
+        var inner = new ZLinkInMemoryProviderLocationStore(new ManualTimeProvider());
+        var provider = new InspectAuthorityBatchLocationStore(inner);
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "reincarnate-batch-owner");
+        var descriptor = Descriptor("source", owner);
+        _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("actor:reincarnate-batch", descriptor, owner);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request)
+        );
+        var before = Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(reserved.Reservation, new byte[] { 2 })
+            )
+            .Snapshot;
+        var observed = 0;
+        provider.Inspect = async batch =>
+        {
+            observed++;
+            foreach (var counterKey in new[] { ObjectCounterKey, AuthorityOwnerCounterKey })
+            {
+                var counterCondition = Assert.Single(
+                    batch.Conditions.OfType<ZLinkStoreCondition.Version>(),
+                    condition => condition.Key == counterKey
+                );
+                var invalid = new ZLinkStoreWriteRequest(
+                    batch
+                        .Conditions.Select(condition =>
+                            condition == counterCondition
+                                ? new ZLinkStoreCondition.Value(counterKey, new byte[] { 0 })
+                                : condition
+                        )
+                        .ToArray(),
+                    batch.Mutations
+                );
+                Assert.IsType<ZLinkStoreWriteResult.Conflict>(await inner.WriteAsync(invalid));
+                Assert.Equal("2", await ReadCounterAsync(inner, ObjectCounterKey));
+                Assert.Equal("2", await ReadCounterAsync(inner, AuthorityOwnerCounterKey));
+                AssertAuthorityUnchanged(
+                    before,
+                    Assert
+                        .IsType<ZLinkAuthorityReadResult.Found>(
+                            await repository.ReadAuthorityAsync(request.Key)
+                        )
+                        .Snapshot
+                );
+            }
+        };
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+            await repository.CompareExchangeAuthorityAsync(
+                request.Key,
+                before.StoreVersion,
+                new ZLinkAuthorityMutation.Put(
+                    new byte[] { 3 },
+                    ZLinkAuthorityGenerationTransition.Reincarnate,
+                    null,
+                    null
+                )
+            )
+        );
+        Assert.Equal(1, observed);
+        Assert.Equal("3", await ReadCounterAsync(inner, ObjectCounterKey));
+        Assert.Equal("3", await ReadCounterAsync(inner, AuthorityOwnerCounterKey));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReincarnateRejectsPreparedAggregateFence(bool opaqueProvider)
+    {
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        IZLinkLocationRepository repository = opaqueProvider
+            ? new ZLinkProviderLocationRepository(provider)
+            : new ZLinkInMemoryLocationStore(time);
+        var owner = await ClaimAsync(repository, "reincarnate-fence-owner");
+        var targetOwner = await ClaimAsync(repository, "reincarnate-fence-target");
+        var descriptor = Descriptor("source", owner);
+        var target = Descriptor("target", targetOwner);
+        _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        _ = await repository.UpdateMeshNodeAsync(target, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("actor:reincarnate-fence", descriptor, owner);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request)
+        );
+        var created = Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(reserved.Reservation, new byte[] { 2 })
+            )
+            .Snapshot;
+        var aggregate = AggregateRequest(
+            [AggregateParticipant(request.Key, created.StoreVersion, 0)],
+            target,
+            targetOwner
+        );
+        Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
+            await repository.PrepareAggregateAsync(aggregate)
+        );
+        var before = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await repository.ReadAuthorityAsync(request.Key)
+            )
+            .Snapshot;
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(
+            await repository.CompareExchangeAuthorityAsync(
+                request.Key,
+                before.StoreVersion,
+                new ZLinkAuthorityMutation.Put(
+                    new byte[] { 3 },
+                    ZLinkAuthorityGenerationTransition.Reincarnate,
+                    null,
+                    null
+                )
+            )
+        );
+        AssertAuthorityUnchanged(
+            before,
+            Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(request.Key)
+                )
+                .Snapshot
+        );
+    }
+
+    private static void AssertAuthorityUnchanged(
+        ZLinkAuthoritySnapshot expected,
+        ZLinkAuthoritySnapshot actual
+    )
+    {
+        Assert.Equal(expected.StoreVersion, actual.StoreVersion);
+        Assert.Equal(expected.Payload.ToArray(), actual.Payload.ToArray());
+        Assert.Equal(expected.ObjectGeneration, actual.ObjectGeneration);
+        Assert.Equal(expected.AuthorityOwnerGeneration, actual.AuthorityOwnerGeneration);
+        Assert.Equal(expected.OwnerId, actual.OwnerId);
+        Assert.Equal(expected.OwnerLeaseGeneration, actual.OwnerLeaseGeneration);
+        Assert.Equal(expected.Allocation, actual.Allocation);
+        if (expected.ReservedCreation is { } expectedCreation)
+        {
+            var actualCreation = Assert.IsType<ZLinkReservedObjectCreation>(
+                actual.ReservedCreation
+            );
+            Assert.Equal(expectedCreation.ReservationId, actualCreation.ReservationId);
+            Assert.Equal(
+                expectedCreation.RequestContentReference,
+                actualCreation.RequestContentReference
+            );
+            Assert.Equal(expectedCreation.RequestEncodedSize, actualCreation.RequestEncodedSize);
+            Assert.Equal(
+                expectedCreation.RequestSha256.ToArray(),
+                actualCreation.RequestSha256.ToArray()
+            );
+        }
+        else
+        {
+            Assert.Null(actual.ReservedCreation);
+        }
+    }
+
     [Fact]
     public async Task OwnerLeaseRenewalPreservesSpiBytesAndChangesProviderVersion()
     {
@@ -1802,11 +2174,17 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             );
     }
 
-    [Fact]
-    public async Task SharedOpaqueProvider_AggregateCommitRetriesCapacityContention()
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(65, 0)]
+    [InlineData(1, 5100)]
+    public async Task SharedOpaqueProvider_AggregateCommitRetriesCapacityContention(
+        int conflicts,
+        int providerLatencyMilliseconds
+    )
     {
         var inner = new ZLinkInMemoryProviderLocationStore();
-        var provider = new AggregateCommitConflictOnceLocationStore(inner);
+        var provider = new AggregateCommitConflictLocationStore(inner);
         var repository = new ZLinkProviderLocationRepository(provider);
         var sourceOwner = await ClaimAsync(repository, "source-owner");
         var targetOwner = await ClaimAsync(repository, "target-owner");
@@ -1851,13 +2229,14 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             await repository.PrepareAggregateAsync(request)
         );
 
-        provider.ConflictNextAggregateCommit = true;
+        provider.RemainingCommitConflicts = conflicts;
+        provider.CommitConflictLatency = TimeSpan.FromMilliseconds(providerLatencyMilliseconds);
 
         Assert.Equal(
             ZLinkAggregateCommitResult.Committed,
             await repository.CommitAggregateAsync(prepared.Fence)
         );
-        Assert.Equal(2, provider.AggregateCommitAttempts);
+        Assert.Equal(conflicts + 1, provider.AggregateCommitAttempts);
         foreach (var participant in participants)
         {
             var authority = Assert
@@ -3901,10 +4280,12 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         }
     }
 
-    private sealed class AggregateCommitConflictOnceLocationStore(IZLinkLocationStore inner)
+    private sealed class AggregateCommitConflictLocationStore(IZLinkLocationStore inner)
         : IZLinkLocationStore
     {
-        public bool ConflictNextAggregateCommit { get; set; }
+        public int RemainingCommitConflicts { get; set; }
+
+        public TimeSpan CommitConflictLatency { get; set; }
 
         public int AggregateCommitAttempts { get; private set; }
 
@@ -3913,7 +4294,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             CancellationToken cancellationToken = default
         ) => inner.ReadAsync(key, cancellationToken);
 
-        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
             ZLinkStoreWriteRequest request,
             CancellationToken cancellationToken = default
         )
@@ -3936,15 +4317,15 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             )
             {
                 AggregateCommitAttempts++;
-                if (ConflictNextAggregateCommit)
+                if (RemainingCommitConflicts > 0)
                 {
-                    ConflictNextAggregateCommit = false;
-                    return ValueTask.FromResult<ZLinkStoreWriteResult>(
-                        new ZLinkStoreWriteResult.Conflict(DateTimeOffset.UtcNow)
-                    );
+                    RemainingCommitConflicts--;
+                    if (CommitConflictLatency > TimeSpan.Zero)
+                        await Task.Delay(CommitConflictLatency, cancellationToken);
+                    return new ZLinkStoreWriteResult.Conflict(DateTimeOffset.UtcNow);
                 }
             }
-            return inner.WriteAsync(request, cancellationToken);
+            return await inner.WriteAsync(request, cancellationToken);
         }
 
         public ValueTask<ZLinkStoreScanResult> ScanAsync(
@@ -3994,6 +4375,32 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 }
             }
             return inner.WriteAsync(request, cancellationToken);
+        }
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
+    }
+
+    private sealed class InspectAuthorityBatchLocationStore(IZLinkLocationStore inner)
+        : IZLinkLocationStore
+    {
+        public Func<ZLinkStoreWriteRequest, Task>? Inspect { get; set; }
+
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        ) => inner.ReadAsync(key, cancellationToken);
+
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (Inspect is { } inspect)
+                await inspect(request);
+            return await inner.WriteAsync(request, cancellationToken);
         }
 
         public ValueTask<ZLinkStoreScanResult> ScanAsync(

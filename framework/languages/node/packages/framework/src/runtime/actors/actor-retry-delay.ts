@@ -1,5 +1,6 @@
 const INITIAL_RETRY_DELAY_MS = 25;
 const MAX_RETRY_DELAY_MS = 1_000;
+const RETRY_BACKOFF_MULTIPLIER = 2;
 
 export class ZLinkActorRetryDelay {
   private delayMs = INITIAL_RETRY_DELAY_MS;
@@ -11,7 +12,7 @@ export class ZLinkActorRetryDelay {
   async wait(signal: AbortSignal | undefined): Promise<boolean> {
     const completed = await delayUnlessAborted(this.delayMs, signal);
     if (completed) {
-      this.delayMs = Math.min(this.delayMs * 2, MAX_RETRY_DELAY_MS);
+      this.delayMs = Math.min(this.delayMs * RETRY_BACKOFF_MULTIPLIER, MAX_RETRY_DELAY_MS);
     }
     return completed;
   }

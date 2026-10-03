@@ -39,7 +39,7 @@ internal static partial class ZLinkRelocationTreeStore
                         FileMode.Truncate,
                         FileAccess.Write,
                         FileShare.None,
-                        1024 * 1024,
+                        StreamBufferBytes,
                         FileOptions.Asynchronous | FileOptions.SequentialScan
                     )
                 )
@@ -209,13 +209,13 @@ internal static partial class ZLinkRelocationTreeStore
             logicalLength = checked(logicalLength + (ulong)length);
             if (logicalLength > MaxLogicalBytes)
                 throw new InvalidOperationException(
-                    "Relocation participant components exceed the 256 GiB aggregate bound."
+                    $"Relocation participant components exceed the {MaxLogicalBytes} byte aggregate bound."
                 );
             chunkCount = checked(chunkCount + CalculateChunkCount(checked((ulong)length)));
         }
         if (chunkCount > MaxChunks)
             throw new InvalidOperationException(
-                "Relocation participant components exceed the 4,096 chunk aggregate bound."
+                $"Relocation participant components exceed the {MaxChunks} chunk aggregate bound."
             );
         var minimumManifestBytes = checked(
             (ulong)FrameHeaderBytes
@@ -226,7 +226,7 @@ internal static partial class ZLinkRelocationTreeStore
         );
         if (minimumManifestBytes > MaxManifestBytes)
             throw new InvalidOperationException(
-                "Relocation participant manifest exceeds its 64 MiB bound."
+                $"Relocation participant manifest exceeds its {MaxManifestBytes} byte bound."
             );
         return (logicalLength, checked((int)chunkCount), checked((int)minimumManifestBytes));
     }
@@ -309,7 +309,7 @@ internal static partial class ZLinkRelocationTreeStore
                     FileMode.Truncate,
                     FileAccess.Write,
                     FileShare.None,
-                    1024 * 1024,
+                    StreamBufferBytes,
                     FileOptions.Asynchronous | FileOptions.SequentialScan
                 )
             )
@@ -359,7 +359,7 @@ internal static partial class ZLinkRelocationTreeStore
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                1024 * 1024,
+                StreamBufferBytes,
                 FileOptions.SequentialScan
             );
             long componentOffset = 0;
@@ -503,7 +503,9 @@ internal static partial class ZLinkRelocationTreeStore
             )
         );
         if (bodyLength > MaxManifestBytes - FrameHeaderBytes - FrameChecksumBytes)
-            throw new InvalidOperationException("Relocation participant manifest exceeds 64 MiB.");
+            throw new InvalidOperationException(
+                $"Relocation participant manifest exceeds {MaxManifestBytes} bytes."
+            );
         var encoded = new byte[FrameHeaderBytes + bodyLength + FrameChecksumBytes];
         WriteFrameHeader(encoded, ParticipantManifestMagic, checked((uint)bodyLength));
         var offset = FrameHeaderBytes;
@@ -579,14 +581,18 @@ internal static partial class ZLinkRelocationTreeStore
             );
         WriteFrameChecksum(encoded);
         if (encoded.Length > MaxManifestBytes)
-            throw new InvalidOperationException("Relocation participant manifest exceeds 64 MiB.");
+            throw new InvalidOperationException(
+                $"Relocation participant manifest exceeds {MaxManifestBytes} bytes."
+            );
         return encoded;
     }
 
     private static ParticipantManifest DecodeParticipantManifest(ReadOnlySpan<byte> encoded)
     {
         if (encoded.Length > MaxManifestBytes)
-            throw DataLost("Relocation participant manifest exceeds its 64 MiB bound.");
+            throw DataLost(
+                $"Relocation participant manifest exceeds its {MaxManifestBytes} byte bound."
+            );
         var body = DecodeFrame(encoded, ParticipantManifestMagic);
         var offset = 0;
         var version = ReadByte(body, ref offset);
@@ -731,7 +737,7 @@ internal static partial class ZLinkRelocationTreeStore
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                1024 * 1024,
+                StreamBufferBytes,
                 FileOptions.Asynchronous | FileOptions.SequentialScan
             );
             input.Position = _offset;

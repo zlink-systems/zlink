@@ -15,12 +15,16 @@
 #
 # Options (pass as -D<name>=<value> before -P):
 #     ZLINK_ROOT   where .zlink/ goes (default: beside this file)
+#     ZLINK_PROJECT_DIR   the project to configure (default: beside this file); the
+#                         perf project uses this to reuse this script
 cmake_minimum_required(VERSION 3.24)
 
 set(ZLINK_FRAMEWORK_CPP_VERSION "0.26.0")
 set(ZLINK_RELEASES "https://github.com/zlink-systems/zlink/releases/download")
 
-set(ZLINK_PROJECT_DIR "${CMAKE_CURRENT_LIST_DIR}")
+if(NOT ZLINK_PROJECT_DIR)
+  set(ZLINK_PROJECT_DIR "${CMAKE_CURRENT_LIST_DIR}")
+endif()
 if(NOT ZLINK_ROOT)
   set(ZLINK_ROOT "${ZLINK_PROJECT_DIR}/.zlink")
 endif()

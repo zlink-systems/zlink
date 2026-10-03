@@ -48,13 +48,29 @@ internal sealed class ZLinkBoundSessionDispatchScope : IAsyncDisposable
         return TryDefer(actorId, closeAsync);
     }
 
-    public static bool TryDefer(string actorId, Func<CancellationToken, ValueTask> operationAsync)
+    public static bool TryDefer(
+        string actorId,
+        Func<CancellationToken, ValueTask> operationAsync
+    ) =>
+        TrySubmitDeferred(actorId, operationAsync) switch
+        {
+            ZLinkOneWaySubmitStatus.Submitted => true,
+            ZLinkOneWaySubmitStatus.Backpressured => throw new InvalidOperationException(
+                "Bound-session deferred submit queue is full."
+            ),
+            _ => false,
+        };
+
+    internal static ZLinkOneWaySubmitStatus? TrySubmitDeferred(
+        string actorId,
+        Func<CancellationToken, ValueTask> operationAsync
+    )
     {
         var scope = CurrentScope.Value;
         if (scope is null || !string.Equals(scope._actorId, actorId, StringComparison.Ordinal))
-            return false;
+            return null;
         if (Volatile.Read(ref scope._disposed) != 0)
-            return false;
+            return null;
 
         try
         {
@@ -62,7 +78,7 @@ internal sealed class ZLinkBoundSessionDispatchScope : IAsyncDisposable
         }
         catch (ObjectDisposedException) when (Volatile.Read(ref scope._disposed) != 0)
         {
-            return false;
+            return null;
         }
     }
 
@@ -87,14 +103,14 @@ internal sealed class ZLinkBoundSessionDispatchScope : IAsyncDisposable
         }
     }
 
-    private bool Defer(Func<CancellationToken, ValueTask> operationAsync)
+    private ZLinkOneWaySubmitStatus? Defer(Func<CancellationToken, ValueTask> operationAsync)
     {
         if (_drained)
-            return false;
+            return null;
         if (_deferredOperations.Count >= MaxDeferredOperations)
-            throw new InvalidOperationException("Bound-session deferred submit queue is full.");
+            return ZLinkOneWaySubmitStatus.Backpressured;
         _deferredOperations.Enqueue(operationAsync);
-        return true;
+        return ZLinkOneWaySubmitStatus.Submitted;
     }
 
     private Func<CancellationToken, ValueTask>? PrepareDrain()

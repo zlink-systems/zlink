@@ -2,6 +2,13 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from './framework-errors-internal';
+const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
+
+/** 소비한 배열 prefix가 정리 조건에 도달했는지 판정합니다. */
+export function shouldCompactBackingArray(head: number, length: number): boolean {
+  return head >= BACKING_ARRAY_COMPACTION_MIN_HEAD && head * 2 >= length;
+}
+
 export class ZLinkRuntimeAdmissionGate {
   private readonly meshes = new Map<string, ZLinkMeshAdmissionState>();
 
@@ -192,7 +199,7 @@ function compactWaiters(state: ZLinkMeshAdmissionState): void {
   if (state.waiterCount === 0) {
     state.waiters.length = 0;
     state.waiterHead = 0;
-  } else if (state.waiterHead >= 1024 && state.waiterHead * 2 >= state.waiters.length) {
+  } else if (shouldCompactBackingArray(state.waiterHead, state.waiters.length)) {
     state.waiters.splice(0, state.waiterHead);
     state.waiterHead = 0;
   }

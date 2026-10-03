@@ -58,13 +58,11 @@ public sealed class EnvelopeHeaderCacheHotPathTests
         var lane = (ZLinkStateLane)Field("CacheLane");
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Assert.True(
-            lane.TryPost(async () =>
-            {
-                entered.SetResult();
-                await release.Task;
-            })
-        );
+        _ = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Task? lookup = null;
         try
@@ -124,7 +122,7 @@ public sealed class EnvelopeHeaderCacheHotPathTests
             {
                 CorrelationId = $"correlation-{index}",
                 Deadline = DateTimeOffset.UnixEpoch.AddTicks(index),
-                Metadata = new() { ["record"] = index.ToString() },
+                Metadata = new Dictionary<string, string>() { ["record"] = index.ToString() },
             };
             using var encoded = ZLinkEnvelopeCodec.EncodeHeader(current);
             Assert.Equal(ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(current), encoded.ToArray());
@@ -139,7 +137,7 @@ public sealed class EnvelopeHeaderCacheHotPathTests
     }
 
     [Fact]
-    public void PlannedHeaderPreservesJsonEscapingIncludingInvalidSurrogates()
+    public void PlannedHeaderPreservesNonMetadataJsonEscapingIncludingInvalidSurrogates()
     {
         var text =
             new string(Enumerable.Range(0, 128).Select(static value => (char)value).ToArray())
@@ -153,7 +151,6 @@ public sealed class EnvelopeHeaderCacheHotPathTests
             Source = text,
             ErrorCode = "failure",
             ErrorMessage = text,
-            Metadata = new() { [text] = text, ["nullable"] = null! },
         };
 
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
@@ -226,13 +223,13 @@ public sealed class EnvelopeHeaderCacheHotPathTests
         """{"source":"first","unknown":{"nested":[true,null,12]},"KINd":3,"f\u006FrmatMarker":"242","CHANNELNAME":"cache","messageName":"flexible","contentType":"application/json","correlationId":"flexible-1","SoUrCe":"last"}"""
     )]
     [InlineData(
-        """{"formatMarker":242,"kind":3,"correlationId":"flexible-2","metadata":{"same":"first","same":"last","nullable":null}}"""
+        """{"formatMarker":242,"kind":3,"correlationId":"flexible-2","metadata":{"same":"first","same":"last"}}"""
     )]
     [InlineData(
         """{"formatMarker":"24\u0032","kind":3,"correlationId":"flexible-3","deadline":"2026-09-10T12:34:56Z","metadata":{"first":"discarded"},"METADATA":{}}"""
     )]
     [InlineData(
-        """{"formatMarker":242,"kind":3,"correlationId":"flexible-4","channelName":null,"messageName":null,"contentType":null,"metadata":null}"""
+        """{"formatMarker":242,"kind":3,"correlationId":"flexible-4","channelName":null,"messageName":null,"contentType":null}"""
     )]
     public void StreamingHeaderDecodePreservesAcceptedWebJsonSemantics(string wire)
     {

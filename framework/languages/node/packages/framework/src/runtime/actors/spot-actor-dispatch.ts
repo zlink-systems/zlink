@@ -1,28 +1,31 @@
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import {
+  type Type,
+  type ZLinkActor,
+  type ZLinkActorHandlerRegistry,
+  type ZLinkMessageContext,
+  type ZLinkMessageSerializer,
+  type ZLinkSpot,
+  type ZLinkSpotActorJoinResult,
+  type ZLinkSpotActorRequestHandler,
+  type ZLinkSpotActorSendHandler,
+  ZLinkFrameworkException,
+  ZLinkMessageMetadataEmpty
+} from '../../contracts';
+
+import type { Message } from '../../contracts/Common/Message';
+import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
+import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes';
+import { ZLinkConfigurationException } from '../configuration';
+import type { ZLinkSerialWorkOptions } from '../execution/serial-execution-queue';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
-import type {
-  Type,
-  ZLinkActor,
-  ZLinkActorHandlerRegistry,
-  ZLinkSpot,
-  ZLinkSpotActorJoinResult,
-  ZLinkMessageContext,
-  ZLinkSpotActorRequestHandler,
-  ZLinkSpotActorSendHandler
-} from '../../contracts';
-import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import { ZLinkFrameworkException, ZLinkMessageMetadataEmpty } from '../../contracts';
-import type { Message } from '../../contracts/Common/Message';
-import { ZLinkConfigurationException } from '../configuration';
-import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes';
-import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
-import type { ZLinkMessageSerializer } from '../../contracts';
-import { actorJoinIdentity } from './actor-lifecycle-snapshot';
-import { runActorHandlerWithDeferredJoins } from './actor-join-deferred-scope';
 import { runWithLifecycleHandler } from '../handlers/handler-instance-scope';
-import type { ZLinkSerialWorkOptions } from '../execution/serial-execution-queue';
+import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { runActorHandlerWithDeferredJoins } from './actor-join-deferred-scope';
+import { actorJoinIdentity } from './actor-lifecycle-snapshot';
 
 export enum ZLinkActorPacketKind {
   Send = 'send',
@@ -34,6 +37,7 @@ export interface ZLinkActorPacketDescriptor {
   readonly packetName: string;
   readonly actorType: Type<ZLinkActor>;
   readonly handlerType: Type;
+  readonly methodName?: string;
 }
 
 export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRegistry {
@@ -56,7 +60,8 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
           : ZLinkActorPacketKind.Request,
       packetName: resolvedPacketName,
       actorType: Object as unknown as Type<ZLinkActor>,
-      handlerType
+      handlerType,
+      methodName: metadata.methodName
     });
   }
 
@@ -67,7 +72,16 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
         `Actor packet '${descriptor.packetName}' for '${descriptor.actorType.name}' is already registered.`
       );
     }
-    this.packets.set(key, descriptor);
+    const metadata = readZLinkDecoratorMetadata(descriptor.handlerType).find(
+      (entry) =>
+        entry.kind ===
+          (descriptor.kind === ZLinkActorPacketKind.Send ? 'spotActorSend' : 'spotActorRequest') &&
+        entry.packetName === descriptor.packetName
+    );
+    this.packets.set(key, {
+      ...descriptor,
+      methodName: descriptor.methodName ?? metadata?.methodName
+    });
     return this;
   }
 
@@ -144,9 +158,10 @@ export class ZLinkSpotActorDispatcher {
       await this.invokeHandler<ZLinkSpotActorSendHandler<ZLinkSpot, ZLinkActor, TMessage>, void>(
         actor,
         descriptor,
-        (handler) =>
+        (handler, method) =>
           runActorHandlerWithDeferredJoins(() =>
-            handler.handle(
+            method.call(
+              handler,
               this.options.spot,
               actor,
               this.createContext(packetName, context),
@@ -232,10 +247,11 @@ export class ZLinkSpotActorDispatcher {
       return await this.invokeHandler<
         ZLinkSpotActorRequestHandler<ZLinkSpot, ZLinkActor, TRequest, TReply>,
         TResult
-      >(actor, descriptor, (handler) =>
+      >(actor, descriptor, (handler, method) =>
         runActorHandlerWithDeferredJoins(
           () =>
-            handler.handle(
+            method.call(
+              handler,
               this.options.spot,
               actor,
               this.createContext(packetName, context),
@@ -274,7 +290,7 @@ export class ZLinkSpotActorDispatcher {
   evaluateActorJoin(
     actor: ZLinkActor,
     request: Message,
-    contentType = 'application/json'
+    contentType: string = ZlinkStreamContentType.Json
   ): Promise<ZLinkSpotActorJoinResult> {
     return this.execute(async () => {
       const payload = wrapFrameworkPayloadMessage(
@@ -337,14 +353,29 @@ export class ZLinkSpotActorDispatcher {
 
   private async invokeHandler<THandler, TResult>(
     actor: ZLinkActor,
-    descriptor: Pick<ZLinkActorPacketDescriptor, 'handlerType'>,
-    callback: (handler: THandler) => Promise<TResult>
+    descriptor: Pick<ZLinkActorPacketDescriptor, 'handlerType' | 'methodName'>,
+    callback: (
+      handler: THandler,
+      method: THandler extends { handle: infer TMethod } ? TMethod : never
+    ) => Promise<TResult>
   ): Promise<TResult> {
     return await runWithLifecycleHandler(
       actor,
       descriptor.handlerType,
       this.options.providerResolver,
-      (resolved) => callback(resolved as THandler)
+      (resolved) => {
+        const methodName = descriptor.methodName ?? 'handle';
+        const method = (resolved as Record<string, unknown>)[methodName];
+        if (typeof method !== 'function') {
+          throw new ZLinkConfigurationException(
+            `Actor handler '${descriptor.handlerType.name}.${methodName}' is not callable.`
+          );
+        }
+        return callback(
+          resolved as THandler,
+          method as THandler extends { handle: infer TMethod } ? TMethod : never
+        );
+      }
     );
   }
 

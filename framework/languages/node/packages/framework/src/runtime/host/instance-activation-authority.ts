@@ -20,6 +20,7 @@ import { ZLinkFrameworkException } from '../../contracts';
 import {
   decodeServiceInstanceAuthorityPayload,
   decodeServiceReadySpotAuthority,
+  decodeServiceClosingSpotAuthority,
   encodeServiceInstanceAuthorityPayload
 } from '../foundation/service-authority-payload-codec';
 import type {
@@ -36,7 +37,6 @@ import type {
 } from '../foundation/service-stateful-wire-codec';
 import { routingIdsEqual } from '../routing-id';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
-import { crc32c } from '../foundation/service-relocation-runtime';
 import { putNewRelocationBlob, relocationBlobReference } from '../locations/relocation-blob';
 
 import {
@@ -80,7 +80,8 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
   }
 
   async reserve(
-    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>
+    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>,
+    signal?: AbortSignal
   ): Promise<ServiceInstanceAuthorityReserve> {
     const target = activation.target;
     const owner = this.requireOwner();
@@ -99,15 +100,15 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
     const stored = await putNewRelocationBlob(
       relocationStore,
       requestBytes,
-      CREATION_REQUEST_RETENTION_MS
+      CREATION_REQUEST_RETENTION_MS,
+      signal
     );
-    const storedRead = await relocationStore.read(stored.reference);
+    const storedRead = await relocationStore.read(stored.reference, signal);
     if (
       stored.reference.value.length === 0 ||
       stored.expiresAt.getTime() <= stored.storeNow.getTime() ||
       storedRead.kind !== 'found' ||
-      crc32c(storedRead.bytes) !== crc32c(requestBytes) ||
-      !Buffer.from(storedRead.bytes).equals(requestBytes)
+      Buffer.compare(storedRead.bytes, requestBytes) !== 0
     ) {
       await this.deleteOrphan(stored.reference);
       throw new Error('Relocation Store returned an invalid creation request receipt.');
@@ -115,50 +116,44 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
     let reserved: Awaited<ReturnType<ZLinkObjectCreationStore['reserve']>>;
     try {
       for (;;) {
-        reserved = await this.options.store.reserve({
-          key: { kind: 'instance_spot', globalId: target.targetSpotId },
-          intent: {
-            stableType: target.stableType,
-            requestContentReference: stored.reference.value,
-            requestSha256: requestHash,
-            requestEncodedSize: BigInt(requestBytes.byteLength)
-          },
-          target: {
-            meshName: this.options.meshName,
-            nodeRid: target.targetNodeRid,
-            nodeLifecycleGeneration: target.targetNodeGeneration,
-            owner
-          },
-          creatingPayload: encodeServiceInstanceAuthorityPayload({
-            state: 'coldActivating',
-            stableType: target.stableType,
-            spotId: target.targetSpotId,
-            ownerId: owner.ownerId,
-            ownerLeaseGeneration: owner.leaseGeneration,
-            ownerMeshName: this.options.meshName,
-            ownerNodeRid: target.targetNodeRid,
-            ownerNodeGeneration: target.targetNodeGeneration
-          }),
-          capacity: {
-            actors: 0,
-            spots: 1,
-            spotType: {
-              objectKind: 'instance_spot',
+        reserved = await this.options.store.reserve(
+          {
+            key: { kind: 'instance_spot', globalId: target.targetSpotId },
+            intent: {
               stableType: target.stableType,
-              count: 1
+              requestContentReference: stored.reference.value,
+              requestSha256: requestHash,
+              requestEncodedSize: BigInt(requestBytes.byteLength)
+            },
+            target: {
+              meshName: this.options.meshName,
+              nodeRid: target.targetNodeRid,
+              nodeLifecycleGeneration: target.targetNodeGeneration,
+              owner
+            },
+            creatingPayload: encodeServiceInstanceAuthorityPayload({
+              state: 'coldActivating',
+              stableType: target.stableType,
+              spotId: target.targetSpotId,
+              ownerId: owner.ownerId,
+              ownerLeaseGeneration: owner.leaseGeneration,
+              ownerMeshName: this.options.meshName,
+              ownerNodeRid: target.targetNodeRid,
+              ownerNodeGeneration: target.targetNodeGeneration
+            }),
+            capacity: {
+              actors: 0,
+              spots: 1,
+              spotType: {
+                objectKind: 'instance_spot',
+                stableType: target.stableType,
+                count: 1
+              }
             }
-          }
-        });
-        if (reserved.kind === 'conflict' || reserved.kind === 'alreadyExists') {
-          const existingState =
-            reserved.current.kind === 'snapshot'
-              ? decodeServiceInstanceAuthorityPayload(reserved.current.payload)?.state
-              : undefined;
-          if (existingState === 'closing') {
-            await this.awaitClosingRelease(target, activation.deadlineUnixMs);
-            continue;
-          }
-        }
+          },
+          undefined,
+          activation.deadlineUnixMs
+        );
         if (reserved.kind !== 'alreadyExists') break;
         this.options.metrics?.recordInstanceSpotClaimConflict(
           this.options.meshName,
@@ -266,40 +261,45 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
   async commit(
     target: ServiceInstanceActivationTarget,
     reservation: ServiceInstanceActivationReservation,
-    spot: ServiceSpotState
+    spot: ServiceSpotState,
+    deadlineUnixMs?: bigint
   ): Promise<{ readonly kind: 'committed' | 'lost'; readonly route: ServiceInstanceRouteFence }> {
     const pending = this.requirePending(reservation);
     requireCommitIdentity(target, reservation, pending.creating, spot, this.options.meshName);
     let result;
     try {
-      result = await this.options.store.commit({
-        key: { kind: 'instance_spot', globalId: target.targetSpotId },
-        reservationId: pending.reservationId,
-        expectedStoreVersion: pending.creating.storeVersion.value,
-        target: {
-          meshName: this.options.meshName,
-          nodeRid: target.targetNodeRid,
-          nodeLifecycleGeneration: target.targetNodeGeneration,
-          owner: pending.owner
+      result = await this.options.store.commit(
+        {
+          key: { kind: 'instance_spot', globalId: target.targetSpotId },
+          reservationId: pending.reservationId,
+          expectedStoreVersion: pending.creating.storeVersion.value,
+          target: {
+            meshName: this.options.meshName,
+            nodeRid: target.targetNodeRid,
+            nodeLifecycleGeneration: target.targetNodeGeneration,
+            owner: pending.owner
+          },
+          readyPayload: encodeServiceInstanceAuthorityPayload({
+            state: 'ready',
+            stableType: spot.stableType,
+            spotId: spot.ref.spotId,
+            ownerId: pending.owner.ownerId,
+            ownerLeaseGeneration: pending.owner.leaseGeneration,
+            ownerMeshName: this.options.meshName,
+            ownerNodeRid: target.targetNodeRid,
+            ownerNodeGeneration: target.targetNodeGeneration,
+            activationRecovery: {
+              reference: pending.requestReference.value,
+              sha256: pending.requestSha256,
+              encodedSize: pending.requestEncodedSize,
+              inboxSequence: 1n,
+              replayCursor: 0n
+            }
+          })
         },
-        readyPayload: encodeServiceInstanceAuthorityPayload({
-          state: 'ready',
-          stableType: spot.stableType,
-          spotId: spot.ref.spotId,
-          ownerId: pending.owner.ownerId,
-          ownerLeaseGeneration: pending.owner.leaseGeneration,
-          ownerMeshName: this.options.meshName,
-          ownerNodeRid: target.targetNodeRid,
-          ownerNodeGeneration: target.targetNodeGeneration,
-          activationRecovery: {
-            reference: pending.requestReference.value,
-            sha256: pending.requestSha256,
-            encodedSize: pending.requestEncodedSize,
-            inboxSequence: 1n,
-            replayCursor: 0n
-          }
-        })
-      });
+        undefined,
+        deadlineUnixMs
+      );
     } catch (error) {
       if (error instanceof ZLinkFrameworkException) throw error;
       throw createInternalFrameworkException(
@@ -483,32 +483,6 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
     );
   }
 
-  private async awaitClosingRelease(
-    target: ServiceInstanceActivationTarget,
-    deadlineUnixMs: bigint
-  ): Promise<void> {
-    const key = authorityKey(target.targetSpotId);
-    const deadlineMs = performance.now() + Number(deadlineUnixMs - BigInt(Date.now()));
-    while (performance.now() <= deadlineMs) {
-      const current = await this.options.store.readAuthority(key);
-      if (current.kind !== 'snapshot') return;
-      const decoded = decodeServiceInstanceAuthorityPayload(current.payload);
-      if (
-        current.allocation.objectKind !== 'instance_spot' ||
-        current.allocation.stableType !== target.stableType ||
-        decoded?.kind !== 'instance_spot' ||
-        decoded.spotId !== target.targetSpotId
-      ) {
-        throw new Error('Instance authority changed to a different Spot while closing.');
-      }
-      if (decoded.state !== 'closing') return;
-      await waitForActivationJoin(deadlineMs);
-    }
-    throw new Error(
-      `Instance Spot '${target.targetSpotId}' close did not release authority before deadline.`
-    );
-  }
-
   private requirePending(reservation: ServiceInstanceActivationReservation): PendingReservation {
     const pending = this.pending.get(reservation.token);
     if (pending === undefined || pending.creating.objectGeneration !== reservation.attempt) {
@@ -522,12 +496,14 @@ function readyRead(
   snapshot: ZLinkAuthoritySnapshot,
   target: ServiceInstanceActivationTarget
 ): ServiceInstanceAuthorityRead {
-  const decoded = decodeServiceReadySpotAuthority(snapshot.payload);
+  const decoded =
+    decodeServiceReadySpotAuthority(snapshot.payload) ??
+    decodeServiceClosingSpotAuthority(snapshot.payload);
   const creating = decodeServiceInstanceAuthorityPayload(snapshot.payload);
   if (
     creating?.state === 'coldActivating' &&
     snapshot.allocation.objectKind === 'instance_spot' &&
-    snapshot.allocation.state === 'reserved' &&
+    (snapshot.allocation.state === 'reserved' || snapshot.allocation.state === 'active') &&
     creating.stableType === target.stableType &&
     creating.spotId === target.targetSpotId &&
     creating.ownerId === snapshot.ownerId &&
@@ -541,7 +517,8 @@ function readyRead(
     return {
       kind: 'creating',
       objectGeneration: snapshot.objectGeneration,
-      authorityOwnerGeneration: snapshot.authorityOwnerGeneration
+      authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
+      authority: snapshot
     };
   }
   if (
@@ -560,14 +537,16 @@ function readyRead(
   ) {
     return { kind: 'missing' };
   }
-  return { kind: 'ready', route: routeFromSnapshot(snapshot) };
+  return { kind: 'ready', route: routeFromSnapshot(snapshot), authority: snapshot };
 }
 
 function readyExisting(
   snapshot: ZLinkAuthoritySnapshot,
   target: ServiceInstanceActivationTarget
 ): Extract<ServiceInstanceAuthorityRead, { readonly kind: 'ready' }> {
-  const decoded = decodeServiceReadySpotAuthority(snapshot.payload);
+  const decoded =
+    decodeServiceReadySpotAuthority(snapshot.payload) ??
+    decodeServiceClosingSpotAuthority(snapshot.payload);
   if (
     decoded?.kind !== 'instance_spot' ||
     decoded.stableType !== target.stableType ||
@@ -582,7 +561,7 @@ function readyExisting(
   ) {
     throw new Error('Existing Instance authority is not a matching Ready allocation.');
   }
-  return { kind: 'ready', route: routeFromSnapshot(snapshot) };
+  return { kind: 'ready', route: routeFromSnapshot(snapshot), authority: snapshot };
 }
 
 async function waitForActivationJoin(deadlineMs: number): Promise<void> {
@@ -619,7 +598,9 @@ function requireCommitIdentity(
 }
 
 function routeFromSnapshot(snapshot: ZLinkAuthoritySnapshot): ServiceInstanceRouteFence {
-  const decoded = decodeServiceReadySpotAuthority(snapshot.payload);
+  const decoded =
+    decodeServiceReadySpotAuthority(snapshot.payload) ??
+    decodeServiceClosingSpotAuthority(snapshot.payload);
   if (decoded?.kind !== 'instance_spot') {
     throw new Error('Instance authority is not Ready.');
   }

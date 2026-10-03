@@ -248,7 +248,7 @@ public sealed class test_request_writable_contract
                 TimeSpan.FromSeconds(3)));
         Assert.Equal(ZlinkRequestException.ErrorCode.NotConnected,
             error.Result);
-        Assert.Equal(107, error.NativeErrno);
+        Assert.Equal(CoreTestSupport.Errno("ENOTCONN"), error.NativeErrno);
     }
 
     [Fact]

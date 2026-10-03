@@ -64,8 +64,7 @@ class route_handler_registry_t
                     result_t<zlink::message_t>::success (zlink::message_t{}));
               }
               catch (...) {
-                  return task_t<zlink::message_t> (
-                    current_exception_to_message_result ("routed handler threw an exception"));
+                  return task_t<zlink::message_t> (current_exception_result<zlink::message_t> ());
               }
           });
     }
@@ -94,8 +93,7 @@ class route_handler_registry_t
                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
               }
               catch (...) {
-                  co_return current_exception_to_message_result (
-                    "routed handler threw an exception");
+                  co_return current_exception_result<zlink::message_t> ();
               }
           });
     }
@@ -123,8 +121,7 @@ class route_handler_registry_t
                   return serialize_handler_result ((owner.*method) (request, context), serializers);
               }
               catch (...) {
-                  return task_t<zlink::message_t> (
-                    current_exception_to_message_result ("routed handler threw an exception"));
+                  return task_t<zlink::message_t> (current_exception_result<zlink::message_t> ());
               }
           });
     }
@@ -155,8 +152,7 @@ class route_handler_registry_t
                     detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
               }
               catch (...) {
-                  co_return current_exception_to_message_result (
-                    "routed handler threw an exception");
+                  co_return current_exception_result<zlink::message_t> ();
               }
           });
     }
@@ -202,10 +198,11 @@ class route_handler_registry_t
         std::size_t operator() (const key_t &key) const noexcept
         {
             auto seed = std::hash<std::string>{}(key.router_channel_id);
-            seed ^= std::hash<int>{}(static_cast<int> (key.kind)) + 0x9e3779b9U + (seed << 6U)
-                    + (seed >> 2U);
-            seed ^=
-              std::hash<std::string>{}(key.packet_name) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
+            constexpr std::size_t hash_mix_constant = 0x9e3779b9U;
+            for (const auto value : {std::hash<int>{}(static_cast<int> (key.kind)),
+                                     std::hash<std::string>{}(key.packet_name)}) {
+                seed ^= value + hash_mix_constant + (seed << 6U) + (seed >> 2U);
+            }
             return seed;
         }
     };

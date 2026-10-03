@@ -1,10 +1,19 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { resolveModuleProviders } = require('./helpers/nestjs-test-utils');
 
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
+const {
+  ZLinkRuntimeTaskErrorSink,
+  ZLinkRuntimeTaskRunner
+} = require('../../packages/framework/dist/runtime/execution');
 const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const { BoundedReplayMap } = require('../../packages/framework/dist/runtime/host/bounded-replay-map');
+const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
+  new ZLinkRuntimeTaskErrorSink(),
+  new AbortController().signal
+);
 const nestjs = require('../../packages/nestjs/dist');
 
 test('bounded terminal replay refreshes recency and evicts only the oldest record', () => {
@@ -76,6 +85,15 @@ test('framework and NestJS builders register separate location and relocation st
 
 });
 
+test('owner lease startup relation includes two timeouts when renewal is slower than its interval', () => {
+  const defaults = framework.createFrameworkOptions(() => {});
+  assert.doesNotThrow(() => framework.createFrameworkRegistration(defaults));
+  const invalid = framework.createFrameworkOptions((builder) => {
+    builder.configureLocations().ownerLeaseRenewIntervalMs(1000).ownerLeaseRenewTimeoutMs(8000);
+  });
+  assert.throws(() => framework.createFrameworkRegistration(invalid), /ownerLease/u);
+});
+
 test('Session relocation seal timeout is a positive finite Location option', () => {
   for (const value of [0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
     const options = framework.createFrameworkOptions((builder) => {
@@ -104,6 +122,207 @@ test('framework runtime host uses the explicit location store for Actor lifecycl
   assert.equal(typeof actorOptions.locationLifecycle, 'object');
   assert.equal(spotOptions.locationLifecycle, undefined);
   assert.equal(typeof spotOptions.spotRouteResolver?.resolve, 'function');
+});
+
+test('host shutdown cancels startup and releases a provider claim committed after cancellation', async () => {
+  const calls = [];
+  const inner = new framework.ZLinkInMemoryProviderLocationStore();
+  let resolveStarted;
+  const claimStarted = new Promise(resolve => { resolveStarted = resolve; });
+  let claimSignal;
+  let claimKey;
+  let claimStartedOnce = false;
+  const provider = {
+    read: inner.read.bind(inner),
+    scan: inner.scan.bind(inner),
+    async write(request, signal) {
+      if (claimStartedOnce) return await inner.write(request, signal);
+      claimStartedOnce = true;
+      claimKey = request.mutations[0].key;
+      claimSignal = signal;
+      resolveStarted();
+      return await new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', async () => {
+          await inner.write(request);
+          reject(signal.reason);
+        }, { once: true });
+      });
+    }
+  };
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      locations: { storeInstance: provider }
+    })
+  }, {
+    backendAdapterFactory: fakeBackendAdapterFactory(calls, rid('startup-shutdown'))
+  });
+  const starting = host.start();
+  const observedStart = starting.then(() => 'started', error => error);
+  await claimStarted;
+  const termination = await host.shutdown({ deadlineMs: 1000 });
+  assert.equal(claimSignal.aborted, true, 'host stop cancels the active claim');
+  const startResult = await observedStart;
+  assert.equal(startResult?.name, 'AbortError');
+  assert.equal(termination.outcome, framework.ZLinkFrameworkTerminationOutcome.Stopped);
+  assert.equal(host.isStarted, false);
+  assert.equal((await inner.read(claimKey)).kind, 'missing');
+});
+
+for (const failedPhase of ['confirmation', 'release']) {
+  test(`host shutdown reports startup ${failedPhase} cleanup failure without retry`, async () => {
+    const inner = new framework.ZLinkInMemoryProviderLocationStore();
+    let claimKey;
+    let claimSignal;
+    let committed = false;
+    let claimStartedOnce = false;
+    let cleanupReads = 0;
+    let cleanupReleases = 0;
+    const providerEvents = [];
+    let resolveStarted;
+    const started = new Promise(resolve => { resolveStarted = resolve; });
+    const provider = {
+      async read(key, signal) {
+        providerEvents.push({ operation: 'read', key: key.value, committed, cancelled: signal?.aborted });
+        if (committed && key.value === claimKey.value) {
+          cleanupReads += 1;
+          if (failedPhase === 'confirmation') throw new Error('confirmation unavailable');
+        }
+        return await inner.read(key, signal);
+      },
+      scan: inner.scan.bind(inner),
+      async write(request, signal) {
+        providerEvents.push({ operation: 'write', mutations: request.mutations.map(mutation => ({ kind: mutation.kind, key: mutation.key.value })), committed });
+        if (!claimStartedOnce) {
+          claimStartedOnce = true;
+          claimKey = request.mutations[0].key;
+          claimSignal = signal;
+          resolveStarted();
+          return await new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', async () => {
+              await inner.write(request);
+              committed = true;
+              reject(signal.reason);
+            }, { once: true });
+          });
+        }
+        if (request.mutations.some(mutation => mutation.kind === 'delete' && mutation.key.value === claimKey.value)) {
+          cleanupReleases += 1;
+          throw new Error('release unavailable');
+        }
+        return await inner.write(request, signal);
+      }
+    };
+    const host = new framework.ZLinkFrameworkRuntimeHost({
+      registration: framework.createFrameworkRegistration({ locations: { storeInstance: provider } })
+    }, { backendAdapterFactory: fakeBackendAdapterFactory([], rid(`failed-${failedPhase}`)) });
+    const starting = host.start();
+    const observedStart = starting.then(() => 'started', error => error);
+    await started;
+    const result = await host.shutdown({ deadlineMs: 1000 });
+    assert.equal(claimSignal.aborted, true);
+    assert.equal((await observedStart)?.name, 'AbortError');
+    assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.ForceStopped, JSON.stringify(providerEvents));
+    assert.equal(result.reason, framework.ZLinkFrameworkTerminationReason.TeardownFailed);
+    assert.equal(cleanupReads, failedPhase === 'release' ? 2 : 1, JSON.stringify(providerEvents));
+    assert.equal(cleanupReleases, failedPhase === 'release' ? 1 : 0);
+    assert.equal((await inner.read(claimKey)).kind, 'found');
+  });
+}
+
+test('host shutdown deadline bounds a pending opaque write reconciliation', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const inner = new framework.ZLinkInMemoryProviderLocationStore();
+  let claimKey;
+  let committed = false;
+  let resolveStarted;
+  let resolveReconciling;
+  let completeRead;
+  const started = new Promise(resolve => { resolveStarted = resolve; });
+  const reconciling = new Promise(resolve => { resolveReconciling = resolve; });
+  const provider = {
+    async read(key, signal) {
+      if (committed && key.value === claimKey.value) {
+        resolveReconciling();
+        return await new Promise(resolve => { completeRead = () => resolve(inner.read(key, signal)); });
+      }
+      return await inner.read(key, signal);
+    },
+    scan: inner.scan.bind(inner),
+    async write(request, signal) {
+      claimKey = request.mutations[0].key;
+      resolveStarted();
+      return await new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', async () => {
+          await inner.write(request);
+          committed = true;
+          reject(signal.reason);
+        }, { once: true });
+      });
+    }
+  };
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({ locations: { storeInstance: provider } })
+  }, { backendAdapterFactory: fakeBackendAdapterFactory([], rid('opaque-reconcile-deadline')) });
+  const observedStart = host.start().then(() => 'started', error => error);
+  await started;
+  let terminated = false;
+  const shuttingDown = host.shutdown({ deadlineMs: 1000 }).then(result => {
+    terminated = true;
+    return result;
+  });
+  await reconciling;
+  t.mock.timers.tick(999);
+  await Promise.resolve();
+  assert.equal(terminated, false);
+  t.mock.timers.tick(1);
+  const result = await shuttingDown;
+  assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.ForceStopped);
+  assert.equal((await observedStart)?.name, 'AbortError');
+  assert.equal(host.isStarted, false);
+  completeRead();
+});
+
+test('direct host stop uses one existing default deadline for a pending provider', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const inner = new framework.ZLinkInMemoryProviderLocationStore();
+  let blockScan = false;
+  let cleanupSignal;
+  let resolveScanning;
+  const scanning = new Promise(resolve => { resolveScanning = resolve; });
+  const provider = {
+    read: inner.read.bind(inner),
+    write: inner.write.bind(inner),
+    async scan(request, signal) {
+      if (!blockScan) return await inner.scan(request, signal);
+      cleanupSignal = signal;
+      resolveScanning();
+      return await new Promise(() => {});
+    }
+  };
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({ locations: { storeInstance: provider } })
+  }, { backendAdapterFactory: fakeBackendAdapterFactory([], rid('direct-stop-deadline')) });
+  await host.start();
+  blockScan = true;
+  const deadlines = [];
+  const setTimer = global.setTimeout;
+  t.mock.method(global, 'setTimeout', (callback, delay, ...args) => {
+    deadlines.push(delay);
+    return setTimer(callback, delay, ...args);
+  });
+  const stopping = host.stop();
+  const observedStop = stopping.then(() => undefined, error => error);
+  await scanning;
+  assert.deepEqual(deadlines, [30_000]);
+  t.mock.timers.tick(29_999);
+  assert.equal(cleanupSignal.aborted, false);
+  t.mock.timers.tick(1);
+  const error = await observedStop;
+  assert(error instanceof framework.ZLinkOwnerCleanupError);
+  assert.equal(error.cause?.name, 'DeadlineExceededError');
+  assert.equal(cleanupSignal.aborted, true);
+  assert.equal(host.isStarted, false);
+  assert.equal(host.status.deadline, undefined);
 });
 
 test('actor handoff source fence uses the Actor mesh node and rejects a cross-mesh RID', () => {
@@ -386,7 +605,7 @@ test('degraded host rejects object messages and timers until owner lease recover
       undefined,
       undefined,
       undefined,
-      scenario.runtime.createSpotManagerOptions().statefulExecutionAllowed
+      scenario.runtime.createSpotManagerOptions().statefulExecution.admissionOpen
     );
     class LeaseTimerHandler {
       async handle() { timerTicks += 1; }
@@ -434,6 +653,7 @@ test('degraded host rejects factory and restore confirmation until owner lease r
   }
   const scenario = recoverableHostScenario();
   scenario.runtime.setSpotManager(new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
     ...scenario.runtime.createSpotManagerOptions(),
     spotFactories: [LeaseOwnedSpot]
   }));
@@ -733,7 +953,8 @@ async function resolveFrameworkRegistration(module) {
   if ('useValue' in provider) {
     return provider.useValue;
   }
-  return await provider.useFactory();
+  const container = await resolveModuleProviders(module, [nestjs.ZLINK_FRAMEWORK_REGISTRATION]);
+  return container.get(nestjs.ZLINK_FRAMEWORK_REGISTRATION);
 }
 
 test('concurrent relocation with a different deadline joins the running operation', async () => {
@@ -983,6 +1204,7 @@ function fakeBackendAdapterFactory(calls, nodeRid) {
             nativeInstance: {},
             onEvent() {},
             recv() { return null; },
+            drain() { return 0; },
             status() { return {}; },
             async dispose() {}
           };

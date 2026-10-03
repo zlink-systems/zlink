@@ -18,6 +18,10 @@ import java.util.Set;
 public interface ZLinkHandlerActivator {
     Object create(Class<?> handlerType);
 
+    default Object findService(Class<?> serviceType) {
+        return create(serviceType);
+    }
+
     /** Prepares reusable construction metadata without creating an instance. */
     default void prepare(Class<?> handlerType) {
         PublicConstructorPlan.prepare(handlerType);
@@ -136,6 +140,12 @@ public interface ZLinkHandlerActivator {
         }
 
         @Override
+        public Object findService(Class<?> serviceType) {
+            Object registered = findRuntimeService(serviceType);
+            return registered != null ? registered : fallback.findService(serviceType);
+        }
+
+        @Override
         public Activation openActivation() {
             Activation fallbackActivation = fallback.openActivation();
             return new Activation() {
@@ -245,11 +255,7 @@ public interface ZLinkHandlerActivator {
         }
 
         private Object findFallbackService(Class<?> parameterType) {
-            try {
-                return fallback.create(parameterType);
-            } catch (RuntimeException ignored) {
-                return null;
-            }
+            return fallback.findService(parameterType);
         }
     }
 }
@@ -258,6 +264,11 @@ final class ReflectionActivator implements ZLinkHandlerActivator {
     @Override
     public Object create(Class<?> handlerType) {
         return PublicConstructorPlan.forType(handlerType).createNoArg();
+    }
+
+    @Override
+    public Object findService(Class<?> serviceType) {
+        return PublicConstructorPlan.forType(serviceType).createIfPresent();
     }
 }
 
@@ -291,6 +302,11 @@ record PublicConstructorPlan(
         if (noArgConstructor == null) {
             throw failure(new NoSuchMethodException(handlerType.getName() + ".<init>()"));
         }
+        return createIfPresent();
+    }
+
+    Object createIfPresent() {
+        if (noArgConstructor == null) return null;
         try {
             return noArgConstructor.newInstance();
         } catch (ReflectiveOperationException failure) {

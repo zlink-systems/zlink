@@ -231,6 +231,25 @@ public final class ZLinkFrameworkRegistration {
     }
 
     void validate() {
+        if (locations.enabled()) {
+            var locationOptions = locations.options();
+            Duration renewTimeout = locationOptions.ownerLeaseRenewTimeout();
+            Duration maximumRenewalTime =
+                    locationOptions.ownerLeaseRenewInterval().compareTo(renewTimeout) > 0
+                            ? locationOptions.ownerLeaseRenewInterval()
+                            : renewTimeout;
+            Duration fencedLifetime =
+                    locationOptions
+                            .ownerLeaseTtl()
+                            .minus(locationOptions.ownerLeaseFencingMargin());
+            if (maximumRenewalTime.compareTo(fencedLifetime) >= 0
+                    || renewTimeout.compareTo(fencedLifetime.minus(maximumRenewalTime)) >= 0) {
+                throw new ZLinkConfigurationException(
+                        "max(ownerLeaseRenewInterval, ownerLeaseRenewTimeout) + "
+                                + "ownerLeaseRenewTimeout must be shorter than "
+                                + "ownerLeaseTtl - ownerLeaseFencingMargin.");
+            }
+        }
         dispatchOptions.validate();
         workers.validate();
         inboundDispatch.applicationJobQueue(handlerExecutor);

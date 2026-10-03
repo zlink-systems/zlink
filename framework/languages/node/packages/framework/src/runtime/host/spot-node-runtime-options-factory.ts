@@ -51,7 +51,7 @@ export interface ZLinkSpotNodeRuntimeOptionsFactoryOptions {
 export class ZLinkSpotNodeRuntimeOptionsFactory {
   constructor(private readonly options: ZLinkSpotNodeRuntimeOptionsFactoryOptions) {}
 
-  create(): ZLinkSpotNodeRuntimeManagerOptions {
+  create(): Omit<ZLinkSpotNodeRuntimeManagerOptions, 'errorSink'> {
     const spotRouterChannelIdForMesh = this.options.meshRouters.spotRouterChannelIdByMesh();
     return {
       registration: this.options.registration,

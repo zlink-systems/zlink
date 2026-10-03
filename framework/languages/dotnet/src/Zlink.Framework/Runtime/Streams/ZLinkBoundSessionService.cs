@@ -74,23 +74,15 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
             message,
             runtime.Registration.Codecs
         );
-        try
+        var deferredStatus = ZLinkBoundSessionDispatchScope.TrySubmitDeferred(
+            actorId,
+            ct => SubmitDeferredFrameAsync(actorId, route, frame, ct)
+        );
+        if (deferredStatus is { } status)
         {
-            if (
-                ZLinkBoundSessionDispatchScope.TryDefer(
-                    actorId,
-                    ct => SubmitDeferredFrameAsync(actorId, route, frame, ct)
-                )
-            )
-            {
+            if (status == ZLinkOneWaySubmitStatus.Submitted)
                 TraceSent(actorId, packetName, frame, route.SessionRid);
-                return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
-            }
-        }
-        catch (InvalidOperationException error)
-            when (error.Message == "Bound-session deferred submit queue is full.")
-        {
-            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Backpressured);
+            return new ZLinkOneWaySubmitResult(status);
         }
 
         var result = await SubmitFrameAsync(actorId, route, frame, cancellationToken)

@@ -38,6 +38,8 @@ import java.util.concurrent.CompletionStage;
 
 @AutoConfiguration
 public class ZLinkFrameworkAutoConfiguration {
+    private static final String DRAIN_READINESS_BEAN_NAME = "zlinkDrainReadiness";
+
     @Bean
     @ConditionalOnMissingBean
     public ZLinkHttpExecutionTurn zlinkHttpExecutionTurn() {
@@ -188,10 +190,10 @@ public class ZLinkFrameworkAutoConfiguration {
         return actorId -> lifecycle.actorSpotHandleResolver().resolveActorSpotHandle(actorId);
     }
 
-    @Bean("zlinkDrainReadiness")
+    @Bean(DRAIN_READINESS_BEAN_NAME)
     @ConditionalOnClass(name = "org.springframework.boot.actuate.health.HealthIndicator")
     @ConditionalOnBean(ZLinkFrameworkLifecycle.class)
-    @ConditionalOnMissingBean(name = "zlinkDrainReadiness")
+    @ConditionalOnMissingBean(name = DRAIN_READINESS_BEAN_NAME)
     public ZLinkDrainReadinessContributor zlinkDrainReadinessContributor(
             ZLinkFrameworkLifecycle lifecycle) {
         return new ZLinkDrainReadinessContributor(lifecycle);

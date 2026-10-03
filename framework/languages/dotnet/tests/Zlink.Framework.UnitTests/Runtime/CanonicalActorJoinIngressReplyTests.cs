@@ -1,11 +1,287 @@
 using System.Diagnostics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class CanonicalActorJoinIngressReplyTests
 {
+    [Fact]
+    public async Task RelocationPrepare_DuplicateRepliesShareRestoreAndManifestConflictRepliesFailed()
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(null);
+        var target = new CountingRelocationTarget();
+        runtime.Target.SetCanonicalRelocationTarget(target);
+        var envelope = new ZLinkRelocationEnvelope(
+            Guid.NewGuid(),
+            1,
+            new byte[32],
+            [
+                new ZLinkRelocationParticipantEnvelope(
+                    new ZLinkAuthorityKey("actor:mesh:actor"),
+                    ZLinkPlacementObjectKind.Actor,
+                    1,
+                    1,
+                    new byte[] { 1 },
+                    [],
+                    []
+                ),
+            ]
+        );
+        var payload = ZLinkRelocationTransferPayload.Create(envelope, 64 * 1024);
+        var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
+            new(1, 1),
+            1,
+            new("source-owner", 1, runtime.SourceRid, 1, "v-source"),
+            new(runtime.TargetRid, runtime.Target.Status().LifecycleGeneration, "target-owner", 1),
+            1,
+            new(1, "actor", "actor", 1, 1),
+            runtime.SourceRid,
+            1,
+            (ulong)payload.TotalLength,
+            (uint)payload.ChunkCount,
+            payload.ChecksumCrc32c,
+            1
+        );
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeRelocationPrepare(
+                ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare),
+                out var wirePrepare,
+                out var prepareError
+            )
+        );
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, prepareError);
+        prepare = wirePrepare;
+        await using var otherSource = runtime.Context.CreateDealerSocket();
+        using var otherCompletionOwner = new TestCompletionPollerDriver(otherSource);
+        otherSource.SetRoutingId(RoutingId.From($"other-source-{Guid.NewGuid():N}"));
+        otherSource.Connect(runtime.Target.Status().LocalEndpoint);
+        await SendHelloAsync(otherSource, $"inproc://other-source-{Guid.NewGuid():N}");
+        using var otherAdmission = await ReceiveAsync(otherSource);
+        await WaitUntilAsync(() => runtime.Target.Status().AdmittedPeerCount == 2);
+        Task<IReadOnlyList<Message>> Request(ZLinkServiceWireCodec.RelocationPrepareRecord record)
+        {
+            using var message = Message.From(ZLinkServiceWireCodec.EncodeRelocationPrepare(record));
+            return runtime
+                .Source.Request()
+                .Message(message)
+                .Timeout(TimeSpan.FromSeconds(2))
+                .Async(CancellationToken.None)
+                .Reply;
+        }
+        var first = Request(prepare);
+        var duplicate = Request(prepare);
+        using var otherMessage = Message.From(
+            ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare)
+        );
+        var otherConnectionReply = otherSource
+            .Request()
+            .Message(otherMessage)
+            .Timeout(TimeSpan.FromSeconds(2))
+            .Async(CancellationToken.None)
+            .Reply;
+        var differentIdentityReplies = new[]
+        {
+            prepare with
+            {
+                SourceNodeRid = RoutingId.From("other-source"),
+            },
+            prepare with
+            {
+                SourceNodeGeneration = prepare.SourceNodeGeneration + 1,
+            },
+            prepare with
+            {
+                Coordinator = prepare.Coordinator with
+                {
+                    ExpectedAuthorityStoreVersion = "other-version",
+                },
+            },
+            prepare with
+            {
+                Target = prepare.Target with { OwnerId = "other-owner" },
+            },
+            prepare with
+            {
+                Object = prepare.Object with { ObjectId = "other-actor" },
+            },
+        }
+            .Select(Request)
+            .ToArray();
+        foreach (
+            var other in new[]
+            {
+                (
+                    prepare.Coordinator with
+                    {
+                        ExpectedAuthorityStoreVersion = "other-version",
+                    },
+                    prepare.Object
+                ),
+                (prepare.Coordinator, prepare.Object with { ObjectId = "other-actor" }),
+            }
+        )
+        {
+            using var chunk = Message.From(
+                ZLinkServiceWireCodec.EncodeRelocationState(
+                    new(
+                        prepare.RelocationId,
+                        prepare.TargetAttemptGeneration,
+                        other.Item1,
+                        1,
+                        other.Item2,
+                        0,
+                        payload.Chunk(0)
+                    )
+                )
+            );
+            await runtime.Source.Send().Message(chunk).Async(CancellationToken.None).Admitted;
+        }
+        var conflict = prepare with { PayloadChecksumCrc32c = prepare.PayloadChecksumCrc32c ^ 1 };
+        var failedParts = await Request(conflict);
+        try
+        {
+            Assert.Single(failedParts);
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeRelocationFailed(
+                    failedParts[0].AsReadOnlyMemory().Span,
+                    out var failed,
+                    out var error
+                )
+            );
+            Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+            Assert.Equal(
+                new ZLinkServiceWireCodec.RelocationFailedRecord(
+                    conflict.RelocationId,
+                    conflict.TargetAttemptGeneration,
+                    conflict.Coordinator,
+                    conflict.Target,
+                    conflict.Object,
+                    2,
+                    ServiceWireConstants.FrameworkErrorCode.RelocationDataLost
+                ),
+                failed
+            );
+            Assert.Equal(0, target.PrepareCount);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(failedParts);
+        }
+        for (var ordinal = 0; ordinal < payload.ChunkCount; ordinal++)
+        {
+            using var chunk = Message.From(
+                ZLinkServiceWireCodec.EncodeRelocationState(
+                    new(
+                        prepare.RelocationId,
+                        prepare.TargetAttemptGeneration,
+                        prepare.Coordinator,
+                        1,
+                        prepare.Object,
+                        (uint)ordinal,
+                        payload.Chunk(ordinal)
+                    )
+                )
+            );
+            await runtime.Source.Send().Message(chunk).Async(CancellationToken.None).Admitted;
+        }
+        foreach (var reply in await Task.WhenAll(first, duplicate))
+        {
+            try
+            {
+                Assert.Single(reply);
+                Assert.True(
+                    ZLinkServiceWireCodec.TryDecodeRelocationReady(
+                        reply[0].AsReadOnlyMemory().Span,
+                        out var ready,
+                        out var error
+                    )
+                );
+                Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+                Assert.Equal(
+                    new ZLinkServiceWireCodec.RelocationReadyRecord(
+                        prepare.RelocationId,
+                        prepare.TargetAttemptGeneration,
+                        prepare.Coordinator,
+                        prepare.Target,
+                        prepare.Object,
+                        2
+                    ),
+                    ready
+                );
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(reply);
+            }
+        }
+        Assert.Equal(1, target.PrepareCount);
+        foreach (var ignored in differentIdentityReplies)
+        {
+            var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => ignored);
+            Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timeout.Result);
+        }
+        var otherTimeout = await Assert.ThrowsAsync<ZlinkRequestException>(() =>
+            otherConnectionReply
+        );
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, otherTimeout.Result);
+    }
+
+    private sealed class CountingRelocationTarget : ICanonicalRelocationTarget
+    {
+        internal int PrepareCount;
+
+        public ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareAsync(
+            ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            ZLinkRelocationEnvelope envelope,
+            RoutingId source,
+            ZLinkCanonicalRelocationPreparationLease lease,
+            CancellationToken token
+        )
+        {
+            Interlocked.Increment(ref PrepareCount);
+            lease.MarkPrepared();
+            return ValueTask.FromResult(
+                new ZLinkServiceWireCodec.RelocationReadyRecord(
+                    prepare.RelocationId,
+                    prepare.TargetAttemptGeneration,
+                    prepare.Coordinator,
+                    prepare.Target,
+                    prepare.Object,
+                    2
+                )
+            );
+        }
+
+        public void ReadySubmitted(
+            ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            RoutingId source
+        ) { }
+
+        public void ReadySubmissionFailed(
+            ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            RoutingId source
+        ) { }
+
+        public ValueTask AbortPreparedAsync(
+            ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            RoutingId source
+        ) => ValueTask.CompletedTask;
+
+        public ValueTask StageDataAsync(
+            ZLinkServiceWireCodec.RelocationDataRecord data,
+            RoutingId source,
+            CancellationToken token
+        ) => throw new NotSupportedException();
+
+        public ValueTask CutoverAsync(
+            ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
+            RoutingId source,
+            CancellationToken token
+        ) => throw new NotSupportedException();
+    }
+
     [Theory]
     [InlineData(false, false, false)]
     [InlineData(true, false, false)]
@@ -480,7 +756,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
-    public async Task CanonicalActorJoinRequest_RetriesPreservedNativeReplyAfterBackpressure()
+    public async Task CanonicalActorJoinRequest_BackpressureConsumesReplyGate()
     {
         var attempts = 0;
         var wireSubmits = 0;
@@ -508,36 +784,23 @@ public sealed class CanonicalActorJoinIngressReplyTests
             ingress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
         );
 
-        var parts = await replyTask.WaitAsync(TimeSpan.FromSeconds(2));
-        try
-        {
-            Assert.Equal(2, Volatile.Read(ref attempts));
-            Assert.Equal(1, Volatile.Read(ref wireSubmits));
-            var reply = DecodeReply(parts, request.Correlation);
-            Assert.True(
-                ZLinkServiceWireCodec.TryDecodeActorJoinReply(
-                    reply,
-                    out var completion,
-                    out var error
-                )
-            );
-            Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
-            Assert.Equal(ActorJoinResult.Accepted, completion!.JoinResult);
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(parts);
-        }
+        Assert.Equal(
+            SubmitResult.InvalidState,
+            ingress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
+        var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => replyTask);
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timeout.Result);
+        Assert.Equal(1, Volatile.Read(ref attempts));
+        Assert.Equal(0, Volatile.Read(ref wireSubmits));
     }
 
     [Fact]
-    public async Task CanonicalActorJoinRequest_FinalRetryFailureConsumesReplyGate()
+    public async Task CanonicalActorJoinRequest_TerminatedAdmissionConsumesReplyGate()
     {
         var attempts = 0;
         await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
         {
-            if (Interlocked.Increment(ref attempts) == 1)
-                return SubmitResult.Backpressured;
+            Interlocked.Increment(ref attempts);
             return SubmitResult.Terminated;
         });
         await using var monitor = runtime.Target.OpenMonitor();
@@ -550,16 +813,14 @@ public sealed class CanonicalActorJoinIngressReplyTests
             runtime.TargetSpotGeneration
         );
 
-        _ = SendRequestAsync(runtime.Source, request);
+        var replyTask = SendRequestAsync(runtime.Source, request);
         var ingress = await ReceiveActorJoinAsync(runtime.Target);
         Assert.Equal(
-            SubmitResult.Backpressured,
+            SubmitResult.Terminated,
             ingress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
         );
 
-        await WaitUntilAsync(() =>
-            Volatile.Read(ref attempts) == 2 && monitor.Status().ProtocolErrors != 0
-        );
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors != 0);
         Assert.Equal(
             SubmitResult.InvalidState,
             ingress.ReplyTerminal(
@@ -567,20 +828,23 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
             )
         );
-        Assert.Equal(2, Volatile.Read(ref attempts));
+        var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => replyTask);
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timeout.Result);
+        Assert.Equal(1, Volatile.Read(ref attempts));
     }
 
     [Fact]
-    public async Task CanonicalActorJoinRequest_OpaqueReplyStopsOnlyOnCoreTerminal()
+    public async Task CanonicalActorJoinRequest_ReconnectDoesNotReopenConsumedReply()
     {
         var attempts = 0;
-        var coreTerminal = 0;
-        await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
+        var currentResult = (int)SubmitResult.Backpressured;
+        await using var runtime = await ConnectedRuntime.CreateAsync(reply =>
         {
             Interlocked.Increment(ref attempts);
-            return Volatile.Read(ref coreTerminal) == 0
-                ? SubmitResult.Backpressured
-                : SubmitResult.Terminated;
+            var result = (SubmitResult)Volatile.Read(ref currentResult);
+            if (result == SubmitResult.Ok)
+                reply.Submit();
+            return result;
         });
         await using var monitor = runtime.Target.OpenMonitor();
         var staleRequest = CreateRequest(
@@ -591,11 +855,11 @@ public sealed class CanonicalActorJoinIngressReplyTests
             runtime.TargetSpotId,
             runtime.TargetSpotGeneration
         );
-        _ = SendRequestAsync(runtime.Source, staleRequest);
+        var staleReplyTask = SendRequestAsync(runtime.Source, staleRequest);
         var staleIngress = await ReceiveActorJoinAsync(runtime.Target);
         var pendingRequest = staleRequest with { Correlation = 55 };
 
-        _ = SendRequestAsync(runtime.Source, pendingRequest);
+        var pendingReplyTask = SendRequestAsync(runtime.Source, pendingRequest);
         var pendingIngress = await ReceiveActorJoinAsync(runtime.Target);
         Assert.Equal(
             SubmitResult.Backpressured,
@@ -605,13 +869,14 @@ public sealed class CanonicalActorJoinIngressReplyTests
             )
         );
 
+        var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => pendingReplyTask);
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timeout.Result);
+        Assert.Equal(1, Volatile.Read(ref attempts));
+        var staleTimeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => staleReplyTask);
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, staleTimeout.Result);
+        Assert.True(monitor.Status().ProtocolErrors > 0);
         await runtime.DisconnectSourceAsync();
-        var attemptsBeforeCoreTerminal = Volatile.Read(ref attempts);
-        await WaitUntilAsync(() => Volatile.Read(ref attempts) > attemptsBeforeCoreTerminal);
-        Assert.Equal(0UL, monitor.Status().ProtocolErrors);
-        Volatile.Write(ref coreTerminal, 1);
-        await WaitUntilAsync(() => monitor.Status().ProtocolErrors != 0);
-        var attemptsAtDiscard = Volatile.Read(ref attempts);
+        Volatile.Write(ref currentResult, (int)SubmitResult.Terminated);
         await runtime.ReconnectAsync();
         Assert.Equal(
             SubmitResult.Terminated,
@@ -620,29 +885,53 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
             )
         );
-        Assert.Equal(attemptsAtDiscard + 1, Volatile.Read(ref attempts));
-        await Task.Delay(150);
-        Assert.Equal(attemptsAtDiscard + 1, Volatile.Read(ref attempts));
+        Assert.Equal(2, Volatile.Read(ref attempts));
         Assert.Equal(
             SubmitResult.InvalidState,
             pendingIngress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
         );
+        Assert.Equal(2, Volatile.Read(ref attempts));
+        Volatile.Write(ref currentResult, (int)SubmitResult.Ok);
+        var nextRequest = staleRequest with { Correlation = 58 };
+        var nextReplyTask = SendRequestAsync(runtime.Source, nextRequest);
+        var nextIngress = await ReceiveActorJoinAsync(runtime.Target);
+        Assert.Equal(
+            SubmitResult.Ok,
+            nextIngress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
+        var nextReply = await nextReplyTask.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            var reply = DecodeReply(nextReply, nextRequest.Correlation);
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeActorJoinReply(
+                    reply,
+                    out var completion,
+                    out var error
+                )
+            );
+            Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+            Assert.Equal(ActorJoinResult.Accepted, completion!.JoinResult);
+            Assert.Equal(3, Volatile.Read(ref attempts));
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(nextReply);
+        }
     }
 
     [Fact]
-    public async Task CanonicalActorJoinRequest_HandoverLeavesReplyRouteToCore()
+    public async Task CanonicalActorJoinRequest_HandoverPreservesConsumedReplyAndAdmitsNewRequest()
     {
         var attempts = 0;
-        var submitMode = 0;
+        var currentResult = (int)SubmitResult.Backpressured;
         await using var runtime = await ConnectedRuntime.CreateAsync(reply =>
         {
             Interlocked.Increment(ref attempts);
-            if (Volatile.Read(ref submitMode) == 0)
-                return SubmitResult.Backpressured;
-            if (Volatile.Read(ref submitMode) == 1)
-                return SubmitResult.Terminated;
-            reply.Submit();
-            return SubmitResult.Ok;
+            var result = (SubmitResult)Volatile.Read(ref currentResult);
+            if (result == SubmitResult.Ok)
+                reply.Submit();
+            return result;
         });
         await using var monitor = runtime.Target.OpenMonitor();
         var staleRequest = CreateRequest(
@@ -654,7 +943,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             runtime.TargetSpotGeneration
         );
 
-        _ = SendRequestAsync(runtime.Source, staleRequest);
+        var staleReplyTask = SendRequestAsync(runtime.Source, staleRequest);
         var staleIngress = await ReceiveActorJoinAsync(runtime.Target);
         Assert.Equal(
             SubmitResult.Backpressured,
@@ -664,32 +953,33 @@ public sealed class CanonicalActorJoinIngressReplyTests
             )
         );
 
+        var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => staleReplyTask);
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timeout.Result);
+        Assert.Equal(1, Volatile.Read(ref attempts));
         var protocolErrors = monitor.Status().ProtocolErrors;
         await runtime.HandoverAsync();
-        await WaitUntilAsync(() => Volatile.Read(ref attempts) > 1);
+        Assert.Equal(
+            SubmitResult.InvalidState,
+            staleIngress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
+        Assert.Equal(1, Volatile.Read(ref attempts));
         Assert.Equal(protocolErrors, monitor.Status().ProtocolErrors);
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
         await runtime.SendPriorHelloAsync();
-        // Core ROUTER §10.1 does not return records of a route it no longer
-        // selects: the prior pair's Hello neither reaches admission nor
-        // produces an Admit, and the current peer stays admitted.
-        await Task.Delay(150);
-        Assert.Equal(protocolErrors, monitor.Status().ProtocolErrors);
-        Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
-
         await runtime.DisconnectPriorSourceAsync();
-        await Task.Delay(150);
+        Assert.Equal(
+            SubmitResult.InvalidState,
+            staleIngress.ReplyTerminal(
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+            )
+        );
+        Assert.Equal(1, Volatile.Read(ref attempts));
         Assert.Equal(protocolErrors, monitor.Status().ProtocolErrors);
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
-        Volatile.Write(ref submitMode, 1);
-        await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
-        var attemptsAfterDisconnect = Volatile.Read(ref attempts);
-        await Task.Delay(150);
-        Assert.Equal(attemptsAfterDisconnect, Volatile.Read(ref attempts));
-        Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
-        Volatile.Write(ref submitMode, 2);
+        Volatile.Write(ref currentResult, (int)SubmitResult.Ok);
         var replacementRequest = staleRequest with { Correlation = 57 };
         var replacementReplyTask = SendRequestAsync(runtime.Source, replacementRequest);
         var replacementIngress = await ReceiveActorJoinAsync(runtime.Target);
@@ -711,6 +1001,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             );
             Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
             Assert.Equal(ActorJoinResult.Accepted, completion!.JoinResult);
+            Assert.Equal(2, Volatile.Read(ref attempts));
         }
         finally
         {
@@ -932,7 +1223,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
-    public async Task CanonicalActorJoinRequest_PendingReplyUsesTerminalDeadline()
+    public async Task CanonicalActorJoinRequest_ClockAdvanceDoesNotReopenConsumedReply()
     {
         var attempts = 0;
         var time = new ManualTimeProvider();
@@ -954,7 +1245,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             runtime.TargetSpotGeneration
         );
 
-        _ = SendRequestAsync(runtime.Source, request);
+        var replyTask = SendRequestAsync(runtime.Source, request);
         var ingress = await ReceiveActorJoinAsync(runtime.Target);
         Assert.Equal(
             SubmitResult.Backpressured,
@@ -964,11 +1255,16 @@ public sealed class CanonicalActorJoinIngressReplyTests
             )
         );
 
-        time.Advance(TimeSpan.FromSeconds(6));
+        Assert.Equal(1, Volatile.Read(ref attempts));
+        Assert.Equal(
+            SubmitResult.InvalidState,
+            ingress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
         await WaitUntilAsync(() => monitor.Status().ProtocolErrors != 0);
-        var expiredAttempts = Volatile.Read(ref attempts);
-        await Task.Delay(150);
-        Assert.Equal(expiredAttempts, Volatile.Read(ref attempts));
+        time.Advance(TimeSpan.FromSeconds(6));
+        var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => replyTask);
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timeout.Result);
+        Assert.Equal(1, Volatile.Read(ref attempts));
         Assert.Equal(
             SubmitResult.InvalidState,
             ingress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
@@ -1408,7 +1704,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         }
 
         internal static async Task<ConnectedRuntime> CreateAsync(
-            Func<ReplySubmitOperation, SubmitResult> submit,
+            Func<ReplySubmitOperation, SubmitResult>? submit,
             TimeProvider? deadlineTimeProvider = null
         )
         {

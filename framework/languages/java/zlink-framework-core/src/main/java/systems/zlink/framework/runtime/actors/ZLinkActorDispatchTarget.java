@@ -15,6 +15,34 @@ import java.util.function.Supplier;
  * Actor queue.
  */
 public interface ZLinkActorDispatchTarget {
+    record ActivationSnapshot(ZLinkActorDispatchTarget target, Object incarnation) {}
+
+    CompletionStage<ZLinkActorSerialExecutor> claimActorQueue(String actorId);
+
+    CompletionStage<Void> executeActor(
+            ZLinkActorSerialExecutor activation,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission);
+
+    CompletionStage<Void> executeActor(
+            ZLinkActorSerialExecutor activation,
+            byte[] acceptedJournalRecord,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission);
+
+    CompletionStage<Void> executeActorLazyRecord(
+            ZLinkActorSerialExecutor activation,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission);
+
+    CompletionStage<Void> removeActorQueueAsync(
+            String actorId, ZLinkActorSerialExecutor activation);
+
     CompletionStage<Void> executeActor(
             String actorId,
             Supplier<CompletionStage<Void>> operation,

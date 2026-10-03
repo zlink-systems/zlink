@@ -1,5 +1,5 @@
-import { ZlinkStreamErrorCode, type ZlinkStreamError } from '../Contracts';
-import { connectorError, unwrapStreamError } from './ZlinkStreamSupport';
+import { ZlinkStreamErrorCode, ZlinkStreamException, type ZlinkStreamError } from '../Contracts';
+import { connectorError } from './ZlinkStreamSupport';
 
 export interface ZlinkStreamAssertions {
   ensure(condition: boolean, message: string): asserts condition;
@@ -31,42 +31,36 @@ export const zlinkStreamAssert: ZlinkStreamAssertions = {
     action: (signal?: AbortSignal) => Promise<void>,
     errorKind?: string
   ): Promise<ZlinkStreamError> {
-    let failure: unknown;
     try {
       await action();
-    } catch (error) {
-      failure = error;
+    } catch (failure) {
+      if (!(failure instanceof ZlinkStreamException)) throw failure;
+      const streamError = failure.error;
+      if (errorKind !== undefined && streamError.code !== errorKind) {
+        throw connectorError(
+          ZlinkStreamErrorCode.ValidationFailed,
+          `Expected failure kind '${errorKind}', got '${streamError.code}'.`,
+          failure
+        );
+      }
+      return streamError;
     }
-    if (failure === undefined) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Expected action to fail.');
-    }
-    const streamError = unwrapStreamError(failure);
-    if (errorKind !== undefined && streamError.code !== errorKind) {
-      throw connectorError(
-        ZlinkStreamErrorCode.ValidationFailed,
-        `Expected failure kind '${errorKind}', got '${streamError.code}'.`,
-        failure
-      );
-    }
-    return streamError;
+    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Expected action to fail.');
   },
 
   async expectTimeout(action: (signal?: AbortSignal) => Promise<void>): Promise<void> {
-    let failure: unknown;
     try {
       await action();
-    } catch (error) {
-      failure = error;
+    } catch (failure) {
+      if (
+        !(failure instanceof ZlinkStreamException) ||
+        (failure.error.code !== ZlinkStreamErrorCode.RequestTimeout &&
+          failure.error.code !== ZlinkStreamErrorCode.ConnectTimeout)
+      ) {
+        throw failure;
+      }
+      return;
     }
-    if (failure === undefined) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Expected action to time out.');
-    }
-    const code = unwrapStreamError(failure).code;
-    if (
-      code !== ZlinkStreamErrorCode.RequestTimeout &&
-      code !== ZlinkStreamErrorCode.ConnectTimeout
-    ) {
-      throw failure;
-    }
+    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Expected action to time out.');
   }
 };

@@ -5,20 +5,17 @@
 #include <zlink/framework/contracts/errors/error.hpp>
 
 #include <zlink/Contracts/Sockets/results.hpp>
+#include <service_wire_constants.hpp>
 
 #include "runtime/diagnostics/diagnostic_event_sink.hpp"
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 
 #include <atomic>
-#include <array>
 #include <cstdint>
 #include <exception>
-#include <cstddef>
-#include <regex>
 #include <string>
 #include <string_view>
-#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -49,10 +46,9 @@ class dispatch_error_reporter_t
             return;
         reported_count ().fetch_add (1, std::memory_order_relaxed);
         if (event.exception) {
-            auto error = exception_summary (event.exception);
+            auto error = diagnostic_event_sink_t::exception_summary (event.exception);
             event.error_type = std::move (error.type);
             event.error_message = std::move (error.message);
-            event.exception = {};
         }
         if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
             event.flow_id.reset ();
@@ -126,51 +122,6 @@ class dispatch_error_reporter_t
     }
 
   private:
-    static constexpr std::size_t error_message_max_length = 512;
-
-    struct exception_summary_t
-    {
-        std::string type;
-        std::string message;
-    };
-
-    static exception_summary_t exception_summary (const std::exception_ptr &exception)
-    {
-        if (!exception)
-            return {};
-        exception_summary_t summary;
-        try {
-            std::rethrow_exception (exception);
-        }
-        catch (const std::exception &error) {
-            summary.type = typeid (error).name ();
-            summary.message = error.what ();
-        }
-        catch (...) {
-            summary.type = "non-standard exception";
-            summary.message = "non-standard exception";
-        }
-        const auto line_end = summary.message.find_first_of ("\r\n");
-        if (line_end != std::string::npos)
-            summary.message.resize (line_end);
-        static const std::array<std::pair<std::regex, std::string>, 4> credential_patterns{
-          std::pair{std::regex (R"(Authorization\s*:\s*(?:(?:Bearer|Basic)\s+)?[^\s,;]+)",
-                                std::regex_constants::icase),
-                    std::string ("Authorization: <redacted>")},
-          std::pair{std::regex (R"(Bearer\s+[^\s,;]+)", std::regex_constants::icase),
-                    std::string ("Bearer <redacted>")},
-          std::pair{std::regex (R"(password\s*=\s*[^\s,;]+)", std::regex_constants::icase),
-                    std::string ("password=<redacted>")},
-          std::pair{std::regex (R"(token\s*=\s*[^\s,;]+)", std::regex_constants::icase),
-                    std::string ("token=<redacted>")}};
-        for (const auto &[pattern, replacement] : credential_patterns) {
-            summary.message = std::regex_replace (summary.message, pattern, replacement);
-        }
-        if (summary.message.size () > error_message_max_length)
-            summary.message.resize (error_message_max_length);
-        return summary;
-    }
-
     void log_default (const message_dispatch_error_event_t &event) const noexcept
     {
         try {
@@ -179,66 +130,64 @@ class dispatch_error_reporter_t
             auto add = [&fields] (const char *key, std::string value) {
                 diagnostic_event_sink_t::append_field (fields, key, std::move (value));
             };
-            add ("event_id", "zlink.dispatch_error");
-            add ("outcome", "failed");
-            add ("surface", std::string (enum_name (event.surface)));
-            add ("kind", std::string (enum_name (event.message_kind)));
-            add ("reason", std::string (enum_name (event.reason)));
-            add ("action", std::string (enum_name (event.action)));
+            add (dispatch_event_field::event_id, "zlink.dispatch_error");
+            add (dispatch_event_field::outcome, "failed");
+            add (dispatch_event_field::surface, std::string (enum_name (event.surface)));
+            add (dispatch_event_field::kind, std::string (enum_name (event.message_kind)));
+            add (dispatch_event_field::reason, std::string (enum_name (event.reason)));
+            add (dispatch_event_field::action, std::string (enum_name (event.action)));
             if (event.packet_name) {
-                add ("packet", *event.packet_name);
+                add (dispatch_event_field::packet, *event.packet_name);
             }
             if (event.channel_name) {
-                add ("channel", *event.channel_name);
+                add (dispatch_event_field::channel, *event.channel_name);
             }
             if (event.channel_route_kind) {
-                add ("channel_route", *event.channel_route_kind);
-            } else if (event.surface == dispatch_error_surface_t::route_mesh_channel) {
-                add ("channel_route", "route_mesh");
-            } else if (event.surface == dispatch_error_surface_t::channel) {
-                add ("channel_route", "client_server");
+                add (dispatch_event_field::channel_route, *event.channel_route_kind);
+            } else if (const auto route_name = default_channel_route_name (event.surface)) {
+                add (dispatch_event_field::channel_route, std::string (*route_name));
             }
             if (event.mesh_name) {
-                add ("mesh", *event.mesh_name);
+                add (dispatch_event_field::mesh, *event.mesh_name);
             }
             if (event.topic) {
-                add ("topic", *event.topic);
+                add (dispatch_event_field::topic, *event.topic);
             }
             if (event.correlation_id) {
-                add ("corr", *event.correlation_id);
+                add (dispatch_event_field::corr, *event.correlation_id);
             }
             if (event.flow_id) {
-                add ("flow", *event.flow_id);
+                add (dispatch_event_field::flow, *event.flow_id);
             }
             if (event.flow_origin) {
-                add ("origin", std::string (enum_name (*event.flow_origin)));
+                add (dispatch_event_field::origin, std::string (enum_name (*event.flow_origin)));
             }
             if (event.source_rid) {
-                add ("source_rid", *event.source_rid);
+                add (dispatch_event_field::source_rid, *event.source_rid);
             }
             if (event.target_rid) {
-                add ("target_rid", *event.target_rid);
+                add (dispatch_event_field::target_rid, *event.target_rid);
             }
             if (event.server_rid) {
-                add ("server_rid", *event.server_rid);
+                add (dispatch_event_field::server_rid, *event.server_rid);
             }
             if (event.spot_id) {
-                add ("spot", *event.spot_id);
+                add (dispatch_event_field::spot, *event.spot_id);
             }
             if (event.actor_id) {
-                add ("actor", *event.actor_id);
+                add (dispatch_event_field::actor, *event.actor_id);
             }
             if (event.instance_spot_type) {
-                add ("instance_type", *event.instance_spot_type);
+                add (dispatch_event_field::instance_type, *event.instance_spot_type);
             }
             if (event.activation_state) {
-                add ("activation_state", *event.activation_state);
+                add (dispatch_event_field::activation_state, *event.activation_state);
             }
             if (event.error_type) {
-                add ("error_type", *event.error_type);
+                add (dispatch_event_field::error_type, *event.error_type);
             }
             if (event.error_message) {
-                add ("error_message", *event.error_message);
+                add (dispatch_event_field::error_message, *event.error_message);
             }
             // Structured fields through the configured framework logger.
             diagnostic_event_sink_t::log_if_configured (
@@ -289,6 +238,12 @@ inline dispatch_error_reason_t
 dispatch_reason_from_error (const framework_exception_t *error) noexcept
 {
     if (error != nullptr
+        && detail::failure_code (*error)
+             == static_cast<std::uint32_t> (
+               runtime::protocol::framework_error_code::routeNotConnected)) {
+        return dispatch_error_reason_t::stale_target;
+    }
+    if (error != nullptr
         && detail::failure_origin (*error) == detail::failure_origin_t::payload_decode) {
         return dispatch_error_reason_t::payload_decode_failed;
     }
@@ -301,6 +256,7 @@ dispatch_reason_from_error (const framework_exception_t *error) noexcept
             case detail::boundary_error_t::shutdown:
                 return dispatch_error_reason_t::shutdown;
             case detail::boundary_error_t::stale_generation:
+            case detail::boundary_error_t::disconnected:
                 return dispatch_error_reason_t::stale_target;
             default:
                 break;

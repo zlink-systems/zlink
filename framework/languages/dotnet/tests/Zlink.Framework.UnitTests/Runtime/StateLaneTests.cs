@@ -9,6 +9,20 @@ namespace Zlink.Framework.UnitTests;
 public sealed class StateLaneTests
 {
     [Fact]
+    public async Task AsynchronousPost_PreservesFailureAndContinuesLaterTurns()
+    {
+        await using var lane = new ZLinkStateLane();
+        var failure = new InvalidOperationException("lane callback failed");
+        var operation = lane.RunAsync(() => ValueTask.FromException(failure));
+        var following = lane.RunAsync(() => 42);
+        Assert.Same(
+            failure,
+            await Assert.ThrowsAsync<InvalidOperationException>(async () => await operation)
+        );
+        Assert.Equal(42, await following);
+    }
+
+    [Fact]
     public async Task IdleSynchronousTurn_ReturnsValueWithoutATask()
     {
         await using var lane = new ZLinkStateLane();
@@ -141,13 +155,11 @@ public sealed class StateLaneTests
         for (var i = 0; i < 100; i++)
         {
             var value = i;
-            Assert.True(
-                lane.TryPost(() =>
-                {
-                    order.Add(value);
-                    return ValueTask.CompletedTask;
-                })
-            );
+            _ = lane.RunAsync(() =>
+            {
+                order.Add(value);
+                return ValueTask.CompletedTask;
+            });
         }
 
         Assert.Equal(Enumerable.Range(0, 100), await lane.RunAsync(() => order.ToArray()));
@@ -162,13 +174,11 @@ public sealed class StateLaneTests
         var count = 0;
 
         for (var i = 0; i < 250; i++)
-            Assert.True(
-                lane.TryPost(() =>
-                {
-                    count++;
-                    return ValueTask.CompletedTask;
-                })
-            );
+            _ = lane.RunAsync(() =>
+            {
+                count++;
+                return ValueTask.CompletedTask;
+            });
 
         Assert.Equal(250, await lane.RunAsync(() => count));
     }
@@ -250,7 +260,7 @@ public sealed class StateLaneTests
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var order = new List<int>();
-        lane.TryPost(async () =>
+        _ = lane.RunAsync(async () =>
         {
             started.SetResult();
             await release.Task;
@@ -274,7 +284,7 @@ public sealed class StateLaneTests
         var completed = 0;
 
         for (var i = 0; i < 200; i++)
-            lane.TryPost(() =>
+            _ = lane.RunAsync(() =>
             {
                 completed++;
                 return ValueTask.CompletedTask;
@@ -295,12 +305,14 @@ public sealed class StateLaneTests
     }
 
     [Fact]
-    public async Task TryPost_AfterDispose_ReportsRefusalInsteadOfThrowing()
+    public async Task AsynchronousPost_AfterDispose_PreservesRefusalInCompletion()
     {
         var lane = new ZLinkStateLane();
         await lane.DisposeAsync();
 
-        Assert.False(lane.TryPost(() => ValueTask.CompletedTask));
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await lane.RunAsync(() => ValueTask.CompletedTask)
+        );
     }
 
     [Fact]

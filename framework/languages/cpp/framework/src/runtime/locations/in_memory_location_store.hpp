@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
+
+#include <zlink/framework/detail/binary_text_codec.hpp>
+
 #include "runtime/locations/location_key_codec.hpp"
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -10,13 +14,20 @@
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include <algorithm>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <mutex>
 #include <set>
+#include <utility>
 
 namespace zlink::framework::runtime
 {
+
+namespace location_composite_key
+{
+inline constexpr char separator[] = "\x1f";
+}
 
 struct owner_lease_row_t
 {
@@ -211,7 +222,8 @@ class in_memory_location_repository_t : public location_repository_t
     task_t<location_page_t<client_server_server_descriptor_t>>
     list_client_servers (std::string channel_name, location_page_request_t page = {}) override
     {
-        if (channel_name.empty () || page.page_size < 1 || page.page_size > 1000)
+        if (channel_name.empty () || page.page_size < 1
+            || page.page_size > location_page_item_limit)
             throw std::invalid_argument ("ClientServer list arguments are invalid");
         return _lane
           .run ([&] {
@@ -316,7 +328,8 @@ class in_memory_location_repository_t : public location_repository_t
     task_t<location_page_t<fanout_publisher_descriptor_t>>
     list_fanout_publishers (std::string channel_name, location_page_request_t page = {}) override
     {
-        if (channel_name.empty () || page.page_size < 1 || page.page_size > 1000)
+        if (channel_name.empty () || page.page_size < 1
+            || page.page_size > location_page_item_limit)
             throw std::invalid_argument ("fanout publisher list arguments are invalid");
         return _lane
           .run ([&] {
@@ -467,10 +480,18 @@ class in_memory_location_repository_t : public location_repository_t
                     authority_compare_exchange_result_t{authority_conflict_t{std::move (current)}});
               }
 
+              if (std::any_of (_aggregates.begin (), _aggregates.end (), [&] (const auto &entry) {
+                      return entry.second.status == aggregate_status_t::prepared
+                             && std::any_of (entry.second.request.participants.begin (),
+                                             entry.second.request.participants.end (),
+                                             [&] (const auto &participant) {
+                                                 return participant.key.value == key.value;
+                                             });
+                  }))
+                  return completed (
+                    authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+
               if (std::holds_alternative<authority_delete_t> (mutation)) {
-                  if (found == _authorities.end ())
-                      return completed (authority_compare_exchange_result_t{
-                        authority_conflict_t{authority_missing_t{now}}});
                   if (found->second.allocation.state != placement_allocation_state_t::active
                       || !owner_token_is_live (found->second.owner, now)
                       || !capacity_bundle_present (_active_by_placement,
@@ -508,7 +529,6 @@ class in_memory_location_repository_t : public location_repository_t
 
               if (auto *retarget = std::get_if<authority_retarget_t> (&mutation)) {
                   if (found->second.allocation.state != placement_allocation_state_t::active
-                      || !owner_token_is_live (found->second.owner, now)
                       || !capacity_bundle_present (_active_by_placement,
                                                    found->second.allocation.target,
                                                    found->second.allocation.capacity_bundle))
@@ -524,7 +544,7 @@ class in_memory_location_repository_t : public location_repository_t
                       return completed (
                         authority_compare_exchange_result_t{authority_conflict_t{found->second}});
                   if (!store_revisions_available ()
-                      || !next_generation (_authority_owner_generation))
+                      || !issue_generations ({{&_authority_owner_generation, 1}}))
                       return completed (
                         authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
                   auto snapshot = found->second;
@@ -546,14 +566,11 @@ class in_memory_location_repository_t : public location_repository_t
                     authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
               }
 
-              auto put = std::get<authority_put_t> (std::move (mutation));
-              if (found == _authorities.end ()
-                  || found->second.allocation.state != placement_allocation_state_t::active)
-                  return completed (authority_compare_exchange_result_t{authority_conflict_t{
-                    found == _authorities.end () ? authority_read_result_t{authority_missing_t{now}}
-                                                 : authority_read_result_t{found->second}}});
+              if (found->second.allocation.state != placement_allocation_state_t::active)
+                  return completed (
+                    authority_compare_exchange_result_t{authority_conflict_t{found->second}});
               auto owner = found->second.owner;
-              const auto object_generation = found->second.object_generation;
+              auto object_generation = found->second.object_generation;
               auto owner_generation = found->second.authority_owner_generation;
               auto allocation = found->second.allocation;
               if (!owner_token_is_live (found->second.owner, now))
@@ -563,7 +580,19 @@ class in_memory_location_repository_t : public location_repository_t
                   return completed (
                     authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
 
-              authority_snapshot_t snapshot{next_store_version (), std::move (put.payload),
+              std::vector<std::byte> payload;
+              if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
+                  if (!issue_generations (
+                        {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
+                      return completed (
+                        authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
+                  object_generation = _object_generation;
+                  owner_generation = _authority_owner_generation;
+                  payload = std::move (reincarnate->payload);
+              } else {
+                  payload = std::move (std::get<authority_put_t> (mutation).payload);
+              }
+              authority_snapshot_t snapshot{next_store_version (), std::move (payload),
                                             object_generation,     owner_generation,
                                             std::move (owner),     now,
                                             std::move (allocation)};
@@ -581,7 +610,7 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<authority_scan_result_t> ();
-        if (limit == 0 || limit > 1000)
+        if (limit == 0 || limit > location_page_item_limit)
             throw std::invalid_argument ("authority scan limit must be between 1 and 1000");
         return _lane
           .run ([&] {
@@ -670,9 +699,9 @@ class in_memory_location_repository_t : public location_repository_t
         const auto publication = std::visit (
           [] (const auto &value) -> creation_terminal_publication_t { return value.terminal; },
           request.completion);
-        if (publication.terminal_envelope.size () > 1024u * 1024u)
+        if (publication.terminal_envelope.size () > location_record_payload_limit)
             throw std::invalid_argument ("creation terminal envelope is too large");
-        const auto expires_at = publication.operation_deadline + std::chrono::minutes (5);
+        const auto expires_at = publication.operation_deadline + creation_terminal_retention;
         return _lane
           .run ([&] {
               const auto now = clock_t::now ();
@@ -743,8 +772,8 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<object_reserve_result_t> ();
-        if (request.creating_payload.size () > 1024u * 1024u
-            || request.intent.request_encoded_size > 1024u * 1024u)
+        if (request.creating_payload.size () > location_record_payload_limit
+            || request.intent.request_encoded_size > location_record_payload_limit)
             throw std::invalid_argument ("object reservation payload exceeds 1 MiB");
         return _lane
           .run ([&] {
@@ -781,11 +810,10 @@ class in_memory_location_repository_t : public location_repository_t
               if (!capacity_available (*target_descriptor, request.target, request.capacity_bundle))
                   return completed (
                     object_reserve_result_t{object_placement_capacity_exhausted_t{}});
-              if (!store_revisions_available () || _object_generation >= max_generation
-                  || _authority_owner_generation >= max_generation)
+              if (!store_revisions_available ()
+                  || !issue_generations (
+                    {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
                   return completed (object_reserve_result_t{authority_generation_exhausted_t{}});
-              ++_object_generation;
-              ++_authority_owner_generation;
 
               const auto store_version = next_store_version ();
               object_reservation_fence_t fence{
@@ -818,11 +846,12 @@ class in_memory_location_repository_t : public location_repository_t
     }
 
     task_t<object_commit_result_t> commit (object_commit_request_t request,
-                                           std::stop_token cancellation = {}) override
+                                           std::stop_token cancellation = {},
+                                           std::chrono::system_clock::time_point = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<object_commit_result_t> ();
-        if (request.ready_payload.size () > 1024u * 1024u)
+        if (request.ready_payload.size () > location_record_payload_limit)
             throw std::invalid_argument ("object commit payload exceeds 1 MiB");
         return _lane
           .run ([&] {
@@ -872,7 +901,8 @@ class in_memory_location_repository_t : public location_repository_t
     }
 
     task_t<object_abort_result_t> abort (object_abort_request_t request,
-                                         std::stop_token cancellation = {}) override
+                                         std::stop_token cancellation = {},
+                                         std::chrono::system_clock::time_point = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<object_abort_result_t> ();
@@ -1027,8 +1057,7 @@ class in_memory_location_repository_t : public location_repository_t
                                    return participant.owner_transition
                                           == authority_generation_transition_t::new_owner;
                                }));
-              if (!store_revisions_available (aggregate->second.request.participants.size ())
-                  || _authority_owner_generation > max_generation - participant_count)
+              if (!store_revisions_available (aggregate->second.request.participants.size ()))
                   return completed (aggregate_commit_result_t::generation_exhausted);
               const auto now = clock_t::now ();
               for (const auto &participant : aggregate->second.request.participants) {
@@ -1062,6 +1091,9 @@ class in_memory_location_repository_t : public location_repository_t
                                                    authority->second.allocation.capacity_bundle))
                       return completed (aggregate_commit_result_t::stale);
               }
+              auto next_owner_generation = _authority_owner_generation;
+              if (!issue_generations ({{&_authority_owner_generation, participant_count}}))
+                  return completed (aggregate_commit_result_t::generation_exhausted);
               for (std::size_t index = 0; index < aggregate->second.request.participants.size ();
                    ++index) {
                   const auto &participant = aggregate->second.request.participants[index];
@@ -1071,8 +1103,7 @@ class in_memory_location_repository_t : public location_repository_t
                   snapshot.store_now = now;
                   if (participant.owner_transition
                       == authority_generation_transition_t::new_owner) {
-                      ++_authority_owner_generation;
-                      snapshot.authority_owner_generation = _authority_owner_generation;
+                      snapshot.authority_owner_generation = ++next_owner_generation;
                       snapshot.owner = aggregate->second.request.target_owner;
                       const auto source_allocation = snapshot.allocation;
                       snapshot.allocation.target = target;
@@ -1231,8 +1262,8 @@ class in_memory_location_repository_t : public location_repository_t
 
     template <typename T> static task_t<T> cancelled ()
     {
-        return task_t<T> (detail::boundary_failure<T> (detail::boundary_error_t::cancelled,
-                                                       "location store operation was cancelled"));
+        return task_t<T> (detail::result_access_t::failure<T> (
+          detail::make_cancellation_exception ("location store operation was cancelled")));
     }
 
     bool owner_token_is_live (const location_owner_token_t &token, clock_t::time_point now) const
@@ -1294,7 +1325,8 @@ class in_memory_location_repository_t : public location_repository_t
             || descriptor.activation_concurrency.active
                  > static_cast<std::uint32_t> (descriptor.activation_concurrency.limit)
             || descriptor.security_identity.empty () || descriptor.owner_id.empty ()
-            || descriptor.lease_generation <= 0 || descriptor.object_capabilities.size () > 1024
+            || descriptor.lease_generation <= 0
+            || descriptor.object_capabilities.size () > mesh_descriptor_list_item_limit
             || descriptor.capacity.actors.limit < 0 || descriptor.capacity.spots.limit < 0
             || (descriptor.capacity.actors.limit > 0
                 && descriptor.capacity.actors.active + descriptor.capacity.actors.reserved
@@ -1302,7 +1334,7 @@ class in_memory_location_repository_t : public location_repository_t
             || (descriptor.capacity.spots.limit > 0
                 && descriptor.capacity.spots.active + descriptor.capacity.spots.reserved
                      > static_cast<std::uint64_t> (descriptor.capacity.spots.limit))
-            || descriptor.capacity.spot_types.size () > 1024
+            || descriptor.capacity.spot_types.size () > mesh_descriptor_list_item_limit
             || (descriptor.object_role != object_role_t::server
                 && !descriptor.object_capabilities.empty ()))
             return false;
@@ -1456,7 +1488,7 @@ class in_memory_location_repository_t : public location_repository_t
 
     static bool valid_fanout_descriptor_text (std::string_view value) noexcept
     {
-        return !value.empty () && value.size () <= 255
+        return !value.empty () && value.size () <= protocol::shortTextBytes
                && value.find ('\0') == std::string_view::npos;
     }
 
@@ -1503,25 +1535,29 @@ class in_memory_location_repository_t : public location_repository_t
 
     static std::string mesh_node_key (const std::string &mesh_name, const std::string &rid)
     {
-        return mesh_name + "\x1f" + rid;
+        return mesh_name + location_composite_key::separator + rid;
     }
 
     static std::string client_server_key (const std::string &channel_name,
                                           const zlink::routing_id_t &rid)
     {
-        return channel_name + "\x1f" + rid.to_hex ();
+        return channel_name + location_composite_key::separator + rid.to_hex ();
     }
 
     static std::string fanout_key (const std::string &channel_name, const zlink::routing_id_t &rid)
     {
-        return channel_name + "\x1f" + rid.to_hex ();
+        return channel_name + location_composite_key::separator + rid.to_hex ();
     }
 
-    static bool next_generation (std::uint64_t &counter)
+    static bool
+    issue_generations (std::initializer_list<std::pair<std::uint64_t *, std::size_t>> counters)
     {
-        if (counter >= max_generation)
-            return false;
-        ++counter;
+        for (const auto &[counter, count] : counters) {
+            if (count > max_generation || *counter > max_generation - count)
+                return false;
+        }
+        for (const auto &[counter, count] : counters)
+            *counter += count;
         return true;
     }
 
@@ -1660,26 +1696,27 @@ class in_memory_location_repository_t : public location_repository_t
 
     static std::string capacity_node_key (const object_creation_target_t &target)
     {
-        return target.mesh_name + "\x1f" + std::string (target.node_rid.value ()) + "\x1f"
+        return target.mesh_name + location_composite_key::separator
+               + std::string (target.node_rid.value ()) + location_composite_key::separator
                + std::to_string (target.node_lifecycle_generation);
     }
 
     static std::string actor_capacity_key (const object_creation_target_t &target)
     {
-        return capacity_node_key (target) + "\x1f" + "actor";
+        return capacity_node_key (target) + location_composite_key::separator + "actor";
     }
 
     static std::string spot_capacity_key (const object_creation_target_t &target)
     {
-        return capacity_node_key (target) + "\x1f" + "spot";
+        return capacity_node_key (target) + location_composite_key::separator + "spot";
     }
 
     static std::string spot_type_capacity_key (const object_creation_target_t &target,
                                                const spot_type_capacity_delta_t &spot_type)
     {
-        return spot_capacity_key (target) + "\x1f"
-               + std::to_string (static_cast<int> (spot_type.object_kind)) + "\x1f"
-               + spot_type.stable_type;
+        return spot_capacity_key (target) + location_composite_key::separator
+               + std::to_string (static_cast<int> (spot_type.object_kind))
+               + location_composite_key::separator + spot_type.stable_type;
     }
 
     static bool valid_capacity_bundle (const placement_capacity_bundle_t &bundle)
@@ -1842,15 +1879,7 @@ class in_memory_location_repository_t : public location_repository_t
 
     static std::string aggregate_id_key (const aggregate_id_t &id)
     {
-        static constexpr char hex[] = "0123456789abcdef";
-        std::string result;
-        result.reserve (32);
-        for (const auto value : id.value) {
-            const auto byte = std::to_integer<unsigned char> (value);
-            result.push_back (hex[byte >> 4]);
-            result.push_back (hex[byte & 0x0f]);
-        }
-        return result;
+        return zlink::framework::detail::encode_hex (std::span<const std::byte> (id.value));
     }
 
     void cleanup_scans (clock_t::time_point now)

@@ -71,10 +71,10 @@ struct binding_completion_observer_t
     };
 };
 
-binding_completion_observer_t observe_send_completion (
-  zlink::async_result_t<void> pending,
-  raw_send_stage_trace_t trace,
-  std::shared_ptr<detail::task_completion_source_t<zlink::submit_result_t>> source)
+binding_completion_observer_t
+observe_send_completion (zlink::async_result_t<void> pending,
+                         raw_send_stage_trace_t trace,
+                         std::shared_ptr<task_completion_source_t<zlink::submit_result_t>> source)
 {
     try {
         co_await std::move (pending);
@@ -131,29 +131,27 @@ binding_completion_observer_t observe_send_completion (
 
 binding_completion_observer_t observe_request_completion (
   zlink::async_result_t<std::vector<zlink::message_t>> pending,
-  std::shared_ptr<detail::task_completion_source_t<raw_request_completion_t>> source)
+  std::shared_ptr<task_completion_source_t<raw_request_completion_t>> source)
 {
     try {
         auto reply = co_await std::move (pending);
         source->complete (result_t<raw_request_completion_t>::success (
-          raw_request_completion_t{raw_request_result_t::ok, copy_binding_parts (reply)}));
+          raw_request_completion_t{zlink::request_result_t::ok, copy_binding_parts (reply)}));
     }
     catch (const zlink::request_error_t &error) {
         source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
-          map_binding_request_result (error.result ()),
+          error.result (),
           {},
           raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, std::nullopt,
-                                error.result (), error.internal_errno ()}}));
+                                error.internal_errno ()}}));
     }
     catch (const zlink::submit_error_t &error) {
-        const auto result = error.result () == zlink::submit_result_t::terminated
-                              ? raw_request_result_t::terminated
-                              : raw_request_result_t::failed;
+        const auto result = runtime::messaging::map_submit_request_result (error.result (), true);
         source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
           result,
           {},
           raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, error.result (),
-                                std::nullopt, error.internal_errno ()}}));
+                                error.internal_errno ()}}));
     }
     catch (const std::exception &error) {
         source->complete (result_t<raw_request_completion_t>::failure (
@@ -267,7 +265,7 @@ raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_r
         }
         if (submission_result != ZLINK_SUBMIT_BACKPRESSURED)
             throw std::logic_error ("raw route async send returned an invalid result snapshot");
-        auto source = std::make_shared<detail::task_completion_source_t<zlink::submit_result_t>> ();
+        auto source = std::make_shared<task_completion_source_t<zlink::submit_result_t>> ();
         auto result = std::make_shared<task_t<zlink::submit_result_t>> (source->task ());
         observe_send_completion (std::move (*pending), std::move (trace), source);
         return {raw_send_submission_state_t::pending_backpressure, std::nullopt,
@@ -353,7 +351,7 @@ task_t<raw_request_completion_t> raw_route_port_t::request (const raw_bytes_t &t
                                                             raw_message_t parts,
                                                             std::chrono::milliseconds timeout)
 {
-    auto source = std::make_shared<detail::task_completion_source_t<raw_request_completion_t>> ();
+    auto source = std::make_shared<task_completion_source_t<raw_request_completion_t>> ();
     auto result = source->task ();
     // Route selection happens synchronously inside .async(). Keep that initial
     // admission boundary separate from the pending terminal: the same errno
@@ -369,7 +367,7 @@ task_t<raw_request_completion_t> raw_route_port_t::request (const raw_bytes_t &t
             std::lock_guard lock (*_socket_mutex);
             if (_socket == nullptr) {
                 source->complete (result_t<raw_request_completion_t>::success (
-                  raw_request_completion_t{raw_request_result_t::terminated, {}}));
+                  raw_request_completion_t{zlink::request_result_t::terminated, {}}));
                 return result;
             }
             auto operation =
@@ -384,15 +382,9 @@ task_t<raw_request_completion_t> raw_route_port_t::request (const raw_bytes_t &t
     }
     catch (const zlink::submit_error_t &error) {
         const auto phase = raw_request_failure_phase_t::initial_admission;
-        const auto result =
-          transient_route_failure (error.result (), error.internal_errno (), phase)
-            ? raw_request_result_t::route_unavailable
-          : error.result () == zlink::submit_result_t::terminated ? raw_request_result_t::terminated
-                                                                  : raw_request_result_t::failed;
+        const auto result = runtime::messaging::map_submit_request_result (error.result (), false);
         source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
-          result,
-          {},
-          raw_request_failure_t{phase, error.result (), std::nullopt, error.internal_errno ()}}));
+          result, {}, raw_request_failure_t{phase, error.result (), error.internal_errno ()}}));
     }
     catch (const std::exception &error) {
         source->complete (result_t<raw_request_completion_t>::failure (

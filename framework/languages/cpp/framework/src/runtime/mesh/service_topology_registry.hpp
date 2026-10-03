@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/transport/listener_identity.hpp"
 #include <zlink/framework/contracts/errors/result.hpp>
 
 #include <service_wire_constants.hpp>
@@ -22,6 +23,8 @@
 
 namespace zlink::framework::runtime::mesh
 {
+
+inline constexpr char legacy_protocol_capability[] = "framework-service-v12";
 
 std::uint64_t sum_service_weights (std::span<const int> weights);
 
@@ -60,17 +63,17 @@ struct service_node_descriptor_t
     std::string advertised_endpoint;
     std::vector<service_channel_descriptor_t> channels;
     service_node_state_t state = service_node_state_t::preparing;
-    std::string security_identity = "default";
+    std::string security_identity = transport::default_security_identity;
     std::int64_t application_version = 0;
     // v13 is the current schema capability. Keep v12 advertised during the
     // rolling cross-language migration: older Node peers still require it,
     // while newer peers require v13. The vector remains byte-sorted on wire.
     std::vector<std::string> protocol_capabilities{
-      "framework-service-v12", zlink::framework::runtime::protocol::required_capability};
+      legacy_protocol_capability, zlink::framework::runtime::protocol::required_capability};
     service_object_role_t object_role = service_object_role_t::none;
     int placement_weight = 100;
-    std::uint32_t active_capacity_limit = 10000;
-    std::uint32_t pending_capacity_limit = 128;
+    std::uint32_t active_capacity_limit = protocol::nodeActiveCapacityDefault;
+    std::uint32_t pending_capacity_limit = protocol::nodePendingCapacityDefault;
     std::uint32_t active_capacity_used = 0;
     std::uint32_t pending_capacity_used = 0;
 
@@ -110,6 +113,9 @@ class service_topology_registry_t
                                           std::vector<std::string> metric_channel_names = {});
 
     void publish_local (service_node_descriptor_t descriptor);
+    std::vector<admitted_peer_t> publish_local_snapshot (service_node_descriptor_t descriptor);
+    task_t<std::pair<service_node_descriptor_t, std::vector<admitted_peer_t>>>
+    publish_draining_snapshot ();
     service_node_descriptor_t local_descriptor () const;
     task_t<std::tuple<service_node_descriptor_t,
                       std::vector<admitted_peer_t>,
@@ -133,6 +139,7 @@ class service_topology_registry_t
     void observe_channel_metrics (opentelemetry::metrics::ObserverResult result, bool closed) const;
 
   private:
+    std::function<void ()> publish_local_on_lane (service_node_descriptor_t descriptor);
     std::vector<admitted_peer_t> peers_on_lane () const;
     std::vector<service_node_descriptor_t> not_required_peers_on_lane () const;
     struct byte_vector_less_t
@@ -182,4 +189,3 @@ class service_topology_registry_t
 };
 
 } // namespace zlink::framework::runtime::mesh
-#include <mutex>

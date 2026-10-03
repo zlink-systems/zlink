@@ -15,7 +15,6 @@ import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.perf.Evidence
 import systems.zlink.framework.perf.Measurement
 import systems.zlink.framework.perf.ObjectsReadiness
-import systems.zlink.framework.perf.PayloadPattern
 import systems.zlink.framework.perf.PerfClock
 import systems.zlink.framework.perf.PerfDriveReply
 import systems.zlink.framework.perf.PerfDriveRequest
@@ -24,6 +23,7 @@ import systems.zlink.framework.perf.Polling
 import systems.zlink.framework.perf.RoleConfig
 import systems.zlink.framework.perf.ScenarioMetrics
 import systems.zlink.framework.perf.kotlin.completionStage
+import systems.zlink.framework.perf.kotlin.planStreamTargets
 import systems.zlink.framework.spots.ZLinkSpotManager
 
 class S2sSpotToChannelRequestEchoScenario(
@@ -36,6 +36,7 @@ class S2sSpotToChannelRequestEchoScenario(
     private val metrics: ScenarioMetrics,
 ) {
     private lateinit var sequences: AtomicLongArray
+    private lateinit var streamTargets: List<String>
 
     companion object {
         fun run(config: RoleConfig) {
@@ -61,18 +62,18 @@ class S2sSpotToChannelRequestEchoScenario(
             mesh.snapshot(config.meshName()).channels().any { it.channelName() == config.channelName() && it.isReady() && it.readyTargetCount() > 0 }
         }, 10, config.workload().setupTimeoutMs().toLong()).await()
         sequences = AtomicLongArray(config.workload().logicalStreams())
+        streamTargets = planStreamTargets(config.spotIds(), config.workload().logicalStreams())
         val probes = ArrayList<Any>()
         config.spotIds().forEachIndexed { index, spotId ->
             val request = measurement.request(index, sequences.incrementAndGet(index % sequences.length()), true)
             val driven = spots.kotlin().requestToSpot<PerfDriveReply>(spotId, PerfDriveRequest(request))
-                .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong() * 2)).await()
+                .timeout(Duration.ofMillis(config.workload().driverTimeoutMs().toLong())).await()
             val reply = driven.echo() ?: throw PerfValidationException("IdentityMismatch", "Setup probe did not reach Channel.")
             check(driven.started()) { "Setup probe was not started." }
-            PayloadPattern.validateIdentity(request, reply)
-            measurement.pattern().validate(reply.payload())
             probes.add(mapOf("correlationId" to request.correlationId(), "receivedTicks" to reply.receivedTicks(), "clockDomainId" to reply.clockDomainId()))
         }
-        readiness.set(true, "", listOf(created, Evidence.of("typedProbeEcho", "Kotlin RouteClient requestToSpot -> Spot requestToChannel", probes)))
+        measurement.setupEvidence(listOf(Evidence.of("typedProbeEcho", "Kotlin RouteClient requestToSpot -> Spot requestToChannel", probes)))
+        readiness.set(true, "", listOf(created))
     }
 
     fun run(): CompletionStage<Void> = completionStage {
@@ -82,18 +83,21 @@ class S2sSpotToChannelRequestEchoScenario(
                     launch(Dispatchers.IO) {
                         while (measurement.canIssue()) {
                             val echo = measurement.request(stream, sequences.incrementAndGet(stream), false)
-                            val started = PerfClock.now()
                             metrics.count("driver.issued")
-                            try {
-                                val driven = spots.kotlin().requestToSpot<PerfDriveReply>(
-                                    config.spotIds()[stream % config.spotIds().size], PerfDriveRequest(echo),
-                                ).timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong() * 2)).await()
-                                if (driven.started()) metrics.record("driverLatencyMs", started, PerfClock.now())
-                                else metrics.count("driver.notStarted")
-                            } catch (error: Exception) {
-                                if (error is CancellationException) throw error
+                            val driverStarted = PerfClock.now()
+                            val driven = try {
+                                spots.kotlin().requestToSpot<PerfDriveReply>(
+                                    streamTargets[stream], PerfDriveRequest(echo),
+                                ).timeout(Duration.ofMillis(config.workload().driverTimeoutMs().toLong())).await()
+                            } catch (error: Throwable) {
                                 metrics.count("driver.failed")
                                 measurement.recordDiagnostic(error)
+                                if (error is CancellationException || error !is Exception) throw error
+                                continue
+                            }
+                            if (!driven.started()) metrics.count("driver.notStarted")
+                            if (driven.echo() != null) {
+                                metrics.record("driverLatencyMs", driverStarted, PerfClock.now())
                             }
                         }
                     }

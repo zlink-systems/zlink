@@ -10,7 +10,7 @@ title: "1. 개요 · C#/.NET"
 # 1. 개요
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [다음: .NET Quickstart — 설치부터 첫 요청까지](../../quickstart.ko.md)
+[가이드 홈](README.ko.md) | [다음: 둘러보기](02-tour.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

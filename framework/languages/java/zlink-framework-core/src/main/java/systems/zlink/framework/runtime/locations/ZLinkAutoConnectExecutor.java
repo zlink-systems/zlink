@@ -5,8 +5,6 @@ interface ZLinkAutoConnectExecutor {
 
     boolean disconnect(ZLinkAutoConnectPlanner.Target target);
 
-    default void ensureConnected(ZLinkAutoConnectPlanner.Target target) {}
-
     default boolean isManual(ZLinkAutoConnectPlanner.Target target) {
         return false;
     }

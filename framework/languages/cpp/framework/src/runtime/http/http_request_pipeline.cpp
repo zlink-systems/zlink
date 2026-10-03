@@ -3,6 +3,8 @@
 #include "runtime/http/http_request_pipeline.hpp"
 #include "runtime/configuration/service_scope.hpp"
 
+#include <zlink/json_profile.hpp>
+
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 
@@ -41,12 +43,14 @@ class http_route_invoker_access_t
                                            const std::string &body)
     {
         (void) handler_executor;
+        const auto wait_owner = detail::current_wait_owner ();
         return handler_coroutine_executor ().submit<http_response_t> (
-          [&route, &services, &context, owned_request = request,
+          [&route, &services, &context, wait_owner, owned_request = request,
            owned_body = body] () mutable -> boost::asio::awaitable<result_t<http_response_t>> {
               try {
                   auto pending = [&] {
-                      const detail::ambient_context_scope_t invocation (nullptr, &route);
+                      const detail::ambient_context_scope_t invocation (nullptr, &route,
+                                                                        wait_owner);
                       return route.invoke (services, context, owned_request, owned_body);
                   }();
                   co_return co_await await_task_result (std::move (pending));
@@ -276,7 +280,7 @@ bool content_type_is_json (std::string value)
     while (!value.empty () && std::isspace (static_cast<unsigned char> (value.back ()))) {
         value.pop_back ();
     }
-    return header_name_equals (value, "application/json");
+    return header_name_equals (value, zlink::detail::json_profile::content_type);
 }
 
 void validate_json_content_type (const http::request<http::string_body> &request,
@@ -574,7 +578,6 @@ void apply_framework_error (http::response<http::string_body> &response,
             break;
         case detail::boundary_error_t::disconnected:
         case detail::boundary_error_t::closed:
-        case detail::boundary_error_t::cancelled:
         case detail::boundary_error_t::stale_generation:
             break;
         case detail::boundary_error_t::none:
@@ -614,7 +617,7 @@ make_health_response (health_builder_t &health,
     http::response<http::string_body> response{
       status == health_status_t::unhealthy ? http::status::service_unavailable : http::status::ok,
       request.version ()};
-    response.set (http::field::content_type, "application/json");
+    response.set (http::field::content_type, zlink::detail::json_profile::content_type);
     response.body () = body.dump ();
     apply_context_response (response, context, false);
     response.prepare_payload ();
@@ -625,7 +628,7 @@ http::response<http::string_body>
 make_json_response (http::status status, unsigned version, std::string body)
 {
     http::response<http::string_body> response{status, version};
-    response.set (http::field::content_type, "application/json");
+    response.set (http::field::content_type, zlink::detail::json_profile::content_type);
     response.body () = std::move (body);
     return response;
 }
@@ -775,7 +778,7 @@ http::response<http::string_body>
 make_http_status_response (http::status status, unsigned version, std::string body, bool keep_alive)
 {
     http::response<http::string_body> response{status, version};
-    response.set (http::field::content_type, "application/json");
+    response.set (http::field::content_type, zlink::detail::json_profile::content_type);
     response.keep_alive (keep_alive);
     response.body () = std::move (body);
     response.prepare_payload ();

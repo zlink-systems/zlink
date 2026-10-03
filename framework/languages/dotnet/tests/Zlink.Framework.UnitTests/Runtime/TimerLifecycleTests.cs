@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Timers;
 
@@ -6,6 +7,59 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class TimerLifecycleTests
 {
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task Failure_observer_sees_timer_stop_policy_before_relocation_freeze(
+        bool stopOnUnhandledException,
+        bool observerFails
+    )
+    {
+        await using var scheduler = new ZLinkTimerScheduler();
+        await using var registry = new ZLinkSpotTimerRegistry(
+            static () => false,
+            scheduler: scheduler
+        );
+        var observed = new TaskCompletionSource<(
+            bool Stopped,
+            IReadOnlyList<ZLinkRelocationLogicalTimer> Timers
+        )>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timer = await registry.AddAsync(
+            "failed-freeze",
+            TimeSpan.FromMilliseconds(1),
+            new ZLinkTimerOptions { StopOnUnhandledException = stopOnUnhandledException },
+            typeof(TestTimerHandler),
+            typeof(TestTimerSpot),
+            CancellationToken.None,
+            static (_, _, _) =>
+                ValueTask.FromException<bool>(
+                    new InvalidOperationException("timer handler failed")
+                ),
+            (_, _, _, stopped, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                observed.TrySetResult((stopped, registry.FreezeRelocation()));
+                return observerFails
+                    ? ValueTask.FromException(
+                        new InvalidOperationException("timer observer failed")
+                    )
+                    : ValueTask.CompletedTask;
+            },
+            CancellationToken.None
+        );
+
+        var observation = await observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(stopOnUnhandledException, observation.Stopped);
+        Assert.Equal(stopOnUnhandledException, timer.IsDisposed);
+        if (stopOnUnhandledException)
+            Assert.Empty(observation.Timers);
+        else
+            Assert.Equal("failed-freeze", Assert.Single(observation.Timers).TimerId);
+        await timer.CancelAsync();
+    }
+
     [Theory]
     [InlineData(5)]
     [InlineData(-5)]

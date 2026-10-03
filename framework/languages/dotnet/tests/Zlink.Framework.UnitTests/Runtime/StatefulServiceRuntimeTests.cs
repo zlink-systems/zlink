@@ -1828,7 +1828,7 @@ public sealed partial class StatefulServiceRuntimeTests
     }
 
     [Fact]
-    public async Task RemoteActorRequest_RetriesPreservedNativeReplyAfterBackpressure()
+    public async Task RemoteActorRequest_BackpressuredNativeReplyIsOneShot()
     {
         var replyAttempts = 0;
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -1894,18 +1894,19 @@ public sealed partial class StatefulServiceRuntimeTests
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
             Assert.Equal(MeshRecordKind.ActorRequest, requestBatch[0].Kind);
             Assert.Equal(SubmitResult.Backpressured, requestBatch[0].Reply(Array.Empty<Message>()));
+            Assert.Equal(SubmitResult.InvalidState, requestBatch[0].Reply(Array.Empty<Message>()));
+            Assert.Equal(1, Volatile.Read(ref replyAttempts));
         }
 
-        await WaitUntilAsync(() =>
-            Volatile.Read(ref replyAttempts) == 2
-            && source.Status().PendingInfrastructureMessages > 0
-        );
+        await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
         var completions = DrainRecords(source);
-        Assert.Single(
+        var terminal = Assert.Single(
             completions.Where(record =>
                 record.Kind == MeshRecordKind.Completion && record.OperationId == operation
             )
         );
+        Assert.Equal((int)RequestResult.TimedOut, terminal.TerminalResult);
+        Assert.Equal(1, Volatile.Read(ref replyAttempts));
         await Task.Delay(100);
         Assert.DoesNotContain(
             DrainRecords(source),
@@ -1914,7 +1915,7 @@ public sealed partial class StatefulServiceRuntimeTests
     }
 
     [Fact]
-    public async Task RemoteActorRequest_BackpressuredReplyThatExpiresDuringSubmitReturnsTerminated()
+    public async Task RemoteActorRequest_BackpressuredReplyPreservesAdmissionAfterClockAdvance()
     {
         var replyAttempts = 0;
         var deadlineTime = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
@@ -1927,8 +1928,7 @@ public sealed partial class StatefulServiceRuntimeTests
             nativeTerminalReplySubmitOverride: _ =>
             {
                 Interlocked.Increment(ref replyAttempts);
-                // Expire after the initial submit's deadline check, before the
-                // Backpressured result is classified for retention or terminal failure.
+                // A wall-clock change does not replace the binding admission result.
                 deadlineTime.Advance(
                     wallClock: TimeSpan.FromSeconds(10),
                     monotonic: TimeSpan.FromSeconds(10)
@@ -1986,7 +1986,8 @@ public sealed partial class StatefulServiceRuntimeTests
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
             Assert.Equal(MeshRecordKind.ActorRequest, requestBatch[0].Kind);
             using var reply = Message.From(new byte[] { 73 });
-            Assert.Equal(SubmitResult.Terminated, requestBatch[0].Reply([reply]));
+            Assert.Equal(SubmitResult.Backpressured, requestBatch[0].Reply([reply]));
+            Assert.Equal(SubmitResult.InvalidState, requestBatch[0].Reply([reply]));
         }
 
         await Task.Delay(100);
@@ -3500,7 +3501,10 @@ public sealed partial class StatefulServiceRuntimeTests
             ZLinkFrameworkErrorKind.Unavailable,
             "The User Spot is sealed for relocation.",
             ZLinkRetryAdvice.RetryAfterBackoff
-        );
+        )
+        {
+            FrameworkFailureCode = (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving,
+        };
         Assert.Equal(
             SubmitResult.Ok,
             source.CloseUserSpot(

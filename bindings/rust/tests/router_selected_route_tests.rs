@@ -23,7 +23,7 @@ fn make_router(ctx: &Context, name: &str) -> RouterSocket {
     router.set_routing_id(&RoutingId::from(name)).unwrap();
     router
         .common_options()
-        .set_linger(Duration::from_millis(0))
+        .set_linger(0)
         .unwrap();
     router
         .common_options()
@@ -31,7 +31,7 @@ fn make_router(ctx: &Context, name: &str) -> RouterSocket {
         .unwrap();
     router
         .common_options()
-        .set_receive_timeout(Duration::from_millis(WAIT_MS as u64))
+        .set_receive_timeout(WAIT_MS as i32)
         .unwrap();
     router
         .common_options()
@@ -156,11 +156,11 @@ fn snapshot_pollroute_and_record_generation() {
         .unwrap();
     dealer
         .common_options()
-        .set_linger(Duration::from_millis(0))
+        .set_linger(0)
         .unwrap();
     dealer
         .common_options()
-        .set_receive_timeout(Duration::from_millis(WAIT_MS as u64))
+        .set_receive_timeout(WAIT_MS as i32)
         .unwrap();
     dealer.connect(&endpoint).unwrap();
     wait_route(&server, None, "route-dealer", 0);

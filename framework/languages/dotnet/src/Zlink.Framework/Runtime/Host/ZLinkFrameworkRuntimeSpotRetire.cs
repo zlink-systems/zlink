@@ -188,27 +188,37 @@ internal sealed partial class ZLinkFrameworkRuntime
                 request.TargetAttemptGeneration
             );
         }
-        catch
+        catch (Exception primaryFailure)
         {
+            var failures = new ZLinkFailureCollector(primaryFailure);
             if (targetAdmissionSeal is not null)
-                _ = await preparedSpot
-                    .Activation.AbortRelocationAsync(targetAdmissionSeal)
+                await failures
+                    .CaptureAsync(async () =>
+                        _ = await preparedSpot
+                            .Activation.AbortRelocationAsync(targetAdmissionSeal)
+                            .ConfigureAwait(false)
+                    )
                     .ConfigureAwait(false);
             foreach (var actorId in boundActorIds.Keys)
             {
-                try
+                failures.Capture(() =>
                 {
                     if (stagedActorStates.TryGetValue(actorId, out var actorState))
-                    {
                         actorState.Handoff.AbortImport(envelope.AggregateId.ToString("N"));
-                    }
-                    await _actorSessionManager
-                        .RollbackTransferredActorAsync(actorId.Value, CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-                catch { }
+                });
+                await failures
+                    .CaptureAsync(() =>
+                        _actorSessionManager.RollbackTransferredActorAsync(
+                            actorId.Value,
+                            CancellationToken.None
+                        )
+                    )
+                    .ConfigureAwait(false);
             }
-            await node.Catalog.DiscardReservedAsync(preparedSpot).ConfigureAwait(false);
+            await failures
+                .CaptureAsync(() => node.Catalog.DiscardReservedAsync(preparedSpot))
+                .ConfigureAwait(false);
+            failures.ThrowIfAny();
             throw;
         }
     }
@@ -634,8 +644,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         )
                     {
                         ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"relocation_session_route_retry actor={actorState.ActorId} "
-                                + $"handoff={handoffId} attempt={attempt}"
+                            $"relocation_session_route_retry actor={actorState.ActorId} handoff={handoffId} attempt={attempt}"
                         );
                         await Task.Delay(
                                 SessionRouteConvergenceRetryDelay * attempt,
@@ -676,8 +685,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             // identity: a late ACK must never commit, so the route is
             // terminal for this handoff.
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"relocation_session_route_fenced actor={actorState.ActorId} "
-                    + $"handoff={handoffId}"
+                $"relocation_session_route_fenced actor={actorState.ActorId} handoff={handoffId}"
             );
             return;
         }
@@ -791,7 +799,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         var targetOwner =
             LocationLifecycle?.OwnerToken
             ?? throw new ZLinkConfigurationException("Location runtime is not registered.");
-        var coordinator = new ZLinkAggregateRelocationCoordinator(authorityStore, relocationStore);
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            ErrorSink,
+            authorityStore,
+            relocationStore
+        );
         var current = stage.Envelope.CanonicalLogicalStream.IsEmpty
             ? stage.Envelope
             : await coordinator
@@ -1168,9 +1180,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"canonical_actor_replay_completion_begin actor={actorState.ActorId} "
-                + $"accepted_sequence={job.AcceptedSequence} reply={reply is not null} "
-                + $"has_reply_route={job.CanonicalRequest is { ReplyRouteId: not 0 }}"
+            $"canonical_actor_replay_completion_begin actor={actorState.ActorId} accepted_sequence={job.AcceptedSequence} reply={reply is not null} has_reply_route={job.CanonicalRequest is { ReplyRouteId: not 0 }}"
         );
         ZLinkCanonicalTerminalCompletion? completion = null;
         byte[]? replyFrame = null;
@@ -1201,16 +1211,12 @@ internal sealed partial class ZLinkFrameworkRuntime
             );
         }
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"canonical_actor_replay_handled actor={actorState.ActorId} "
-                + $"accepted_sequence={job.AcceptedSequence} "
-                + $"has_completion={completion is not null}"
+            $"canonical_actor_replay_handled actor={actorState.ActorId} accepted_sequence={job.AcceptedSequence} has_completion={completion is not null}"
         );
         if (completion is not null)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"canonical_actor_reply_relay_begin actor={actorState.ActorId} "
-                    + $"accepted_sequence={job.AcceptedSequence} "
-                    + $"reply_route={request!.ReplyRouteId}"
+                $"canonical_actor_reply_relay_begin actor={actorState.ActorId} accepted_sequence={job.AcceptedSequence} reply_route={request!.ReplyRouteId}"
             );
             var acknowledgement = await TryRelayCanonicalReplyAsync(
                     RoutingId.FromHex(completion.SourceNodeRid),
@@ -1232,9 +1238,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 )
                 .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"canonical_actor_reply_relay_result actor={actorState.ActorId} "
-                    + $"accepted_sequence={job.AcceptedSequence} "
-                    + $"acknowledgement={acknowledgement}"
+                $"canonical_actor_reply_relay_result actor={actorState.ActorId} accepted_sequence={job.AcceptedSequence} acknowledgement={acknowledgement}"
             );
             if (
                 !await CompleteCanonicalReplyDeliveryAsync(
@@ -1252,8 +1256,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         actorState.Handoff.AcknowledgeCanonicalReplayThrough(job.AcceptedSequence);
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"canonical_actor_replay_completion_end actor={actorState.ActorId} "
-                + $"accepted_sequence={job.AcceptedSequence}"
+            $"canonical_actor_replay_completion_end actor={actorState.ActorId} accepted_sequence={job.AcceptedSequence}"
         );
     }
 

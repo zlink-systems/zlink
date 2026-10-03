@@ -75,9 +75,11 @@ public interface ZLinkActorJoinRelocationPort {
                     rawReply,
                     activeTurnSeal,
                     0L,
-                    "application/json",
+                    systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile
+                            .CONTENT_TYPE,
                     new byte[0],
-                    "application/json");
+                    systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile
+                            .CONTENT_TYPE);
         }
 
         public Goal(
@@ -108,9 +110,11 @@ public interface ZLinkActorJoinRelocationPort {
                     rawReply,
                     activeTurnSeal,
                     advertisedReceiveChunkLimitBytes,
-                    "application/json",
+                    systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile
+                            .CONTENT_TYPE,
                     new byte[0],
-                    "application/json");
+                    systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile
+                            .CONTENT_TYPE);
         }
 
         public Goal {

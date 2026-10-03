@@ -1386,7 +1386,7 @@ public sealed class ServiceRuntimeFoundationTests
         {
             using var ready = new MeshReadyBatch();
             using var received = new MeshReceiveBatch();
-            while (!stop.IsCancellationRequested)
+            while (!stop.IsCancellationRequested || node.Status().PendingBytes != 0)
             {
                 ready.Reset();
                 node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);

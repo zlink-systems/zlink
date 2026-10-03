@@ -22,6 +22,9 @@ class session_serial_executor_t;
 
 namespace zlink::framework::detail
 {
+inline constexpr char heartbeat_ping_name[] = "$zlink.heartbeat.ping";
+inline constexpr char heartbeat_pong_name[] = "$zlink.heartbeat.pong";
+
 
 std::string_view stream_content_type (stream_codec_t codec) noexcept;
 stream_codec_t stream_codec_from_content_type (std::string_view content_type) noexcept;
@@ -151,6 +154,11 @@ class stream_runtime_t
     std::vector<zlink::message_t> written_payloads (const stream_t &stream) const;
 
   private:
+    void send_control_frame (stream_t &stream,
+                             const char *name,
+                             std::optional<stream_close_reason_t> close_reason = std::nullopt,
+                             std::string_view diagnostic = {},
+                             std::function<void ()> completed = {}) const noexcept;
     result_t<void> dispatch_application (stream_t &stream,
                                          std::string operation,
                                          std::function<task_t<void> ()> callback) const;
@@ -187,12 +195,14 @@ class stream_runtime_t
      * writer; the caller closes the connection afterwards. */
     void send_session_closing (stream_t &stream,
                                stream_close_reason_t reason,
-                               std::string_view diagnostic) const noexcept;
+                               std::string_view diagnostic,
+                               std::function<void ()> completed = {}) const noexcept;
 
     /* Server liveness ping (graceful-drain-handoff §7.2): empty control frame
      * on the session's transport writer; the sweep loop owns the cadence. */
     void send_heartbeat_ping (stream_t &stream) const noexcept;
     void send_heartbeat_pong (stream_t &stream) const noexcept;
+    void dispatch_control_frame (stream_t &stream, const stream_header_t &header) const noexcept;
 
   private:
     std::shared_ptr<stream_runtime_state_t> _state;

@@ -3,7 +3,6 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -152,9 +151,9 @@ final class ZLinkUserSpotOperationHandler
         }
         CompletableFuture<ZLinkInternalMeshNode.UserSpotCloseResponse> result =
                 new CompletableFuture<>();
-        activation
+        return activation
                 .context
-                .enqueueLifecycle(
+                .enqueueClose(
                         () ->
                                 closeOnLifecycle(fence)
                                         .handle(
@@ -168,14 +167,17 @@ final class ZLinkUserSpotOperationHandler
                                                         result.completeExceptionally(failure);
                                                     }
                                                     return null;
-                                                }))
+                                                }),
+                        () ->
+                                activation.existingCloseCoordinator() != null
+                                        && activation.existingCloseCoordinator().committed())
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) {
                                 result.completeExceptionally(failure);
                             }
-                        });
-        return result;
+                        })
+                .thenCompose(ignored -> result);
     }
 
     /**
@@ -432,7 +434,7 @@ final class ZLinkUserSpotOperationHandler
                                                                                     () -> {
                                                                                         activation
                                                                                                 .context
-                                                                                                .sealClosingAdmission();
+                                                                                                .commitClose();
                                                                                         return CompletableFuture
                                                                                                 .completedFuture(
                                                                                                         null);
@@ -447,15 +449,6 @@ final class ZLinkUserSpotOperationHandler
                                                                                                 .completedFuture(
                                                                                                         null);
                                                                                     }),
-                                                                    ZLinkSpotCloseCoordinator.Step
-                                                                            .operation(
-                                                                                    () ->
-                                                                                            activation
-                                                                                                    .context
-                                                                                                    .awaitAllLanes(
-                                                                                                            ZLinkSerialExecutionQueue
-                                                                                                                    .Quiescence
-                                                                                                                    .APPLICATION)),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .onClosing(
                                                                                     () ->
@@ -504,16 +497,6 @@ final class ZLinkUserSpotOperationHandler
                                                                                         activation
                                                                                                 .backendSpot
                                                                                                 .close();
-                                                                                        return CompletableFuture
-                                                                                                .completedFuture(
-                                                                                                        null);
-                                                                                    }),
-                                                                    ZLinkSpotCloseCoordinator.Step
-                                                                            .operation(
-                                                                                    () -> {
-                                                                                        lifecycle
-                                                                                                .retireClosed(
-                                                                                                        activation);
                                                                                         return CompletableFuture
                                                                                                 .completedFuture(
                                                                                                         null);
@@ -593,6 +576,9 @@ final class ZLinkUserSpotOperationHandler
                                                                                                             })
                                                                                                     .thenApply(
                                                                                                             ignored -> {
+                                                                                                                lifecycle
+                                                                                                                        .retireClosed(
+                                                                                                                                activation);
                                                                                                                 runtime
                                                                                                                         .releaseClosingCoordinator(
                                                                                                                                 fence
@@ -655,7 +641,8 @@ final class ZLinkUserSpotOperationHandler
                     .handle(
                             (ignored, failure) ->
                                     SpotActivationBase.finishCleanup(
-                                            failure, abort(admission.reservation())))
+                                            failure,
+                                            authorityStore.abort(admission.reservation(), OPEN)))
                     .thenCompose(stage -> stage)
                     .thenApply(
                             ignored ->
@@ -676,7 +663,7 @@ final class ZLinkUserSpotOperationHandler
                         node.status().routingId(),
                         node.status().lifecycleGeneration());
         return authorityStore
-                .commit(admission.reservation(), ready, OPEN)
+                .commit(admission.reservation(), ready, request.intent().deadlineUnixMs())
                 .thenCompose(
                         result -> {
                             if (result != ZLinkObjectCommitResult.COMMITTED

@@ -122,14 +122,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                                     )
                                     {
                                         ZLinkFrameworkDebugLog.SpotDiscovery(
-                                            $"bound_session_replaced_sent actor={record.ActorAuthority.ActorId} "
-                                                + $"target={targetNodeRid} session={record.RetiredSession.SessionRid}"
+                                            $"bound_session_replaced_sent actor={record.ActorAuthority.ActorId} target={targetNodeRid} session={record.RetiredSession.SessionRid}"
                                         );
                                         return true;
                                     }
                                     ZLinkFrameworkDebugLog.SpotDiscovery(
-                                        $"bound_session_replaced_retry actor={record.ActorAuthority.ActorId} "
-                                            + $"target={targetNodeRid} session={record.RetiredSession.SessionRid}"
+                                        $"bound_session_replaced_retry actor={record.ActorAuthority.ActorId} target={targetNodeRid} session={record.RetiredSession.SessionRid}"
                                     );
                                 }
                                 catch (Exception failure)
@@ -148,8 +146,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         )
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"bound_session_replaced_detached_not_started actor={record.ActorAuthority.ActorId} "
-                    + $"target={targetNodeRid} session={record.RetiredSession.SessionRid}"
+                $"bound_session_replaced_detached_not_started actor={record.ActorAuthority.ActorId} target={targetNodeRid} session={record.RetiredSession.SessionRid}"
             );
         }
     }

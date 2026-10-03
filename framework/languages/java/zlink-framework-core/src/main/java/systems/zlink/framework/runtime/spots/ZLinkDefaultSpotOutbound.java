@@ -167,13 +167,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
     }
 
     private SpotTransportAddressResolver resolver() {
-        SpotTransportAddressResolver resolver;
-        try {
-            resolver = spotAddressResolver == null ? null : spotAddressResolver.get();
-        } catch (RuntimeException ignored) {
-            resolver = null;
-        }
-        return resolver;
+        return spotAddressResolver == null ? null : spotAddressResolver.get();
     }
 
     private CompletionStage<SpotTransportAddress> resolve(
@@ -357,22 +351,31 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                     resolve(target, resolver)
                             .handle(
                                     (address, failure) -> {
-                                        if (failure == null) {
-                                            return resolver.observeTerminal(
-                                                    target, sendExisting(address));
-                                        }
-                                        if (!instanceIntent || instanceSpots == null) {
+                                        if (failure != null
+                                                && (!instanceIntent
+                                                        || !SpotTransportAddressResolver
+                                                                .isStaleRoute(failure))) {
                                             return CompletableFuture.<Void>failedFuture(
                                                     unwrap(failure));
                                         }
-                                        return instanceSpots.send(
-                                                target,
-                                                stableType,
-                                                selectedMesh,
-                                                copyPayload(),
-                                                packetName,
-                                                contentType,
-                                                metadata.values());
+                                        CompletionStage<Void> submitted =
+                                                instanceIntent
+                                                        ? instanceSpots == null
+                                                                ? CompletableFuture.failedFuture(
+                                                                        new ZLinkConfigurationException(
+                                                                                "Instance Spot runtime is not configured"))
+                                                                : instanceSpots.send(
+                                                                        target,
+                                                                        stableType,
+                                                                        selectedMesh,
+                                                                        copyPayload(),
+                                                                        packetName,
+                                                                        contentType,
+                                                                        metadata.values())
+                                                        : sendExisting(address);
+                                        return failure == null
+                                                ? resolver.observeTerminal(target, submitted)
+                                                : submitted;
                                     })
                             .thenCompose(Function.identity());
             return ZLinkOneWayCalls.adaptOneWay(stage)
@@ -628,16 +631,25 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                         resolve(target, resolver)
                                 .handle(
                                         (address, failure) -> {
-                                            if (failure == null) {
-                                                return resolver.observeTerminal(
-                                                        target,
-                                                        requestExisting(address, replyType));
-                                            }
-                                            if (!instanceIntent || instanceSpots == null) {
+                                            if (failure != null
+                                                    && (!instanceIntent
+                                                            || !SpotTransportAddressResolver
+                                                                    .isStaleRoute(failure))) {
                                                 return CompletableFuture.<TReply>failedFuture(
                                                         unwrap(failure));
                                             }
-                                            return activateRequest(replyType);
+                                            CompletionStage<TReply> submitted =
+                                                    instanceIntent
+                                                            ? instanceSpots == null
+                                                                    ? CompletableFuture
+                                                                            .failedFuture(
+                                                                                    new ZLinkConfigurationException(
+                                                                                            "Instance Spot runtime is not configured"))
+                                                                    : activateRequest(replyType)
+                                                            : requestExisting(address, replyType);
+                                            return failure == null
+                                                    ? resolver.observeTerminal(target, submitted)
+                                                    : submitted;
                                         })
                                 .thenCompose(Function.identity());
             } catch (RuntimeException | Error failure) {

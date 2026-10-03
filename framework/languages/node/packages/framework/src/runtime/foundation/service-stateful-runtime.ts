@@ -1,5 +1,20 @@
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { ZLinkFrameworkException } from '../../contracts';
+import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
+import { decodeServiceClosingSpotAuthority } from './service-authority-payload-codec';
+import {
+  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
+  ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import { awaitWithAbort } from '../abort';
+import { shouldCompactBackingArray } from '../admission';
+import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
+import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
+import { flowIfEnabled } from '../diagnostics/message-flow';
 import { captureZLinkExecutionTurn } from '../execution';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -8,21 +23,26 @@ import {
   internalFrameworkWireReply,
   translateWireReplyDecodeError
 } from '../framework-errors-internal';
-import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
-import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
 import {
-  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
-  ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
-  ZLinkDispatchErrorSurface,
-  ZLinkDispatchMessageKind
-} from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { flowIfEnabled } from '../diagnostics/message-flow';
+  decodeActorJoin28,
+  encodeActorJoin28,
+  type ActorJoin28
+} from '../protocol/service_wire_pilot_codec.generated';
+import { canonicalActorJoinHandoffId, routingIdBytes } from './actor-join-recovery-codec';
+import { OperationRegistry } from './operation-registry';
+import {
+  MessageFollowSuppressionRegistry,
+  type MessageFollowSuppressionFence
+} from './message-follow-suppression-registry';
+import { ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE } from './operation-identity';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime,
   RawServicePumpResult
 } from './raw-service-mesh-runtime';
+import type { ServiceInstanceActivationRecoveryEnvelope } from './service-instance-activation-recovery-codec';
+import type { ServiceMailboxRecord } from './service-mailbox';
+import { validateServiceMetadataFrame } from './service-metadata-codec';
 import {
   ActorLifecycleKind,
   OperationKind,
@@ -34,11 +54,6 @@ import {
   type ServiceStreamSessionBinding,
   type StreamSessionActorAuthorityFence
 } from './service-runtime-contracts';
-import type { ServiceMailboxRecord } from './service-mailbox';
-import {
-  MessageFollowSuppressionRegistry,
-  type MessageFollowSuppressionFence
-} from './message-follow-suppression-registry';
 import {
   ServiceStaleGenerationError,
   ServiceStatefulRegistry,
@@ -50,6 +65,8 @@ import {
   type ServiceSpotState
 } from './service-stateful-registry';
 import {
+  M6bServiceWireCommand,
+  M6bServiceWireFlag,
   decodeStatefulHeader,
   decodeStatefulReply,
   encodeActorCreateHeader,
@@ -67,17 +84,15 @@ import {
   encodeStatefulReply,
   encodeUserSpotCloseHeader,
   encodeUserSpotCreateHeader,
-  M6bServiceWireCommand,
-  M6bServiceWireFlag,
   sessionBindingFromWire,
+  type ServiceActorCreateRecord,
   type ServiceActorRouteFence,
   type ServiceBoundSessionActorAuthority,
-  type ServiceRetiredBoundSessionRouteFence,
-  type ServiceActorCreateRecord,
+  type ServiceDirectSpotRouteFence,
   type ServiceInstanceActivationTarget,
   type ServiceInstanceRouteFence,
   type ServiceMessageFollowRoute,
-  type ServiceDirectSpotRouteFence,
+  type ServiceRetiredBoundSessionRouteFence,
   type ServiceSpotRouteFence,
   type ServiceStatefulReplyTail,
   type ServiceStatefulWireRecord,
@@ -85,24 +100,21 @@ import {
   type ServiceUserSpotCreateRecord
 } from './service-stateful-wire-codec';
 import {
-  decodeActorJoin28,
-  encodeActorJoin28,
-  type ActorJoin28
-} from '../protocol/service_wire_pilot_codec.generated';
-import { canonicalActorJoinHandoffId, routingIdBytes } from './actor-join-recovery-codec';
-
+  SERVICE_WIRE_COMMAND_OFFSET,
+  SERVICE_WIRE_FLAGS_OFFSET
+} from './service-wire-binary-primitives';
+import { SERVICE_WIRE_MAGIC, SERVICE_WIRE_MAJOR } from './service-wire-constants.generated';
 import {
+  ServiceWireProtocolError,
   decodeApplicationPayload,
   decodeApplicationPayloadView,
   encodeApplicationPayload,
-  type ServiceApplicationPayload,
-  ServiceWireProtocolError
+  type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
-import type { ServiceInstanceActivationRecoveryEnvelope } from './service-instance-activation-recovery-codec';
-import { validateServiceMetadataFrame } from './service-metadata-codec';
-import { ZLinkFrameworkException } from '../../contracts';
+const STATEFUL_OPERATION_RETRY_TICK_MS = 20;
 
-const ACTOR_ROUTE_STALE = 21;
+const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
+
 const SPOT_MOVING = 34;
 const USER_SPOT_OPERATION_CAPACITY = 65_536;
 const USER_SPOT_OPERATION_REPLAY_RETENTION_MS = 5 * 60_000;
@@ -169,6 +181,7 @@ export interface ServiceStatefulMailboxData {
   readonly isPending?: () => boolean;
   /** Carries the local operation deadline into the lifecycle dispatch lane. */
   readonly deadlineUnixMs?: bigint;
+  readonly activationRecord?: Extract<ServiceStatefulWireRecord, { readonly kind: 'instanceSpot' }>;
   readonly onTerminalCompletion?: () => void | Promise<void>;
   /** Decoded only by the canonical command-28 generator path. */
   readonly canonicalApplicationPayload?: ServiceApplicationPayload;
@@ -258,8 +271,13 @@ export type ServiceInstanceAuthorityRead =
       readonly kind: 'creating';
       readonly objectGeneration: bigint;
       readonly authorityOwnerGeneration: bigint;
+      readonly authority?: ZLinkAuthoritySnapshot;
     }
-  | { readonly kind: 'ready'; readonly route: ServiceInstanceRouteFence };
+  | {
+      readonly kind: 'ready';
+      readonly route: ServiceInstanceRouteFence;
+      readonly authority?: ZLinkAuthoritySnapshot;
+    };
 
 export type ServiceInstanceAuthorityReserve =
   | { readonly kind: 'reserved'; readonly reservation: ServiceInstanceActivationReservation }
@@ -295,7 +313,8 @@ export interface ServiceInstanceActivationAuthority {
 export interface ServiceAsyncInstanceActivationAuthority {
   read(target: ServiceInstanceActivationTarget): Promise<ServiceInstanceAuthorityRead>;
   reserve(
-    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>
+    activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>,
+    signal?: AbortSignal
   ): Promise<ServiceInstanceAuthorityReserve>;
   resume(
     target: ServiceInstanceActivationTarget,
@@ -304,7 +323,8 @@ export interface ServiceAsyncInstanceActivationAuthority {
   commit(
     target: ServiceInstanceActivationTarget,
     reservation: ServiceInstanceActivationReservation,
-    spot: ServiceSpotState
+    spot: ServiceSpotState,
+    deadlineUnixMs?: bigint
   ): Promise<{ readonly kind: 'committed' | 'lost'; readonly route: ServiceInstanceRouteFence }>;
   complete(
     target: ServiceInstanceActivationTarget,
@@ -361,7 +381,7 @@ export class ServiceStatefulRuntime {
 
   readonly registry: ServiceStatefulRegistry;
 
-  private readonly operations = new ServiceTerminalOperationRegistry<ServiceStatefulResult>();
+  private readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult>;
   private readonly sessionDeliveries = new Map<string, ServiceSessionDelivery>();
   /**
    * A local Actor owner can replace its own session binding before the
@@ -416,7 +436,7 @@ export class ServiceStatefulRuntime {
   private readonly pendingInstanceActivations = new Map<
     string,
     Promise<{
-      readonly spot: ServiceSpotState;
+      readonly spot: Pick<ServiceSpotState, 'ref'>;
       readonly route: ServiceInstanceRouteFence;
     }>
   >();
@@ -425,8 +445,12 @@ export class ServiceStatefulRuntime {
   constructor(
     private readonly raw: RawServiceMeshRuntime,
     readonly nodeRid: string,
-    readonly nodeGeneration: bigint
+    readonly nodeGeneration: bigint,
+    onPendingOperationsChanged?: () => void
   ) {
+    this.operations = new ServiceTerminalOperationRegistry(
+      new OperationRegistry(undefined, onPendingOperationsChanged)
+    );
     this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration);
     this.registry.createEntrySpot(nodeRid);
     raw.setServiceIngress((record) => this.ingress(record));
@@ -1266,11 +1290,11 @@ export class ServiceStatefulRuntime {
           reporter.report({
             surface: ZLinkDispatchErrorSurface.SpotRoute,
             messageKind: ZLinkDispatchMessageKind.Send,
-            reason: serviceSpotPublishFailureReason(
-              undefined,
-              this.raw.isPeerRouteReady(target.descriptor.nodeRoutingId),
-              this.closed
-            ),
+            reason: this.closed
+              ? ZLinkDispatchErrorReason.Shutdown
+              : this.raw.isPeerRouteReady(target.descriptor.nodeRoutingId)
+                ? ZLinkDispatchErrorReason.Backpressure
+                : ZLinkDispatchErrorReason.StaleTarget,
             action: ZLinkDispatchErrorAction.Drop,
             meshName: this.dispatchErrorMeshName,
             channelName,
@@ -1307,10 +1331,10 @@ export class ServiceStatefulRuntime {
     const pending = this.operations.register(timeoutMs);
     const target = this.acceptSpotAuthority(requested);
     if (target === undefined) {
-      this.operations.reply(pending.id, {
-        terminalResult: RequestResult.NotFound,
-        failureCode: ACTOR_ROUTE_STALE
-      });
+      this.operations.reply(
+        pending.id,
+        internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale)
+      );
       return pending;
     }
     const header = encodeSpotHeader('spotRequest', sourceSpotId, target, pending.id, {
@@ -1365,10 +1389,10 @@ export class ServiceStatefulRuntime {
     const pending = this.operations.register(timeoutMs);
     const route = this.tryActorFence(target);
     if (route === undefined) {
-      this.operations.reply(pending.id, {
-        terminalResult: RequestResult.NotFound,
-        failureCode: ACTOR_ROUTE_STALE
-      });
+      this.operations.reply(
+        pending.id,
+        internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale)
+      );
       return pending;
     }
     const header = encodeActorHeader(
@@ -1398,7 +1422,8 @@ export class ServiceStatefulRuntime {
     route: ServiceInstanceRouteFence,
     payload: ServiceApplicationPayload,
     sourceSpotId?: string,
-    metadataFrame?: Uint8Array
+    metadataFrame?: Uint8Array,
+    instanceIntent = false
   ): Promise<number> {
     return this.submitOneWay(
       route.targetNodeRid,
@@ -1412,7 +1437,8 @@ export class ServiceStatefulRuntime {
             'send',
             { high: 0n, low: 0n },
             undefined,
-            metadataFrame !== undefined
+            metadataFrame !== undefined,
+            instanceIntent
           ),
           encodeApplicationPayload(payload)
         ],
@@ -1472,7 +1498,8 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload,
     timeoutMs: number,
     sourceSpotId?: string,
-    metadataFrame?: Uint8Array
+    metadataFrame?: Uint8Array,
+    instanceIntent = false
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     this.submitRequest(
@@ -1486,9 +1513,10 @@ export class ServiceStatefulRuntime {
             this.nodeRid,
             sourceSpotId,
             'request',
-            { high: 2n, low: pending.id },
+            { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id },
             pending.id,
-            metadataFrame !== undefined
+            metadataFrame !== undefined,
+            instanceIntent
           ),
           encodeApplicationPayload(payload)
         ],
@@ -1877,10 +1905,10 @@ export class ServiceStatefulRuntime {
       delivery.binding.sessionRid !== sessionRid ||
       delivery.binding.bindingGeneration !== expectedBindingGeneration
     ) {
-      this.operations.reply(pending.id, {
-        terminalResult: RequestResult.NotFound,
-        failureCode: ACTOR_ROUTE_STALE
-      });
+      this.operations.reply(
+        pending.id,
+        internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale)
+      );
       return pending;
     }
     this.sessionDeliveries.delete(actorKey(actor));
@@ -1965,6 +1993,14 @@ export class ServiceStatefulRuntime {
       header,
       encodeApplicationPayload(payload)
     ]);
+  }
+
+  expireOperations(nowMs: number, turnDeadlineMs: number): number {
+    return this.operations.expire(nowMs, turnDeadlineMs);
+  }
+
+  get pendingOperationCount(): number {
+    return this.operations.size;
   }
 
   close(): void {
@@ -2111,6 +2147,22 @@ export class ServiceStatefulRuntime {
             kind === ZLinkFrameworkInternalErrorKind.SpotMoving ||
             kind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale
           ) {
+            const reporter = this.dispatchErrors;
+            if (decoded.kind === 'instanceSpot' && reporter?.captureEnabled() === true) {
+              reporter.report({
+                surface: ZLinkDispatchErrorSurface.InstanceSpot,
+                messageKind: ZLinkDispatchMessageKind.Send,
+                reason: ZLinkDispatchErrorReason.StaleTarget,
+                action: ZLinkDispatchErrorAction.Drop,
+                meshName: this.dispatchErrorMeshName,
+                sourceRid: decoded.sourceNodeRid,
+                spotId:
+                  decoded.activation === 'ready'
+                    ? decoded.route.targetSpotId
+                    : decoded.target.targetSpotId,
+                error
+              });
+            }
             return 'protocolError';
           }
         }
@@ -2372,7 +2424,7 @@ export class ServiceStatefulRuntime {
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'instanceSpot' }>,
     payloadFrame: Buffer,
-    spot: ServiceSpotState,
+    spot: Pick<ServiceSpotState, 'ref'>,
     localReply?: NonNullable<ServiceStatefulMailboxData['reply']>,
     onTerminalCompletion?: NonNullable<ServiceStatefulMailboxData['onTerminalCompletion']>,
     metadataFrame?: Buffer,
@@ -2424,6 +2476,8 @@ export class ServiceStatefulRuntime {
       ...(record.operationKind === 'request' ? { correlation: record.replyRouteId } : {}),
       ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
       targetSpot: spot.ref,
+      activationRecord: record,
+      ...(record.activation === 'missing' ? { deadlineUnixMs: record.deadlineUnixMs } : {}),
       ...(metadataFrame === undefined ? {} : { applicationMetadata: metadataFrame }),
       ...(terminalCompletion === undefined ? {} : { onTerminalCompletion: terminalCompletion }),
       ...(record.operationKind === 'request'
@@ -2545,12 +2599,14 @@ export class ServiceStatefulRuntime {
       const spot = this.requireInstanceActivation(ingress, refreshedRecord);
       const admitted = this.enqueueActivatedInstanceSpot(
         ingress,
-        refreshedRecord,
+        record,
         payloadFrame,
         spot,
         undefined,
         this.instanceApplicationTerminalCompletion(this.instanceApplicationTarget(refreshedRecord)),
-        metadataFrame
+        metadataFrame,
+        false,
+        this.instanceApplicationTarget(refreshedRecord)
       );
       if (admitted !== 'application') {
         throw new Error('Rematerialized Instance message was not admitted to the local queue.');
@@ -2828,8 +2884,8 @@ export class ServiceStatefulRuntime {
       // activation continuation can publish its in-memory intent. If the
       // local ready projection already carries the exact object and owner
       // fence from the received route, publish that validated projection
-      // instead of exposing a transient NotFound result to a following
-      // request. A mismatched or absent local projection remains NotFound.
+      // instead of rejecting a following request while publication finishes.
+      // An absent Ready projection cannot validate the received owner fence.
       const local = this.registry.spot(record.route.targetSpotId);
       if (
         local?.kind === 'instance' &&
@@ -2842,7 +2898,7 @@ export class ServiceStatefulRuntime {
     }
     if (intent === undefined) {
       throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+        ZLinkFrameworkInternalErrorKind.SpotMoving,
         `Instance Spot '${record.route.targetSpotId}' has no current Ready authority.`
       );
     }
@@ -2965,7 +3021,10 @@ export class ServiceStatefulRuntime {
     >,
     payloadFrame: Buffer,
     metadataFrame?: Buffer
-  ): Promise<{ readonly spot: ServiceSpotState; readonly route: ServiceInstanceRouteFence }> {
+  ): Promise<{
+    readonly spot: Pick<ServiceSpotState, 'ref'>;
+    readonly route: ServiceInstanceRouteFence;
+  }> {
     const key = instanceActivationKey(record);
     const pending = this.pendingInstanceActivations.get(key);
     if (pending !== undefined) return pending;
@@ -2987,7 +3046,10 @@ export class ServiceStatefulRuntime {
     >,
     payloadFrame: Buffer,
     metadataFrame?: Buffer
-  ): Promise<{ readonly spot: ServiceSpotState; readonly route: ServiceInstanceRouteFence }> {
+  ): Promise<{
+    readonly spot: Pick<ServiceSpotState, 'ref'>;
+    readonly route: ServiceInstanceRouteFence;
+  }> {
     const target = record.target;
     if (
       target.targetNodeRid !== this.nodeRid ||
@@ -3003,6 +3065,46 @@ export class ServiceStatefulRuntime {
 
     const local = this.registry.spot(target.targetSpotId);
     const current = await authority.read(target);
+    if (
+      current.kind === 'creating' &&
+      current.authority?.allocation.state === 'active' &&
+      this.instanceApplicationLifecycle?.isMaterializing?.(target) === true
+    ) {
+      return {
+        spot: { ref: { spotId: target.targetSpotId, generation: current.objectGeneration } },
+        route: {
+          targetSpotId: target.targetSpotId,
+          targetNodeRid: this.nodeRid,
+          targetNodeGeneration: this.nodeGeneration,
+          objectGeneration: current.objectGeneration,
+          authorityOwnerGeneration: current.authorityOwnerGeneration,
+          ownerId: current.authority.ownerId,
+          leaseGeneration: current.authority.ownerLeaseGeneration,
+          storeVersion: current.authority.storeVersion.value
+        }
+      };
+    }
+    if (
+      current.kind === 'ready' &&
+      current.authority !== undefined &&
+      decodeServiceClosingSpotAuthority(current.authority.payload) !== undefined
+    ) {
+      if (current.route.targetNodeRid !== this.nodeRid) {
+        throw new ServiceInstanceActivationRedirectError(current.route);
+      }
+      if (
+        current.route.targetNodeGeneration !== this.nodeGeneration ||
+        (local !== undefined &&
+          !routeMatchesLocal(current.route, local, this.nodeRid, this.nodeGeneration)) ||
+        (local === undefined && this.instanceApplicationLifecycle?.isMaterialized(target) !== true)
+      ) {
+        throw new ServiceStaleGenerationError('spot', target.targetSpotId);
+      }
+      return {
+        spot: { ref: { spotId: target.targetSpotId, generation: current.route.objectGeneration } },
+        route: current.route
+      };
+    }
     if (!this.acceptsLocalMissingInstancePlacement()) {
       if (current.kind === 'ready' && current.route.targetNodeRid !== this.nodeRid) {
         throw new ServiceInstanceActivationRedirectError(current.route);
@@ -3074,18 +3176,27 @@ export class ServiceStatefulRuntime {
         throw new ServiceStaleGenerationError('spot', target.targetSpotId);
       }
     }
-    const reserved = await authority.reserve({
-      target,
-      sourceNodeRid: record.sourceNodeRid,
-      sourceNodeGeneration: record.sourceNodeGeneration,
-      ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
-      operationKind: record.operationKind,
-      operation: record.operation,
-      ...(record.replyRouteId === undefined ? {} : { replyRouteId: record.replyRouteId }),
-      deadlineUnixMs: record.deadlineUnixMs,
-      ...(metadataFrame === undefined ? {} : { metadataFrame }),
-      applicationPayloadFrame: payloadFrame
-    });
+    const deadline = operationDeadline(record.deadlineUnixMs);
+    let reserved: ServiceInstanceAuthorityReserve;
+    try {
+      reserved = await authority.reserve(
+        {
+          target,
+          sourceNodeRid: record.sourceNodeRid,
+          sourceNodeGeneration: record.sourceNodeGeneration,
+          ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
+          operationKind: record.operationKind,
+          operation: record.operation,
+          ...(record.replyRouteId === undefined ? {} : { replyRouteId: record.replyRouteId }),
+          deadlineUnixMs: record.deadlineUnixMs,
+          ...(metadataFrame === undefined ? {} : { metadataFrame }),
+          applicationPayloadFrame: payloadFrame
+        },
+        deadline.signal
+      );
+    } finally {
+      deadline.close();
+    }
     if (reserved.kind === 'ready') {
       throw new ServiceInstanceActivationRedirectError(reserved.route);
     }
@@ -3110,7 +3221,12 @@ export class ServiceStatefulRuntime {
     }
     let committed: Awaited<ReturnType<ServiceAsyncInstanceActivationAuthority['commit']>>;
     try {
-      committed = await authority.commit(target, reserved.reservation, activation.spot);
+      committed = await authority.commit(
+        target,
+        reserved.reservation,
+        activation.spot,
+        record.deadlineUnixMs
+      );
     } catch (error) {
       if (activation.created) this.registry.closeSpot(activation.spot.ref);
       await this.instanceApplicationLifecycle?.discard(target);
@@ -3602,7 +3718,15 @@ export class ServiceStatefulRuntime {
     const accepted = this.raw.mailbox.tryEnqueue({
       owner: `actor:${actor.actorId}\0${actor.generation}`,
       domain: 'infrastructure',
-      parts: [Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0])],
+      parts: [
+        Buffer.from([
+          SERVICE_WIRE_MAGIC[0],
+          SERVICE_WIRE_MAGIC[1],
+          SERVICE_WIRE_MAJOR,
+          M6bServiceWireCommand.boundSessionBind,
+          0
+        ])
+      ],
       sourceRoutingId: binding.sessionOwnerNodeRid,
       stateful: {
         receiveKind: ReceiveKind.ActorBinding,
@@ -3828,7 +3952,13 @@ export class ServiceStatefulRuntime {
     control: ActorControlPayload,
     onTerminalCompletion?: () => void | Promise<void>
   ): void {
-    const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.actorJoined, 0]);
+    const header = Buffer.from([
+      SERVICE_WIRE_MAGIC[0],
+      SERVICE_WIRE_MAGIC[1],
+      SERVICE_WIRE_MAJOR,
+      M6bServiceWireCommand.actorJoined,
+      0
+    ]);
     let terminalAttempted = false;
     void (async () => {
       const applicationJobOwner = await this.raw.reserveLocalIngress();
@@ -3874,7 +4004,13 @@ export class ServiceStatefulRuntime {
   ): boolean {
     const actor = binding.actor;
     const sessionOwner = requireSessionOwnerIdentity(binding);
-    const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0]);
+    const header = Buffer.from([
+      SERVICE_WIRE_MAGIC[0],
+      SERVICE_WIRE_MAGIC[1],
+      SERVICE_WIRE_MAJOR,
+      M6bServiceWireCommand.boundSessionBind,
+      0
+    ]);
     const applicationJob = requireApplicationJobOwner(ingress).takeInitial('infrastructure');
     const accepted = this.raw.mailbox.tryEnqueue({
       owner: `actor:${actor.actorId}\0${actor.generation}`,
@@ -4048,7 +4184,7 @@ export class ServiceStatefulRuntime {
     handler: ServiceUserSpotOperationHandler,
     record: ServiceUserSpotCreateRecord | ServiceUserSpotCloseRecord | ServiceActorCreateRecord
   ): Promise<ServiceUserSpotOperationResult> {
-    const deadline = userSpotDeadline(record.deadlineUnixMs);
+    const deadline = operationDeadline(record.deadlineUnixMs);
     try {
       const result =
         record.kind === 'userSpotCreate'
@@ -4152,7 +4288,10 @@ export class ServiceStatefulRuntime {
           stop.signal.throwIfAborted();
           if (!durableRequestCanReplay(error)) throw error;
           if (durableRequestWasAdmitted(error)) wasAdmitted = true;
-          const retryDelayMs = Math.min(20, deadlineMs - performance.now());
+          const retryDelayMs = Math.min(
+            STATEFUL_OPERATION_RETRY_TICK_MS,
+            deadlineMs - performance.now()
+          );
           if (retryDelayMs <= 0) {
             throw durableOperationExhausted(operationKind, wasAdmitted, error);
           }
@@ -4203,8 +4342,8 @@ export class ServiceStatefulRuntime {
         const applicationJobOwner = await this.raw.reserveLocalIngress();
         try {
           const result = await this.ingress({
-            command: header[3]!,
-            flags: header[4]!,
+            command: header[SERVICE_WIRE_COMMAND_OFFSET]!,
+            flags: header[SERVICE_WIRE_FLAGS_OFFSET]!,
             sourceRoutingId: this.nodeRid,
             requestSequence,
             reply: finish,
@@ -4241,8 +4380,8 @@ export class ServiceStatefulRuntime {
         void ServiceStatefulRuntime.detachedIngressScope(async () => {
           try {
             await this.ingress({
-              command: parts[0]![3]!,
-              flags: parts[0]![4]!,
+              command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+              flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
               sourceRoutingId: this.nodeRid,
               sourceNodeGeneration: this.nodeGeneration,
               parts,
@@ -4260,8 +4399,8 @@ export class ServiceStatefulRuntime {
       }
       try {
         const result = await this.ingress({
-          command: parts[0]![3]!,
-          flags: parts[0]![4]!,
+          command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+          flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
           sourceRoutingId: this.nodeRid,
           sourceNodeGeneration: this.nodeGeneration,
           parts,
@@ -4305,8 +4444,8 @@ export class ServiceStatefulRuntime {
       void (async () => {
         const applicationJobOwner = await this.raw.reserveLocalIngress();
         const localIngress: RawServiceIngressRecord = {
-          command: parts[0]![3]!,
-          flags: parts[0]![4]!,
+          command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+          flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
           sourceRoutingId: this.nodeRid,
           requestSequence: pending.id,
           parts,
@@ -4348,10 +4487,10 @@ export class ServiceStatefulRuntime {
         ? this.tryActorFence(actor)
         : this.acceptCanonicalActorFence(actor, canonical.actorFence);
     if (target === undefined || actorRoute === undefined) {
-      this.operations.reply(pending.id, {
-        terminalResult: RequestResult.NotFound,
-        failureCode: ACTOR_ROUTE_STALE
-      });
+      this.operations.reply(
+        pending.id,
+        internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale)
+      );
       return;
     }
     if (canonical !== undefined) {
@@ -4922,7 +5061,10 @@ export class ServiceStatefulRuntime {
         }
         const current = this.peekSpotMessageFollow(state)!;
         try {
-          const metadata = (current.ingress.parts[0]![4]! & M6bServiceWireFlag.metadata) !== 0;
+          const metadata =
+            (current.ingress.parts[0]![SERVICE_WIRE_FLAGS_OFFSET]! &
+              M6bServiceWireFlag.metadata) !==
+            0;
           const parts = [
             encodeSpotHeader(
               current.wire.kind,
@@ -5061,7 +5203,7 @@ export class ServiceStatefulRuntime {
     if (state.queuedCount === 0) {
       state.queued.length = 0;
       state.queuedHead = 0;
-    } else if (state.queuedHead >= 1024 && state.queuedHead * 2 >= state.queued.length) {
+    } else if (shouldCompactBackingArray(state.queuedHead, state.queued.length)) {
       state.queued.splice(0, state.queuedHead);
       state.queuedHead = 0;
     }
@@ -5282,28 +5424,6 @@ export class ServiceStatefulRuntime {
   }
 }
 
-function serviceSpotPublishFailureReason(
-  result: number | undefined,
-  routeReady: boolean,
-  closed: boolean
-): 'stale_target' | 'backpressure' | 'shutdown' {
-  if (closed || result === SubmitResult.Terminated) return 'shutdown';
-  switch (result) {
-    case SubmitResult.Backpressured:
-      return 'backpressure';
-    case SubmitResult.NotAdmitted:
-    case SubmitResult.NotConnected:
-    case SubmitResult.NotFound:
-    case SubmitResult.InvalidHandle:
-      return 'stale_target';
-    default:
-      // RawServiceMeshRuntime exposes failed Core submissions as false. A
-      // ready route therefore identifies queue admission failure; a route
-      // that became unready after selection is a stale target.
-      return routeReady ? 'backpressure' : 'stale_target';
-  }
-}
-
 function isEntrySpotFence(fence: ServiceSpotRouteFence): boolean {
   return (
     fence.spot.spotId === fence.targetNodeRid &&
@@ -5313,16 +5433,23 @@ function isEntrySpotFence(fence: ServiceSpotRouteFence): boolean {
   );
 }
 
-function userSpotDeadline(deadlineUnixMs: bigint): {
+function operationDeadline(deadlineUnixMs: bigint): {
   readonly signal: AbortSignal;
   close(): void;
 } {
   const controller = new AbortController();
   const delay = Number(deadlineUnixMs - BigInt(Date.now()));
-  const timeout = setTimeout(
-    () => controller.abort(new Error('User Spot operation deadline exceeded.')),
-    Math.max(0, Math.min(delay, 0x7fff_ffff))
-  );
+  const expire = () =>
+    controller.abort(
+      createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+        'Operation deadline exceeded.'
+      )
+    );
+  const timeout =
+    delay <= 0
+      ? (expire(), undefined)
+      : setTimeout(expire, Math.min(delay, MAX_NODE_TIMER_DELAY_MS));
   return {
     signal: controller.signal,
     close: () => clearTimeout(timeout)
@@ -5403,12 +5530,12 @@ function actorLocation(actor: ServiceActorState): ActorLocation {
 
 function failure(error: unknown): ServiceStatefulResult {
   if (error instanceof ServiceStaleGenerationError) {
-    return { terminalResult: RequestResult.NotFound, failureCode: ACTOR_ROUTE_STALE };
+    return internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
   }
   if (error instanceof ZLinkFrameworkException) {
     return internalFrameworkWireReply(error);
   }
-  return { terminalResult: RequestResult.InternalError, failureCode: 17 };
+  return internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.RequestFailed);
 }
 
 function actorKey(actor: ServiceActorRef): string {
@@ -5801,7 +5928,7 @@ function topicMatches(filter: string, topic: string): boolean {
 function emptyPayload(): ServiceApplicationPayload {
   return {
     packetName: 'ZLinkFrameworkEmpty',
-    contentType: 'application/octet-stream',
+    contentType: ZlinkStreamContentType.Raw,
     payload: Buffer.alloc(0)
   };
 }

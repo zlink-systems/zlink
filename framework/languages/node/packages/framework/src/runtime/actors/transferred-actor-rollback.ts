@@ -4,24 +4,18 @@ import { closeMeshCompletion } from '../backend';
 import { RequestResult } from '../backend/runtime-values';
 import type { ZLinkActorManagerOptions } from './actor-runtime-contracts';
 import type { ZLinkActorRuntimeState } from './actor-runtime-state';
-import { ZLinkActorRetryDelay } from './actor-retry-delay';
+import { createActorMembership } from './actor-lifecycle-snapshot';
 
 type ZLinkTransferredActorRollbackOptions = Pick<
   ZLinkActorManagerOptions,
-  | 'actorDestroyedCleanup'
-  | 'nativeActorNode'
-  | 'nativeActorNodeProvider'
-  | 'nativeActorCompletionTableProvider'
-  | 'shutdownSignal'
-  | 'metrics'
+  'nativeActorNode' | 'nativeActorNodeProvider' | 'nativeActorCompletionTableProvider'
 >;
 
 export class ZLinkTransferredActorRollbackCoordinator {
-  private readonly tasks = new Map<string, Promise<void>>();
-
   constructor(
     private readonly states: Map<string, ZLinkActorRuntimeState>,
-    private readonly options: ZLinkTransferredActorRollbackOptions
+    private readonly options: ZLinkTransferredActorRollbackOptions,
+    private readonly finalize: (actorId: string, state: ZLinkActorRuntimeState) => Promise<void>
   ) {}
 
   async rollback(actor: ZLinkActor, signal?: AbortSignal): Promise<void> {
@@ -37,54 +31,10 @@ export class ZLinkTransferredActorRollbackCoordinator {
 
     const actorRef = state.nativeActorRef;
     const node = this.options.nativeActorNode ?? this.options.nativeActorNodeProvider?.();
-    try {
-      if (node !== undefined && actorRef !== undefined) {
-        await this.destroyNativeActor(node, actorRef, signal);
-      }
-    } catch (error) {
-      this.schedule(actor, state, node, actorRef);
-      throw error;
+    if (node !== undefined && actorRef !== undefined) {
+      await this.destroyNativeActor(node, actorRef, signal);
     }
-    this.complete(actor, state);
-  }
-
-  private schedule(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    node: ZLinkBackendMeshNode | undefined,
-    actorRef: ZLinkBackendActorRef | undefined
-  ): void {
-    if (this.tasks.has(actor.context.actorId)) {
-      return;
-    }
-    const task = this.retry(actor, state, node, actorRef).finally(() =>
-      this.tasks.delete(actor.context.actorId)
-    );
-    this.tasks.set(actor.context.actorId, task);
-  }
-
-  private async retry(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    node: ZLinkBackendMeshNode | undefined,
-    actorRef: ZLinkBackendActorRef | undefined
-  ): Promise<void> {
-    const retryDelay = new ZLinkActorRetryDelay();
-    while (
-      this.states.get(actor.context.actorId) === state &&
-      this.options.shutdownSignal?.aborted !== true
-    ) {
-      if (!(await retryDelay.wait(this.options.shutdownSignal))) return;
-      try {
-        if (node !== undefined && actorRef !== undefined) {
-          await this.destroyNativeActor(node, actorRef);
-        }
-        this.complete(actor, state);
-        return;
-      } catch {
-        // The tombstone prevents dispatch while the next retry is pending.
-      }
-    }
+    await this.complete(actor, state);
   }
 
   private async destroyNativeActor(
@@ -116,13 +66,12 @@ export class ZLinkTransferredActorRollbackCoordinator {
     }
   }
 
-  private complete(actor: ZLinkActor, state: ZLinkActorRuntimeState): void {
+  private async complete(actor: ZLinkActor, state: ZLinkActorRuntimeState): Promise<void> {
     if (this.states.get(actor.context.actorId) !== state) {
       return;
     }
-    this.options.actorDestroyedCleanup?.(actor.context.actorId);
-    state.clearAfterDestroy();
-    this.states.delete(actor.context.actorId);
-    this.options.metrics?.change('zlink.actor.count', -1);
+    await state.getOrStartDestroy(createActorMembership(actor).actor.nodeRid, () =>
+      this.finalize(actor.context.actorId, state)
+    );
   }
 }

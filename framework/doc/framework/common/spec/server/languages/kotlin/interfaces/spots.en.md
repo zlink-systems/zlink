@@ -435,11 +435,11 @@ re-acquires the same gate to run the coroutine continuation. In
 `PER_ACTOR`, per-Actor lanes, the Spot direct/lifecycle lane, and
 per-timer lanes are independent, and suspension only holds that lane's
 permit. Different Actors and different timers can run concurrently.
-`SPOT_WIDE`'s Close/relocation/snapshot seals new admission and only
+`SPOT_WIDE`'s relocation/snapshot seals new admission and only
 proceeds after an all-lane barrier where every active lane, including
 coroutine continuations, reaches a safe turn boundary. A barrier failure
 aborts the whole seal of the same generation and restores application
-admission exactly.
+admission exactly. Close follows the boundary of [Spot address messaging §7](../../../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary).
 
 A `PER_ACTOR` User Spot only allows `recreateOnRelocation()`. The Spot
 adapter, Spot fields, and a Spot-level application timer aren't

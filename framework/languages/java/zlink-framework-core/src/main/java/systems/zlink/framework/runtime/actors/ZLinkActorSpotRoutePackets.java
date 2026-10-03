@@ -25,6 +25,16 @@ public final class ZLinkActorSpotRoutePackets {
     public static final String ACTOR_PACKET_NAME = "__zlink.actor.packet";
     public static final String HANDOFF_DIRECT_REPLY_ACK = "__zlink.actor.handoff.directAck";
 
+    private static final int TRANSFER_REQUEST_FIELD_COUNT = 33;
+    private static final int HANDOFF_BACKLOG_START_PART = 3;
+    private static final int HANDOFF_BACKLOG_PART_STRIDE = 5;
+    private static final int BOUND_SESSION_SEND_MIN_PART_COUNT = 3;
+    private static final int ACTOR_PACKET_MIN_PART_COUNT = 5;
+    private static final int HANDOFF_ARRIVAL_PART = ACTOR_PACKET_MIN_PART_COUNT;
+    private static final int ACCEPTED_JOURNAL_PART = HANDOFF_ARRIVAL_PART + 1;
+    private static final int REPLY_ROUTE_FIELD_COUNT = 7;
+    private static final int ACTOR_REF_FIELD_COUNT = 3;
+
     private ZLinkActorSpotRoutePackets() {}
 
     public static List<Message> createAdmissionRequestParts(
@@ -255,7 +265,7 @@ public final class ZLinkActorSpotRoutePackets {
 
     public static TransferRequest decodeTransferRequest(Message message) {
         String[] fields = message.toUtf8String().split("\n", -1);
-        if (fields.length != 33
+        if (fields.length != TRANSFER_REQUEST_FIELD_COUNT
                 || (!ADMISSION_PHASE.equals(fields[0]) && !COMMIT_PHASE.equals(fields[0]))
                 || fields[1].isBlank()
                 || fields[3].isBlank()
@@ -318,14 +328,17 @@ public final class ZLinkActorSpotRoutePackets {
 
     public static List<WireHandoffPacket> decodeHandoffPackets(
             List<Message> parts, int backlogCount) {
-        if (backlogCount < 0 || parts.size() != 3 + backlogCount * 5) {
+        if (backlogCount < 0
+                || parts.size()
+                        != HANDOFF_BACKLOG_START_PART
+                                + backlogCount * HANDOFF_BACKLOG_PART_STRIDE) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "invalid actor transfer handoff backlog");
         }
         List<WireHandoffPacket> backlog = new ArrayList<>(backlogCount);
         for (int index = 0; index < backlogCount; index++) {
-            int offset = 3 + index * 5;
+            int offset = HANDOFF_BACKLOG_START_PART + index * HANDOFF_BACKLOG_PART_STRIDE;
             backlog.add(
                     new WireHandoffPacket(
                             Long.parseLong(parts.get(offset).toUtf8String()),
@@ -455,7 +468,7 @@ public final class ZLinkActorSpotRoutePackets {
     }
 
     public static BoundSessionSend decodeBoundSessionSend(List<Message> parts) {
-        if (parts.size() < 3
+        if (parts.size() < BOUND_SESSION_SEND_MIN_PART_COUNT
                 || !BOUND_SESSION_SEND_PACKET_NAME.equals(parts.get(0).toUtf8String())) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
@@ -467,7 +480,8 @@ public final class ZLinkActorSpotRoutePackets {
     }
 
     public static ActorPacket decodeActorPacket(List<Message> parts) {
-        if (parts.size() < 5 || !ACTOR_PACKET_NAME.equals(parts.get(0).toUtf8String())) {
+        if (parts.size() < ACTOR_PACKET_MIN_PART_COUNT
+                || !ACTOR_PACKET_NAME.equals(parts.get(0).toUtf8String())) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "invalid routed actor packet");
         }
@@ -476,10 +490,13 @@ public final class ZLinkActorSpotRoutePackets {
                 decodeReplyRoute(parts.get(2)),
                 ZLinkStreamHeaderCodec.decodeOrPlain(parts.get(3).toByteArray()),
                 Message.from(parts.get(4)),
-                parts.size() < 6 || parts.get(5).toUtf8String().isBlank()
+                parts.size() <= HANDOFF_ARRIVAL_PART
+                                || parts.get(HANDOFF_ARRIVAL_PART).toUtf8String().isBlank()
                         ? null
-                        : Long.parseLong(parts.get(5).toUtf8String()),
-                parts.size() < 7 ? new byte[0] : parts.get(6).toByteArray());
+                        : Long.parseLong(parts.get(HANDOFF_ARRIVAL_PART).toUtf8String()),
+                parts.size() <= ACCEPTED_JOURNAL_PART
+                        ? new byte[0]
+                        : parts.get(ACCEPTED_JOURNAL_PART).toByteArray());
     }
 
     public static Message createHandoffDirectReplyAck() {
@@ -522,7 +539,7 @@ public final class ZLinkActorSpotRoutePackets {
             return null;
         }
         String[] fields = message.toUtf8String().split("\n", -1);
-        if (fields.length != 7
+        if (fields.length != REPLY_ROUTE_FIELD_COUNT
                 || fields[0].isBlank()
                 || fields[1].isBlank()
                 || fields[3].isBlank()) {
@@ -540,7 +557,7 @@ public final class ZLinkActorSpotRoutePackets {
 
     private static ZLinkBackendActorRef decodeActorRef(Message metadata, String errorMessage) {
         String[] fields = metadata.toUtf8String().split("\n", -1);
-        if (fields.length != 3 || fields[0].isBlank() || fields[1].isBlank()) {
+        if (fields.length != ACTOR_REF_FIELD_COUNT || fields[0].isBlank() || fields[1].isBlank()) {
             throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, errorMessage);
         }
         return new ZLinkBackendActorRef(

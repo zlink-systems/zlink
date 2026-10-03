@@ -11,6 +11,7 @@
 #include <perf/scenario_metrics.hpp>
 
 #include <deque>
+#include <memory>
 
 namespace perf
 {
@@ -22,27 +23,37 @@ class send_send_correlation_t
     struct entry_t
     {
         entry_t (echo_request_t request_, std::int64_t started, std::int64_t expires) :
-            request (std::move (request_)), started_ticks (started), expires_at_ticks (expires),
-            // The waiter resumes through the host executor, like a native binding awaitable, never on the completing thread.
-            result (zlink::framework::detail::capture_native_continuation_scheduler ())
+            request (std::make_shared<const echo_request_t> (std::move (request_))), started_ticks (started),
+            expires_at_ticks (expires)
         {
         }
-        echo_request_t request;
-        std::int64_t started_ticks, expires_at_ticks;
-        zlink::framework::detail::task_completion_source_t<int> result;
+        std::shared_ptr<const echo_request_t> request;
+        const std::int64_t started_ticks;
+        const std::int64_t expires_at_ticks;
+        zlink::framework::task_completion_source_t<int> result;
         std::atomic<int> state{pending};
         std::int64_t closed_ticks = 0;
         std::exception_ptr error;
+        std::mutex gate;
 
-        bool close (int to, std::exception_ptr why)
+        int close (int to, std::exception_ptr why)
         {
-            int expected = pending;
-            if (!state.compare_exchange_strong (expected, to))
-                return false;
-            closed_ticks = now_ticks ();
-            error = std::move (why);
+            {
+                std::lock_guard lock (gate);
+                if (state.load () != pending)
+                    return pending;
+                closed_ticks = now_ticks ();
+                if (closed_ticks >= expires_at_ticks) {
+                    to = expired;
+                    why = std::make_exception_ptr (validation_error_t (
+                      "CorrelationExpired", "No return send arrived before the correlation deadline."));
+                }
+                request.reset ();
+                error = std::move (why);
+                state = to;
+            }
             result.complete (zlink::framework::result_t<int>::success (to));
-            return true;
+            return to;
         }
     };
     using entry_ptr_t = std::shared_ptr<entry_t>;
@@ -74,7 +85,8 @@ class send_send_correlation_t
     entry_ptr_t register_request (const echo_request_t &request, std::int64_t started_ticks)
     {
         auto entry = std::make_shared<entry_t> (
-          request, started_ticks, now_ticks () + static_cast<std::int64_t> (_measurement.config ().workload.correlation_expiry_ms) * 1'000'000);
+          request, started_ticks,
+          now_ticks () + static_cast<std::int64_t> (_measurement.config ().workload.correlation_expiry_ms) * 1'000'000);
         {
             std::lock_guard lock (_gate);
             if (!_entries.emplace (request.correlation_id, entry).second)
@@ -96,12 +108,15 @@ class send_send_correlation_t
     // the echo was already fixed first.
     void first_send_ended (const entry_ptr_t &entry, std::exception_ptr error)
     {
+        const auto now = now_ticks ();
+        if (expire_if_due (entry, now))
+            return;
         if (!error) {
             if (_measurement.phase () != "setup")
                 _metrics.count ("messages.admitted");
         }
         else
-            entry->close (failed, std::move (error));
+            close (entry, failed, std::move (error));
     }
 
     // The return handler's one call: the reply's identity and payload decide the first result.
@@ -119,18 +134,28 @@ class send_send_correlation_t
             return;
         }
         std::exception_ptr invalid;
-        try {
-            payload_pattern_t::validate_identity (entry->request, reply);
-            _measurement.pattern ().validate (reply.payload);
+        std::shared_ptr<const echo_request_t> request;
+        {
+            std::lock_guard lock (entry->gate);
+            request = entry->request;
         }
-        catch (const validation_error_t &) {
-            invalid = std::current_exception ();
+        if (request) {
+            try {
+                payload_pattern_t::validate_identity (*request, reply);
+                _measurement.pattern ().validate (reply.payload);
+            }
+            catch (const validation_error_t &) {
+                invalid = std::current_exception ();
+            }
         }
-        if (!entry->close (invalid ? failed : succeeded, invalid))
-            _metrics.count (entry->state.load () == succeeded ? "messages.duplicateReply" : "messages.lateReply");
+        const auto now = now_ticks ();
+        expire_if_due (entry, now);
+        if (close (entry, invalid ? failed : succeeded, invalid))
+            return;
+        _metrics.count (entry->state.load () == succeeded ? "messages.duplicateReply" : "messages.lateReply");
     }
 
-    // The final result once the first send has ended: the first result of the correlation, or its expiry (closed by
+    // The final result after the correlation closes: the first result of the correlation, or its expiry (closed by
     // the expiry thread). The time is when that result was fixed, so an echo seen before the first send's terminal
     // keeps its own time.
     zlink::framework::task_t<std::pair<std::exception_ptr, std::int64_t>> complete (entry_ptr_t entry)
@@ -141,6 +166,21 @@ class send_send_correlation_t
     }
 
   private:
+    bool close (const entry_ptr_t &entry, int to, std::exception_ptr error)
+    {
+        const auto closed = entry->close (to, std::move (error));
+        if (closed == expired)
+            _metrics.count ("messages.expired");
+        return closed != pending;
+    }
+
+    bool expire_if_due (const entry_ptr_t &entry, std::int64_t now)
+    {
+        return now >= entry->expires_at_ticks
+               && close (entry, expired, std::make_exception_ptr (validation_error_t (
+                    "CorrelationExpired", "No return send arrived before the correlation deadline.")));
+    }
+
     void expire_loop ()
     {
         std::unique_lock lock (_gate);
@@ -157,8 +197,7 @@ class send_send_correlation_t
             }
             _expiry.pop_front ();
             lock.unlock ();
-            if (front->close (expired, std::make_exception_ptr (validation_error_t ("CorrelationExpired", "No return send arrived before the correlation deadline."))))
-                _metrics.count ("messages.expired");
+            expire_if_due (front, now_ticks ());
             lock.lock ();
         }
     }

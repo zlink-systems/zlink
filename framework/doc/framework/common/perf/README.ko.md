@@ -97,8 +97,7 @@ Object role과 Store 필요성은 [MeshNode 계약][mesh]을 따르며, Store가
 | warmup | 실제 셀의 모든 connector 또는 logical stream으로 같은 호출을 실행한다 | 제외 |
 | reset | 제출 정지·잔여 작업 종료 뒤 모든 참여자의 같은 resetSeq 응답을 확인한다 | 제외 |
 | measured | 시작 barrier를 통과한 owner가 monotonic duration 동안 부하를 실행한다 | 포함 |
-| settle | 새 측정 operation 없이 남은 결과를 유한 시간 동안 관찰한다 | 별도 |
-| report | Owner별 원본과 histogram을 수집해 셀 결과를 만든다 | 제외 |
+| report | Window가 끝나면 새 operation 없이 owner별 원본과 histogram을 수집해 셀 결과를 만든다 | 제외 |
 | cleanup | 이번 셀이 소유한 client/server를 종료하고 run 소유 자원을 정리한다 | 제외 |
 
 ### 4.1 Window와 reset
@@ -113,15 +112,15 @@ Object role과 Store 필요성은 [MeshNode 계약][mesh]을 따르며, Store가
 - **모든 role과 CS client가 같은 resetSeq를 확인한 뒤 시작 barrier를 연다.** Reset 호출은
   process 사이에서 원자적이지 않기 때문이다. Application counter 초기화와 public
   `ResetCapacityMetrics` 호출 결과는 각각 기록한다([metric epoch 소유 계약][metrics]).
-- **Measured 종료 뒤 새 operation을 시작하지 않는다.** Settle은 이 cohort의 결과 관찰
-  구간이다. §13의 첫 결과를 보존하며 timeout 뒤 새 deadline이나 재시도로 결과를 바꾸지 않는다.
-- **Warmup drain이나 settle bound를 넘으면 실패 원본을 남긴다.** Connection 재생성이나
+- **Window 안에 terminal이 된 operation만 센다.** Window가 끝나면 owner는 새 operation을
+  시작하지 않고 원본을 확정한다. 이때 terminal이 아닌 operation은 `messages.inflightAtEnd`로만
+  세고 성공·실패·latency에 넣지 않는다. 셀이 끝나면 process를 종료하므로 남은 작업을 기다리지 않는다.
+- **Warmup drain을 넘으면 실패 원본을 남긴다.** Connection 재생성이나
   임의 sleep으로 잔여 작업을 없앤 것처럼 처리하면 같은 조건을 비교할 수 없기 때문이다.
 
 `messages.completed`는 cohort 중 window 안에 검증까지 끝난 성공 수다.
-Window가 끝난 뒤 settle 안에 끝난 성공은 `messages.settleCompleted`와 별도 histogram에 둔다.
-처리량 분모에는 settle 시간을 더하지 않는다. Settle 종료 시 미완료는 `messages.unresolved`다.
-이는 Framework timeout의 재분류가 아니라 harness의 관찰 종료다([완료 계약][submit]).
+Terminal 판정은 owner의 monotonic clock으로 `terminalTicks < endTicks`를 비교한다. 첫 결과를 보존하며
+timeout 뒤 새 deadline이나 재시도로 결과를 바꾸지 않는다([완료 계약][submit]).
 
 ### 4.2 Server-driven 부하
 
@@ -137,8 +136,12 @@ Trigger는 `runId`, `cellId`, `resetSeq`, phase만 전달하고 그 설정을 �
 Spot handler 안에서 outbound call을 재는 셀은 같은 process의 application driver가 public
 Spot request/send로 handler를 실행한다. Driver는 호출 전에 stream의 in-flight 자리를 확보하고
 최종 echo 결과까지 유지한다. Local driver 호출을 별도 KOPS로 세지 않는다.
+Driver 호출의 deadline은 §5.2의 `driverTimeoutMs`다. Driver 호출은 측정 대상 remote call을 감싸므로,
+remote call이 자기 deadline에 끝나도 driver가 그 결과를 받을 수 있어야 하기 때문이다.
 §10.5의 주 latency는 handler 안 remote call 직전부터 완료까지이며, driver부터의 전체 시간은
-`driver.latency.*`에 따로 기록한다. Source admission 대기는 각 구간의 public call 시작부터 포함한다.
+`driver.latency.*`에 따로 기록한다. `driver.latency.*` 표본은 측정 operation이 검증까지 성공한 경우만이고,
+`driver.failed`는 driver 호출 자체의 실패만 센다. 측정 operation의 실패는 handler가 한 번만 기록한다.
+Source admission 대기는 각 구간의 public call 시작부터 포함한다.
 Measured 종료 뒤 도착한 local driver 요청은 outbound call을 시작하지 않고
 `PerfDriveReply.started=false`로 끝내며 `driver.notStarted`로 기록한다.
 
@@ -168,6 +171,7 @@ Shell runner의 옵션 이름과 consumer는 다음과 같다. 미적용 옵션�
 | `--terminal` | 일반은 `ordinary`, worker는 `yield` | §10.5·§10.8 handler가 `ordinary`/`yield`를 소비; 나머지는 ordinary 고정 |
 | `--channel-topology` | `routemesh` | `channel-echo-only` bootstrap이 `routemesh`/`clientserver`를 소비; 나머지 S2S Channel은 RouteMesh 고정 |
 | `--codec` | `json`만 수락 | Typed payload 설정 검증과 serializer metadata 기록 |
+| `--package-source` | `published`; `published` 또는 `local` | 공통 runner가 build에 넘기는 참조 방식(§6.5) |
 | `--output` | `perf-results/<run-id>` | Writer·공통 runner가 사용하는 run root |
 | `--run-id` | UTC 표기+고유 suffix | 공통 runner가 자원·로그·결과 identity에 사용; `[A-Za-z0-9_-]+` |
 | `--endpoint-config` | 공통 runner 생성 파일 | Standalone client가 읽는 실제 endpoint manifest |
@@ -221,14 +225,17 @@ Subscriber는 `role=subscriber`, `roleInstance=subscriberId`로 각각 한 항�
 ### 5.2 공통 workload 값
 
 표준 echo의 role config에는 `requestTimeoutMs=1000`, `correlationExpiryMs=1000`,
-`settleTimeoutMs=5000`, `setupTimeoutMs=30000`, `adminTimeoutMs=5000`을 기록한다.
-앞의 request 값은 public request call, expiry는 harness correlation, settle은 phase owner,
-setup은 공통 runner/준비 caller, admin 값은 HTTP client가 소비한다. Family send timeout은
+`driverTimeoutMs=2000`, `setupTimeoutMs=30000`, `adminTimeoutMs=5000`을 기록한다.
+앞의 request 값은 public request call, expiry는 harness correlation, driver는 §4.2의 local driver 호출,
+setup은 공통 runner/준비 caller, admin 값은 HTTP client가 소비한다. 이 값의 소유자는 공통 runner이며
+role과 client는 role config에서 읽기만 한다. Family send timeout은
 public socket 설정의 실제 값(표준 1000ms)을 기록한다([설정 소유 계약][submit]).
 
 Worker config에는 `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
-`maxQueueLength=4096`, `idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`와 executor의
-실효 제한을 기록한다. 적용은 각 언어의 public worker options만 사용한다(§10.8).
+`idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`와 executor의 실효 제한을 기록한다.
+적용은 각 언어의 public worker options만 사용한다(§10.8). Worker queue에는 상한이 없다
+([Framework API](../spec/server/00-foundation/06-framework-api.ko.md)). Host가 받는 job의 상한은
+Application job queue가 소유하며 §23 manifest로만 바꾼다.
 일반 workload는 각 stream이 완료 뒤 다음 operation을 시작하는 closed-loop다.
 Rate·burst·Core/queue profile을 바꾸는 입력은 §23 manifest만 소유한다.
 
@@ -347,14 +354,21 @@ Channel echo target은 같은 `Channel` 실행 프로젝트를 사용한다. Sub
 - **언어별 `scripts/`의 세 script는 공통 runner의 진입점이다.** 언어 이름과 그 언어의
   role executable 위치를 정하고, §5의 CLI 입력은 그대로 공통 runner에 넘긴다. Measured loop와
   Framework 호출은 계속 각 언어의 role process와 client가 소유한다(§6).
-- **Perf는 공개 registry에 publish된 Framework·bindings package를 참조한다.** 참조 방식은
+- **기본(`--package-source published`)은 공개 registry에 publish된 Framework·bindings package를 참조한다.** 참조 방식은
   sample의 사용자 모드([Framework workspace §2][workspace])와 같은 장치를 쓴다. 사용자가
   받는 것과 같은 산출물을 측정해야 결과를 release에 대응시킬 수 있기 때문이다.
+- **published에서 측정할 버전은 언어별 Framework 버전 하나만 정한다.** 그 값은 `framework/perf/schema/packages.json`
+  한 곳에 두고, binding과 Core는 그 Framework package가 선언한 의존성을 따른다. 사용자가 Framework를
+  설치하면 받는 조합이 그것이기 때문이다. 새 Framework release가 publish되면 이 파일만 바꾼다.
+- **`--package-source local`은 checkout의 Framework 소스와 저장소 모드의 binding 참조를 쓴다.** Core는
+  local package 절차에 따라 검증된 release 산출물을 쓴다. 아직 publish되지 않은 변경을 확인하는 개발용이다. 참조 방식은 sample의 저장소 모드와 [local package 절차][local-package]를
+  그대로 쓰고, perf 전용 장치를 두지 않는다. 결과의 provenance에 `packageSource=local`과 실제 산출물
+  version·hash를 남기며 그 셀은 `baselineEligible=false`다. Release에 대응하는 결과가 아니기 때문이다.
 
 ```text
 framework/perf/
 |-- runner/        # §4 phase, §15 collection·aggregation, §19 provenance
-|-- schema/        # §15 result schema, §15.3 histogram bounds, §14 metric catalog
+|-- schema/        # §15 result schema, §15.3 histogram bounds, §14 metric catalog, 측정 Framework 버전
 `-- tests/
 ```
 
@@ -402,7 +416,7 @@ record start immediately before the measured public call
 invoke the public request or initial send once
 observe the first request terminal or harness echo outcome
 validate the echoed identity and payload
-record window/settle outcome; release the slot
+record the outcome if its terminal is inside the window; release the slot
 ```
 
 Send/send는 correlation 등록과 return handler가 드러나야 한다.
@@ -486,7 +500,7 @@ Session과 Actor가 같은 local object node에 있을 때 connector·session·A
 | Role/process | CS Client × clientCount, SessionActorLocal × 1; session actor route와 Actor owner가 같은 local object node |
 | 부하·mode | Physical connectors; `request`, ordinary; 대표 1024 bytes |
 | 완료·집계 | Client의 public request 직전부터 원래 STREAM request의 typed echo 검증 완료까지 |
-| 준비 | Connector ID마다 Actor 하나를 public manager로 준비하고 그 Ref를 해당 session에 bind |
+| 준비 | Session handler는 setup probe를 받으면 public manager API로 그 connector ID의 Actor를 생성하고 그 Ref를 해당 session에 bind한 뒤 probe를 relay한다 |
 | Location Store/Docker | Object Server 때문에 필수; run 전용 Docker Redis |
 | Null/unsupported | `actor.sourceAdmission.*`는 direct send가 없어 비적용; 내부 Spot 지표는 public 관측 미지원; worker/fanout은 비적용 |
 
@@ -881,7 +895,7 @@ Send/send correlation은 첫 public send 직전에 등록하고 동일 시점에
 | 관찰 | Harness 기록 |
 |---|---|
 | 첫 send의 정상 admission | `messages.admitted`; AC는 sourceAdmissionMs도 기록; echo 성공은 아직 아님 |
-| Pending correlation에 첫 유효 reply | Echo 성공 1회; window/settle 구분은 §4 |
+| Pending correlation에 첫 유효 reply | Echo 성공 1회; window 판정은 §4.1 |
 | Pending 중 첫 send 실패 | 그 public 실패를 최종 결과로 기록; expiry로 다시 세지 않음 |
 | Pending 중 deadline 도달 | `messages.timeout` 1회와 그 부분집합 `messages.expired` 1회; harness `CorrelationExpired` |
 | 성공으로 닫힌 correlation의 추가 reply | `messages.duplicateReply`; 성공 수·histogram 불변 |
@@ -897,19 +911,18 @@ Request public `DeadlineExceeded`와 harness `CorrelationExpired`는 `messages.t
 Echo cohort는 다음 식으로 결산한다. Count는 §15의 정수 문자열로 저장한다.
 
 ```text
-messages.sent = messages.completed + messages.settleCompleted
-              + messages.failed + messages.timeout
-              + messages.cancelled + messages.unresolved
+messages.sent = messages.completed + messages.failed + messages.timeout
+              + messages.cancelled + messages.inflightAtEnd
 messages.expired <= messages.timeout
 ```
 
 `sent`는 measured call을 시작한 logical operation 수이며 물리 전송 성공 수가 아니다.
-Publish의 결산은 §15.4에서 별도로 정의한다. 실패·미완료 operation은 성공 latency에 넣지 않는다.
+Publish의 결산은 §15.4에서 별도로 정의한다. 실패 operation과 `inflightAtEnd`는 성공 latency에 넣지 않는다.
 
 Send/send에서 echo가 first-send terminal보다 먼저 관측되면 echo 시각을 보존한다.
 In-flight slot은 echo의 최종 결과와 first-send terminal을 모두 관찰한 뒤 반납하므로
-admission 대기 중인 public call 위에 다음 operation을 겹쳐 제출하지 않는다. Terminal이 settle
-bound까지 없으면 완료 echo를 다시 계수하지 않고 별도 수집 실패로 셀을 실패 처리한다.
+admission 대기 중인 public call 위에 다음 operation을 겹쳐 제출하지 않는다. Window가 끝날 때 echo와
+first-send terminal 중 하나라도 없으면 그 operation은 `inflightAtEnd`다.
 
 ## 14. 메트릭
 
@@ -923,8 +936,9 @@ API에서 얻는다. [Runtime monitoring][monitor]·[Runtime metrics][metrics]�
 | `load.logicalStreams`, `load.inflightPerStream`, `load.inflight.max` | count, u64 문자열 | Server-driven stream 수·설정 상한·application에서 관측한 전체 최대 미완료 수 |
 | `messages.sent` | count, u64 문자열 | Window 안 측정 public call을 시작한 logical operation 수 |
 | `messages.admitted` | count, u64 문자열 | Initial one-way send의 정상 public admission terminal 수; request는 null |
-| `messages.completed`, `messages.settleCompleted` | count, u64 문자열 | §4의 window 성공·settle 성공 |
-| `messages.failed/timeout/cancelled/unresolved` | count, u64 문자열 | §13의 서로 배타적인 cohort 결과 |
+| `messages.completed` | count, u64 문자열 | §4.1의 window 성공 |
+| `messages.failed/timeout/cancelled` | count, u64 문자열 | §13의 서로 배타적인 cohort 결과 |
+| `messages.inflightAtEnd` | count, u64 문자열 | Window 안에 시작했으나 window가 끝날 때 terminal이 아닌 operation; 실패가 아님 |
 | `messages.expired/duplicateReply/lateReply/unknownCorrelation` | count, u64 문자열 | Send/send correlation 결과·추가 관찰; request는 비적용 |
 | `applicationMessages.request/send/reply/event` | count, u64 문자열 | Window 안 application 측정 경로의 public call 시작 또는 typed reply 반환 수; wire frame 아님 |
 | `applicationPayloadBytes.request/send/reply/event` | bytes, u64 문자열 | 위 각 관찰에 대응하는 logical payload bytes |
@@ -932,7 +946,6 @@ API에서 얻는다. [Runtime monitoring][monitor]·[Runtime metrics][metrics]�
 | `throughput.messagesPerSec` | number, message/s | 위 application message count의 합/sec; native attempt·header·fragment·handshake·driver·admin 제외 |
 | `throughput.megabytesPerSec` | number, MiB/s | 위 directional logical payload bytes의 합/sec/1048576; echo 양방향 포함, wire 대역폭 아님 |
 | `latency.meanMs/p50Ms/p95Ms/p99Ms/maxMs` | number 또는 null, ms | Window echo 성공 histogram `latencyMs` |
-| `settle.latency.*` | number 또는 null, ms | Settle echo 성공 histogram `settleLatencyMs` |
 | `actor.sourceAdmission.latency.*` | number 또는 null, ms | AC send의 call 시작→정상 source admission; `sourceAdmissionMs`에서 계산 |
 | `spot.remoteCallLatency.*` | number 또는 null, ms | §10.5의 call 시작→reply 검증; gate 재획득·continuation을 포함하며 `latencyMs`와 같은 구간 |
 | `spot.applicationYieldCalls` | count, u64 문자열 | Handler에서 실제로 호출한 Yield 수; turn suspension 수가 아님 |
@@ -943,16 +956,15 @@ API에서 얻는다. [Runtime monitoring][monitor]·[Runtime metrics][metrics]�
 | `worker.submitToStart.*` | number 또는 null, ms | 같은 clock domain의 worker call 직전→callback 시작; admission·dispatch 포함 |
 | `worker.taskLatency.*` | number 또는 null, ms | Callback의 monotonic 시작→끝 |
 | `worker.resultToContinuation.*` | number 또는 null, ms | Callback 끝→caller 재개; 결과 전달·gate 재획득 포함 |
-| `messages.published/publishedInWindow/settlePublished` | count, u64 문자열 | PS cohort의 성공 publish 전체/window/settle; §15.4 |
+| `messages.publishedInWindow` | count, u64 문자열 | PS cohort 중 window 안에 admission이 성공한 publish; §15.4 |
 | `fanout.subscriberCount` | count, u64 문자열 | 별도 Subscriber process 수 |
-| `fanout.uniqueDelivered/deliveredInWindow/settleDelivered` | count, u64 문자열 | Subscriber별 publisher window 성공 집합에 해당하는 검증된 unique 수신; §15.4 |
+| `fanout.deliveredInWindow` | count, u64 문자열 | Subscriber별 publisher window 성공 집합에 해당하는 검증된 unique 수신; §15.4 |
 | `fanout.duplicateEvents` | count, u64 문자열 | 같은 measured identity의 추가 수신 횟수; publisher 성공 집합 교차와 별도 진단 |
 | `fanout.outOfCohortEvents` | count, u64 문자열 | 최종 publisher window 성공 집합 밖의 unique sequence 수; delivery 분자에서 제외 |
-| `fanout.deliveryRatio` | number 또는 null, ratio | Subscriber별 uniqueDelivered/publishedInWindow의 최솟값 |
+| `fanout.deliveryRatio` | number 또는 null, ratio | Subscriber별 deliveredInWindow/publishedInWindow의 최솟값 |
 | `fanout.publishOpsPerSec` | number 또는 null, op/s | publishedInWindow/publisher measuredSeconds |
 | `fanout.deliveryOpsPerSec` | number 또는 null, event/s | Subscriber별 deliveredInWindow/자기 measuredSeconds; 전체는 합 |
 | `fanout.deliveryLatency.*` | number 또는 null, ms | 검증된 공통 clock domain에서만 publish call 직전→subscriber handler entry |
-| `fanout.settleDeliveryLatency.*` | number 또는 null, ms | 같은 fanout 완료 구간의 settle 수신; window histogram과 분리 |
 | `process.cpuPercent` | number 또는 null, % | Process CPU 시간 증가/monotonic 측정 시간×100; core 하나가 100%, 100% 초과 가능 |
 | `process.rssMb` | number 또는 null, MiB | 100ms 주기 process RSS sample의 최대값; 실제 sample 간격도 기록 |
 | `process.allocatedMb` | number 또는 null, MiB | Runtime이 제공하는 measured 누적 allocation 증가 |
@@ -990,7 +1002,7 @@ CS의 `load.logicalStreams`는 null이다. CS in-flight의 기준은 connector�
 문자열 parsing으로 route·worker 내부 원인을 복원하지 않는다.
 
 Harness key는 `CorrelationExpired`, `PayloadMismatch`, `IdentityMismatch`, `UnknownCorrelation`,
-`DuplicateReply`, `SettleIncomplete`, `PhaseMismatch`, `SchemaMismatch`, `CollectionFailure`를 사용한다.
+`DuplicateReply`, `PhaseMismatch`, `SchemaMismatch`, `CollectionFailure`를 사용한다.
 이것은 Framework enum이 아니다. 실제 public 오류가 없는 동기 language 오류는 `errors.language`에 둔다.
 한 원격 오류가 caller와 target에서 함께 보이면 결과의 오류 합계는 §15 집계 owner의 관찰만 사용하고
 target의 진단은 해당 role 원본에 남긴다.
@@ -1151,29 +1163,35 @@ Node bigint와 모든 64-bit 값은 decimal string으로 저장하며 JSON numbe
 Application latency histogram은 다음 형식을 사용한다. Public provider의 자체 histogram을
 이 application histogram과 혼합하지 않는다.
 
-```json
+일부 상한과 count를 생략한 형식 예시다.
+
+```text
 {
   "unit": "ms",
   "ticksUnit": "ns",
-  "bounds": [0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
-  "counts": ["0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"],
+  "bounds": [0.01, 0.0125, 0.016, 0.02, 0.025, 0.0315, 0.04, 0.05, 0.063, 0.08, 0.1, …, 800, 1000],
+  "counts": ["0", …],
   "overflow": "0",
   "count": "0",
   "sumNs": "0",
   "maxNs": null,
-  "percentileMethod": "nearest-rank-bucket-upper-bound"
+  "percentileMethod": "nearest-rank-bucket-upper-bound-capped-by-max"
 }
 ```
 
+- **Bounds는 `framework/perf/schema/histogram-bounds.json` 한 곳이 소유한다.** 0.01ms부터 decade마다
+  R10 수열 `1, 1.25, 1.6, 2, 2.5, 3.15, 4, 5, 6.3, 8`배로 800ms까지 두고 마지막 상한은 1000ms다(51개). 이웃 상한의
+  비는 최대 약 1.28이므로 bucket 상한 추정값은 그 bucket의 실제 값보다 최대 약 28% 클 수 있다.
+  Runner와 언어 role은 이 파일을 읽고 값을 다시 적지 않는다.
 - **Bucket는 `[0,b0]`, 이후 `(b[i-1],b[i]]`이며 누적 count가 아니다.** 같은 sample이
   하나의 bucket 또는 overflow에만 들어가야 합산할 수 있기 때문이다.
-- **Percentile은 nearest rank의 bucket 상한으로 추정한다.** `rank=ceil(p*count)`의
-  sample을 포함하는 첫 bucket의 상한을 사용한다. p50/p95/p99의 rank는 정수 연산
+- **Percentile은 nearest rank의 bucket 상한과 max 중 작은 값으로 추정한다.** `rank=ceil(p*count)`의
+  sample을 포함하는 첫 bucket의 상한을 구하고 `maxMs`보다 크면 `maxMs`를 쓴다. 모든 sample이 max 이하이므로
+  이 값도 실제 percentile 이상인 상한이며, percentile이 max를 넘지 않는다. p50/p95/p99의 rank는 정수 연산
   `ceil(q*count/100)`(`q=50,95,99`)으로 계산해 count를 부동소수로 축소하지 않는다.
-  0.1ms보다 빠른 p50도 `0.1`이라는
-  quantized estimate이며 정확한 실측값이라고 표시하지 않는다.
+  결과는 quantized estimate이며 정확한 실측값이라고 표시하지 않는다.
 - **선택된 rank가 overflow에 있으면 percentile은 null이다.** 마지막 상한으로 값을
-  자르면 tail을 과소 표시하기 때문이다. `HISTOGRAM_OVERFLOW`와 `lowerBoundMs=1024`를 남긴다.
+  자르면 tail을 과소 표시하기 때문이다. `HISTOGRAM_OVERFLOW`와 마지막 bound를 `lowerBoundMs`로 남긴다.
 - **Mean과 max는 bucket에서 복원하지 않는다.** 모든 유효 sample(overflow 포함)의
   정확한 integer `sumNs`, `count`, `maxNs`에서 계산한다.
 
@@ -1185,24 +1203,24 @@ Sample이 0이면 모든 percentile·mean·max는 null+`NO_SAMPLES`다.
 
 집계는 같은 단위·bounds·cohort·구간의 count와 sum을 더하고 max의 최댓값을 취한다.
 Process별 percentile이나 mean을 단순 평균하지 않는다. 서로 다른 bucket 원본은
-`SchemaMismatch` 실패다. `latencyMs`와 `settleLatencyMs`는 합치지 않는다.
+`SchemaMismatch` 실패다.
 동일 구간인 `spot.remoteCallLatency.*`는 §10.5의 `latencyMs`를 참조해 계산하고 두 번째
 histogram을 유지하지 않는다. 다른 구간은 아래의 별도 histogram으로 보존한다. 전체 latency key와 sample 집합을
 하나의 표로 대응시켜 collector마다 다른 구간을 합치지 않도록 한다.
 
 | Histogram key | Metric prefix·표본 |
 |---|---|
-| `latencyMs` / `settleLatencyMs` | `latency.*` / `settle.latency.*`; window/settle echo 성공 |
+| `latencyMs` | `latency.*`; window echo 성공 |
 | `sourceAdmissionMs` | `actor.sourceAdmission.latency.*`; window에서 terminal이 된 AC initial send admission |
 | `driverLatencyMs` | `driver.latency.*`; window에서 완료된 local driver |
 | `workerCallLatencyMs` | `worker.callLatency.*`; window에서 완료된 worker call |
 | `workerSubmitToStartMs` | `worker.submitToStart.*`; 위 worker call의 같은 callback |
 | `workerTaskLatencyMs` | `worker.taskLatency.*`; 위 worker call의 같은 callback |
 | `workerResultToContinuationMs` | `worker.resultToContinuation.*`; 위 worker call의 같은 callback |
-| `fanoutDeliveryLatencyMs` / `fanoutSettleDeliveryLatencyMs` | `fanout.deliveryLatency.*` / `fanout.settleDeliveryLatency.*`; §15.4 window/settle unique 교차 집합 |
+| `fanoutDeliveryLatencyMs` | `fanout.deliveryLatency.*`; §15.4 window unique 교차 집합 |
 
-위 성공 sample은 모두 measured cohort에 속한다. 보조 구간의 settle 표본은 primary echo
-histogram에 섞지 않는다. 비적용 histogram도 null+reason으로 남긴다.
+위 성공 sample은 모두 measured cohort에 속하고 window 안에 끝난 것이다. 보조 histogram의 표본은
+같은 operation이 primary 성공으로 확정된 경우만 넣는다. 비적용 histogram도 null+reason으로 남긴다.
 
 ### 15.4 집계 owner와 result schema
 
@@ -1232,14 +1250,13 @@ PerfMetricsSnapshot {
   language: "dotnet" | "cpp" | "java" | "kotlin" | "node"
   role: Text; roleInstance: Index
   configHash: Text
-  phase: "setup" | "warmup" | "reset" | "measured" | "settle" | "complete"
+  phase: "setup" | "warmup" | "reset" | "measured" | "complete"
   window: {
     startedAtUnixMs: I64 | null         // 표기 전용; 아직 시작하지 않았으면 null
     endedAtUnixMs: I64 | null
     startTicks: I64 | null
     endTicks: I64 | null
     measuredSeconds: Number | null     // (endTicks-startTicks)/1e9, 같은 owner clock
-    settleSeconds: Number | null
   }
   clock: ClockMetadata                 // §15.2
   serializedMessageBytes: Object[]      // §15.2의 typed row
@@ -1280,8 +1297,8 @@ Histogram·label·unit을 임의로 바꿔 같은 provider metric처럼 export�
 Run root summary는 셀별 행이며 셀 사이 throughput 합계가 없다.
 
 PS Publisher는 측정 시작 sequence 범위와 성공 publish sequence 집합을 보존한다.
-`published=publishedInWindow+settlePublished`이며 둘 다 measured cohort의 public admission 성공이다.
-`sent=published+failed+timeout+cancelled+unresolved`로 결산한다.
+`publishedInWindow`는 measured cohort 중 window 안에 public admission이 성공한 publish 수다.
+`sent=publishedInWindow+failed+timeout+cancelled+inflightAtEnd`로 결산한다.
 `messages.completed`, echo `latency.*`, `throughput.kops`는 null+`NOT_APPLICABLE`다.
 
 Sequence 파일의 공통 identity는 §15.2의 measured Identity다. 각 range는 양 끝 포함,
@@ -1292,12 +1309,10 @@ Range { first: U64; last: U64 }
 PublisherSequences extends Identity {
   attemptedRanges: Range[]              // measured 동안 시작한 모든 publish
   windowSuccessRanges: Range[]          // publisher window 안 admission 성공
-  settleSuccessRanges: Range[]          // settle에서 admission 성공; ratio 분모에서 제외
 }
 SubscriberSequences extends Identity {
   subscriberId: Index
   windowRanges: Range[]                 // 검증된 첫 수신이 subscriber window 안인 sequence
-  settleRanges: Range[]                 // 첫 수신이 settle 안인 sequence; windowRanges와 겹치지 않음
   duplicateEvents: U64
   nullReasons: Object                  // §15.5의 JSON pointer와 reason
   timingEvidence: ReceiptTiming[] | null // 공통 clock domain 미검증이면 null+reason
@@ -1306,22 +1321,21 @@ ReceiptTiming {
   sequence: U64
   sentTicks: I64; publisherClockDomainId: Text
   receivedTicks: I64; subscriberClockDomainId: Text
-  receivedIn: "window" | "settle"
 }
 ```
 
 Publisher 성공 집합에는 실패한 sequence를 넣지 않는다. 최종 delivery 집계는 각 subscriber의
-windowRanges/settleRanges를 **windowSuccessRanges와만 교차**한다. Ratio 분모는
-`publishedInWindow`다. Settle publish 성공을 별도로 보존하되 이 분모에 더하지 않는다.
-Subscriber별 `uniqueDelivered=deliveredInWindow+settleDelivered`는 그 교차 집합의 크기다.
-같은 sequence가 두 구간에서 수신되면 첫 수신만 unique이며 뒤 수신은 duplicateEvents다.
+windowRanges를 **windowSuccessRanges와만 교차**한다. Ratio 분모는 `publishedInWindow`다.
+Subscriber별 `deliveredInWindow`는 그 교차 집합의 크기다. Window 끝에 전송 중인 sequence는 해당
+subscriber의 `deliveredInWindow`에 포함되지 않는다. 이 경계 효과는 관측한 ratio와 함께 해석한다.
+같은 sequence를 다시 수신하면 첫 수신만 unique이며 뒤 수신은 duplicateEvents다.
 Cohort 밖 수신은 outOfCohortEvents이며 unique delivery와 histogram에서 제외한다.
-각 subscriber의 monotonic 구간으로 window/settle을 나누고 시작 skew의 관찰 근거를 보존한다.
+Subscriber는 handler entry의 monotonic 시각을 자기 `[startTicks, endTicks)`와 비교해 window 수신을 정하고 시작 skew의 관찰 근거를 보존한다.
 분모가 0이면 ratio는 null+`ZERO_DENOMINATOR`이고 셀은 `invalid`다.
 수신 누락만으로 Framework error를 만들지 않는다.
 
-Timing evidence는 unique 수신당 한 행이다. 최종 latency histogram도 위 교차 집합으로만
-계산하고 window/settle을 분리한다. Evidence 비용은 subscriber process의 실제 자원 사용량에
+공통 clock domain을 검증한 경우에만 timing evidence를 unique 수신당 한 행으로 남기고, 최종 latency
+histogram도 위 교차 집합으로만 계산한다. Evidence 비용은 subscriber process의 실제 자원 사용량에
 포함하며 수집 방식·보관 byte 수를 provenance에 기록한다.
 
 ### 15.5 Null과 reason
@@ -1415,7 +1429,7 @@ Public status/reset의 exact interface는 [.NET][d-status], [C++][c-status], [Ja
 [Kotlin][k-status], [Node.js][n-status]가 소유한다.
 Framework가 없는 trigger client는 application/process 값만 기록한다.
 
-Snapshot에는 요청한 셀·resetSeq와 phase, window/settle counter·histogram, public capacity와
+Snapshot에는 요청한 셀·resetSeq와 phase, window counter·histogram, public capacity와
 process 수치가 함께 들어간다. Measured 중 원본 수집은 저비용 sampler에 맡기고 HTTP snapshot
 직렬화·histogram 합산은 report phase에서 수행한다. Admin endpoint failure는 수집 실패로 남긴다.
 
@@ -1556,7 +1570,7 @@ schema·histogram bounds·집계와 격리 절차는 §6.5의 공통 runner가 �
 실행·성능 검증이 끝났다는 뜻이 아니다.
 
 1. Typed JSON DTO, clock·histogram 기록·error mapping과 공통 runner의 진입점 script를 작성한다.
-2. Public status 기반 readiness, reset barrier, application trigger와 window/settle 기록을 연결한다.
+2. Public status 기반 readiness, reset barrier, application trigger와 window 기록을 연결한다.
 3. `session-echo-only`로 connector·phase·집계를 확인한다.
 4. `cs-local-session-actor-echo`, `cs-remote-session-actor-echo`를 구성한다.
 5. `channel-echo-only`의 RouteMesh와 ClientServer 필수 셀을 구성한다.
@@ -1589,8 +1603,8 @@ Spot/Actor mapping, topology/discovery, worker 설정을 남긴다.
 | `invalid` | 분모 0, 준비 기준 미달, 서로 다른 schema 등으로 해당 비교의 전제가 성립하지 않음 |
 | `unsupported` | 필요한 public 호출/선언을 해당 언어에서 확인·실행하지 못함; 필수 완료 수에 포함하지 않음 |
 
-성공 echo baseline은 `valid`이고 실패·timeout·cancelled·unresolved·validation 오류가 0인 셀만
-`baselineEligible=true`로 채택한다. PS는 lossless 계약이 아니므로 누락만으로 error를 만들지 않으며,
+성공 echo baseline은 `packageSource=published`이고 `valid`이며 실패·timeout·cancelled·validation 오류가 0인 셀만
+`baselineEligible=true`로 채택한다. `inflightAtEnd`는 실패가 아니므로 채택 조건에 들어가지 않는다. PS는 lossless 계약이 아니므로 누락만으로 error를 만들지 않으며,
 유효한 publish 분모와 subscriber 원본이 있으면 ratio를 보존한 채 비교한다.
 PS baseline 채택의 허용 deliveryRatio는 비교 계획에 명시하며 미지정이면 `baselineEligible=false`다.
 오류가 있는 수치를 무오류 baseline으로 저장하지 않는다.
@@ -1661,7 +1675,7 @@ Runner CLI, application admin/trigger JSON, typed reply·handler evidence, publi
 
 - Warmup 잔여 call이 있는 상태에서 reset을 요청하면 measured 시작 acknowledgement가 관측되지 않는다.
 - 모든 참여자가 같은 resetSeq를 반환한 뒤 measured를 시작하면 각 원본에서 그 identity와 monotonic window가 조회된다.
-- Window 종료 뒤 완료된 echo는 settle count·histogram에서만 증가하고 throughput의 완료 수는 바뀌지 않는다.
+- Window 종료 때 terminal이 아닌 operation은 `inflightAtEnd`에만 세고 성공·실패·histogram과 throughput에는 들어가지 않는다.
 - 유효 reply·public failure·expiry가 같은 correlation에서 관측돼도 최종 결과 한 건만 결산되며 추가 reply는 별도 counter로 남는다.
 - 필수 parameter의 consumer가 없는 셀이나 잘못된 mode·codec 입력은 preflight 오류를 반환한다.
 - 서로 다른 셀을 실행하면 독립된 config/result/original 파일이 생성되고 같은 셀 경로 재사용 요청은 덮어쓰기 오류를 반환한다.
@@ -1694,7 +1708,7 @@ Perf는 public 설정값과 snapshot·완료 evidence를 기록한다.
 | `scenario`, `payloadDistribution`, `requestOneWayRatio` | Application workload generator; packet kind·logical bytes 비율 |
 | `logicalStreams` 또는 `connections`, `inflight`, `ratePerSecond`, `burstRatePerSecond`, `burstDurationMs` | 해당 CS/source generator; steady/burst 부하 |
 | `handlerCpuWork`, `handlerIoWork` | Public application handler/worker; 고정한 CPU·I/O 비율 |
-| `warmupSeconds=30`, `measuredSeconds=60`, `repetitions=5`, 각 deadline·settle 값 | Phase owner; 명시적인 입력값으로 기록 |
+| `warmupSeconds=30`, `measuredSeconds=60`, `repetitions=5`, 각 deadline 값 | Phase owner; 명시적인 입력값으로 기록 |
 | `requestedProcessors=[4,8,16]`, `cpuQuota`, `cpuset`, `executorMaximum` | Process/container 실행과 public executor 설정 |
 | `memoryLimitBytes`, `runtimeOptions`, `gcOptions` | Process/container 실행 |
 | `coreProfiles`, `coreBudgetCandidatesBytes`, `applicationQueueProfiles`, `manualQueueCandidates` | Public host configuration builder |
@@ -1723,7 +1737,7 @@ perf에서 계측하지 않는다. Core manual/profile 우선순위도 public ef
 
 ### 23.2 측정 phase와 reset 기준
 
-각 반복은 §4의 warmup drain→reset acknowledgement→measured→settle 순서를 따른다.
+각 반복은 §4의 warmup drain→reset acknowledgement→measured→report 순서를 따른다.
 최소 30초 warmup과 60초 measured를 5회 실행하며 steady/burst 구간은 manifest에 고정한다.
 변동계수가 5%를 넘으면 불안정 결과로 표시하고 원본을 보존한다. 같은 실행의 duration·timeout을
 늘려 통과 결과로 바꾸지 않는다.
@@ -1863,3 +1877,4 @@ counter를 함께 보존한다. 내부 permit leak·source handoff 검증을 per
 [j-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/java/03-stream-connector.ko.md
 [n-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/typescript/03-stream-connector.ko.md
 [workspace]: ../../../../../doc/building/framework-workspace.ko.md
+[local-package]: ../../../../../scripts/local-package/README.ko.md

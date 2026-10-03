@@ -46,6 +46,31 @@ log와 trace에 기록한다.
 문서는 enum 이름, exception과 result 표현만 정의하며 kind를 추가하거나 재시도 boolean을
 추가하지 않는다.
 
+### 2.1 Wire failure code와 ErrorKind
+
+Remote node가 보낸 Framework 실패의 failure code([service wire schema](../../../../../../runtime/protocol/service-wire-v1.schema.json)의 `framework-error-code` 중
+`none`이 아닌 값) 하나는 `ErrorKind` 하나를 정한다. Terminal result와 함께 온 code(`typedFrameworkFailure`)든,
+relocation 실패(command 53)처럼 code만 온 것이든 수신자는 command나 경로와 관계없이 아래 표로 분류한다.
+`ErrorKind`를 wire로 보낼 때 원인을 나타내는 failure code가 그 kind의 행에 있으면 그 code를 쓰고, 없으면
+대표 code를 쓴다. Terminal result를 담는 reply에서 `ShuttingDown`은 `terminated`, `InvalidOperation`의 대표는
+`invalidState`로 failure code 없이 보내며, 그 조합은 schema의 `terminal-failure-integrity`를 따른다.
+`NotConfigured`는 wire 표현이 없어 `requestFailed`로 보낸다. Relocation 실패(command 53)처럼 terminal result 없이
+code만 담는 실패에서 `ShuttingDown`은 `routeNotConnected`로 보내고(받는 쪽에서 그 node를 이 operation에 쓸 수 없는
+`Unavailable`이다), 원인 code가 없는 `InvalidOperation`은 `requestFailed`로 보낸다.
+
+| ErrorKind | 대표 code | 같은 kind로 받는 다른 code |
+|---|---|---|
+| `NotFound` | `requestTargetNotFound` | `actorRouteNotFound`, `spotRouteNotFound`, `handlerNotFound`, `routeHandlerNotFound`, `actorDispatchHandlerNotFound` |
+| `AlreadyExists` | `actorAlreadyExists` | — |
+| `TypeMismatch` | `spotTypeMismatch` | `actorTypeMismatch` |
+| `Rejected` | `requestRejected` | `actorCreateRejected` |
+| `Unavailable` | `routeNotConnected` | `workerQueueFull`, `actorLocationStale`, `spotMoving` |
+| `DeadlineExceeded` | `workerTimedOut` | — |
+| `ProtocolError` | `requestProtocolError` | `payloadDecodeFailed` |
+| `InvalidOperation` | 없음(`invalidState`) | `actorSessionNotBound`, `spotGenerationStale` |
+| `DataLost` | `relocationDataLost` | — |
+| `InternalFailure` | `requestFailed` | `workerFailed`, `actorCreateFailed`, `spotCreateFailed` |
+
 ## 3. 호출 전에 확인할 수 있는 오류
 
 잘못된 인자와 이미 종료된 handle처럼 호출 위치에서 바로 확인할 수 있는 문제는 각 언어의
@@ -73,8 +98,9 @@ call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와
 
 ## 5. Request 완료와 실패
 
-`Request`는 typed reply를 받으면 정상 완료된다. 정상 reply를 만들 수 없으면 다음
-`ErrorKind` 중 하나로 한 번만 완료한다.
+`Request`는 typed reply를 받으면 정상 완료된다. 정상 reply를 만들 수 없으면 `ErrorKind`(§2) 하나로 한 번만
+완료한다. Remote node가 보낸 실패의 kind는 [§2.1](#21-wire-failure-code와-errorkind)이 정한다. 이 node가 직접
+판정하는 경우는 다음과 같다.
 
 - 대상이나 handler가 없으면 `NotFound`다.
 - Route, connection 또는 current owner를 사용할 수 없으면 `Unavailable`이다. 최초 message의
@@ -85,7 +111,7 @@ call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와
 - 위 종류로 표현할 수 없는 Framework 실행 실패는 `InternalFailure`다.
 
 <a id="bounded-queue-failure"></a>
-**줄이 가득 찼다는 것은 오류가 아니다.** 자리가 날 때까지 기다린다. 들어오는 속도를 늦추는
+**Framework가 소유한 줄이 가득 찼다는 것은 오류가 아니다.** 자리가 날 때까지 기다린다. 들어오는 속도를 늦추는
 수단은 [§6](../01-execution/04-application-job-queue-and-backpressure.ko.md#6-pressure-상태와-socket-제어)의
 `PAUSED` 하나뿐이다.
 
@@ -173,7 +199,7 @@ wait다.
 
 **줄이 가득 찼을 때**
 
-- 같은 runtime이든 다른 node든, 줄에 자리가 없다는 이유로 끝나는 request가 없다.
+- 같은 runtime이든 다른 node든, Framework가 소유한 줄에 자리가 없다는 이유로 끝나는 request가 없다.
 - Spot을 둘 node가 하나도 없으면 `Unavailable`로 끝난다.
 
 **Typed Rejected 구분**

@@ -1,10 +1,11 @@
 import {
+  type RequiredZlinkStreamConnectorOptions,
   ZlinkStreamConnection,
   ZlinkStreamErrorCode,
   ZlinkStreamTransportFactory
 } from '../../Contracts';
-import type { RequiredZlinkStreamConnectorOptions } from '../../Contracts';
-import { connectorError, throwIfAborted } from '../ZlinkStreamSupport';
+
+import { connectorError, shouldCompactBackingArray, throwIfAborted } from '../ZlinkStreamSupport';
 
 interface BrowserWebSocketEventMap {
   open: unknown;
@@ -194,7 +195,7 @@ export class BrowserWebSocketConnection implements ZlinkStreamConnection {
     const message = this.messages[this.messageHead];
     this.messages[this.messageHead] = undefined;
     this.messageHead += 1;
-    if (this.messageHead >= 1024 && this.messageHead * 2 >= this.messages.length) {
+    if (shouldCompactBackingArray(this.messageHead, this.messages.length)) {
       this.messages.splice(0, this.messageHead);
       this.messageHead = 0;
     }
@@ -215,9 +216,9 @@ async function waitForOpen(
     );
     const onOpen = () => finish();
     const onClose = () =>
-      finish(connectorError(ZlinkStreamErrorCode.ConnectTimeout, 'Connect closed before opening.'));
+      finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Connect closed before opening.'));
     const onError = () =>
-      finish(connectorError(ZlinkStreamErrorCode.ConnectTimeout, 'Connect failed.'));
+      finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Connect failed.'));
     const onAbort = () =>
       finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Connect canceled.'));
     const finish = (error?: unknown) => {

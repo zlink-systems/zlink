@@ -3,6 +3,7 @@ const SampleNames = {
   playerActorType: 'gamequest-player',
   playerQuestSpotType: 'gamequest.player-quest',
   playerQuestSpotMesh: 'gamequest.player-quest.spot',
+  closeObservationStage: 'closing',
   requestTimeout: 5000,
   clientTimeout: 20000
 } as const;

@@ -38,13 +38,11 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongFunction;
 import java.util.function.LongSupplier;
-import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 
@@ -52,13 +50,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private static final Logger LOGGER =
             Logger.getLogger(ZLinkSessionActorsRuntime.class.getName());
     static final Duration RELAY_SUBMIT_TIMEOUT = Duration.ofSeconds(30);
-    private static final ZLinkSessionRelayHeaders RELAY_HEADERS = new ZLinkSessionRelayHeaders();
+    private final ZLinkSessionRelayHeaders relayHeaders = new ZLinkSessionRelayHeaders();
     private final ZLinkBackendStreamSocket stream;
     private final ZLinkInternalSpotNode spotNode;
     private final RoutingId sessionRid;
     private final ZLinkActorRuntime actors;
     private final ZLinkMessageSerializer serializer;
-    private final Predicate<RoutingId> routeReady;
     private final LocalActorDispatcher localActorDispatcher;
     private final boolean nativeSessionRelayAttached;
     private final ZLinkStreamCodec defaultCodec;
@@ -143,21 +140,20 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         CompletionStage<Void> submit(LongFunction<CompletionStage<Void>> operation);
     }
 
-    public static void enterRelayDispatch(ZLinkStreamHeader header) {
-        RELAY_HEADERS.enter(header);
+    public void enterRelayDispatch(ZLinkStreamHeader header) {
+        relayHeaders.enter(header);
     }
 
-    public static void enterRelayDispatch(
-            ZLinkSessionDispatchContext dispatch, ZLinkStreamHeader header) {
-        RELAY_HEADERS.enter(dispatch, header);
+    public void enterRelayDispatch(ZLinkSessionDispatchContext dispatch, ZLinkStreamHeader header) {
+        relayHeaders.enter(dispatch, header);
     }
 
-    public static void exitRelayDispatch() {
-        RELAY_HEADERS.exit();
+    public void exitRelayDispatch() {
+        relayHeaders.exit();
     }
 
-    public static void exitRelayDispatch(ZLinkSessionDispatchContext dispatch) {
-        RELAY_HEADERS.exit(dispatch);
+    public void exitRelayDispatch(ZLinkSessionDispatchContext dispatch) {
+        relayHeaders.exit(dispatch);
     }
 
     public ZLinkSessionActorsRuntime(
@@ -165,17 +161,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             RoutingId sessionRid,
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer) {
-        this(
-                null,
-                stream,
-                sessionRid,
-                actors,
-                serializer,
-                ignored -> true,
-                null,
-                true,
-                ZLinkStreamCodec.JSON,
-                null);
+        this(null, stream, sessionRid, actors, serializer, null, true, ZLinkStreamCodec.JSON, null);
     }
 
     public ZLinkSessionActorsRuntime(
@@ -183,26 +169,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             RoutingId sessionRid,
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer,
-            Predicate<RoutingId> routeReady) {
-        this(
-                null,
-                stream,
-                sessionRid,
-                actors,
-                serializer,
-                routeReady,
-                null,
-                true,
-                ZLinkStreamCodec.JSON,
-                null);
-    }
-
-    public ZLinkSessionActorsRuntime(
-            ZLinkBackendStreamSocket stream,
-            RoutingId sessionRid,
-            ZLinkActorRuntime actors,
-            ZLinkMessageSerializer serializer,
-            Predicate<RoutingId> routeReady,
             LocalActorDispatcher localActorDispatcher,
             boolean nativeSessionRelayAttached,
             ZLinkStreamCodec defaultCodec) {
@@ -212,7 +178,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 sessionRid,
                 actors,
                 serializer,
-                routeReady,
                 localActorDispatcher,
                 nativeSessionRelayAttached,
                 defaultCodec,
@@ -225,7 +190,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             RoutingId sessionRid,
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer,
-            Predicate<RoutingId> routeReady,
             LocalActorDispatcher localActorDispatcher,
             boolean nativeSessionRelayAttached,
             ZLinkStreamCodec defaultCodec) {
@@ -235,7 +199,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 sessionRid,
                 actors,
                 serializer,
-                routeReady,
                 localActorDispatcher,
                 nativeSessionRelayAttached,
                 defaultCodec,
@@ -248,7 +211,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             RoutingId sessionRid,
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer,
-            Predicate<RoutingId> routeReady,
             LocalActorDispatcher localActorDispatcher,
             boolean nativeSessionRelayAttached,
             ZLinkStreamCodec defaultCodec,
@@ -259,7 +221,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 sessionRid,
                 actors,
                 serializer,
-                routeReady,
                 localActorDispatcher,
                 nativeSessionRelayAttached,
                 defaultCodec,
@@ -273,7 +234,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             RoutingId sessionRid,
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer,
-            Predicate<RoutingId> routeReady,
             LocalActorDispatcher localActorDispatcher,
             boolean nativeSessionRelayAttached,
             ZLinkStreamCodec defaultCodec,
@@ -285,7 +245,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 sessionRid,
                 actors,
                 serializer,
-                routeReady,
                 localActorDispatcher,
                 nativeSessionRelayAttached,
                 defaultCodec,
@@ -300,7 +259,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             RoutingId sessionRid,
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer,
-            Predicate<RoutingId> routeReady,
             LocalActorDispatcher localActorDispatcher,
             boolean nativeSessionRelayAttached,
             ZLinkStreamCodec defaultCodec,
@@ -313,7 +271,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         this.sessionRid = sessionRid;
         this.actors = actors;
         this.serializer = serializer;
-        this.routeReady = routeReady == null ? ignored -> true : routeReady;
         this.localActorDispatcher = localActorDispatcher;
         this.nativeSessionRelayAttached = nativeSessionRelayAttached;
         this.defaultCodec = defaultCodec == null ? ZLinkStreamCodec.JSON : defaultCodec;
@@ -494,67 +451,55 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         ignored ->
                                 replaceBinding(
                                         ref.actorId(),
-                                        () ->
-                                                awaitRouteReady(ref)
-                                                        .thenCompose(
-                                                                routeReadyIgnored -> {
-                                                                    int actorSlot =
-                                                                            allocateActorSlot();
-                                                                    return ZLinkBoundSessionRuntime
-                                                                            .bindActorWithRetry(
-                                                                                    stream,
-                                                                                    sessionRid,
-                                                                                    ref,
-                                                                                    actorSlot,
-                                                                                    RELAY_SUBMIT_TIMEOUT)
-                                                                            .thenApply(
-                                                                                    bindIgnored ->
-                                                                                            actorSlot);
-                                                                })
-                                                        .thenApply(
-                                                                actorSlot -> {
-                                                                    AtomicReference<ZLinkBoundActor>
-                                                                            binding =
-                                                                                    new AtomicReference<>();
-                                                                    long bindingGeneration =
-                                                                            currentBindingGeneration(
-                                                                                    ref.actorId());
-                                                                    ZLinkBoundActor actor =
-                                                                            new ZLinkBoundActor(
-                                                                                    stream,
-                                                                                    sessionRid,
-                                                                                    ref,
-                                                                                    meshName,
-                                                                                    Optional
-                                                                                            .empty(),
-                                                                                    actors,
-                                                                                    serializer,
-                                                                                    0,
-                                                                                    bindingGeneration,
-                                                                                    actorSlot,
-                                                                                    routeReady,
-                                                                                    null,
-                                                                                    true,
-                                                                                    defaultCodec,
-                                                                                    RELAY_HEADERS,
-                                                                                    flow,
-                                                                                    () ->
-                                                                                            isCurrentBinding(
-                                                                                                    binding
-                                                                                                            .get()),
-                                                                                    operation ->
-                                                                                            admitIngress(
-                                                                                                    binding
-                                                                                                            .get(),
-                                                                                                    operation),
-                                                                                    metadataPolicy);
-                                                                    binding.set(actor);
-                                                                    actor.setUnbindListener(
-                                                                            () ->
-                                                                                    removeBinding(
-                                                                                            actor));
-                                                                    return actor;
-                                                                })))
+                                        () -> {
+                                            int allocatedActorSlot = allocateActorSlot();
+                                            return ZLinkBoundSessionRuntime.bindActorWithRetry(
+                                                            stream,
+                                                            sessionRid,
+                                                            ref,
+                                                            allocatedActorSlot,
+                                                            RELAY_SUBMIT_TIMEOUT)
+                                                    .thenApply(
+                                                            bindIgnored -> {
+                                                                AtomicReference<ZLinkBoundActor>
+                                                                        binding =
+                                                                                new AtomicReference<>();
+                                                                long bindingGeneration =
+                                                                        currentBindingGeneration(
+                                                                                ref.actorId());
+                                                                ZLinkBoundActor actor =
+                                                                        new ZLinkBoundActor(
+                                                                                stream,
+                                                                                sessionRid,
+                                                                                ref,
+                                                                                meshName,
+                                                                                Optional.empty(),
+                                                                                actors,
+                                                                                serializer,
+                                                                                0,
+                                                                                bindingGeneration,
+                                                                                allocatedActorSlot,
+                                                                                null,
+                                                                                true,
+                                                                                defaultCodec,
+                                                                                relayHeaders,
+                                                                                flow,
+                                                                                () ->
+                                                                                        isCurrentBinding(
+                                                                                                binding
+                                                                                                        .get()),
+                                                                                operation ->
+                                                                                        admitIngress(
+                                                                                                binding
+                                                                                                        .get(),
+                                                                                                operation),
+                                                                                metadataPolicy);
+                                                                binding.set(actor);
+                                                                actor.setUnbindListener(
+                                                                        () -> removeBinding(actor));
+                                                                return actor;
+                                                            });
+                                        }))
                 .thenCompose(
                         actor ->
                                 actor.notifyRemoteBoundSession()
@@ -602,16 +547,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                             int actorSlot = allocateActorSlot();
                             CompletionStage<Void> nativeBinding =
                                     nativeSessionRelayAttached
-                                            ? awaitRouteReady(ref)
-                                                    .thenCompose(
-                                                            ignored ->
-                                                                    ZLinkBoundSessionRuntime
-                                                                            .bindActorWithRetry(
-                                                                                    stream,
-                                                                                    sessionRid,
-                                                                                    ref,
-                                                                                    actorSlot,
-                                                                                    RELAY_SUBMIT_TIMEOUT))
+                                            ? ZLinkBoundSessionRuntime.bindActorWithRetry(
+                                                    stream,
+                                                    sessionRid,
+                                                    ref,
+                                                    actorSlot,
+                                                    RELAY_SUBMIT_TIMEOUT)
                                             : CompletableFuture.completedFuture(null);
                             return nativeBinding.thenApply(
                                     ignored -> {
@@ -627,7 +568,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                         actors,
                                                         actor,
                                                         defaultCodec,
-                                                        routeReady,
                                                         metadataPolicy);
                                         RoutingId sourceNodeRid =
                                                 nativeSessionRelayAttached && spotNode != null
@@ -659,11 +599,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                         bindingToken,
                                                         bindingGeneration,
                                                         actorSlot,
-                                                        routeReady,
                                                         localActorDispatcher,
                                                         nativeSessionRelayAttached,
                                                         defaultCodec,
-                                                        RELAY_HEADERS,
+                                                        relayHeaders,
                                                         flow,
                                                         () -> isCurrentBinding(binding.get()),
                                                         operation ->
@@ -755,7 +694,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private int allocateActorSlot() {
         return inStateLane(
                 () -> {
-                    if (nextActorSlot > 0xffff) {
+                    if (nextActorSlot > ZLinkBoundActor.MAX_ACTOR_SLOT) {
                         throw new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.INVALID_OPERATION,
                                 "Session Actor slots are exhausted");
@@ -1209,7 +1148,20 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         });
         try {
             stream.disconnectPeer(sessionRid);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException disconnectFailure) {
+            failure.addSuppressed(disconnectFailure);
+            if (flow != null)
+                flow.reportFailure(
+                        systems.zlink.framework.runtime.internal.diagnostics
+                                .ZLinkDispatchErrorSurface.STREAM_SESSION,
+                        systems.zlink.framework.runtime.internal.diagnostics
+                                .ZLinkDispatchMessageKind.SEND,
+                        systems.zlink.framework.runtime.internal.diagnostics
+                                .ZLinkDispatchErrorReason.TARGET_CLOSED,
+                        systems.zlink.framework.runtime.internal.diagnostics
+                                .ZLinkDispatchErrorAction.DROP,
+                        terminal.seal().actor().actor().actorId(),
+                        disconnectFailure);
         }
         current.forEach(actor -> notifyDisconnectedSafely(actor, RELAY_SUBMIT_TIMEOUT));
     }
@@ -2098,23 +2050,5 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
     private boolean isCurrentBinding(ZLinkBoundActor actor) {
         return actor != null && bound.contains(actor);
-    }
-
-    private CompletionStage<Void> awaitRouteReady(ZLinkBackendActorRef ref) {
-        return ZLinkActorRetryScheduler.waitUntilRelay(
-                RELAY_SUBMIT_TIMEOUT,
-                () -> routeReady.test(ref.nodeRid()),
-                () -> {},
-                () -> {
-                    String message =
-                            "session relay route was not ready before timeout: " + ref.actorId();
-                    //  Spec 32-framework-error-model:90 — a route wait past its
-                    //  deadline is DeadlineExceeded, not a raw language timeout.
-                    //  The TimeoutException cause is kept for diagnostics.
-                    return new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                            message,
-                            new TimeoutException(message));
-                });
     }
 }

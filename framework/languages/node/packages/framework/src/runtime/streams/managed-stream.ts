@@ -25,6 +25,7 @@ import type {
 } from '../backend/contracts';
 import { RequestResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import { ZLinkBufferMessage as NativeMessage } from '../backend/runtime-message';
+import { diagnosticTextOrAbsent } from '../diagnostics/diagnostic-text';
 import type {
   StreamSessionActorAuthorityFence,
   StreamSessionService
@@ -140,7 +141,7 @@ export class ZLinkManagedStream implements ZLinkStream {
       return { status: ZLinkSubmitStatus.Submitted };
     } catch (error) {
       if (isZLinkBackendResultError(error) && error.operation === 'submit') {
-        return classifySubmitResult(error.result, 'STREAM submit');
+        return classifySubmitResult(error.result, 'STREAM submit', error.phase);
       }
       throw error;
     }
@@ -322,7 +323,11 @@ export class ZLinkManagedStream implements ZLinkStream {
           ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
           `Actor '${actor.actorId}' native route fence does not match its ActorRef ` +
             `(expected ${String(actor.nodeRid)}/${actor.objectGeneration}, ` +
-            `resolved ${resolved === undefined ? 'none' : `${String(resolved.nodeRid)}/${resolved.generation}`}, ` +
+            `resolved ${diagnosticTextOrAbsent(
+              resolved === undefined
+                ? undefined
+                : `${String(resolved.nodeRid)}/${resolved.generation}`
+            )}, ` +
             `terminal=${completion.terminalResult}, failure=${completion.failureErrno}).`
         );
       }

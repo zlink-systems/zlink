@@ -2,24 +2,23 @@
 
 package systems.zlink.runtime.sockets;
 
-import java.lang.foreign.MemorySegment;
-import java.nio.charset.StandardCharsets;
-import java.util.List;
-import java.util.Objects;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendResult;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
-import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.NativeMessage;
 import systems.zlink.runtime.nativeapi.NativeRoutingIds;
 import systems.zlink.runtime.nativeapi.NativeSubmitErrors;
 import systems.zlink.runtime.nativeapi.SendScratch;
+
+import java.lang.foreign.MemorySegment;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Objects;
 
 final class SocketSendPlane {
     private final NativeSocketRuntime socket;
@@ -67,8 +66,8 @@ final class SocketSendPlane {
             return true;
         }
         if (isDontWait(flags)
-            && attempt.result() == SubmitResult.BACKPRESSURED.value()
-            && isWouldBlock(attempt.errno())) {
+                && attempt.result() == SubmitResult.BACKPRESSURED.value()
+                && NativeSubmitErrors.isBackpressured(attempt.errno())) {
             return false;
         }
         throwFailure(attempt);
@@ -188,8 +187,8 @@ final class SocketSendPlane {
             return true;
         }
         if (isDontWait(flag)
-            && attempt.result() == SubmitResult.BACKPRESSURED.value()
-            && isWouldBlock(attempt.errno())) {
+                && attempt.result() == SubmitResult.BACKPRESSURED.value()
+                && NativeSubmitErrors.isBackpressured(attempt.errno())) {
             return false;
         }
         throwFailure(attempt);
@@ -355,11 +354,6 @@ final class SocketSendPlane {
             case NOT_CONNECTED -> SendResult.NOT_READY;
             default -> throw failure;
         };
-    }
-
-    private static boolean isWouldBlock(int errno) {
-        return errno == NativeErrno.EAGAIN
-            || errno == NativeErrno.EWOULDBLOCK_WIN;
     }
 
     private static void requireSuccess(PartAttempt attempt) {

@@ -21,6 +21,9 @@ import java.util.concurrent.CompletionStage;
 
 /** Builds operational projections from descriptors and durable authority. */
 public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRuntimeQuery {
+    private static final int OBJECT_PAGE_ENVELOPE_BYTES = 256;
+    private static final int MAXIMUM_QUERY_PAGE_ITEMS = 1000;
+    private static final int DESCRIPTOR_SCAN_PAGE_ITEMS = 1000;
     private static final int MAX_OBJECT_PAGE_BYTES = 4 * 1024 * 1024;
     private static final int MAX_CONTINUATION_TOKEN_BYTES = 4096;
     private static final int OBJECT_JSON_FIXED_BYTES =
@@ -138,8 +141,9 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         Objects.requireNonNull(filter, "filter");
         ZLinkPageRequest safe = normalize(page);
         int pageSize = safe.pageSize();
-        if (pageSize < 1 || pageSize > 1000)
-            throw new IllegalArgumentException("pageSize must be in 1..1000");
+        if (pageSize < 1 || pageSize > MAXIMUM_QUERY_PAGE_ITEMS)
+            throw new IllegalArgumentException(
+                    "pageSize must be in 1.." + MAXIMUM_QUERY_PAGE_ITEMS);
         String prefix =
                 filter.objectKind() == ZLinkPlacementObjectKind.ACTOR
                         ? ZLinkAuthorityKeyCodec.actorPrefix()
@@ -151,7 +155,13 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                 new ZLinkAuthorityScanCursor(
                                         parseCursor(safe.continuationToken())));
         return unavailable(
-                loadObjectPage(filter, prefix, cursor, pageSize, new ArrayList<>(), 256),
+                loadObjectPage(
+                        filter,
+                        prefix,
+                        cursor,
+                        pageSize,
+                        new ArrayList<>(),
+                        OBJECT_PAGE_ENVELOPE_BYTES),
                 "list object locations");
     }
 
@@ -219,7 +229,8 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                         int nextBytes = encodedBytes;
                                         if (projected != null) {
                                             int entryBytes = encodedObjectBytes(projected) + 1;
-                                            if (entryBytes + 256 > MAX_OBJECT_PAGE_BYTES) {
+                                            if (entryBytes + OBJECT_PAGE_ENVELOPE_BYTES
+                                                    > MAX_OBJECT_PAGE_BYTES) {
                                                 return CompletableFuture.failedFuture(
                                                         new IllegalStateException(
                                                                 "location object entry exceeds the"
@@ -227,7 +238,8 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                             }
                                             if (!values.isEmpty()
                                                     && nextBytes + entryBytes
-                                                            > MAX_OBJECT_PAGE_BYTES - 256) {
+                                                            > MAX_OBJECT_PAGE_BYTES
+                                                                    - OBJECT_PAGE_ENVELOPE_BYTES) {
                                                 return CompletableFuture.completedFuture(
                                                         new ZLinkLocationPage<>(
                                                                 List.copyOf(values),
@@ -348,8 +360,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                     while (cause instanceof CompletionException && cause.getCause() != null) {
                         cause = cause.getCause();
                     }
-                    if (cause instanceof IllegalArgumentException
-                            || cause instanceof ZLinkFrameworkException) {
+                    if (cause instanceof ZLinkFrameworkException) {
                         result.completeExceptionally(cause);
                     } else {
                         result.completeExceptionally(
@@ -391,7 +402,8 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         }
         String meshName = meshes.get(meshIndex);
         return stores.unifiedStore()
-                .listMeshNodes(meshName, new ZLinkPageRequest(1000, continuation))
+                .listMeshNodes(
+                        meshName, new ZLinkPageRequest(DESCRIPTOR_SCAN_PAGE_ITEMS, continuation))
                 .thenCompose(
                         page ->
                                 scanTopologyItems(
@@ -502,7 +514,8 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         }
         String meshName = meshes.get(meshIndex);
         return stores.unifiedStore()
-                .listMeshNodes(meshName, new ZLinkPageRequest(1000, continuation))
+                .listMeshNodes(
+                        meshName, new ZLinkPageRequest(DESCRIPTOR_SCAN_PAGE_ITEMS, continuation))
                 .thenCompose(page -> scanServiceSummaryItems(meshes, meshIndex, page, 0, grouped));
     }
 
@@ -555,13 +568,17 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
 
     private ZLinkPageRequest normalize(ZLinkPageRequest page) {
         ZLinkPageRequest safe = page == null ? ZLinkPageRequest.firstPage() : page;
-        return safe.pageSize() > 0 ? safe : new ZLinkPageRequest(1000, safe.continuationToken());
+        return safe.pageSize() > 0
+                ? safe
+                : new ZLinkPageRequest(
+                        ZLinkPageRequest.firstPage().pageSize(), safe.continuationToken());
     }
 
     private ZLinkPageRequest boundedPage(ZLinkPageRequest page) {
         ZLinkPageRequest safe = normalize(page);
-        if (safe.pageSize() > 1000) {
-            throw new IllegalArgumentException("pageSize must be in 1..1000");
+        if (safe.pageSize() > MAXIMUM_QUERY_PAGE_ITEMS) {
+            throw new IllegalArgumentException(
+                    "pageSize must be in 1.." + MAXIMUM_QUERY_PAGE_ITEMS);
         }
         return safe;
     }
@@ -587,7 +604,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
 
         ZLinkLocationServiceSummary toSummary(String meshName) {
             return new ZLinkLocationServiceSummary(
-                    meshName, total, ready, total - ready, 0, updatedAt);
+                    meshName, total, ready, 0, total - ready, updatedAt);
         }
     }
 }

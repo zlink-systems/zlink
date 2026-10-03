@@ -6,6 +6,7 @@ import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableActorFactory;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableSpotFactory;
@@ -196,7 +197,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
     CompletionStage<PreparedSource> prepare(
             String spotId,
             ZLinkRelocationTargetPolicy targetPolicy,
-            ZLinkStoreCancellation cancellation) {
+            ZLinkStoreCancellation cancellation,
+            CompletionStage<?> cancellationSignal) {
         Objects.requireNonNull(targetPolicy, "targetPolicy");
         Objects.requireNonNull(cancellation, "cancellation");
         return reconcileUnresolvedPreparations()
@@ -214,7 +216,11 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             return admit(spotId, spot, targetPolicy, cancellation)
                                     .thenCompose(
                                             admission ->
-                                                    sealAndCapture(spot, admission, cancellation));
+                                                    sealAndCapture(
+                                                            spot,
+                                                            admission,
+                                                            cancellation,
+                                                            cancellationSignal));
                         });
     }
 
@@ -312,7 +318,10 @@ final class ZLinkUserSpotRetireSourceBuilder {
     }
 
     private CompletionStage<PreparedSource> sealAndCapture(
-            ZLinkSpot<?> spot, Admission admission, ZLinkStoreCancellation cancellation) {
+            ZLinkSpot<?> spot,
+            Admission admission,
+            ZLinkStoreCancellation cancellation,
+            CompletionStage<?> cancellationSignal) {
         ZLinkUserSpotRelocationBarrier barrier =
                 spots.relocationBarrier(admission.inventory().spot().id(), actors);
         return barrier.sealForRelocation(
@@ -321,7 +330,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             .equals(admission.inventory().actorIds())
                                     && !cancellation.isCancellationRequested();
                         },
-                        cancellation::isCancellationRequested)
+                        cancellation::isCancellationRequested,
+                        cancellationSignal)
                 .thenCompose(
                         sealedResult -> {
                             if (sealedResult.isEmpty()) {
@@ -1626,13 +1636,20 @@ final class ZLinkUserSpotRetireSourceBuilder {
             List<String> actorIds = captured.inventory().actorIds();
             String spotId = captured.inventory().spot().id();
             long generation = captured.inventory().spot().snapshot().objectGeneration();
+            List<Supplier<? extends CompletionStage<Void>>> cleanups = new ArrayList<>();
             if (relocationReplies != null) {
-                actorIds.forEach(relocationReplies::closeActorTimersAfterRelocation);
+                for (String actorId : actorIds)
+                    cleanups.add(
+                            () ->
+                                    ZLinkHandlerStages.fromRunnable(
+                                            () ->
+                                                    relocationReplies
+                                                            .closeActorTimersAfterRelocation(
+                                                                    actorId)));
             }
-            return actors.completeRelocationSource(actorIds)
-                    .thenCompose(
-                            ignored ->
-                                    spots.completeRelocationSource(spotId, generation, deadline));
+            cleanups.add(() -> actors.completeRelocationSource(actorIds));
+            cleanups.add(() -> spots.completeRelocationSource(spotId, generation, deadline));
+            return ZLinkHandlerStages.completeAll(cleanups);
         }
     }
 

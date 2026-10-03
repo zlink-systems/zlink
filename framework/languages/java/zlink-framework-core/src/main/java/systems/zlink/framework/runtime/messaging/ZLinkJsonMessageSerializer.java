@@ -26,12 +26,15 @@ import java.util.HashSet;
 import java.util.Set;
 
 public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer {
+    private static final String FIELD_ACTOR_ID = "actorId";
+    private static final String FIELD_OBJECT_GENERATION = "objectGeneration";
+    private static final String FIELD_MESH_NAME = "meshName";
+    private static final String FIELD_NODE_RID = "nodeRid";
+    private static final String FIELD_SPOT_ID = "spotId";
     private final ObjectMapper mapper;
 
     public ZLinkJsonMessageSerializer() {
-        this(
-                ZLinkFrameworkJsonProfile.mapper(
-                        routingIdModule(), actorRefModule(), spotRefModule()));
+        this(ZLinkFrameworkJsonProfile.mapper(actorRefModule(), spotRefModule()));
     }
 
     ZLinkJsonMessageSerializer(ObjectMapper mapper) {
@@ -103,32 +106,6 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
         return value == null ? "null" : value.getClass().getName();
     }
 
-    private static SimpleModule routingIdModule() {
-        SimpleModule module = new SimpleModule("zlink-routing-id");
-        module.addSerializer(
-                RoutingId.class,
-                new JsonSerializer<>() {
-                    @Override
-                    public void serialize(
-                            RoutingId value,
-                            JsonGenerator generator,
-                            SerializerProvider serializers)
-                            throws IOException {
-                        generator.writeString(value.toHex());
-                    }
-                });
-        module.addDeserializer(
-                RoutingId.class,
-                new JsonDeserializer<>() {
-                    @Override
-                    public RoutingId deserialize(JsonParser parser, DeserializationContext context)
-                            throws IOException {
-                        return RoutingId.fromHex(parser.getValueAsString());
-                    }
-                });
-        return module;
-    }
-
     private static SimpleModule actorRefModule() {
         SimpleModule module = new SimpleModule("zlink-actor-ref");
         module.addSerializer(
@@ -139,12 +116,12 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
                             ActorRef value, JsonGenerator generator, SerializerProvider serializers)
                             throws IOException {
                         generator.writeStartObject();
-                        generator.writeStringField("actorId", value.actorId());
+                        generator.writeStringField(FIELD_ACTOR_ID, value.actorId());
                         generator.writeStringField(
-                                "objectGeneration",
+                                FIELD_OBJECT_GENERATION,
                                 Long.toUnsignedString(value.objectGeneration()));
-                        generator.writeStringField("meshName", value.meshName());
-                        generator.writeStringField("nodeRid", value.nodeRid().toHex());
+                        generator.writeStringField(FIELD_MESH_NAME, value.meshName());
+                        generator.writeStringField(FIELD_NODE_RID, value.nodeRid().toHex());
                         generator.writeEndObject();
                     }
                 });
@@ -171,11 +148,14 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
                                         field, ActorRef.class, "duplicate ActorRef property");
                             }
                             switch (field) {
-                                case "actorId" -> actorId = requireString(parser, context, field);
-                                case "objectGeneration" ->
+                                case FIELD_ACTOR_ID ->
+                                        actorId = requireString(parser, context, field);
+                                case FIELD_OBJECT_GENERATION ->
                                         objectGeneration = requireString(parser, context, field);
-                                case "meshName" -> meshName = requireString(parser, context, field);
-                                case "nodeRid" -> nodeRid = requireString(parser, context, field);
+                                case FIELD_MESH_NAME ->
+                                        meshName = requireString(parser, context, field);
+                                case FIELD_NODE_RID ->
+                                        nodeRid = requireString(parser, context, field);
                                 default ->
                                         throw JsonMappingException.from(
                                                 parser, "unknown ActorRef property: " + field);
@@ -226,12 +206,12 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
                             SpotRef value, JsonGenerator generator, SerializerProvider serializers)
                             throws IOException {
                         generator.writeStartObject();
-                        generator.writeStringField("spotId", value.spotId());
+                        generator.writeStringField(FIELD_SPOT_ID, value.spotId());
                         generator.writeStringField(
-                                "objectGeneration",
+                                FIELD_OBJECT_GENERATION,
                                 Long.toUnsignedString(value.objectGeneration()));
-                        generator.writeStringField("meshName", value.meshName());
-                        generator.writeStringField("nodeRid", value.nodeRid().toHex());
+                        generator.writeStringField(FIELD_MESH_NAME, value.meshName());
+                        generator.writeStringField(FIELD_NODE_RID, value.nodeRid().toHex());
                         generator.writeEndObject();
                     }
                 });
@@ -258,14 +238,14 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
                                         field, SpotRef.class, "duplicate SpotRef property");
                             }
                             switch (field) {
-                                case "spotId" ->
+                                case FIELD_SPOT_ID ->
                                         spotId = requireRefString(parser, field, "SpotRef");
-                                case "objectGeneration" ->
+                                case FIELD_OBJECT_GENERATION ->
                                         objectGeneration =
                                                 requireRefString(parser, field, "SpotRef");
-                                case "meshName" ->
+                                case FIELD_MESH_NAME ->
                                         meshName = requireRefString(parser, field, "SpotRef");
-                                case "nodeRid" ->
+                                case FIELD_NODE_RID ->
                                         nodeRid = requireRefString(parser, field, "SpotRef");
                                 default ->
                                         throw JsonMappingException.from(

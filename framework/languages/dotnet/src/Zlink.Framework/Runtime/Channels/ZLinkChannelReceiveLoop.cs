@@ -15,7 +15,8 @@ internal sealed class ZLinkChannelReceiveLoop(
         ZLinkClientServerServerIdentity identity,
         ZLinkApplicationJobQueue applicationJobQueue,
         IZLinkRuntimeFailureReporter errorSink,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        CancellationToken forceStopToken
     )
     {
         using var receivePoller = ZLinkBackendSocketPoller.Create(router);
@@ -24,6 +25,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                 $"client-server-application:{channelName}",
                 errorSink,
                 cancellationToken,
+                forceStopToken,
                 DispatchClientServerAsync,
                 RejectClientServerDispatch
             );
@@ -261,7 +263,7 @@ internal sealed class ZLinkChannelReceiveLoop(
         }
     }
 
-    private static async ValueTask<bool> SendOwnedAsync(
+    private static async ValueTask SendOwnedAsync(
         IRouterSocket router,
         RoutingId sourceRid,
         Message message,
@@ -276,11 +278,6 @@ internal sealed class ZLinkChannelReceiveLoop(
                 .Async(cancellationToken)
                 .EnsureAcceptedAsync()
                 .ConfigureAwait(false);
-            return true;
-        }
-        catch
-        {
-            return false;
         }
         finally
         {
@@ -293,7 +290,8 @@ internal sealed class ZLinkChannelReceiveLoop(
         ISubSocket subscriber,
         ZLinkApplicationJobQueue applicationJobQueue,
         IZLinkRuntimeFailureReporter errorSink,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        CancellationToken forceStopToken
     )
     {
         using var receivePoller = ZLinkBackendSocketPoller.Create(subscriber);
@@ -302,6 +300,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                 $"fanout-application:{channelName}",
                 errorSink,
                 cancellationToken,
+                forceStopToken,
                 DispatchFanoutAsync,
                 RejectFanoutDispatch
             );
@@ -393,19 +392,11 @@ internal sealed class ZLinkChannelReceiveLoop(
         Action onActivity,
         Action onProtocolError,
         ZLinkApplicationJobQueue applicationJobQueue,
-        IZLinkRuntimeFailureReporter errorSink,
+        ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork> applicationDispatch,
         CancellationToken cancellationToken
     )
     {
         using var receivePoller = ZLinkBackendSocketPoller.Create(subscriber);
-        await using var applicationDispatch =
-            new ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork>(
-                $"fanout-automatic-application:{channelName}",
-                errorSink,
-                cancellationToken,
-                DispatchFanoutAsync,
-                RejectFanoutDispatch
-            );
         var topicMessagePool = new ZLinkTopicMessageStoragePool();
         TopicMessage? topicMessage = topicMessagePool.Rent();
         try
@@ -549,7 +540,22 @@ internal sealed class ZLinkChannelReceiveLoop(
         ZLinkApplicationJobQueueLease Admission
     );
 
-    private readonly record struct FanoutDispatchWork(
+    internal ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork> CreateFanoutDispatchQueue(
+        string channelName,
+        IZLinkRuntimeFailureReporter errorSink,
+        CancellationToken cancellationToken,
+        CancellationToken forceStopToken
+    ) =>
+        new(
+            $"fanout-application:{channelName}",
+            errorSink,
+            cancellationToken,
+            forceStopToken,
+            DispatchFanoutAsync,
+            RejectFanoutDispatch
+        );
+
+    internal readonly record struct FanoutDispatchWork(
         string ChannelName,
         TopicMessage TopicMessage,
         ZLinkTopicMessageStoragePool TopicMessagePool,

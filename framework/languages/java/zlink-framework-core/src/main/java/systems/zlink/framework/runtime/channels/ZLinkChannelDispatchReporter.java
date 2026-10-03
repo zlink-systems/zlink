@@ -222,7 +222,8 @@ final class ZLinkChannelDispatchReporter {
     static ZLinkDispatchErrorReason reasonFrom(Throwable error) {
         return unwrap(error) instanceof PayloadDecodeDispatchException
                 ? ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED
-                : ZLinkDispatchErrorReason.HANDLER_EXCEPTION;
+                : systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter.reasonFrom(
+                        frameworkErrorKind(error));
     }
 
     static ZLinkFrameworkErrorKind frameworkErrorKind(Throwable error) {
@@ -242,15 +243,7 @@ final class ZLinkChannelDispatchReporter {
 
     static void replyAndClose(
             ZLinkBackendRouterSocket router, ZLinkBackendReceived received, Message reply) {
-        if (received.hasDirectReplyPath()) {
-            replyAndClose(received, reply);
-        } else {
-            replyAndClose(
-                    router,
-                    received.routingId().orElseThrow(),
-                    received.requestSeq().orElseThrow(),
-                    reply);
-        }
+        replyPayloadAndClose(router, received, null, reply);
     }
 
     static void replyAndClose(ZLinkBackendReceived received, Message reply) {

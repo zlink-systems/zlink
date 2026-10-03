@@ -9,7 +9,17 @@ export {
   ZlinkStreamConnectionState
 } from './ZlinkStreamEnums';
 export type { ZlinkStreamCloseReason } from './ZlinkStreamEnums';
-export * from './ZlinkStreamConnectorOptions';
+export type {
+  ZlinkStreamConnectorOptions,
+  ZlinkStreamHeartbeatOptions,
+  ZlinkStreamReconnectOptions,
+  ZlinkStreamPacketNameResolver,
+  ZlinkStreamPayloadCodec,
+  ZlinkStreamCompressionCodec,
+  ZlinkStreamTransportFactory,
+  ZlinkStreamConnection,
+  RequiredZlinkStreamConnectorOptions
+} from './ZlinkStreamConnectorOptions';
 export * from './ZlinkStreamInterfaces';
 export * from './ZlinkStreamMetadata';
 export type {

@@ -88,7 +88,7 @@ public class ZLinkHttpRequestBuilder
     {
         var encoded = ResolveCodecs().Encode(value, typeof(T));
         _body = encoded.Body;
-        _headers["content-type"] = encoded.ContentType;
+        _headers[HttpHeaderLookup.ContentTypeKey] = encoded.ContentType;
         return this;
     }
 
@@ -103,7 +103,7 @@ public class ZLinkHttpRequestBuilder
 
         HttpClientText.RequireNonBlank(contentType, "HTTP request body content type is required");
         _body = Encoding.UTF8.GetBytes(content);
-        _headers["content-type"] = contentType;
+        _headers[HttpHeaderLookup.ContentTypeKey] = contentType;
         return this;
     }
 
@@ -116,7 +116,7 @@ public class ZLinkHttpRequestBuilder
         ArgumentNullException.ThrowIfNull(provider);
         HttpClientText.RequireNonBlank(contentType, "HTTP request body content type is required");
         _bodyProvider = provider;
-        _headers["content-type"] = contentType;
+        _headers[HttpHeaderLookup.ContentTypeKey] = contentType;
         return this;
     }
 
@@ -165,26 +165,38 @@ public class ZLinkHttpRequestBuilder
         return _client ??= _clientFactory!.Build();
     }
 
-    private void ReleaseIfOwned(ZLinkHttpClient client)
+    private ValueTask<T> ExecuteAsync<T>(ZLinkHttpClient client, ValueTask<T> operation)
     {
-        if (_ownsClient)
-            client.Dispose();
+        return _ownsClient ? ExecuteOneShotAsync(operation, client.Dispose) : operation;
+    }
+
+    internal static async ValueTask<T> ExecuteOneShotAsync<T>(ValueTask<T> operation, Action close)
+    {
+        var pending = operation.AsTask();
+        try
+        {
+            return await pending.ConfigureAwait(false);
+        }
+        finally
+        {
+            try
+            {
+                close();
+            }
+            catch (Exception) when (pending.IsFaulted || pending.IsCanceled)
+            {
+                // 요청 실패가 닫기 실패보다 우선한다(HTTP client builder §2).
+            }
+        }
     }
 
     /// <summary>Submits the request and returns the raw response.</summary>
     public async ValueTask<RawHttpResponse> AsyncRaw(CancellationToken cancellationToken = default)
     {
+        var request = MakeRequest(null);
         var client = ResolveClient();
-        try
-        {
-            return await client
-                .Runtime.ExecuteAsync(MakeRequest(null), cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            ReleaseIfOwned(client);
-        }
+        return await ExecuteAsync(client, client.Runtime.ExecuteAsync(request, cancellationToken))
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -198,17 +210,10 @@ public class ZLinkHttpRequestBuilder
     )
     {
         ArgumentNullException.ThrowIfNull(sink);
+        var request = MakeRequest(sink);
         var client = ResolveClient();
-        try
-        {
-            return await client
-                .Runtime.ExecuteAsync(MakeRequest(sink), cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            ReleaseIfOwned(client);
-        }
+        return await ExecuteAsync(client, client.Runtime.ExecuteAsync(request, cancellationToken))
+            .ConfigureAwait(false);
     }
 
     /// <summary>Submits the request and decodes the JSON body to <typeparamref name="T" />.</summary>
@@ -227,24 +232,39 @@ public class ZLinkHttpRequestBuilder
     /// <summary>
     ///     Starts the request and reports completion through a callback. Exactly one of
     ///     <c>error</c> and <c>response</c> is non-null. A server callback is queued as a new turn on
-    ///     the execution line captured when this request was created.
+    ///     the execution line captured when this request was created. Outside an execution turn the
+    ///     callback runs inline, and an exception it throws faults the returned task.
     /// </summary>
-    public void Async<T>(
+    public Task Async<T>(
         ZLinkHttpCallback<T> callback,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(callback);
-        _ = CompleteCallbackAsync(ExecuteTypedAsync<T>(cancellationToken), callback);
+        return CompleteCallbackAsync(ExecuteTypedAsync<T>(cancellationToken), callback);
     }
 
     protected async ValueTask<HttpResponse<T>> ExecuteTypedAsync<T>(
         CancellationToken cancellationToken
     )
     {
+        var request = MakeRequest(null);
+        var client = ResolveClient();
+        return await ExecuteAsync(client, PerformTypedAsync<T>(client, request, cancellationToken))
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask<HttpResponse<T>> PerformTypedAsync<T>(
+        ZLinkHttpClient client,
+        HttpRequestSpec request,
+        CancellationToken cancellationToken
+    )
+    {
         var codecs = ResolveCodecs();
-        var raw = await AsyncRaw(cancellationToken).ConfigureAwait(false);
-        if (raw.Status >= 400)
+        var raw = await client
+            .Runtime.ExecuteAsync(request, cancellationToken)
+            .ConfigureAwait(false);
+        if (raw.Status >= (int)System.Net.HttpStatusCode.BadRequest)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InternalFailure,
                 $"HTTP request failed with status {raw.Status}"
@@ -259,7 +279,10 @@ public class ZLinkHttpRequestBuilder
             }
             else
             {
-                var contentType = HttpHeaderLookup.Find(raw.Headers, "content-type");
+                var contentType = HttpHeaderLookup.Find(
+                    raw.Headers,
+                    HttpHeaderLookup.ContentTypeKey
+                );
                 body =
                     (T?)codecs.Decode(raw.BodyBytes, typeof(T), contentType)
                     ?? throw new InvalidOperationException("HTTP response body decoded to null");
@@ -309,6 +332,12 @@ public class ZLinkHttpRequestBuilder
             error = exception;
         }
 
+        if (_executionTurn is null)
+        {
+            callback(error, response);
+            return;
+        }
+
         void Complete()
         {
             try
@@ -317,21 +346,18 @@ public class ZLinkHttpRequestBuilder
             }
             catch (Exception exception)
             {
-                _executionTurn?.ReportError(exception);
+                _executionTurn.ReportError(exception);
             }
         }
 
-        if (_executionTurn is null)
-            Complete();
-        else
-            try
-            {
-                _executionTurn.Post(Complete);
-            }
-            catch (Exception exception)
-            {
-                _executionTurn.ReportError(exception);
-            }
+        try
+        {
+            _executionTurn.Post(Complete);
+        }
+        catch (Exception exception)
+        {
+            _executionTurn.ReportError(exception);
+        }
     }
 
     private HttpRequestSpec MakeRequest(Action<ReadOnlyMemory<byte>>? sink)
@@ -390,14 +416,14 @@ public class ZLinkHttpRequestBuilder
 
         if (_form.Count > 0)
         {
-            headers["content-type"] = "application/x-www-form-urlencoded";
+            headers[HttpHeaderLookup.ContentTypeKey] = FormContentType;
             return (Encoding.UTF8.GetBytes(EncodeFormBody()), headers);
         }
 
         if (_multipart.Count > 0)
         {
             var boundary = HttpClientText.MakeMultipartBoundary();
-            headers["content-type"] = "multipart/form-data; boundary=" + boundary;
+            headers[HttpHeaderLookup.ContentTypeKey] = MultipartContentTypePrefix + boundary;
             return (Encoding.UTF8.GetBytes(EncodeMultipartBody(boundary)), headers);
         }
 
@@ -429,24 +455,39 @@ public class ZLinkHttpRequestBuilder
         return encoded.ToString();
     }
 
+    private const string FormContentType = "application/x-www-form-urlencoded";
+    private const string MultipartContentTypePrefix = "multipart/form-data; boundary=";
+    private const string MultipartDelimiterPrefix = "--";
+    private const string MimeLineEnd = "\r\n";
+    private const string FormDataDispositionPrefix = "Content-Disposition: form-data; name=\"";
+    private const string FilenameParameterPrefix = "; filename=\"";
+
     private string EncodeMultipartBody(string boundary)
     {
         var encoded = new StringBuilder();
         foreach (var part in _multipart)
         {
-            encoded.Append("--").Append(boundary).Append("\r\n");
-            encoded.Append("Content-Disposition: form-data; name=\"").Append(part.Name).Append('"');
+            encoded.Append(MultipartDelimiterPrefix).Append(boundary).Append(MimeLineEnd);
+            encoded.Append(FormDataDispositionPrefix).Append(part.Name).Append('"');
             if (part.Filename.Length > 0)
-                encoded.Append("; filename=\"").Append(part.Filename).Append('"');
+                encoded.Append(FilenameParameterPrefix).Append(part.Filename).Append('"');
 
-            encoded.Append("\r\n");
+            encoded.Append(MimeLineEnd);
             if (part.ContentType.Length > 0)
-                encoded.Append("Content-Type: ").Append(part.ContentType).Append("\r\n");
+                encoded
+                    .Append(HttpHeaderLookup.ContentType)
+                    .Append(": ")
+                    .Append(part.ContentType)
+                    .Append(MimeLineEnd);
 
-            encoded.Append("\r\n").Append(part.Content).Append("\r\n");
+            encoded.Append(MimeLineEnd).Append(part.Content).Append(MimeLineEnd);
         }
 
-        encoded.Append("--").Append(boundary).Append("--\r\n");
+        encoded
+            .Append(MultipartDelimiterPrefix)
+            .Append(boundary)
+            .Append(MultipartDelimiterPrefix)
+            .Append(MimeLineEnd);
         return encoded.ToString();
     }
 
@@ -543,7 +584,7 @@ public sealed class ZLinkHttpServerRequestBuilder : ZLinkHttpRequestBuilder
     /// </summary>
     public ValueTask<HttpResponse<T>> Yield<T>(CancellationToken cancellationToken = default)
     {
-        var turn = RequireExecutionTurn("Yield");
+        var turn = RequireExecutionTurn(nameof(Yield));
         return turn.YieldAsync(Async<T>, cancellationToken);
     }
 }

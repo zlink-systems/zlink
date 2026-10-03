@@ -147,6 +147,7 @@ internal sealed class ZLinkLocationAutoConnectHost
                     nameof(spot.SpotMeshChannelName)
                 );
                 AddLoop(
+                    state.ErrorSink,
                     ZLinkLocationAutoConnectType.SpotMesh,
                     meshName,
                     ZLinkLocationRole.Spot,
@@ -502,6 +503,7 @@ internal sealed class ZLinkLocationAutoConnectHost
     }
 
     private void AddLoop(
+        IZLinkRuntimeFailureReporter errorSink,
         ZLinkLocationAutoConnectType type,
         ZLinkMeshName meshName,
         ZLinkLocationRole role,
@@ -516,7 +518,7 @@ internal sealed class ZLinkLocationAutoConnectHost
         long applicationVersion = 0,
         string? maintenanceWave = null,
         string? entrySpotId = null,
-        int placementWeight = 100,
+        int placementWeight = ZLinkSpotNodeRegistration.DefaultPlacementWeight,
         ZLinkPlacementCapacity? capacity = null,
         ZLinkActivationConcurrency? activationConcurrency = null,
         IReadOnlyDictionary<string, int>? channelWeights = null,
@@ -577,7 +579,11 @@ internal sealed class ZLinkLocationAutoConnectHost
                                 Array.Empty<ZLinkSpotTypeCapacity>()
                             ),
                         ActivationConcurrency =
-                            activationConcurrency ?? new ZLinkActivationConcurrency(0, 128),
+                            activationConcurrency
+                            ?? new ZLinkActivationConcurrency(
+                                0,
+                                ZLinkSpotNodeRegistration.DefaultActivationConcurrencyLimit
+                            ),
                     }
                     : null
             );
@@ -591,13 +597,15 @@ internal sealed class ZLinkLocationAutoConnectHost
             _time,
             retainRemovedMembers,
             initiallyPublished: startupState is not null,
-            initialStoreGeneration: startupState?.StoreGeneration ?? 0
+            initialStoreGeneration: startupState?.StoreGeneration ?? 0,
+            errorSink: errorSink
         );
         _reconcilers.Add(reconciler);
         _localReconcilers[(type, meshName, role)] = reconciler;
         if (type is ZLinkLocationAutoConnectType.RouteMesh or ZLinkLocationAutoConnectType.SpotMesh)
             _routeMeshReconcilers[meshName] = reconciler;
         var loop = new ZLinkAutoConnectLoop(
+            errorSink,
             reconciler,
             local,
             _options,

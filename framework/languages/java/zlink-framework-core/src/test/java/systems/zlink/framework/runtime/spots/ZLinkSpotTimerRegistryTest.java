@@ -17,6 +17,8 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwn
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkTimer;
+import systems.zlink.framework.spots.ZLinkTimerOptions;
+import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 
 import java.time.Duration;
@@ -38,6 +40,102 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 final class ZLinkSpotTimerRegistryTest {
+    @Test
+    void cancelWhileOwnerIsBusyPreventsHandlerAfterGateReacquisition() throws Exception {
+        var scheduledTick = new AtomicReference<Runnable>();
+        var scheduler =
+                new ScheduledThreadPoolExecutor(1) {
+                    @Override
+                    public ScheduledFuture<?> schedule(
+                            Runnable command, long delay, TimeUnit unit) {
+                        scheduledTick.set(command);
+                        return super.schedule(() -> {}, 1, TimeUnit.HOURS);
+                    }
+                };
+        var queue = new systems.zlink.framework.execution.ZLinkSerialExecutionQueue();
+        var releaseOwner = new CompletableFuture<Void>();
+        var ownerEntered = new CompletableFuture<Void>();
+        var attempted = new CompletableFuture<Void>();
+        var releaseGate = new CompletableFuture<Void>();
+        var gateEntered = new CompletableFuture<Void>();
+        var handled = new AtomicBoolean();
+        var registryRef = new AtomicReference<ZLinkSpotTimerRegistry>();
+        var registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        scheduler,
+                        ignored -> new PreviousTimerHandler(handled),
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) -> {
+                            try {
+                                var field =
+                                        ZLinkSpotTimerRegistry.class.getDeclaredField("stateLane");
+                                field.setAccessible(true);
+                                var lane =
+                                        (systems.zlink.framework.runtime.internal.execution
+                                                        .ZLinkStateLane)
+                                                field.get(registryRef.get());
+                                lane.runAsync(
+                                        () -> {
+                                            ownerEntered.complete(null);
+                                            releaseOwner.join();
+                                            return null;
+                                        });
+                                ownerEntered.get(3, TimeUnit.SECONDS);
+                            } catch (ReflectiveOperationException | TimeoutException failure) {
+                                return CompletableFuture.failedFuture(failure);
+                            } catch (ExecutionException failure) {
+                                return CompletableFuture.failedFuture(failure.getCause());
+                            } catch (InterruptedException failure) {
+                                Thread.currentThread().interrupt();
+                                return CompletableFuture.failedFuture(failure);
+                            }
+                            return queue.enqueue(
+                                    () -> {
+                                        var completion = operation.get();
+                                        attempted.complete(null);
+                                        return completion;
+                                    },
+                                    null);
+                        });
+        registryRef.set(registry);
+        registry.setSpot(new TestSpot());
+        try {
+            var timer =
+                    registry.add("timer", Duration.ofMillis(1), PreviousTimerHandler.class, null)
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            CompletableFuture.runAsync(scheduledTick.get());
+            attempted.get(3, TimeUnit.SECONDS);
+            var other =
+                    queue.enqueue(
+                            () -> {
+                                gateEntered.complete(null);
+                                return releaseGate;
+                            },
+                            null);
+            gateEntered.get(3, TimeUnit.SECONDS);
+            var cancelled = timer.cancel();
+            releaseOwner.complete(null);
+            cancelled.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertFalse(handled.get());
+            releaseGate.complete(null);
+            other.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            assertFalse(handled.get());
+        } finally {
+            releaseOwner.complete(null);
+            releaseGate.complete(null);
+            registry.closeAsync().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            scheduler.shutdownNow();
+            queue.close();
+        }
+    }
+
     @Test
     void emptyCanonicalTimerEnvelopeRestoresAsNoTimers() {
         var decoded =
@@ -86,7 +184,9 @@ final class ZLinkSpotTimerRegistryTest {
         registry.setSpot(new TestSpot());
 
         try {
-            registry.add("timer", Duration.ofMillis(1), CountingTimerHandler.class, null);
+            registry.add("timer", Duration.ofMillis(1), CountingTimerHandler.class, null)
+                    .toCompletableFuture()
+                    .join();
             assertEquals(1, preparations.get());
             assertTrue(handled.await(2, TimeUnit.SECONDS));
             assertEquals(1, creates.get());
@@ -383,8 +483,12 @@ final class ZLinkSpotTimerRegistryTest {
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
         try {
-            registry.add("z-timer", Duration.ofHours(1), PreviousTimerHandler.class, null);
-            registry.add("a-timer", Duration.ofHours(1), PreviousTimerHandler.class, null);
+            registry.add("z-timer", Duration.ofHours(1), PreviousTimerHandler.class, null)
+                    .toCompletableFuture()
+                    .join();
+            registry.add("a-timer", Duration.ofHours(1), PreviousTimerHandler.class, null)
+                    .toCompletableFuture()
+                    .join();
             byte[] first = ZLinkSpotTimerRelocationEnvelope.encode(registry.freeze());
             byte[] second =
                     ZLinkSpotTimerRelocationEnvelope.encode(
@@ -430,6 +534,134 @@ final class ZLinkSpotTimerRegistryTest {
             assertTrue(handled.await(2, TimeUnit.SECONDS));
             assertFalse(timer.isDisposed());
         } finally {
+            registry.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void dispatchObserverSeesFinalizedTimerBeforeEnqueueReturns() throws Exception {
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        AtomicReference<ZLinkSpotTimerRegistry> owner = new AtomicReference<>();
+        CompletableFuture<ZLinkSpotTimerRegistry.FrozenTimers> frozen = new CompletableFuture<>();
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> new PreviousTimerHandler(new AtomicBoolean()),
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) ->
+                                operation
+                                        .get()
+                                        .thenRun(() -> frozen.complete(owner.get().freeze())));
+        owner.set(registry);
+        registry.setSpot(new TestSpot());
+        try {
+            registry.add("timer", Duration.ofMillis(1), PreviousTimerHandler.class, null);
+            var timers = frozen.get(2, TimeUnit.SECONDS).timers();
+            assertEquals(1, timers.size());
+            assertTrue(timers.getFirst().nextScheduledAt().isPresent());
+            assertTrue(timers.getFirst().pendingTick().isEmpty());
+        } finally {
+            registry.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void failureObserverCanFreezeTheNextLogicalTimerAction() throws Exception {
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        CompletableFuture<ZLinkSpotTimerRegistry.FrozenTimers> frozen = new CompletableFuture<>();
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> new ThrowingTimerHandler(new AtomicInteger()),
+                        List.of(),
+                        null,
+                        "freeze-observer",
+                        (timerName, operation) -> operation.get());
+        registry.setSpot(new TestSpot());
+        java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
+        java.util.logging.Handler observer =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (!record.getMessage().contains("source=freeze-observer")) return;
+                        try {
+                            frozen.complete(registry.freeze());
+                        } catch (RuntimeException failure) {
+                            frozen.completeExceptionally(failure);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(observer);
+        try {
+            registry.add("timer", Duration.ofMillis(1), ThrowingTimerHandler.class, null);
+            var timers = frozen.get(2, TimeUnit.SECONDS).timers();
+            assertEquals(1, timers.size());
+            assertTrue(timers.getFirst().nextScheduledAt().isPresent());
+            assertTrue(timers.getFirst().pendingTick().isEmpty());
+        } finally {
+            logger.removeHandler(observer);
+            registry.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void failureObserverSeesStoppedTimerRemoved() throws Exception {
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        CompletableFuture<ZLinkSpotTimerRegistry.FrozenTimers> frozen = new CompletableFuture<>();
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> new ThrowingTimerHandler(new AtomicInteger()),
+                        List.of(),
+                        null,
+                        "stop-freeze-observer",
+                        (timerName, operation) -> operation.get());
+        registry.setSpot(new TestSpot());
+        java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
+        java.util.logging.Handler observer =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (!record.getMessage().contains("source=stop-freeze-observer")) return;
+                        try {
+                            frozen.complete(registry.freeze());
+                        } catch (RuntimeException failure) {
+                            frozen.completeExceptionally(failure);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(observer);
+        try {
+            registry.add(
+                    "timer",
+                    Duration.ofMillis(1),
+                    ThrowingTimerHandler.class,
+                    new ZLinkTimerOptions(ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, true));
+            assertTrue(frozen.get(2, TimeUnit.SECONDS).timers().isEmpty());
+        } finally {
+            logger.removeHandler(observer);
             registry.close();
             executor.shutdownNow();
         }

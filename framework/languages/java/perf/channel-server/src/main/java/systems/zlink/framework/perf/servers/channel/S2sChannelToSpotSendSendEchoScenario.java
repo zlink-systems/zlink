@@ -72,7 +72,10 @@ public final class S2sChannelToSpotSendSendEchoScenario {
 
     public CompletionStage<Void> prepare() {
         int timeoutMs = config.workload().setupTimeoutMs();
-        return Polling.until(() -> meshRuntime.snapshot(config.meshName()).isReady(), 10, timeoutMs)
+        return Polling.until(() -> {
+            var mesh = meshRuntime.snapshot(config.meshName());
+            return mesh.isReady() && mesh.readyPeerCount() > 0; // a ready Object Server peer, not only a ready local node
+        }, 10, timeoutMs)
                 .thenCompose(ignored -> SpotSetup.findAll(manager, config))
                 .thenCompose(found -> {
                     sequences = new AtomicLongArray(config.workload().logicalStreams());
@@ -126,7 +129,13 @@ public final class S2sChannelToSpotSendSendEchoScenario {
                 return Optional.empty();
             }
             PerfEchoRequest sent = request.withSentTicks(started);
-            SendSendCorrelation.Entry entry = correlations.register(sent, started); // §13: register immediately before the first public send
+            SendSendCorrelation.Entry entry;
+            try {
+                entry = correlations.register(sent, started); // §13: register immediately before the first public send
+            } catch (RuntimeException error) {
+                measurement.completeOperation(started, error);
+                return Optional.empty();
+            }
             CompletionStage<Void> first;
             try {
                 first = spots.sendToSpot(spotId, sent).submit();
@@ -139,7 +148,8 @@ public final class S2sChannelToSpotSendSendEchoScenario {
             }).thenCompose(result -> result);
             return Optional.of(new CompletionLoop.Iteration<>(operation, (result, error) -> {
                 if (error != null) {
-                    measurement.completeOperation(started, error, null);
+                    measurement.completeOperation(started, error);
+                    measurement.recordDiagnostic(error);
                 } else {
                     measurement.completeOperation(started, result.error(), result.completedTicks());
                 }

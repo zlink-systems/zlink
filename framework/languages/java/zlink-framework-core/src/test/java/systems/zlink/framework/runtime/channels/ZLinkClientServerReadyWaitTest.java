@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import static systems.zlink.framework.runtime.channels.ZLinkChannelSubmissionAssertions.assertSubmitFailure;
+
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -83,8 +85,13 @@ final class ZLinkClientServerReadyWaitTest {
             long started = fixture.time.nanoTime();
             assertEquals(0, fixture.businessRequests.get());
 
-            assertDeadlineExceeded(call);
-            assertEquals(started + Duration.ofSeconds(1).toNanos(), fixture.time.nanoTime());
+            CompletableFuture<Reply> reply = call.submit(Reply.class).toCompletableFuture();
+            assertFalse(reply.isDone(), "admission must wait until its family deadline");
+            assertDeadlineExceeded(reply);
+            // 02-channel-transport/02-channel-messaging.ko.md:172: admission uses its own deadline.
+            // No business request starts, so the independent call clock and its full timeout budget
+            // are untouched.
+            assertEquals(started, fixture.time.nanoTime());
             assertEquals(0, fixture.businessRequests.get());
         }
     }
@@ -97,9 +104,15 @@ final class ZLinkClientServerReadyWaitTest {
                             .requestToChannel("orders", new Request("late"))
                             .timeout(Duration.ofMillis(400));
             long started = fixture.time.nanoTime();
-            fixture.time.schedule(fixture::admit, 150, TimeUnit.MILLISECONDS);
+            // 02-channel-transport/02-channel-messaging.ko.md:172: readiness waits within a
+            // separate admission deadline.
+            CompletableFuture<Reply> reply = call.submit(Reply.class).toCompletableFuture();
+            assertFalse(reply.isDone());
+            assertEquals(0, fixture.businessRequests.get());
+            fixture.time.advanceBy(Duration.ofMillis(150).toNanos());
+            fixture.admit();
 
-            assertEquals(new Reply("reply"), call.submit(Reply.class).toCompletableFuture().join());
+            assertEquals(new Reply("reply"), reply.join());
             assertEquals(1, fixture.businessRequests.get());
             assertEquals(started + Duration.ofMillis(150).toNanos(), fixture.requestStarted);
             assertEquals(Duration.ofMillis(400), fixture.requestTimeout.get());
@@ -118,9 +131,15 @@ final class ZLinkClientServerReadyWaitTest {
                             .requestToChannel("orders", new Request("pending"))
                             .timeout(Duration.ofMillis(400));
             long started = fixture.time.nanoTime();
-            fixture.time.schedule(fixture::admit, 150, TimeUnit.MILLISECONDS);
 
+            // 02-channel-transport/02-channel-messaging.ko.md:172: readiness waits within a
+            // separate admission deadline.
             CompletableFuture<Reply> reply = call.submit(Reply.class).toCompletableFuture();
+            assertFalse(reply.isDone());
+            assertEquals(0, fixture.businessRequests.get());
+            fixture.time.advanceBy(Duration.ofMillis(150).toNanos());
+            fixture.admit();
+            assertTrue(fixture.businessRequestStarted.await(1, TimeUnit.SECONDS));
             assertEquals(1, fixture.businessRequests.get());
             assertEquals(started + Duration.ofMillis(150).toNanos(), fixture.requestStarted);
             assertEquals(Duration.ofMillis(400), fixture.requestTimeout.get());
@@ -149,8 +168,13 @@ final class ZLinkClientServerReadyWaitTest {
                             .requestToChannel("orders", new Request("cap"))
                             .timeout(Duration.ofSeconds(8));
             long started = fixture.time.nanoTime();
-            assertDeadlineExceeded(call);
-            assertEquals(started + Duration.ofSeconds(1).toNanos(), fixture.time.nanoTime());
+            CompletableFuture<Reply> reply = call.submit(Reply.class).toCompletableFuture();
+            assertFalse(reply.isDone(), "admission must wait until its family deadline");
+            assertDeadlineExceeded(reply);
+            // 02-channel-transport/02-channel-messaging.ko.md:172: admission uses its own deadline.
+            // No business request starts, so the independent call clock and its full timeout budget
+            // are untouched.
+            assertEquals(started, fixture.time.nanoTime());
             assertEquals(0, fixture.businessRequests.get());
         }
     }
@@ -163,9 +187,15 @@ final class ZLinkClientServerReadyWaitTest {
                             .requestToChannel("orders", new Request("cap-ready"))
                             .timeout(Duration.ofSeconds(8));
             long started = fixture.time.nanoTime();
-            fixture.time.schedule(fixture::admit, 500, TimeUnit.MILLISECONDS);
+            // 02-channel-transport/02-channel-messaging.ko.md:172: readiness waits within a
+            // separate admission deadline.
+            CompletableFuture<Reply> reply = call.submit(Reply.class).toCompletableFuture();
+            assertFalse(reply.isDone());
+            assertEquals(0, fixture.businessRequests.get());
+            fixture.time.advanceBy(Duration.ofMillis(500).toNanos());
+            fixture.admit();
 
-            assertEquals(new Reply("reply"), call.submit(Reply.class).toCompletableFuture().join());
+            assertEquals(new Reply("reply"), reply.join());
             assertEquals(1, fixture.businessRequests.get());
             assertEquals(started + Duration.ofMillis(500).toNanos(), fixture.requestStarted);
             assertEquals(Duration.ofSeconds(8), fixture.requestTimeout.get());
@@ -179,17 +209,16 @@ final class ZLinkClientServerReadyWaitTest {
     void noReadyServerSendEndsAsDeadlineExceededAtFamilyTimeout() throws Exception {
         try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
             long started = fixture.time.nanoTime();
-            var failure =
-                    assertThrows(
-                            ZLinkFrameworkException.class,
-                            () ->
-                                    fixture.runtime
-                                            .sendToChannel("orders", new Request("cold"))
-                                            .submit()
-                                            .toCompletableFuture()
-                                            .join());
+            var admission = fixture.runtime.sendToChannel("orders", new Request("cold")).submit();
+            assertFalse(
+                    admission.toCompletableFuture().isDone(),
+                    "send admission must wait until its family deadline");
+            var failure = assertSubmitFailure(ZLinkFrameworkException.class, () -> admission);
             assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failure.kind());
-            assertEquals(started + Duration.ofSeconds(1).toNanos(), fixture.time.nanoTime());
+            // 02-channel-transport/02-channel-messaging.ko.md:172: admission uses its own deadline.
+            // No business request starts, so the independent call clock and its full timeout budget
+            // are untouched.
+            assertEquals(started, fixture.time.nanoTime());
             assertEquals(0, fixture.businessRequests.get());
         }
     }
@@ -199,7 +228,7 @@ final class ZLinkClientServerReadyWaitTest {
         try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
             long started = fixture.time.nanoTime();
             var requestFailure =
-                    assertThrows(
+                    assertSubmitFailure(
                             systems.zlink.framework.errors.ZLinkConfigurationException.class,
                             () ->
                                     fixture.runtime
@@ -207,7 +236,7 @@ final class ZLinkClientServerReadyWaitTest {
                                             .submit(Reply.class));
             assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, requestFailure.kind());
             var sendFailure =
-                    assertThrows(
+                    assertSubmitFailure(
                             systems.zlink.framework.errors.ZLinkConfigurationException.class,
                             () ->
                                     fixture.runtime
@@ -243,15 +272,13 @@ final class ZLinkClientServerReadyWaitTest {
                             assertInstanceOf(ZLinkFrameworkException.class, failure.getCause())
                                     .kind());
                     var sendFailure =
-                            assertThrows(
+                            assertSubmitFailure(
                                     ZLinkFrameworkException.class,
                                     () ->
                                             fixture.runtime
                                                     .sendToChannel(
                                                             "orders", new Request("ineligible"))
-                                                    .submit()
-                                                    .toCompletableFuture()
-                                                    .join());
+                                                    .submit());
                     assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, sendFailure.kind());
                     assertEquals(started, fixture.time.nanoTime());
                     assertEquals(0, fixture.businessRequests.get());
@@ -260,11 +287,8 @@ final class ZLinkClientServerReadyWaitTest {
         }
     }
 
-    private static void assertDeadlineExceeded(ZLinkRequestCall call) {
-        CompletionException failure =
-                assertThrows(
-                        CompletionException.class,
-                        () -> call.submit(Reply.class).toCompletableFuture().join());
+    private static void assertDeadlineExceeded(CompletableFuture<Reply> reply) {
+        CompletionException failure = assertThrows(CompletionException.class, reply::join);
         assertEquals(
                 ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                 assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
@@ -277,7 +301,18 @@ final class ZLinkClientServerReadyWaitTest {
     private static final class Fixture implements AutoCloseable {
         private final ManualTime time = new ManualTime();
         private final CountDownLatch admissionListening = new CountDownLatch(1);
-        private final CompletableFuture<ZLinkBackendReceived> admission = new CompletableFuture<>();
+        private final CompletableFuture<ZLinkBackendReceived> admission =
+                new CompletableFuture<>() {
+                    @Override
+                    public CompletableFuture<ZLinkBackendReceived> whenComplete(
+                            java.util.function.BiConsumer<
+                                            ? super ZLinkBackendReceived, ? super Throwable>
+                                    action) {
+                        var result = super.whenComplete(action);
+                        admissionListening.countDown();
+                        return result;
+                    }
+                };
         private final CompletableFuture<ZLinkBackendReceived> secondAdmission =
                 new CompletableFuture<>() {
                     @Override
@@ -295,6 +330,7 @@ final class ZLinkClientServerReadyWaitTest {
         private final AtomicInteger connects = new AtomicInteger();
         private final AtomicInteger disconnects = new AtomicInteger();
         private final AtomicInteger businessRequests = new AtomicInteger();
+        private final CountDownLatch businessRequestStarted = new CountDownLatch(1);
         private final AtomicReference<Duration> requestTimeout = new AtomicReference<>();
         private volatile long requestStarted;
         private volatile boolean replyImmediately = true;
@@ -332,6 +368,7 @@ final class ZLinkClientServerReadyWaitTest {
                                                     requestStarted = time.nanoTime();
                                                     requestTimeout.set((Duration) args[1]);
                                                     businessRequests.incrementAndGet();
+                                                    businessRequestStarted.countDown();
                                                     yield replyImmediately
                                                             ? CompletableFuture.completedFuture(
                                                                     received(
@@ -421,9 +458,8 @@ final class ZLinkClientServerReadyWaitTest {
                                 @Override
                                 public boolean waitForReadable(Duration timeout) {
                                     try {
-                                        return readable.tryAcquire(
-                                                        timeout.toMillis(), TimeUnit.MILLISECONDS)
-                                                && !closed;
+                                        readable.acquire();
+                                        return !closed;
                                     } catch (InterruptedException interrupted) {
                                         Thread.currentThread().interrupt();
                                         return false;
@@ -433,7 +469,6 @@ final class ZLinkClientServerReadyWaitTest {
                                 @Override
                                 public ZLinkBackendSocketMonitorEvent recvDontWait() {
                                     if (emitted) {
-                                        admissionListening.countDown();
                                         return null;
                                     }
                                     emitted = true;
@@ -495,7 +530,7 @@ final class ZLinkClientServerReadyWaitTest {
                             time::nanoTime,
                             time::advanceBy,
                             time);
-            // The next monitor receive follows registration of the admission callback.
+            // The first admission callback is installed before the fixture exposes its runtime.
             assertTrue(admissionListening.await(1, TimeUnit.SECONDS));
         }
 
@@ -504,7 +539,7 @@ final class ZLinkClientServerReadyWaitTest {
         }
 
         private void admitWithEligibility(int weight, ZLinkFrameworkRuntimeState state) {
-            (helloRequests.get() == 1 ? admission : secondAdmission)
+            (admission.isCompletedExceptionally() ? secondAdmission : admission)
                     .complete(
                             received(
                                     Message.from(

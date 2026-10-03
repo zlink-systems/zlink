@@ -14,6 +14,110 @@ import java.util.function.Supplier;
 
 /** Internal, backend-neutral metric hook used by runtime hot paths. */
 public final class ZLinkRuntimeMetrics {
+    public static final String SPOT_COUNT_NAME = "zlink.spot.count";
+    public static final String SPOT_CREATED_NAME = "zlink.spot.created";
+    public static final String SPOT_CLOSED_NAME = "zlink.spot.closed";
+    public static final String DRAIN_ACTORS_HANDED_OFF_NAME = "zlink.drain.actors.handed_off";
+
+    public enum Unit {
+        SECONDS("s"),
+        BYTES("By"),
+        REQUEST("{request}"),
+        MESSAGE("{message}"),
+        FAILURE("{failure}"),
+        PEER("{peer}"),
+        JOB("{job}"),
+        MEMBER("{member}"),
+        PPM("{ppm}"),
+        WAITER("{waiter}"),
+        WAIT("{wait}"),
+        STATE("{state}"),
+        TRANSITION("{transition}");
+
+        private final String wire;
+
+        Unit(String wire) {
+            this.wire = wire;
+        }
+
+        public String wire() {
+            return wire;
+        }
+    }
+
+    public enum Metric {
+        REQUEST_DURATION("zlink.mesh_node.request.duration", Kind.HISTOGRAM, Unit.SECONDS),
+        REQUEST_TIMEOUTS("zlink.mesh_node.request.timeouts", Kind.COUNTER, Unit.REQUEST),
+        MESSAGES_DROPPED("zlink.mesh_node.messages.dropped", Kind.COUNTER, Unit.MESSAGE),
+        CHANNEL_SELECTION_FAILURES(
+                "zlink.mesh_node.channel.selection_failures", Kind.COUNTER, Unit.FAILURE);
+
+        public enum Kind {
+            HISTOGRAM,
+            COUNTER
+        }
+
+        private final String metricName;
+        private final Kind kind;
+        private final Unit unit;
+
+        Metric(String metricName, Kind kind, Unit unit) {
+            this.metricName = metricName;
+            this.kind = kind;
+            this.unit = unit;
+        }
+
+        public String metricName() {
+            return metricName;
+        }
+
+        public Kind kind() {
+            return kind;
+        }
+
+        public Unit unit() {
+            return unit;
+        }
+
+        public static Metric decode(String name) {
+            if (REQUEST_DURATION.metricName.equals(name)) {
+                return REQUEST_DURATION;
+            }
+            if (REQUEST_TIMEOUTS.metricName.equals(name)) {
+                return REQUEST_TIMEOUTS;
+            }
+            if (MESSAGES_DROPPED.metricName.equals(name)) {
+                return MESSAGES_DROPPED;
+            }
+            if (CHANNEL_SELECTION_FAILURES.metricName.equals(name)) {
+                return CHANNEL_SELECTION_FAILURES;
+            }
+            return null;
+        }
+    }
+
+    public enum Tag {
+        KIND("kind"),
+        MESH_NAME("mesh_name"),
+        SURFACE("surface"),
+        STATE("state"),
+        REASON("reason"),
+        OUTCOME("outcome"),
+        SOURCE("source"),
+        CHANNEL_NAME("channel_name"),
+        MESSAGE_KIND("message_kind");
+        private final String wire;
+
+        Tag(String wire) {
+            this.wire = wire;
+        }
+
+        public String wire() {
+            return wire;
+        }
+    }
+
+    public static final String REQUEST_INFLIGHT_NAME = "zlink.mesh_node.requests.inflight";
     private static final Sink NOOP = new Sink() {};
     private static volatile Sink sink = NOOP;
     private static final AtomicReference<Supplier<ZLinkHostCapacityStatus>> HOST_CAPACITY_SOURCE =

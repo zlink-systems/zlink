@@ -1,42 +1,57 @@
+import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  internalFrameworkErrorKind
-} from '../framework-errors-internal';
+  type ActorRef,
+  type RoutingId,
+  type ZLinkActorClient,
+  type ZLinkActorRequestCall,
+  type ZLinkActorSendCall,
+  type ZLinkMessageSerializer,
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException,
+  ZLinkSpotKind
+} from '../../contracts';
+
+import { ZLINK_MAX_ACTOR_ID_BYTES } from '../../contracts/Common/CoreTypes';
+import type { Message } from '../../contracts/Common/Message';
+import { awaitWithAbort, throwIfAborted } from '../abort';
+import {
+  type ZLinkBackendActorRef,
+  type ZLinkBackendMeshNode,
+  type ZLinkMeshCompletionTable,
+  closeMeshCompletion
+} from '../backend';
+
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import {
+  isZLinkBackendResultError,
   RequestResult,
   SubmitResult,
-  isZLinkBackendResultError,
   ZLINK_BACKEND_SEND_NONE
 } from '../backend/runtime-values';
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkActorClient,
-  ZLinkActorRequestCall,
-  ZLinkActorSendCall,
-  ZLinkMessageSerializer
-} from '../../contracts';
-import { ZLinkSpotKind } from '../../contracts';
-import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
+import { ZLinkConfigurationException } from '../configuration';
 import {
+  captureZLinkSpotSerialTurn,
+  currentZLinkSpotSerialSourceId,
+  requireZLinkYieldTurn,
+  type ZLinkSpotSerialTurn
+} from '../execution';
+import { remainingActorRequestTimeout, waitActorReply } from './actor-request-deadline';
+import {
+  createInternalFrameworkException,
+  internalFrameworkErrorKind,
+  internalFrameworkErrorKindFromWireFailureCode,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import type { ZLinkResolvedActorRoute, ZLinkStoreLocationResolvers } from '../locations';
+import { resolveFrameworkPacketName } from '../messaging/packet-name';
+import { decodeFrameworkPayloadMessage, encodeFrameworkPayload } from '../messaging/payload-codec';
+import {
+  classifySubmitResult,
   requireOneWayCompletion,
   throwAlreadySubmitted,
-  classifySubmitResult,
   ZLinkSubmitStatus,
   type ZLinkSubmitResult
 } from '../messaging/submission-result';
-import type { Message } from '../../contracts/Common/Message';
-import type {
-  ZLinkBackendActorRef,
-  ZLinkBackendMeshNode,
-  ZLinkMeshCompletionTable
-} from '../backend';
-import { closeMeshCompletion } from '../backend';
-import { awaitWithAbort, throwIfAborted } from '../abort';
-import { encodeFrameworkPayload, decodeFrameworkPayloadMessage } from '../messaging/payload-codec';
-import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import {
   actorRequestDeadlineMetadata,
   decodeStreamHeader,
@@ -46,11 +61,7 @@ import {
   ZLinkStreamHeaderFlags,
   ZLinkStreamMessageKind
 } from '../streams/protocol';
-import type { ZLinkStoreLocationResolvers } from '../locations';
-import type { ZLinkResolvedActorRoute } from '../locations';
-import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
-import { encodeRemoteActorPacketRelayPayload } from './actor-packet-relay-wire';
-import { requestRoutedJsonReply } from './actor-routed-json-request';
+import { currentZLinkActorExecution } from './actor-execution-context';
 import {
   attachActorMessageFollowContext,
   createInitialActorMessageFollowContext,
@@ -58,13 +69,11 @@ import {
   type ZLinkActorMessageFollowContext
 } from './actor-message-follow-context';
 import {
-  captureZLinkSpotSerialTurn,
-  currentZLinkSpotSerialSourceId,
-  requireZLinkYieldTurn,
-  type ZLinkSpotSerialTurn
-} from '../execution';
-import { ZLinkConfigurationException } from '../configuration';
-import { currentZLinkActorExecution } from './actor-execution-context';
+  encodeRemoteActorPacketRelayPayload,
+  ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
+} from './actor-packet-relay-wire';
+import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
+import { requestRoutedJsonReply } from './actor-routed-json-request';
 
 export interface ZLinkActorClientOptions {
   readonly nodeProvider: (meshName: string) => ZLinkBackendMeshNode | undefined;
@@ -182,7 +191,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
             returnResponse: false,
             messageFollowContext: messageFollow
           }),
-          { packetName: '__zlink.actor.packet.relay' }
+          { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET }
         );
         return { status: ZLinkSubmitStatus.Submitted };
       }
@@ -215,7 +224,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       effectiveTimeoutMs === undefined ? undefined : performance.now() + effectiveTimeoutMs;
     const deadlineUnixMs =
       effectiveTimeoutMs === undefined ? undefined : Date.now() + effectiveTimeoutMs;
-    const route = await this.resolveActorRoute(actorId, signal);
+    const route = await this.resolveActorRoute(actorId, signal, deadlineMs);
     if (
       waitPolicy === 'async' &&
       sourceSpotId !== undefined &&
@@ -249,10 +258,13 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     );
     const routedActor = attachActorMessageFollowContext(actor, messageFollow);
     try {
+      const delivery = this.options
+        .transportDeliveryGate?.()
+        ?.waitBeforeSubmit(actorId, 'request', signal);
       const submissionCopies =
-        (await this.options
-          .transportDeliveryGate?.()
-          ?.waitBeforeSubmit(actorId, 'request', signal)) ?? 1;
+        delivery === undefined
+          ? 1
+          : ((await waitActorReply(delivery, actorId, deadlineMs, signal)) ?? 1);
       const handoff = this.options.handoffCapture?.(
         meshName,
         actor.actorId,
@@ -274,9 +286,11 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
           );
           if (duplicate !== undefined) submissions.push(duplicate);
         }
-        const replies = await waitHandoffReply<unknown[]>(
+        const replies = await waitActorReply<unknown[]>(
           Promise.all(submissions),
-          remainingActorRequestTimeout(actorId, deadlineMs)
+          actorId,
+          deadlineMs,
+          signal
         );
         return replies[0] as TReply;
       }
@@ -303,7 +317,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
 
   private async resolveActorRoute(
     actorId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineMs?: number
   ): Promise<ZLinkResolvedActorRoute> {
     const resolver = this.options.locationResolver();
     if (resolver === undefined) {
@@ -312,7 +327,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         'Actor direct messaging requires a Location Store.'
       );
     }
-    const resolution = await resolver.resolveDirectActorRoute(actorId, signal);
+    const resolution = await resolver.resolveDirectActorRoute(actorId, signal, deadlineMs);
     if (resolution.kind === 'missing') {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
@@ -399,7 +414,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       );
     } catch (error) {
       if (isZLinkBackendResultError(error)) {
-        return classifySubmitResult(error.result, 'Actor send');
+        return classifySubmitResult(error.result, 'Actor send', error.phase);
       }
       throw mapSubmitError(error, 'Actor send');
     }
@@ -559,53 +574,12 @@ function remoteRelayErrorKind(value: unknown): ZLinkFrameworkInternalErrorKind {
     : ZLinkFrameworkInternalErrorKind.RequestFailed;
 }
 
-function remainingActorRequestTimeout(
-  actorId: string,
-  deadlineMs: number | undefined
-): number | undefined {
-  if (deadlineMs === undefined) return undefined;
-  const remaining = deadlineMs - performance.now();
-  if (remaining <= 0) {
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-      `Actor request '${actorId}' exceeded its deadline before submission.`
-    );
-  }
-  return Math.max(1, Math.ceil(remaining));
-}
-
 function requireActorId(actorId: string): void {
   const byteLength = Buffer.byteLength(actorId, 'utf8');
-  if (byteLength < 1 || byteLength > 255) {
-    throw new ZLinkConfigurationException('Actor ID must contain 1..255 UTF-8 bytes.');
-  }
-}
-
-async function waitHandoffReply<TReply>(
-  reply: Promise<unknown>,
-  timeoutMs: number | undefined
-): Promise<TReply> {
-  if (timeoutMs === undefined) return (await reply) as TReply;
-  let deadline: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      reply as Promise<TReply>,
-      new Promise<TReply>((_resolve, reject) => {
-        deadline = setTimeout(
-          () =>
-            reject(
-              createInternalFrameworkException(
-                ZLinkFrameworkInternalErrorKind.RequestFailed,
-                'Actor handoff request timed out.',
-                true
-              )
-            ),
-          timeoutMs
-        );
-      })
-    ]);
-  } finally {
-    if (deadline !== undefined) clearTimeout(deadline);
+  if (byteLength < 1 || byteLength > ZLINK_MAX_ACTOR_ID_BYTES) {
+    throw new ZLinkConfigurationException(
+      `Actor ID must contain 1..${ZLINK_MAX_ACTOR_ID_BYTES} UTF-8 bytes.`
+    );
   }
 }
 
@@ -860,7 +834,7 @@ function decodeActorReplyPayload<TReply>(
     payload,
     serializers,
     undefined,
-    'application/json',
+    ZlinkStreamContentType.Json,
     packetName,
     'reply'
   );
@@ -878,54 +852,6 @@ function mapSubmitError(error: unknown, operationName: string): Error {
   );
 }
 
-//  Ownership-aware Actor remote-reply translator (spec 32:81-118, 99-103):
-//  the reply comes from a remote target, so a fine framework failure code
-//  refines the coarse terminal, and a terminal-only conflict/busy is the
-//  target's owner/queue state (retryable stale/Unavailable), never a
-//  source-owned queue exhaustion. Backpressure never appears on this reply
-//  path. Internal kinds are preserved so the stale-actor re-resolve retry
-//  (isStaleActorError) keeps working.
-function actorFailureCodeKind(failureErrno: number): ZLinkFrameworkInternalErrorKind | undefined {
-  switch (failureErrno) {
-    case 3:
-      return ZLinkFrameworkInternalErrorKind.ActorAlreadyExists;
-    case 4:
-      return ZLinkFrameworkInternalErrorKind.ActorTypeMismatch;
-    case 7:
-      return ZLinkFrameworkInternalErrorKind.SpotTypeMismatch;
-    case 8:
-      return ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
-    case 9:
-    case 14:
-      return ZLinkFrameworkInternalErrorKind.RequestTargetNotFound;
-    case 12:
-    case 16:
-      return ZLinkFrameworkInternalErrorKind.RequestProtocolError;
-    //  routeNotConnected(13) and a remote worker queue full(18) are Unavailable.
-    case 13:
-    case 18:
-      return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
-    case 15:
-      return ZLinkFrameworkInternalErrorKind.RequestRejected;
-    case 19:
-      return ZLinkFrameworkInternalErrorKind.WorkerTimedOut;
-    case 17:
-      return ZLinkFrameworkInternalErrorKind.RequestFailed;
-    case 20:
-      return ZLinkFrameworkInternalErrorKind.WorkerFailed;
-    case 21:
-      return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
-    case 33:
-      return ZLinkFrameworkInternalErrorKind.ActorGenerationStale;
-    case 34:
-      return ZLinkFrameworkInternalErrorKind.ActorMoving;
-    case 35:
-      return ZLinkFrameworkInternalErrorKind.RelocationDataLost;
-    default:
-      return undefined;
-  }
-}
-
 function actorTerminalKind(result: number): ZLinkFrameworkInternalErrorKind {
   switch (result) {
     case RequestResult.TimedOut:
@@ -941,7 +867,7 @@ function actorTerminalKind(result: number): ZLinkFrameworkInternalErrorKind {
     case RequestResult.NotConnected:
       return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
     //  A terminal-only conflict/busy on a remote actor reply is the target's
-    //  stale/owner state: retryable ActorLocationStale (-> Unavailable).
+    //  stale/owner state: ActorLocationStale (Unavailable).
     case RequestResult.Conflict:
     case RequestResult.Busy:
       return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
@@ -950,8 +876,11 @@ function actorTerminalKind(result: number): ZLinkFrameworkInternalErrorKind {
   }
 }
 
+// The shared table preserves Actor fine kinds; without a recognized fine code,
+// the remote owner/queue terminal supplies the classification.
 function mapRequestResult(result: number, failureErrno: number, operationName: string): Error {
-  const kind = actorFailureCodeKind(failureErrno) ?? actorTerminalKind(result);
+  const kind =
+    internalFrameworkErrorKindFromWireFailureCode(failureErrno) ?? actorTerminalKind(result);
   return createInternalFrameworkException(
     kind,
     `${operationName} failed with request result ${result}` +
