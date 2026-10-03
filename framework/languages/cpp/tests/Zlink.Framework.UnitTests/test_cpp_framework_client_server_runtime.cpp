@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
+#include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/client_server/client_server_failure_mapper.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
@@ -108,92 +109,6 @@ void verify_client_server_send_does_not_wait_on_infrastructure_worker ()
     assert (slow_send_handler_t::completed.load (std::memory_order_acquire));
     app.stop ();
     app_thread.join ();
-}
-
-struct concurrency_request_t
-{
-    static constexpr const char *packet_name = "concurrency.request";
-};
-void to_json (nlohmann::json &json, const concurrency_request_t &)
-{
-    json = nlohmann::json::object ();
-}
-void from_json (const nlohmann::json &, concurrency_request_t &)
-{
-}
-
-struct concurrency_request_handler_t
-{
-    using request_type = concurrency_request_t;
-    using reply_type = std::string;
-    std::string handle (const concurrency_request_t &) { return "ok"; }
-};
-
-// #1383: a server receive turn reads every request already queued on the connection, as the
-// client receive turn does. N concurrent requests then cost well under N sequential round
-// trips; reading one request per worker turn made them cost N turns.
-void verify_client_server_concurrent_requests_share_receive_turns ()
-{
-    auto app = zlink::framework::app_t::create ();
-    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
-        options.handlers ().group ("concurrency").add<concurrency_request_handler_t> ();
-        auto channel = options.add_client_server_channel ("concurrency");
-        channel.server ().listen ().add_handler_group ("concurrency");
-        channel.client ();
-    });
-    auto provider = app.advanced ().services ().build_provider ();
-    auto &runtime = provider.get_required<zlink::framework::client_server_runtime_t> ();
-    auto &channels = provider.get_required<zlink::framework::channel_client_t> ();
-    char program[] = "client-server-concurrency";
-    char *arguments[] = {program, nullptr};
-    std::thread app_thread ([&] { (void) app.run (1, arguments); });
-    const auto deadline = std::chrono::steady_clock::now () + 5s;
-    while (!runtime.snapshot ("concurrency").is_ready
-           && std::chrono::steady_clock::now () < deadline)
-        std::this_thread::sleep_for (1ms);
-    assert (runtime.snapshot ("concurrency").is_ready);
-    const auto request_once = [&] {
-        const auto reply = channels.request_to_channel ("concurrency", concurrency_request_t{})
-                             .async<std::string> ()
-                             .result ();
-        assert (reply && reply.value () == "ok");
-    };
-    for (int i = 0; i < 20; ++i)
-        request_once ();
-    constexpr int sequential_count = 50;
-    const auto sequential_started = std::chrono::steady_clock::now ();
-    for (int i = 0; i < sequential_count; ++i)
-        request_once ();
-    const auto sequential_one =
-      (std::chrono::steady_clock::now () - sequential_started) / sequential_count;
-    constexpr int concurrent_count = 64;
-    const auto concurrent_started = std::chrono::steady_clock::now ();
-    std::vector<zlink::framework::task_t<std::string>> pending;
-    pending.reserve (concurrent_count);
-    for (int i = 0; i < concurrent_count; ++i)
-        pending.push_back (channels.request_to_channel ("concurrency", concurrency_request_t{})
-                             .async<std::string> ());
-    for (auto &call : pending) {
-        const auto reply = call.result ();
-        assert (reply && reply.value () == "ok");
-    }
-    const auto concurrent_all = std::chrono::steady_clock::now () - concurrent_started;
-    app.stop ();
-    app_thread.join ();
-    // Measured on WSL under load: one request per receive turn gave 1.5-1.8, reading the queued
-    // requests in one turn gave 2.6-3.3.
-    const auto speedup = std::chrono::duration<double> (sequential_one * concurrent_count).count ()
-                         / std::chrono::duration<double> (concurrent_all).count ();
-    std::printf ("client-server concurrency: sequential one=%lldus concurrent %d=%lldus "
-                 "speedup=%.2f\n",
-                 static_cast<long long> (
-                   std::chrono::duration_cast<std::chrono::microseconds> (sequential_one).count ()),
-                 concurrent_count,
-                 static_cast<long long> (
-                   std::chrono::duration_cast<std::chrono::microseconds> (concurrent_all).count ()),
-                 speedup);
-    std::fflush (stdout);
-    assert (speedup > 2.2);
 }
 
 struct metadata_send_handler_t
@@ -442,6 +357,110 @@ void verify_invalid_metadata_is_a_protocol_error ()
         assert (server.mailbox ().pending_messages (service_mailbox_domain_t::application) == 0);
     }
     server.close ();
+}
+
+// #1383: one server receive turn reads the queued records until the Application Job Queue
+// supply or the receive batch budget stops it. Reading one record per turn made N concurrent
+// requests wait N worker turns. The turn starts after the server socket reports POLLIN.
+std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
+                                         std::size_t budget_messages,
+                                         std::size_t queued_records)
+{
+    using zlink::framework::runtime::application_job_queue_configuration_t;
+    using zlink::framework::runtime::application_job_queue_t;
+    using zlink::framework::runtime::receive_batch_budget_t;
+    using zlink::framework::runtime::mesh::service_mailbox_domain_t;
+    static std::atomic_int instance{0};
+    const auto endpoint = "inproc://client-server-receive-turn-"
+                          + std::to_string (instance.fetch_add (1, std::memory_order_relaxed));
+    protocol::client_server_server_admission_t descriptor{
+      "receive-turn",
+      bytes ("receive-turn-server"),
+      1,
+      1,
+      100,
+      zlink::framework::runtime::mesh::service_node_state_t::serving,
+      "default",
+      16 * 1024 * 1024,
+      endpoint};
+    auto context = std::make_shared<zlink::context_t> ();
+    zlink::poller_t transport;
+    constexpr std::uintptr_t server_slot = 7;
+    client_server::raw_client_server_server_options_t options{descriptor};
+    options.transport_poller = &transport;
+    options.transport_poller_slot = server_slot;
+    auto server = std::make_shared<client_server::raw_client_server_server_t> (options, context);
+    server->start ();
+    zlink::dealer_socket_t source (*context);
+    source.set_routing_id (zlink::routing_id_t::from ("receive-turn-peer"));
+    source.options ().linger (0ms);
+    zlink::framework::test::completion_poller_driver_t completions (source);
+    source.connect (server->endpoint ());
+    const auto hello = protocol::encode_client_server_client_admission (
+      protocol::command::hello, {"receive-turn", "default", 16 * 1024 * 1024});
+    auto admission = await_metadata_wire_reply (
+      source.request ().message (zlink::message_t::from (hello)).timeout (5s).async ().reply);
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    auto admitted = client_server::client_server_pump_result_t::no_data;
+    while (admitted != client_server::client_server_pump_result_t::infrastructure
+           && std::chrono::steady_clock::now () < deadline) {
+        const auto now = std::chrono::steady_clock::now ();
+        (void) server->drain_monitor_events (now);
+        admitted = server->pump_one (now).result ().value ();
+        if (admitted == client_server::client_server_pump_result_t::no_data)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (admitted == client_server::client_server_pump_result_t::infrastructure);
+    assert (admission.result ());
+    const std::string header =
+      R"({"formatMarker":242,"kind":3,"channelName":"receive-turn","messageName":"receive-turn.send","contentType":"application/json","metadata":{}})";
+    for (std::size_t index = 0; index < queued_records; ++index) {
+        const auto submitted = source.send ()
+                                 .message (zlink::message_t::from (header))
+                                 .message (zlink::message_t::from ("{}"))
+                                 .async ();
+        assert (submitted.result == ZLINK_SUBMIT_OK);
+    }
+    const auto readable_deadline = std::chrono::steady_clock::now () + 5s;
+    bool readable = false;
+    while (!readable && std::chrono::steady_clock::now () < readable_deadline) {
+        std::array<zlink::poll_event_t, 4> events{};
+        const auto count = transport.wait (events.data (), events.size (), 1ms);
+        for (std::size_t index = 0; index < count; ++index)
+            readable = readable
+                       || (events[index].slot == server_slot
+                           && (static_cast<short> (events[index].revents)
+                               & static_cast<short> (zlink::poll_event_flag_t::pollin))
+                                != 0);
+    }
+    assert (readable);
+    application_job_queue_configuration_t configuration;
+    configuration.effective_max_queued_application_jobs = queue_capacity;
+    auto jobs = std::make_shared<application_job_queue_t> (configuration);
+    auto first = jobs->try_reserve_supply ();
+    assert (first);
+    receive_batch_budget_t budget;
+    budget.max_messages = budget_messages;
+    budget.max_elapsed = std::chrono::hours (1);
+    client_server::pump_server_transport (
+      server, std::chrono::steady_clock::now (), jobs,
+      std::make_shared<application_job_queue_t::permit_t> (std::move (*first)), budget)
+      .result ()
+      .value ();
+    const auto records =
+      server->mailbox ().pending_messages (service_mailbox_domain_t::application);
+    server->close ();
+    return records;
+}
+
+void verify_server_receive_turn_reads_queued_records ()
+{
+    // The Application Job Queue supply stops the turn: 5 permits for 8 queued records.
+    assert (server_receive_turn_records (5, 64, 8) == 5);
+    // The receive batch budget stops the turn: 3 messages for 8 queued records.
+    assert (server_receive_turn_records (64, 3, 8) == 3);
+    // Neither stops it: the turn reads every queued record.
+    assert (server_receive_turn_records (64, 64, 8) == 8);
 }
 
 void verify_client_server_metadata_snapshot ()
@@ -1236,7 +1255,7 @@ int main ()
     verify_invalid_metadata_is_a_protocol_error ();
     verify_client_server_metadata_snapshot ();
     verify_client_server_send_does_not_wait_on_infrastructure_worker ();
-    verify_client_server_concurrent_requests_share_receive_turns ();
+    verify_server_receive_turn_reads_queued_records ();
     verify_client_server_readiness_counts_local_ready_servers ();
     verify_network_defaults_are_deferred_until_apply ();
     verify_client_server_terminal_errors_preserve_public_boundaries ();

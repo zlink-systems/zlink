@@ -237,20 +237,14 @@ struct client_server_location_runtime_t::client_channel_t
     bool selector_dirty = true;
 };
 
-namespace
-{
-
-/* One receive turn reads the queued records within the receive batch budget, as the client
- * turn does. Each record takes its own Application Job Queue permit: the first comes from the
- * worker's supply slot, the rest only while the queue has room. */
 task_t<void>
 pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        mesh::service_liveness_registry_t::clock_t::time_point now,
                        std::shared_ptr<application_job_queue_t> application_jobs,
-                       std::shared_ptr<application_job_queue_t::permit_t> application_permit)
+                       std::shared_ptr<application_job_queue_t::permit_t> application_permit,
+                       receive_batch_budget_t budget)
 {
     (void) co_await server->drain_monitor_events_task (now);
-    receive_batch_budget_t budget;
     while (application_permit && budget.can_receive ()) {
         const auto result =
           co_await server->pump_one (now, std::move (application_permit), &budget);
@@ -265,6 +259,9 @@ pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
     }
     (void) co_await server->tick_liveness (now);
 }
+
+namespace
+{
 
 task_t<void> pump_client_transport (std::shared_ptr<raw_client_server_client_t> client,
                                     mesh::service_liveness_registry_t::clock_t::time_point now)
