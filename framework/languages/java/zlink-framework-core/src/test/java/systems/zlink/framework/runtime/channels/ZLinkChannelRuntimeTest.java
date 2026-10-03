@@ -24,11 +24,13 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.channels.ZLinkRequestHandler;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory;
 import systems.zlink.framework.runtime.internal.backend.*;
@@ -48,6 +50,7 @@ import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 import systems.zlink.framework.spots.ZLinkSpotKind;
 
 import java.lang.reflect.Method;
@@ -73,6 +76,18 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 final class ZLinkChannelRuntimeTest {
+    private static volatile CompletableFuture<Void> closeHandlerEntered;
+    private static volatile CompletableFuture<String> closeHandlerTerminal;
+
+    public static final class PendingCloseRequestHandler
+            implements ZLinkRequestHandler<String, String> {
+        @Override
+        public CompletionStage<String> handle(String request, ZLinkMessageContext context) {
+            closeHandlerEntered.complete(null);
+            return closeHandlerTerminal;
+        }
+    }
+
     private static ZLinkHandlerActivator handlers() {
         SpotTransportAddressResolver resolver =
                 spotId ->
@@ -89,6 +104,128 @@ final class ZLinkChannelRuntimeTest {
 
     private static ZLinkHandlerActivator handlers(SpotTransportAddressResolver resolver) {
         return ZLinkHandlerActivator.services().add(SpotTransportAddressResolver.class, resolver);
+    }
+
+    private static ZLinkChannelDispatchRegistry dispatchRegistry(ZLinkChannelRuntime runtime)
+            throws ReflectiveOperationException {
+        var field = ZLinkChannelRuntime.class.getDeclaredField("dispatchRegistry");
+        field.setAccessible(true);
+        return (ZLinkChannelDispatchRegistry) field.get(runtime);
+    }
+
+    @Test
+    void closeWaitsForAcceptedChannelHandlerTerminal() throws Exception {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        ZLinkChannelRuntime runtime =
+                new ZLinkChannelRuntime(
+                        backend,
+                        options.registration(),
+                        new ZLinkJsonMessageSerializer(),
+                        handlers());
+        var registry = dispatchRegistry(runtime);
+        registry.registerClientServer(
+                "orders",
+                Map.of(),
+                Map.of(
+                        "Request",
+                        new ChannelRequestHandlerRegistration(
+                                PendingCloseRequestHandler.class,
+                                String.class,
+                                String.class,
+                                "Request")));
+        closeHandlerEntered = new CompletableFuture<>();
+        closeHandlerTerminal = new CompletableFuture<>();
+        AtomicInteger replies = new AtomicInteger();
+        CompletableFuture<String> reply = new CompletableFuture<>();
+        ZLinkDispatchErrorReporter errors =
+                new ZLinkDispatchErrorReporter(
+                        options.registration().dispatchOptions(), handlers(), Runnable::run);
+        ZLinkChannelMessageDispatcher dispatcher =
+                new ZLinkChannelMessageDispatcher(
+                        registry,
+                        new ZLinkChannelHandlerInvoker(
+                                new ZLinkStringMessageSerializer(),
+                                new ZLinkCodecRegistration(),
+                                ZLinkHandlerActivator.reflection(),
+                                Runnable::run,
+                                List.of(),
+                                List.of()),
+                        new ZLinkChannelDispatchReporter(errors),
+                        errors.flow());
+        dispatcher.dispatchRequest(
+                "orders",
+                null,
+                new ZLinkBackendReceived(
+                        ZLinkBackendRequestResult.OK,
+                        Optional.of(RoutingId.from("client")),
+                        Optional.empty(),
+                        Optional.of(7L),
+                        List.of(
+                                Message.from("Request".getBytes(StandardCharsets.UTF_8)),
+                                Message.from("first".getBytes(StandardCharsets.UTF_8))),
+                        parts -> {
+                            replies.incrementAndGet();
+                            reply.complete(parts.getLast().toUtf8String());
+                        },
+                        () -> {}));
+        closeHandlerEntered.get(2, TimeUnit.SECONDS);
+
+        CompletableFuture<Void> closing = CompletableFuture.runAsync(runtime::close);
+        try {
+            assertThrows(
+                    java.util.concurrent.TimeoutException.class,
+                    () -> closing.get(1, TimeUnit.SECONDS));
+            assertEquals(0, replies.get());
+        } finally {
+            closeHandlerTerminal.complete("done");
+        }
+        assertEquals("done", reply.get(2, TimeUnit.SECONDS));
+        closing.get(2, TimeUnit.SECONDS);
+        assertEquals(1, replies.get());
+        closeHandlerEntered = null;
+        closeHandlerTerminal = null;
+    }
+
+    @Test
+    void channelCloseDeadlineStillClosesOwnedContext() throws Exception {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        ZLinkChannelRuntime runtime =
+                new ZLinkChannelRuntime(
+                        backend,
+                        options.registration(),
+                        new ZLinkJsonMessageSerializer(),
+                        handlers());
+        var registry = dispatchRegistry(runtime);
+        registry.registerClientServer("orders", Map.of(), Map.of());
+        CompletableFuture<Void> entered = new CompletableFuture<>();
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        registry.clientServerQueue("orders")
+                .enqueue(
+                        () -> {
+                            entered.complete(null);
+                            return release;
+                        },
+                        null);
+        entered.get(2, TimeUnit.SECONDS);
+
+        try {
+            ExecutionException failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> runtime.closeAsync(Instant.now().plusMillis(150))
+                                    .toCompletableFuture()
+                                    .get(2, TimeUnit.SECONDS));
+            assertInstanceOf(java.util.concurrent.TimeoutException.class, failure.getCause());
+            assertEquals(1, backend.context.closeCount.get());
+        } finally {
+            release.complete(null);
+        }
+        registry.clientServerQueue("orders")
+                .awaitQuiescence()
+                .toCompletableFuture()
+                .get(2, TimeUnit.SECONDS);
     }
 
     @Test
@@ -2395,6 +2532,8 @@ final class ZLinkChannelRuntimeTest {
     }
 
     private static final class FakeContext implements ZLinkBackendContext {
+        private final AtomicInteger closeCount = new AtomicInteger();
+
         @Override
         public void shutdown() {}
 
@@ -2404,7 +2543,9 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public void close() {}
+        public void close() {
+            closeCount.incrementAndGet();
+        }
     }
 
     private static final class FakeRouterSocket implements ZLinkBackendRouterSocket {

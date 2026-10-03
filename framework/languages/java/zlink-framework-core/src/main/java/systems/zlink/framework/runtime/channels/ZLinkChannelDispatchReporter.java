@@ -14,13 +14,56 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.function.Consumer;
 
 final class ZLinkChannelDispatchReporter {
     private final ZLinkDispatchErrorReporter reporter;
 
     ZLinkChannelDispatchReporter(ZLinkDispatchErrorReporter reporter) {
         this.reporter = reporter;
+    }
+
+    static void onAdmissionRejected(
+            CompletableFuture<Void> admission, Runnable release, Consumer<Throwable> rejected) {
+        admission.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) {
+                        release.run();
+                        if (rejected != null) rejected.accept(failure);
+                    }
+                });
+    }
+
+    void replyShutdownOnAdmissionRejected(
+            CompletableFuture<Void> admission,
+            Message payload,
+            ZLinkBackendRouterSocket router,
+            ZLinkBackendReceived received,
+            ZLinkDispatchErrorSurface surface,
+            String packetName,
+            String channelName,
+            String sourceRid,
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader) {
+        onAdmissionRejected(
+                admission,
+                payload::close,
+                failure ->
+                        replyError(
+                                router,
+                                received,
+                                surface,
+                                ZLinkDispatchMessageKind.REQUEST,
+                                ZLinkDispatchErrorReason.SHUTDOWN,
+                                packetName,
+                                channelName,
+                                sourceRid,
+                                requestHeader,
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                                        "channel runtime is closing",
+                                        failure)));
     }
 
     void replyError(

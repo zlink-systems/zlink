@@ -252,9 +252,9 @@ final class ZLinkChannelMessageDispatcher {
             String packetName = packet.packetName();
             String topic = received.topic();
             Message payload = Message.from(packet.payload());
+            CompletableFuture<Void> admission = new CompletableFuture<>();
             try {
-                CompletionStage<Void> queued =
-                        registry.publishQueue(channelName)
+                registry.publishQueue(channelName)
                                 .enqueue(
                                         () ->
                                                 invokeStarted(
@@ -292,13 +292,9 @@ final class ZLinkChannelMessageDispatcher {
                                                                 (ignored, error) -> {
                                                                     payload.close();
                                                                 }),
-                                        null);
-                queued.whenComplete(
-                        (ignored, error) -> {
-                            if (error != null) {
-                                payload.close();
-                            }
-                        });
+                                        admission);
+                ZLinkChannelDispatchReporter.onAdmissionRejected(
+                        admission, payload::close, null);
             } catch (RuntimeException error) {
                 payload.close();
                 throw error;
@@ -334,9 +330,9 @@ final class ZLinkChannelMessageDispatcher {
                 null,
                 0L);
         Message payload = Message.from(packet.payload());
+        CompletableFuture<Void> admission = new CompletableFuture<>();
         try {
-            CompletionStage<Void> queued =
-                    registry.sendQueue(channelName)
+            registry.clientServerQueue(channelName)
                             .enqueue(
                                     () -> {
                                         traceFlow(
@@ -400,13 +396,8 @@ final class ZLinkChannelMessageDispatcher {
                                                         })
                                                 .whenComplete((ignored, error) -> payload.close());
                                     },
-                                    null);
-            queued.whenComplete(
-                    (ignored, error) -> {
-                        if (error != null) {
-                            payload.close();
-                        }
-                    });
+                                    admission);
+            ZLinkChannelDispatchReporter.onAdmissionRejected(admission, payload::close, null);
         } catch (RuntimeException error) {
             payload.close();
             throw error;
@@ -423,9 +414,9 @@ final class ZLinkChannelMessageDispatcher {
             String contentType) {
         String packetName = packet.packetName();
         Message payload = Message.from(packet.payload());
+        CompletableFuture<Void> admission = new CompletableFuture<>();
         try {
-            CompletionStage<Void> queued =
-                    registry.requestQueue(channelName)
+            registry.clientServerQueue(channelName)
                             .enqueue(
                                     () -> {
                                         traceFlow(
@@ -536,13 +527,17 @@ final class ZLinkChannelMessageDispatcher {
                                                         })
                                                 .thenApply(ignored -> null);
                                     },
-                                    null);
-            queued.whenComplete(
-                    (ignored, error) -> {
-                        if (error != null) {
-                            payload.close();
-                        }
-                    });
+                                    admission);
+            errors.replyShutdownOnAdmissionRejected(
+                    admission,
+                    payload,
+                    router,
+                    received,
+                    ZLinkDispatchErrorSurface.CHANNEL,
+                    packetName,
+                    channelName,
+                    null,
+                    packet.header());
         } catch (RuntimeException error) {
             payload.close();
             throw error;

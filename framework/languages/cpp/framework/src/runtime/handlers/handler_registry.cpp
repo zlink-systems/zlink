@@ -6,6 +6,7 @@
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/handlers/handler_registry_runtime.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -38,7 +39,7 @@ std::shared_ptr<runtime::offload_executor_t> &handler_invocation_executor_ref ()
     return executor;
 }
 
-std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor ()
+std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor_core ()
 {
     std::lock_guard lock (handler_invocation_executor_mutex ());
     if (!handler_invocation_executor_ref ()) {
@@ -51,7 +52,7 @@ std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor ()
 
 void ensure_handler_invocation_executor ()
 {
-    (void) handler_invocation_executor ();
+    (void) handler_invocation_executor_core ();
 }
 
 handler_dispatch_kind_t dispatch_kind_for (handler_kind_t kind)
@@ -298,6 +299,11 @@ void configure_handler_invocation_executor ()
     ensure_handler_invocation_executor ();
 }
 
+std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor ()
+{
+    return handler_invocation_executor_core ();
+}
+
 void shutdown_handler_invocation_executor () noexcept
 {
     std::shared_ptr<runtime::offload_executor_t> executor;
@@ -447,7 +453,7 @@ handler_registry_t::invoke (std::string_view channel_name,
     auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
     auto task = completion->task ();
     try {
-        auto executor = handler_invocation_executor ();
+        auto executor = detail::handler_invocation_executor ();
         if (!executor) {
             return detail::boundary_failure<zlink::message_t> (
               detail::boundary_error_t::shutdown, "handler invocation executor is not running");

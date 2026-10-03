@@ -45,7 +45,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Timeout(10)
@@ -146,7 +145,6 @@ final class ZLinkChannelBlockingSubmissionTest {
                                 OptionalLong.of(1),
                                 new ZLinkApplicationJobQueue.ProcessorCandidates(
                                         1, null, null, null))) {
-            AtomicBoolean running = new AtomicBoolean(true);
             CompletableFuture<Void> checked = new CompletableFuture<>();
             var router =
                     (ZLinkBackendRouterSocket)
@@ -165,14 +163,14 @@ final class ZLinkChannelBlockingSubmissionTest {
                                             } catch (Throwable failure) {
                                                 checked.completeExceptionally(failure);
                                             } finally {
-                                                running.set(false);
+                                                Thread.currentThread().interrupt();
                                             }
                                             return false;
                                         }
                                         throw new AssertionError(
                                                 "unexpected router call: " + method);
                                     });
-            try (var loops = new ZLinkChannelReceiveLoops(running::get, jobs)) {
+            try (var loops = new ZLinkChannelReceiveLoops(jobs)) {
                 loops.startRequest(
                         router, received -> received.close(), checked::completeExceptionally);
                 try {
@@ -181,7 +179,6 @@ final class ZLinkChannelBlockingSubmissionTest {
                     following.complete();
                     assertEquals(new Reply("accepted"), completion.get(3, TimeUnit.SECONDS));
                 } finally {
-                    running.set(false);
                     rejected.complete();
                 }
             }
