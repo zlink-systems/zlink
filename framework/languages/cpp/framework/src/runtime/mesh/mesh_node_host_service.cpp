@@ -1297,28 +1297,28 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
 {
     const auto deadline = std::chrono::steady_clock::now () + timeout;
     if (!_location_store || stable_type.empty ())
-        return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
+        co_return result_t<spot_create_result_t>::failure (
           framework_error_kind_t::not_configured,
-          "User Spot creation requires a Location Store and stable type"));
+          "User Spot creation requires a Location Store and stable type");
     std::shared_ptr<detail::mesh_node_runtime_t> source;
     if (mesh_name) {
         const auto found = std::find_if (_nodes.begin (), _nodes.end (), [&] (const auto &node) {
             return node && node->mesh_name () == *mesh_name;
         });
         if (found == _nodes.end ())
-            return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
+            co_return result_t<spot_create_result_t>::failure (
               framework_error_kind_t::not_found,
-              "The selected Mesh is not registered in this process"));
+              "The selected Mesh is not registered in this process");
         source = *found;
     } else {
         if (_nodes.empty ())
-            return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
+            co_return result_t<spot_create_result_t>::failure (
               framework_error_kind_t::not_configured,
-              "No object Client or Server Mesh is registered"));
+              "No object Client or Server Mesh is registered");
         if (_nodes.size () != 1)
-            return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
+            co_return result_t<spot_create_result_t>::failure (
               framework_error_kind_t::invalid_operation,
-              "More than one object Mesh is registered; select one with in_mesh"));
+              "More than one object Mesh is registered; select one with in_mesh");
         source = _nodes.front ();
     }
     if (!spot_id) {
@@ -1328,24 +1328,22 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
             detail::require_spot_id (*spot_id);
         }
         catch (const std::invalid_argument &error) {
-            return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
-              framework_error_kind_t::not_configured, error.what ()));
+            co_return result_t<spot_create_result_t>::failure (
+              framework_error_kind_t::not_configured, error.what ());
         }
         if (!exclusive && detail::is_framework_entry_spot_id (*spot_id)) {
-            return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
+            co_return result_t<spot_create_result_t>::failure (
               framework_error_kind_t::not_configured,
-              "caller-provided SpotId uses the reserved Entry Spot format"));
+              "caller-provided SpotId uses the reserved Entry Spot format");
         }
     }
     const auto selected_mesh = mesh_name.value_or (source->mesh_name ());
     std::vector<mesh_node_descriptor_t> candidates;
-    auto listed = infrastructure_result ([&] {
-        return _services->get_required<store_location_resolvers_t> ().list_live_mesh_nodes (
-          selected_mesh);
-    });
+    auto listed = co_await await_result (
+      _services->get_required<store_location_resolvers_t> ().list_live_mesh_nodes (selected_mesh));
     if (!listed.has_value ())
-        return task_t<spot_create_result_t> (detail::propagate_failure<spot_create_result_t> (
-          listed, "User Spot target lookup failed"));
+        co_return detail::propagate_failure<spot_create_result_t> (
+          listed, "User Spot target lookup failed");
     for (auto &descriptor : listed.value ()) {
         const auto capable = std::any_of (
           descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
@@ -1361,8 +1359,8 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
             candidates.push_back (std::move (descriptor));
     }
     if (candidates.empty ())
-        return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
-          framework_error_kind_t::unavailable, "No eligible User Spot target is ready"));
+        co_return result_t<spot_create_result_t>::failure (framework_error_kind_t::unavailable,
+                                                           "No eligible User Spot target is ready");
     const auto choose_target = [&] {
         const auto total_weight = std::accumulate (
           candidates.begin (), candidates.end (), std::uint64_t{0},
@@ -1387,8 +1385,8 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
         const auto raw = detail::message_to_raw (*request, *_serializers);
         const auto bytes = raw.bytes ();
         if (bytes.size () > 1024u * 1024u)
-            return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
-              framework_error_kind_t::not_configured, "User Spot creation request exceeds 1 MiB"));
+            co_return result_t<spot_create_result_t>::failure (
+              framework_error_kind_t::not_configured, "User Spot creation request exceeds 1 MiB");
         application_bytes.assign (bytes.begin (), bytes.end ());
     }
     const object_creation_key_t key{placement_object_kind_t::user_spot, *spot_id};
@@ -1420,9 +1418,7 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
                                   node_rid_t::from_string (target.rid.to_string ()),
                                   target.lifecycle_generation,
                                   {target.owner_id, target.lease_generation}};
-        reserved = infrastructure_result ([&] {
-                       return _location_store->reserve (reserve_request);
-                   }).value ();
+        reserved = co_await _location_store->reserve (reserve_request);
         const auto *conflict = std::get_if<object_reserve_conflict_t> (&reserved);
         const bool target_unavailable =
           conflict && std::holds_alternative<authority_missing_t> (conflict->current);
@@ -1438,47 +1434,46 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
                                           }),
                           candidates.end ());
         if (candidates.empty () || std::chrono::steady_clock::now () >= deadline)
-            return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
-              framework_error_kind_t::unavailable,
-              "User Spot placement candidates were exhausted"));
+            co_return result_t<spot_create_result_t>::failure (
+              framework_error_kind_t::unavailable, "User Spot placement candidates were exhausted");
         target = choose_target ();
     }
     if (const auto *ready = std::get_if<object_already_exists_t> (&reserved)) {
         if (exclusive)
-            return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
+            co_return result_t<spot_create_result_t>::failure (
               framework_error_kind_t::already_exists,
-              "Framework-generated User SpotId already exists"));
-        return task_t<spot_create_result_t> (result_t<spot_create_result_t>::success (
+              "Framework-generated User SpotId already exists");
+        co_return result_t<spot_create_result_t>::success (
           {spot_ref_t{*spot_id, ready->current.object_generation,
                       ready->current.allocation.target.mesh_name,
                       ready->current.allocation.target.node_rid},
-           spot_create_state_t::existing, std::nullopt}));
+           spot_create_state_t::existing, std::nullopt});
     }
     if (const auto *mismatch = std::get_if<object_type_mismatch_t> (&reserved)) {
         if (exclusive && mismatch->current.allocation.state == placement_allocation_state_t::active)
-            return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
+            co_return result_t<spot_create_result_t>::failure (
               framework_error_kind_t::already_exists,
-              "Framework-generated User SpotId already exists"));
-        return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
-          framework_error_kind_t::type_mismatch, "User Spot stable type does not match"));
+              "Framework-generated User SpotId already exists");
+        co_return result_t<spot_create_result_t>::failure (framework_error_kind_t::type_mismatch,
+                                                           "User Spot stable type does not match");
     }
     if (std::holds_alternative<object_placement_capacity_exhausted_t> (reserved))
-        return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
-          framework_error_kind_t::unavailable, "User Spot placement capacity is exhausted"));
+        co_return result_t<spot_create_result_t>::failure (
+          framework_error_kind_t::unavailable, "User Spot placement capacity is exhausted");
     if (const auto *created = std::get_if<object_reserved_t> (&reserved)) {
         fence = created->fence;
         source_created_reservation = true;
     } else if (const auto *conflict = std::get_if<object_reserve_conflict_t> (&reserved)) {
         if (exclusive)
-            return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
+            co_return result_t<spot_create_result_t>::failure (
               framework_error_kind_t::already_exists,
-              "Framework-generated User SpotId already has an authority claim"));
+              "Framework-generated User SpotId already has an authority claim");
         const auto *snapshot = std::get_if<authority_snapshot_t> (&conflict->current);
         if (!snapshot || !snapshot->pending_creation
             || snapshot->allocation.stable_type != stable_type)
-            return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
+            co_return result_t<spot_create_result_t>::failure (
               framework_error_kind_t::internal_failure,
-              "User Spot Creating attempt cannot be joined"));
+              "User Spot Creating attempt cannot be joined");
         fence = {snapshot->pending_creation->reservation_id,
                  snapshot->store_version,
                  snapshot->object_generation,
@@ -1492,8 +1487,8 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
         target.owner_id = fence.target.owner.owner_id;
         target.lease_generation = fence.target.owner.lease_generation;
     } else {
-        return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
-          framework_error_kind_t::internal_failure, "User Spot reservation failed"));
+        co_return result_t<spot_create_result_t>::failure (framework_error_kind_t::internal_failure,
+                                                           "User Spot reservation failed");
     }
     const auto source_status = source->native_node ().status ();
     protocol::user_spot_create_header_t command{
@@ -1578,9 +1573,8 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
                                                    source_created_reservation);
         completion->complete (result_t<spot_create_result_t>::failure (
           framework_error_kind_t::internal_failure, "User Spot create submission failed"));
-        return output;
     }
-    return output;
+    co_return co_await await_result (std::move (output));
 }
 
 task_t<std::optional<spot_ref_t>> mesh_node_host_service_t::find_user_spot (spot_id_t spot_id)

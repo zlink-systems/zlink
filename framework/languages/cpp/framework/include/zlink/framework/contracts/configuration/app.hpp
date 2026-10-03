@@ -104,6 +104,8 @@ class app_t
   private:
     friend class app_advanced_t;
 
+    task_t<relocation_result_t> relocate_async (relocation_options_t options,
+                                                std::stop_token wait_cancellation);
     static task_t<void> run_shared_relocation (detail::app_state_t &state);
     static void run_shared_shutdown (detail::app_state_t &state) noexcept;
 

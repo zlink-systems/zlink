@@ -809,9 +809,24 @@ class exercise_t final : public zf::hosted_service_t
             }
             std::optional<zf::task_t<zf::relocation_result_t>> relocation;
             if (_evidence->branch == branch_t::relocating) {
+                auto &runtime = services.get_required<zf::framework_runtime_t> ();
+                auto entered = std::make_shared<std::promise<void>> ();
+                auto relocating = entered->get_future ();
+                auto observed = std::make_shared<std::atomic_bool> (false);
+                auto observation = runtime.observe (
+                  runtime_observer_capacity,
+                  [entered,
+                   observed] (const zf::observed_status_t<zf::framework_runtime_status_t> &status) {
+                      if (status.status.state == zf::framework_runtime_state_t::relocating
+                          && !observed->exchange (true))
+                          entered->set_value ();
+                  });
                 relocation.emplace (
                   _app->relocate ({.mode = zf::relocation_mode_t::planned_maintenance,
                                    .deadline = request_timeout}));
+                if (!_evidence->complete_relocation)
+                    require_ready (relocating, "public runtime observer did not report Relocating");
+                observation->close ();
                 if (!_evidence->complete_relocation
                     && _app->runtime_state () != zf::framework_runtime_state_t::relocating)
                     throw std::runtime_error ("public host did not enter Relocating");
