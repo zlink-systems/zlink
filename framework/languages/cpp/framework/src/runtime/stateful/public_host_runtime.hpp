@@ -148,8 +148,8 @@ using spot_request_completion_t =
   std::function<void (foundation::operation_terminal_t, result_t<std::vector<zlink::message_t>>)>;
 
 using route_fence_t = std::pair<std::uint64_t, std::uint64_t>;
-using spot_route_fence_resolver_t = std::function<std::optional<route_fence_t> (
-  const zlink::routing_id_t &, std::string_view, std::uint64_t)>;
+using spot_route_fence_resolver_t = std::function<task_t<std::optional<route_fence_t>> (
+  zlink::routing_id_t, std::string, std::uint64_t)>;
 
 enum class bound_session_bind_admission_t
 {
@@ -427,8 +427,8 @@ struct instance_spot_activation_materializer_t
       std::function<task_t<zlink::message_t> (std::function<void ()> &)>,
       std::shared_ptr<::zlink::framework::detail::deferred_barrier_t> *)>
       dispatch;
-    std::function<result_t<protocol::instance_spot_activation_header_t> (
-      const protocol::instance_spot_activation_header_t &)>
+    std::function<task_t<result_t<protocol::instance_spot_activation_header_t>> (
+      protocol::instance_spot_activation_header_t)>
       select_target;
 
     explicit operator bool () const noexcept
@@ -898,9 +898,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                                        std::chrono::milliseconds timeout,
                                                        std::span<const std::uint8_t> metadata,
                                                        spot_request_completion_t completion = {});
-    std::optional<route_fence_t>
-    resolve_spot_route_fence (const zlink::routing_id_t &target_node_rid,
-                              std::string_view target_spot_id,
+    task_t<std::optional<route_fence_t>>
+    resolve_spot_route_fence (zlink::routing_id_t target_node_rid,
+                              std::string target_spot_id,
                               std::uint64_t target_spot_generation);
     void invalidate_spot_route_fence (const protocol::message_follow_notice_t &notice);
     bool complete_local_request (const pending_operation_t &operation,

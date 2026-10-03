@@ -2005,13 +2005,13 @@ encode_spot_route_parts (runtime::messaging::message_kind_t kind,
     return envelope.encode_raw_body_parts (header, std::move (payload));
 }
 
-std::optional<std::uint64_t>
-resolve_target_spot_generation (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
-                                const zlink::routing_id_t &target_node_rid,
-                                const spot_id_t &target_spot_id)
+task_t<std::optional<std::uint64_t>>
+resolve_target_spot_generation (std::shared_ptr<detail::spot_node_builder_state_t> state,
+                                zlink::routing_id_t target_node_rid,
+                                spot_id_t target_spot_id)
 {
     if (!state) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
     runtime::spot_address_resolver_t *resolver = nullptr;
     std::string mesh_name;
@@ -2031,18 +2031,18 @@ resolve_target_spot_generation (const std::shared_ptr<detail::spot_node_builder_
     if (local_spot) {
         const auto generation = local_spot->status ().lifecycle_generation ();
         if (generation != 0) {
-            return generation;
+            co_return generation;
         }
     }
     if (!resolver) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
     const auto address =
-      resolver->resolve_spot_address (std::move (mesh_name), target_spot_id).result ().value ();
+      co_await resolver->resolve_spot_address (std::move (mesh_name), target_spot_id);
     if (!address || address->node_rid != target_node_rid || address->spot_generation == 0) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
-    return address->spot_generation;
+    co_return address->spot_generation;
 }
 
 std::exception_ptr
@@ -2141,44 +2141,39 @@ request_spot_parts_async (service::spot_handle_t egress,
 }
 
 task_t<runtime::messaging::message_parts_t>
-request_spot_mesh_parts (const std::shared_ptr<detail::spot_context_state_t> &state,
+request_spot_mesh_parts (std::shared_ptr<detail::spot_context_state_t> state,
                          node_rid_t node_rid,
                          spot_id_t spot_id,
                          runtime::messaging::message_parts_t parts,
                          std::chrono::milliseconds timeout)
 {
     if (!state) {
-        return task_t<runtime::messaging::message_parts_t> (
-          result_t<runtime::messaging::message_parts_t>::failure (
-            framework_error_kind_t::protocol_error, "SPOT context is not configured"));
+        co_return result_t<runtime::messaging::message_parts_t>::failure (
+          framework_error_kind_t::protocol_error, "SPOT context is not configured");
     }
     auto native = state->native_spot.lock ();
     if (!native) {
-        return task_t<runtime::messaging::message_parts_t> (
-          result_t<runtime::messaging::message_parts_t>::failure (
-            framework_error_kind_t::not_found, "SPOT mesh route requires a running native Spot"));
+        co_return result_t<runtime::messaging::message_parts_t>::failure (
+          framework_error_kind_t::not_found, "SPOT mesh route requires a running native Spot");
     }
     try {
         const auto target_node_rid = zlink::routing_id_t::from (std::string (node_rid.value ()));
         const auto target_generation =
-          resolve_target_spot_generation (state->node, target_node_rid, spot_id);
+          co_await resolve_target_spot_generation (state->node, target_node_rid, spot_id);
         if (!target_generation) {
-            return task_t<runtime::messaging::message_parts_t> (
-              result_t<runtime::messaging::message_parts_t>::failure (
-                framework_error_kind_t::not_found,
-                "SPOT mesh request target generation is unavailable"));
+            co_return result_t<runtime::messaging::message_parts_t>::failure (
+              framework_error_kind_t::not_found,
+              "SPOT mesh request target generation is unavailable");
         }
-        return request_spot_parts_async (*native, target_node_rid, spot_id, *target_generation,
-                                         std::move (parts), timeout);
+        co_return co_await request_spot_parts_async (
+          *native, target_node_rid, spot_id, *target_generation, std::move (parts), timeout);
     }
     catch (const framework_exception_t &error) {
-        return task_t<runtime::messaging::message_parts_t> (
-          detail::result_access_t::failure<runtime::messaging::message_parts_t> (error));
+        co_return detail::result_access_t::failure<runtime::messaging::message_parts_t> (error);
     }
     catch (const std::exception &error) {
-        return task_t<runtime::messaging::message_parts_t> (
-          result_t<runtime::messaging::message_parts_t>::failure (
-            framework_error_kind_t::internal_failure, error.what ()));
+        co_return result_t<runtime::messaging::message_parts_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ());
     }
 }
 
@@ -4196,8 +4191,8 @@ send_call_t spot_context_t::send_to_erased (node_rid_t node_rid,
               const auto target_node_rid =
                 zlink::routing_id_t::from (std::string (node_rid.value ()));
               const auto target_spot_id = spot_id;
-              const auto target_generation =
-                resolve_target_spot_generation (state->node, target_node_rid, target_spot_id);
+              const auto target_generation = co_await resolve_target_spot_generation (
+                state->node, target_node_rid, target_spot_id);
               if (!target_generation) {
                   throw framework_exception_t (framework_error_kind_t::not_found,
                                                "SPOT mesh send target generation is unavailable");
@@ -14060,7 +14055,7 @@ spot_node_runtime_t::send_spot_mesh_parts (const zlink::routing_id_t &target_nod
         }
         auto egress = node->entry_spot ();
         const auto target_generation =
-          resolve_target_spot_generation (_state, target_node_rid, target_spot_id);
+          co_await resolve_target_spot_generation (_state, target_node_rid, target_spot_id);
         if (!target_generation) {
             throw framework_exception_t (framework_error_kind_t::not_found,
                                          "SPOT mesh send target generation is unavailable");
@@ -14133,7 +14128,7 @@ spot_node_runtime_t::send_actor_leave_notification (const zlink::routing_id_t &t
     co_return co_await sender (target_node_rid, std::move (native_parts));
 }
 
-std::optional<std::uint64_t>
+task_t<std::optional<std::uint64_t>>
 spot_node_runtime_t::resolve_spot_generation (const zlink::routing_id_t &target_node_rid,
                                               const spot_id_t &target_spot_id) const
 {
