@@ -3715,8 +3715,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             () -> spot.onLeaveActor(actor))));
         }
         if (spotSurface instanceof ZLinkEntrySpot entrySpot) {
+            // Entry OnJoinedActor runs as the Actor's own lifecycle turn, so an Entry Spot that
+            // destroys the returning Actor does not wait for that Actor to go idle.
             return joined
-                    ? ZLinkHandlerStages.fromStageSupplier(() -> entrySpot.onJoinedActor(actor))
+                    ? actorSessions
+                            .runtime()
+                            .invokeActorLifecycle(
+                                    actor,
+                                    () ->
+                                            ZLinkHandlerStages.fromStageSupplier(
+                                                    () -> entrySpot.onJoinedActor(actor)))
                     : ZLinkHandlerStages.fromStageSupplier(() -> entrySpot.onLeaveActor(actor));
         }
         return CompletableFuture.completedFuture(null);
@@ -3767,12 +3775,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         : ZLinkBackendActorLifecycleEventKind.LEFT,
                 actor,
                 spotId);
-        if (joined && spotSurface instanceof ZLinkEntrySpot<?>) {
-            return actorSessions
-                    .runtime()
-                    .invokeActorLifecycle(
-                            actor, () -> notifySpotActorLifecycle(spotSurface, actor, true));
-        }
         return notifySpotActorLifecycle(spotSurface, actor, joined);
     }
 
