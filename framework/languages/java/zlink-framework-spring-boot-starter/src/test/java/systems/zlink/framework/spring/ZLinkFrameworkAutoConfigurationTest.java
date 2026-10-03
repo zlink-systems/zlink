@@ -88,6 +88,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -179,11 +180,18 @@ final class ZLinkFrameworkAutoConfigurationTest {
             assertThrows(
                     ZLinkConfigurationException.class,
                     () -> fanout.publish("missing", "payload").submit());
-            assertThrows(
-                    ZLinkConfigurationException.class,
-                    () ->
-                            route.requestToNode("missing", RoutingId.from("target"), "payload")
-                                    .submit(String.class));
+            // 01-execution/01-submit-and-completion.ko.md:48: submit reports the failure by
+            // completing its stage exceptionally.
+            CompletionException routeFailure =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    route.requestToNode(
+                                                    "missing", RoutingId.from("target"), "payload")
+                                            .submit(String.class)
+                                            .toCompletableFuture()
+                                            .join());
+            assertInstanceOf(ZLinkConfigurationException.class, routeFailure.getCause());
         }
     }
 
