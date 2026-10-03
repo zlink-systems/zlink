@@ -483,7 +483,14 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         }
       );
       const reply = this.decodeMeshReply<TReply>(meshName, completion);
-      this.traceNodeRequest(ZLinkMessageFlowOutcome.ReplyReceived, 'succeeded', meshName, targetNodeRid, packetName, correlationId);
+      this.traceNodeRequest(
+        ZLinkMessageFlowOutcome.ReplyReceived,
+        'succeeded',
+        meshName,
+        targetNodeRid,
+        packetName,
+        correlationId
+      );
       return reply;
     } catch (error) {
       if (!isRemoteChannelErrorReply(error)) {

@@ -368,7 +368,9 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
   }
 }
 
-async function requestReply(submission: ReturnType<RequestSubmitOperation['submit']>): Promise<Message[]> {
+async function requestReply(
+  submission: ReturnType<RequestSubmitOperation['submit']>
+): Promise<Message[]> {
   if (submission.result === SubmitResult.Backpressured) {
     const [, replies] = await Promise.all([submission.admitted, submission.reply]);
     return replies;
