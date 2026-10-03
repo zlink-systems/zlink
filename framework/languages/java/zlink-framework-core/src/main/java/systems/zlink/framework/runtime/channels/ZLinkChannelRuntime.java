@@ -1480,7 +1480,10 @@ public final class ZLinkChannelRuntime
     public void close() {
         try {
             closeCore(null);
-        } catch (InterruptedException | TimeoutException | ExecutionException failure) {
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new CompletionException(failure);
+        } catch (TimeoutException | ExecutionException failure) {
             throw new CompletionException(failure);
         }
     }
