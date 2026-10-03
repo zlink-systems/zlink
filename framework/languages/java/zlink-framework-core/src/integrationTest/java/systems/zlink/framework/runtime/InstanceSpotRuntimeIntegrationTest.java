@@ -235,6 +235,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         EchoInstanceSpot.closingCalls.set(0);
         EchoInstanceSpot.generations.clear();
         EchoInstanceSpot.closingEntered = new CompletableFuture<>();
+        EchoInstanceSpot.closeCompleted = new CompletableFuture<>();
         EchoInstanceSpot.closingRelease = CompletableFuture.completedFuture(null);
         EchoInstanceSpot.closingFailure =
                 failureStage.equals("callback")
@@ -342,20 +343,22 @@ final class InstanceSpotRuntimeIntegrationTest {
                         store.readyPending.get(5, TimeUnit.SECONDS);
                     } else {
                         store.deleteApplied.get(5, TimeUnit.SECONDS);
+                        // The probe starts after Close has ended, so the target no longer holds
+                        // the Spot and the source sends on the Ready route it read before Close.
+                        assertTrue(EchoInstanceSpot.closeCompleted.get(5, TimeUnit.SECONDS));
+                        assertEquals(0, target.activeSpotCount("game"));
                     }
                     SourceEntrySpot.probeStart.complete(null);
-                    Throwable notFound = SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS);
-                    if (failureStage.equals("creating")) {
-                        assertTrue(notFound instanceof ZLinkFrameworkException);
-                        assertEquals(
-                                ZLinkFrameworkErrorKind.NOT_FOUND,
-                                ((ZLinkFrameworkException) notFound).kind());
-                    } else {
-                        // The source still holds the released Ready route, so the probe can
-                        // also end with the owner fence verdict (spot-close-v1.json
-                        // stale-released-ready-owner-fence-request).
-                        assertClosingProbeNotRun(notFound);
-                    }
+                    Throwable probe = SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS);
+                    // creating: spot address messaging §9, a direct call without Instance intent
+                    // to a Creating authority is NotFound. missing: the released Ready route is
+                    // refused by its owner fence (spot-close-v1.json
+                    // stale-released-ready-owner-fence-request).
+                    assertProbeKind(
+                            failureStage.equals("creating")
+                                    ? ZLinkFrameworkErrorKind.NOT_FOUND
+                                    : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            probe);
                     store.releaseReady.complete(null);
                     SourceEntrySpot.afterCloseStart.complete(null);
                     if (failureStage.equals("creating")) {
@@ -440,8 +443,14 @@ final class InstanceSpotRuntimeIntegrationTest {
                 if (failureStage.equals("cas-window")) {
                     store.closingApplied.get(5, TimeUnit.SECONDS);
                     SourceEntrySpot.probeStart.complete(null);
+                    // Spot address messaging §7 step 1: the probe reaches the owner while Close
+                    // runs and waits behind it. §9 Closing row: without Instance intent it ends
+                    // with NotFound once Close ends.
+                    awaitPendingMessage(spots, spotId);
                     store.releaseClosing.complete(null);
-                    assertClosingProbeNotRun(SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS));
+                    assertProbeKind(
+                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                            SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS));
                     assertTrue(closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
                     return;
@@ -449,8 +458,12 @@ final class InstanceSpotRuntimeIntegrationTest {
                 if (failureStage.equals("window")) {
                     store.deleteAttempted.get(5, TimeUnit.SECONDS);
                     SourceEntrySpot.probeStart.complete(null);
+                    // The authority is Closing until the held Delete applies. §9 Closing row: a
+                    // request without Instance intent ends with NotFound before the release.
+                    assertProbeKind(
+                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                            SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS));
                     store.releaseDelete.complete(null);
-                    assertClosingProbeNotRun(SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS));
                     assertTrue(closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     assertEquals(0, target.activeSpotCount("game"));
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
@@ -511,19 +524,31 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
     }
 
-    /**
-     * Spot address messaging §7 step 1 and §9: a request without Instance intent that reaches the
-     * owner during Close waits behind Close and ends with NotFound; one that arrives after the
-     * release on the old Ready route ends with Unavailable (owner fence row). It never runs on the
-     * closing generation.
-     */
-    private static void assertClosingProbeNotRun(Throwable failure) {
+    private static void assertProbeKind(ZLinkFrameworkErrorKind expected, Throwable failure) {
         assertTrue(failure instanceof ZLinkFrameworkException, String.valueOf(failure));
-        var kind = ((ZLinkFrameworkException) failure).kind();
-        assertTrue(
-                kind == ZLinkFrameworkErrorKind.NOT_FOUND
-                        || kind == ZLinkFrameworkErrorKind.UNAVAILABLE,
-                kind.toString());
+        assertEquals(expected, ((ZLinkFrameworkException) failure).kind());
+    }
+
+    /** Waits until the Instance Spot owner queue holds an accepted message behind Close. */
+    private static void awaitPendingMessage(Object spots, String spotId) throws Exception {
+        var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
+        activations.setAccessible(true);
+        Object activation = ((java.util.Map<?, ?>) activations.get(spots)).get(spotId);
+        var contextField = activation.getClass().getSuperclass().getDeclaredField("context");
+        contextField.setAccessible(true);
+        Object context = contextField.get(activation);
+        var ownerQueue = context.getClass().getDeclaredMethod("ownerQueue");
+        ownerQueue.setAccessible(true);
+        var queue =
+                (systems.zlink.framework.execution.ZLinkSerialExecutionQueue)
+                        ownerQueue.invoke(context);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (queue.pendingMessages().isEmpty()) {
+            if (System.nanoTime() > deadline) {
+                throw new java.util.concurrent.TimeoutException("probe never reached the owner");
+            }
+            Thread.sleep(2);
+        }
     }
 
     private static AtomicInteger installBackendFailure(
@@ -978,8 +1003,48 @@ final class InstanceSpotRuntimeIntegrationTest {
                                                                             }
                                                                             Throwable cause =
                                                                                     unwrap(failure);
-                                                                            assertClosingProbeNotRun(
-                                                                                    cause);
+                                                                            // This step waits only
+                                                                            // for the
+                                                                            // Missing row, not for
+                                                                            // the
+                                                                            // owner's Close to end.
+                                                                            // A probe
+                                                                            // that reaches the
+                                                                            // owner while
+                                                                            // Close still runs is
+                                                                            // NotFound
+                                                                            // (§9 Closing row); one
+                                                                            // that
+                                                                            // arrives after the
+                                                                            // release on
+                                                                            // the Ready route read
+                                                                            // before
+                                                                            // is refused by its
+                                                                            // owner fence
+                                                                            // as Unavailable (§9
+                                                                            // owner fence
+                                                                            // row,
+                                                                            // spot-close-v1.json
+                                                                            // stale-released-ready-owner-fence-request).
+                                                                            assertTrue(
+                                                                                    cause
+                                                                                            instanceof
+                                                                                            ZLinkFrameworkException,
+                                                                                    String.valueOf(
+                                                                                            cause));
+                                                                            var kind =
+                                                                                    ((ZLinkFrameworkException)
+                                                                                                    cause)
+                                                                                            .kind();
+                                                                            assertTrue(
+                                                                                    kind
+                                                                                                    == ZLinkFrameworkErrorKind
+                                                                                                            .NOT_FOUND
+                                                                                            || kind
+                                                                                                    == ZLinkFrameworkErrorKind
+                                                                                                            .UNAVAILABLE,
+                                                                                    kind
+                                                                                            .toString());
                                                                             return (Void) null;
                                                                         }),
                                                 CompletableFuture.delayedExecutor(
