@@ -329,8 +329,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
       [] (zlink::routing_id_t, std::string,
           std::uint64_t) -> zlink::framework::task_t<std::optional<host::route_fence_t>> {
           co_return host::route_fence_t{1, 1};
-      },
-      1min);
+      });
     new_target->configure_stateful_dispatch (
       [] (const stateful::accepted_record_authority_query_t &query)
         -> std::optional<stateful::accepted_record_authority_t> {
@@ -1791,7 +1790,7 @@ void verify_spot_route_fence_admission_precedes_body_decode ()
       valid, std::optional<zlink::framework::location_owner_token_t>{}));
 }
 
-void verify_public_host_route_cache_stops_at_owner_admission_deadline ()
+void verify_public_host_route_fence_reads_store_without_second_cache (bool release_lease)
 {
     using namespace zlink::framework;
     auto store = std::make_shared<runtime::in_memory_location_repository_t> ();
@@ -1836,7 +1835,6 @@ void verify_public_host_route_cache_stops_at_owner_admission_deadline ()
       host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("route-cache-source")},
                            "entry",
                            {"framework.spot"},
-                           10s,
                            3s});
     auto target = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("route-cache-target")}});
@@ -1870,7 +1868,13 @@ void verify_public_host_route_cache_stops_at_owner_admission_deadline ()
           .value ();
     };
     assert (send () == zlink::submit_result_t::ok);
-    std::this_thread::sleep_for (3s);
+    if (release_lease) {
+        // The Location Store owns the fence. A lease released after the first
+        // send must reach the next send, not be hidden by a host-side copy.
+        assert (std::holds_alternative<owner_lease_released_t> (
+          store->release_owner_lease (owner).result ().value ()));
+    } else
+        std::this_thread::sleep_for (3s);
     assert (send () == zlink::submit_result_t::not_found);
 
     source->close ();
@@ -7227,7 +7231,8 @@ int main (int argc, char **argv)
     verify_bound_session_push_source_does_not_prejudge_current_binding ();
     verify_spot_id_contract ();
     verify_spot_route_fence_admission_precedes_body_decode ();
-    verify_public_host_route_cache_stops_at_owner_admission_deadline ();
+    verify_public_host_route_fence_reads_store_without_second_cache (false);
+    verify_public_host_route_fence_reads_store_without_second_cache (true);
     verify_entry_spot_identity_claim_is_global_and_fenced ();
     verify_user_spot_execution_mode_registration ();
     verify_self_actor_request_rejected_before_submission ();

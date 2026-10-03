@@ -6523,8 +6523,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     };
     source.bind_serializers (serializers);
     target.bind_serializers (serializers);
-    source.configure_spot_route_fence_resolver (resolve_spot_route, 0ms, 0ms);
-    target.configure_spot_route_fence_resolver (resolve_spot_route, 0ms, 0ms);
+    source.configure_spot_route_fence_resolver (resolve_spot_route, 0ms);
+    target.configure_spot_route_fence_resolver (resolve_spot_route, 0ms);
     source.configure_user_spot_operations (
       locations,
       [] (const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &) {
