@@ -44,22 +44,18 @@ test('request-backpressure pumps completions and observes admission without awai
   installTargetStats(t);
   const replies = [];
   let resolveAdmission;
-  let opened = 0;
   let closed = 0;
   const pollTimeouts = [];
   let submissions = 0;
   const transport = {
     backpressuredResult: 'backpressured',
-    openRequestCompletionPump() {
-      opened += 1;
-      return {
-        poll(timeoutMs) {
-          pollTimeouts.push(timeoutMs);
-          for (const resolve of replies.splice(0)) resolve();
-          resolveAdmission?.();
-        },
-        close() { closed += 1; }
-      };
+    requestCompletionPump: {
+      poll(timeoutMs) {
+        pollTimeouts.push(timeoutMs);
+        for (const resolve of replies.splice(0)) resolve();
+        resolveAdmission?.();
+      },
+      close() { closed += 1; }
     },
     requestSubmission(_stream, payload) {
       submissions += 1;
@@ -77,8 +73,7 @@ test('request-backpressure pumps completions and observes admission without awai
   const metrics = new core.SourceMetrics(100);
   const result = await core.runActive(transport, metrics, options, activeTrigger('request-backpressure'));
 
-  assert.equal(opened, 1);
-  assert.equal(closed, 1);
+  assert.equal(closed, 0, 'the active phase does not close the transport-owned poller');
   assert.ok(submissions > 1, 'submission resumed after the separately observed admission');
   assert.ok(pollTimeouts.some((timeoutMs) => timeoutMs > 0), 'blocked turn waited for completion');
   assert.ok(pollTimeouts.length >= submissions, 'every submit turn advanced the completion pump');
@@ -90,6 +85,7 @@ test('send-saturation yields so every logical stream starts work', async (t) => 
   const streams = new Set();
   const transport = {
     backpressuredResult: 'backpressured',
+    awaitSendCompletion: (admitted) => admitted,
     sendSubmission(stream) {
       streams.add(stream);
       return { result: 'accepted', admitted: Promise.resolve() };

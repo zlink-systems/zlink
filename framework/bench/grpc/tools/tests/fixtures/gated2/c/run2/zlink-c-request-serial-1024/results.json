@@ -1,0 +1,28 @@
+{
+  "schema": "with-grpc-cell-v1",
+  "cells": [
+    {
+      "implementation": "zlink-c",
+      "pattern": "request-serial",
+      "payload_size": 1024,
+      "throughput_per_second": 8116.0,
+      "bandwidth_mb_s": 8.31,
+      "latency_mean_ms": 0.123,
+      "latency_p95_ms": 0.144,
+      "latency_p99_ms": 0.19,
+      "client_cpu_percent": 2.358,
+      "client_memory_mb": 7.188,
+      "server_cpu_percent": 1.283,
+      "server_memory_mb": 6.562,
+      "peak_in_flight": 1,
+      "extra": {
+        "submitted": 24347.0,
+        "completed": 24347.0,
+        "errors": 0.0,
+        "blocked": 0.0,
+        "max_outstanding": 1.0,
+        "submit_wait_ms": 93.177
+      }
+    }
+  ]
+}

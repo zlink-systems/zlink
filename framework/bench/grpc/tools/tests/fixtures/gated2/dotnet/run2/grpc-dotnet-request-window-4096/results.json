@@ -1,0 +1,19 @@
+{
+  "schema": "with-grpc-cell-v1",
+  "cells": [
+    {
+      "implementation": "grpc-dotnet",
+      "pattern": "request-window",
+      "payload_size": 4096,
+      "throughput_per_second": 122631.0,
+      "bandwidth_mb_s": 502.297,
+      "latency_mean_ms": 0.753,
+      "latency_p95_ms": 1.732,
+      "latency_p99_ms": 2.097,
+      "client_cpu_percent": 33.5,
+      "client_memory_mb": 1359.441,
+      "server_cpu_percent": 29.16,
+      "server_memory_mb": 509.855
+    }
+  ]
+}

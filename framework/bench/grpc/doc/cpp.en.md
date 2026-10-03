@@ -8,7 +8,7 @@ owned by the specification; this page holds only the C++-specific values.
 
 | Implementation | request | send/command | Modules used |
 |---|---|---|---|
-| `grpc-cpp` | `PrepareAsyncEcho` + `CompletionQueue` (unary) | `PrepareAsyncCommand`, `Empty` reply | system `libgrpc++` |
+| `grpc-cpp` | `PrepareAsyncEcho` + `CompletionQueue` (unary) | `PrepareAsyncCommand`, `Empty` reply | vcpkg `gRPC::grpc++` |
 | `zlink-cpp` | raw ROUTER `request(peer).message(...).async()` | command-only raw ROUTER `send(peer).message(...).async()` | packaged `zlink::cpp` |
 | `zlink-framework-cpp` | `route_client_t::request_to_channel(...).async<BenchPayload>()` | `route_client_t::send_to_channel(...).async()` | repository `zlink::framework`, `zlink::framework_codec_protobuf` |
 
@@ -19,39 +19,26 @@ ClientServer channels).
 
 ## 2. How to run
 
-The runner does not build. Build first; measurements always go through the perf ticket queue.
+The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. Unless `SKIP_BUILD=1`, the runner builds first with `cpp/build.sh`. The build fetches the C++ Framework
+manifest (`framework/languages/cpp/vcpkg.json`) with the `bench` feature through the vcpkg that
+`VCPKG_ROOT` points to. gRPC and protobuf come from the same manifest, so one process links one
+protobuf. The ZLink binding and Core come from the local package root (default `.artifacts/wsl`),
+`install/zlink-cpp/<binding version>` and `install/zlink-core/<Core version>`; the versions are set
+by `bindings/cpp/VERSION` and `VERSION` in the repository. Measurements always go through the perf
+ticket queue.
 
 ```bash
-# Build — the local package root (default .artifacts/wsl) must hold install/zlink-cpp/0.17.6 and
-# install/zlink-core/0.17.5 (a symlink to the release Core prefix is fine).
-cmake -S framework/bench/grpc/cpp -B framework/bench/grpc/cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build framework/bench/grpc/cpp/build --parallel 2
+# full matrix, always through the perf ticket queue
+bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "cpp with-grpc" -- \
+  bash framework/bench/grpc/cpp/run_local.sh
 
-# Full matrix, one run — always through the perf ticket queue
-bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "cpp with-grpc run 1/3" -- \
-  bash framework/bench/grpc/cpp/run_local.sh cpp-s3-run1
-
-# One cell
-bash framework/bench/grpc/cpp/run_local.sh smoke --implementations zlink-framework-cpp \
-  --patterns request-window --payload-sizes 1024 --duration-seconds 2
+# one cell
+IMPLEMENTATIONS=zlink-framework-cpp PATTERNS=request-serial PAYLOAD_SIZES=1024 RUNS=1 DURATION_SECONDS=2 \
+  bash framework/bench/grpc/cpp/run_local.sh
 ```
 
-| Input | Default | Meaning |
-|---|---|---|
-| first argument | `cpp-router-1` | run label (result directory name) |
-| `BUILD_DIR` | `cpp/build` | location of the prebuilt executables |
-| `--implementations` / `IMPLEMENTATIONS` | all three | implementation list |
-| `--patterns` / `PATTERNS` | all four | pattern list |
-| `--payload-sizes` / `PAYLOAD_SIZES` | `1024,4096` | body sizes (other values are rejected) |
-| `--duration-seconds` / `DURATION_SECONDS` | 5 | active seconds |
-| `--warmup` / `WARMUP_SECONDS` | 5 | warmup seconds |
-| `--warmup-segments` / `WARMUP_SEGMENTS` | 10 | warmup throughput observation segments |
-| `REQUEST_WINDOW`, `SEND_CONCURRENCY` | 100, 8 | other values are rejected |
-| `REQUEST_TIMEOUT_MS` / `DRAIN_BOUND_MS` | 30000 / 30000 | request timeout / drain and settle bound |
-| `COMMAND_SETTLE_MS` | 200 | quiet window for stable receive/complete counts |
-| `OUTPUT_DIR` / `--output-dir` | `log/cpp/<stamp>/<label>` | result directory |
-| `RUN_STAMP` | current time | run group id |
-| `LOAD_GATE` | 2.0 | load-average gate before measuring |
+Warmup (5 s, 10 segments), the request timeout, the drain bound, the settle quiet period and the
+load gate (load average below 2.0 before measuring) are fixed by the runner.
 
 ## 3. Process layout
 
@@ -73,7 +60,6 @@ after each cell ends.
 | Pattern | `streams.count` | `streams.inFlightPerStream` | Implementation |
 |---|---:|---:|---|
 | `request-serial` | 1 | 1 | sequential submit/completion on one application thread |
-| `request-window` | 1 | 100 | outstanding set of 100 gRPC async calls / raw coroutines / framework tasks |
 | `request-backpressure` | 1 | none | submits without an application bound, yielding to the completion pump per submit |
 | `send-saturation` | 8 | 1 | one stub per stream for gRPC, a coroutine slot for raw, a task slot for framework |
 
@@ -89,44 +75,29 @@ No driver drains transport completions directly or installs a second poller.
 | gRPC source | one channel, one unary stub per logical stream, `CompletionQueue` on the application thread |
 | gRPC target | synchronous `ServerBuilder` defaults, insecure loopback |
 | compiler | GNU C++ 13.3.0, C++20, Release `-O3` |
-| gRPC / protobuf | system 1.51.1 / 3.21.12 |
-| ZLink binding / Core | local package 0.17.6 / release 0.17.5 |
+| gRPC / protobuf | `bench` feature of the C++ Framework vcpkg manifest (versions recorded in the raw output) |
+| ZLink binding / Core | local package (versions recorded in the raw output) |
 | framework | repository source (public CMake targets; the measured commit is recorded in the raw output) |
 | source saturation instrument | `submit_thread_cores` (`CLOCK_THREAD_CPUTIME_ID`); ceiling 1 |
 | latency sample caps | A 200,000, B 2,000,000 |
 
 ## 5. Where results go
 
-```text
-framework/bench/grpc/log/cpp/<stamp>/<label>/
-├── runner.log · report.txt · load-gates.txt
-└── <implementation>-<pattern>-<payload>/
-    ├── results.json            # with-grpc-cell-v1: role, trigger, streams, target_stats
-    ├── source.log / target.log
-    ├── warmup-target-stats.json
-    └── target-stats.json       # { "snapshot": <B stats response> }
-```
-
-The two stats files are diagnostic snapshots and are wrapped in a `snapshot` container (a
-`role=target` object at the root would be mistaken for a standalone cell by the aggregator). In
-`results.json`, `completed_at_close` and `server_received_at_close` are what A saw at the active
-boundary; `completed` and `target_stats.received` are the final values after settle. The send
-`KMSG/s` in the table is, per the spec, B's active-header receive count after settle divided by
-`durationMs`; rows whose drain exceeds 10% of the active length are read together with `drain ms`
-and the consumption rate (decision record FB-051).
+Results follow the §11 layout (`<OUTPUT_DIR>/run<N>/<implementation>-<pattern>-<payload>/results.json`).
+A cell also keeps the diagnostics `source.log`, `target.log` and `target-stats.json` and `warmup-target-stats.json`.
+Only the aggregator produces tables and judgements. To measure every language and produce the
+reports in one go, use `run_all.sh` (§11). To aggregate one language, pass it together with the C
+results:
 
 ```bash
-python3 framework/bench/grpc/tools/bench_aggregate.py --lang cpp --judgement-pattern request-window \
-  --runs-glob 'framework/bench/grpc/log/cpp/<run-1>/*' \
-  --runs-glob 'framework/bench/grpc/log/cpp/<run-2>/*' \
-  --runs-glob 'framework/bench/grpc/log/cpp/<run-3>/*' \
-  --runs-glob 'framework/bench/grpc/log/c/<c-run>*' --format full
+python3 framework/bench/grpc/tools/bench_aggregate.py --lang cpp \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/c/run*' \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/cpp/run*' --format full
 ```
 
 ## 6. Known limits
 
-- `zlink-framework-cpp` shows about 7% of raw on request-serial and roughly 1 ms of per-request
-  serialisation on window (decision record FB-052). This is treated as a property of the framework
+- `zlink-framework-cpp` shows about 7% of raw on request-serial (decision record FB-052). This is treated as a property of the framework
   C++ runtime, not a bench defect, and is judged on the 3-run values.
 - `zlink-framework-cpp send-saturation`: after the warmup flood the RouteMesh send target
   disappears and every active send fails (decision record FB-054, same class as FB-012). Until the

@@ -2,12 +2,13 @@
 """Aggregate with-grpc bench runs into one report.
 
 The language harnesses measure. This tool owns everything derived from what they
-measured: unit normalization, medians, G5 reproducibility, the spec 7.2 ratios,
-and the decision about whether a ratio may be published at all.
+measured: medians, G5 reproducibility, the spec 7.2 ratios, and the decision
+about whether a ratio may be published at all. It reads only
+``<run directory>/<cell directory>/results.json`` (README section 11).
 
     bench_aggregate.py --lang dotnet \\
-        --runs-glob framework/bench/grpc/log/c/<stamp>/c-router-* \\
-        --runs-glob framework/bench/grpc/log/dotnet/<stamp>/dotnet-router-*
+        --runs-glob 'framework/bench/grpc/log/<stamp>/c/run*' \\
+        --runs-glob 'framework/bench/grpc/log/<stamp>/dotnet/run*'
 
 Runs given in one invocation form one comparison. Each run contributes only the
 implementations it measured, so the C reference runs and the language runs are
@@ -33,7 +34,7 @@ from benchagg.analysis import (  # noqa: E402
 from benchagg.model import JUDGEMENT_PATTERN, PATTERNS, PAYLOAD_SIZES  # noqa: E402
 from benchagg.readers import ReportError, read_runs  # noqa: E402
 from benchagg.render import (  # noqa: E402
-    render_contaminated,
+    render_excluded,
     render_companion_table,
     render_diagnostics_table,
     render_doc_table,
@@ -134,8 +135,8 @@ def emit(args, run_set, rows, sizes, judgements) -> str:
         out.append(render_g5_note())
         out.append("")
         out.append(render_g5_table(rows, sizes))
-        out.append("\n## Contaminated cells (FB-008, excluded from tables and judgement)\n")
-        out.append(render_contaminated(run_set.contaminated()))
+        out.append("\n## Excluded cells (FB-008, excluded from tables and judgement)\n")
+        out.append(render_excluded(run_set.excluded()))
         out.append("\n## Incomplete server-driven cells (excluded from tables and judgement)\n")
         out.append(render_incomplete(run_set.incomplete()))
     if args.format in ("full", "judgement"):

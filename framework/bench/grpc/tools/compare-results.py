@@ -2,15 +2,15 @@
 """Render a Markdown before/after comparison of with-grpc bench JSON results.
 
 The two inputs are measurement directories.  A directory may itself be a run or
-contain run directories.  The established ``benchagg`` reader owns the JSON
-schema and A/B source-target merge; this command only compares its normalized
+contain run directories; a run is a directory whose cell directories hold
+``results.json``.  The established ``benchagg`` reader owns the JSON
+schema and the completion of server-driven source cells; this command only compares its normalized
 rows.  It deliberately reports evidence instead of making a release decision.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import sys
@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from benchagg.analysis import Row, build_rows  # noqa: E402
 from benchagg.model import CellKey, RunSet  # noqa: E402
-from benchagg.readers import ReportError, read_run  # noqa: E402
+from benchagg.readers import CELL_FILE, ReportError, read_run  # noqa: E402
 
 
 HIGHER_IS_BETTER = ("throughput_per_second", "bandwidth_mb_s")
@@ -70,37 +70,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _is_result_directory(path: str) -> bool:
-    """Whether a directory has one of the result containers the reader accepts."""
-    if os.path.isfile(os.path.join(path, "report.txt")):
-        return True
-    for name in os.listdir(path):
-        if not name.endswith(".json"):
-            continue
-        if name == "cells.json":
-            return True
-        file_path = os.path.join(path, name)
-        try:
-            with open(file_path, encoding="utf-8") as handle:
-                payload = json.load(handle)
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(payload, dict) and (
-            payload.get("schema") == "with-grpc-cell-v1"
-            or payload.get("role") in ("source", "target")
-        ):
-            return True
-    return False
-
-
 def discover_run_dirs(root: str) -> list[str]:
-    """Find result directories without treating files as part of the schema."""
+    """A run is a directory that holds ``<cell directory>/results.json``."""
     if not os.path.isdir(root):
         raise ReportError(f"{root}: not a measurement directory")
     found: list[str] = []
     for current, dirs, _files in os.walk(root):
         dirs.sort()
-        if _is_result_directory(current):
+        if any(os.path.isfile(os.path.join(current, name, CELL_FILE)) for name in dirs):
             found.append(current)
             dirs[:] = []
     return found
@@ -110,12 +87,12 @@ def load_snapshot(label: str, root: str) -> Snapshot:
     run_dirs = discover_run_dirs(root)
     issues: list[InputIssue] = []
     if not run_dirs:
-        issues.append(InputIssue(label, root, "no supported JSON result document or report.txt found"))
+        issues.append(InputIssue(label, root, f"no <cell directory>/{CELL_FILE} found"))
 
     run_set = RunSet()
     for run_dir in run_dirs:
         try:
-            cells, notes = read_run(run_dir, source=run_dir)
+            cells, notes = read_run(run_dir)
         except ReportError as error:
             issues.append(InputIssue(label, run_dir, str(error)))
             continue

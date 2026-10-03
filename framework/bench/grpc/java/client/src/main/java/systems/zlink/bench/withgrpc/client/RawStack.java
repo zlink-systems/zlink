@@ -6,12 +6,14 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 import systems.zlink.bench.withgrpc.shared.RawWire;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.eventing.PollEventFlags;
+import systems.zlink.contracts.eventing.PollEvents;
 import systems.zlink.contracts.eventing.Poller;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SubmitResult;
@@ -20,14 +22,17 @@ import systems.zlink.contracts.sockets.RouterSocket;
 /** Raw binding client: ROUTER&lt;-&gt;ROUTER with an explicit target routing ID. */
 public final class RawStack implements AutoCloseable {
     private final RouterSocket router;
+    private final Poller completionPoller;
+    private final PollEvents events = new PollEvents(1);
     private final RoutingId peer;
     private final int runId;
     private final Duration timeout;
 
     private RawStack(
-        RouterSocket router, RoutingId peer,
+        RouterSocket router, Poller completionPoller, RoutingId peer,
         int runId, Duration timeout) {
         this.router = router;
+        this.completionPoller = completionPoller;
         this.peer = peer;
         this.runId = runId;
         this.timeout = timeout;
@@ -43,7 +48,18 @@ public final class RawStack implements AutoCloseable {
         router.options().mandatory(true);
         router.options().setConnectRoutingId(peer);
         router.connect(endpoint);
-        return new RawStack(router, peer, options.runId, timeout);
+        Poller completionPoller = null;
+        try {
+            completionPoller = Zlink.createPoller();
+            completionPoller.add(router, 0, PollEventFlags.POLLCOMPLETION);
+            return new RawStack(router, completionPoller, peer, options.runId, timeout);
+        } catch (RuntimeException | Error error) {
+            if (completionPoller != null) {
+                completionPoller.close();
+            }
+            router.close();
+            throw error;
+        }
     }
 
     public RawOperation request() {
@@ -103,15 +119,22 @@ public final class RawStack implements AutoCloseable {
     public abstract class RawOperation implements BenchOperation {
         public abstract RawSubmission submitRaw(int payloadSize, byte phase, long sequence);
 
-        final Poller openCompletionPoller() {
-            Poller poller = Zlink.createPoller();
-            try {
-                poller.add(router, 0, PollEventFlags.POLLCOMPLETION);
-                return poller;
-            } catch (RuntimeException | Error error) {
-                poller.close();
-                throw error;
+        /** Drives this socket's completion poller: one non-blocking pass, then waits for the rest. */
+        @Override
+        public boolean await(
+                java.util.concurrent.CompletableFuture<Void> completion, Duration timeout)
+                throws InterruptedException, ExecutionException {
+            long deadline = BenchMetricHeader.nowNs() + timeout.toNanos();
+            completionPoller.wait(events, Duration.ZERO);
+            while (!completion.isDone()) {
+                long remaining = deadline - BenchMetricHeader.nowNs();
+                if (remaining <= 0L) {
+                    return false;
+                }
+                completionPoller.wait(events, Duration.ofNanos(remaining));
             }
+            completion.get();
+            return true;
         }
 
         @Override
@@ -149,6 +172,7 @@ public final class RawStack implements AutoCloseable {
 
     @Override
     public void close() {
+        completionPoller.close();
         router.close();
     }
 }

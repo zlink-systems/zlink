@@ -20,33 +20,20 @@ bash scripts/perf/perf-ticket.sh submit -p 2 -o <owner> -d '<설명>' -- \
   bash framework/bench/grpc/dotnet/run_local.sh
 ```
 
-기본 실행은 payload 1024·4096 B에서 `request-serial`, `request-backpressure`,
-`send-saturation` 세 패턴을 돈다. 예를 들어 framework 행의 serial 셀만 실행하려면 다음처럼
-지정한다.
+입력은 규격 [§11](../README.ko.md#11-runner-입력과-결과-배치)의 환경 변수가 전부다. 기본 실행은
+payload 1024·4096 B에서 `request-serial`, `request-backpressure`, `send-saturation` 세 패턴을 돈다.
+예를 들어 framework 행의 serial 셀만 실행하려면 다음처럼 지정한다.
 
 ```bash
-bash scripts/perf/perf-ticket.sh submit -p 2 -o <owner> -d '<설명>' -- \
-  bash framework/bench/grpc/dotnet/run_local.sh \
-    --implementation zlink-framework-dotnet --scenario request-serial
+IMPLEMENTATIONS=zlink-framework-dotnet PATTERNS=request-serial \
+  bash framework/bench/grpc/dotnet/run_local.sh
 ```
 
-| 변수 | 기본값 | 의미 |
-|---|---:|---|
-| `PAYLOAD_SIZES` | `1024,4096` | payload 크기 목록 |
-| `SEND_CONCURRENCY` | `8` | `send-saturation` logical stream 수 |
-| `WARMUP` | `1000` | active 전에 수행할 warmup 호출 수 |
-| `DURATION_SECONDS` | `5` | active 구간 시간 |
-| `DRAIN_BOUND_MS` | `30000` | active 뒤 drain 상한 |
-| `TIMEOUT_SECONDS` | `300` | 시나리오 종료 상한 |
-
-`request-backpressure`에는 application in-flight 상한을 추가하지 않는다. runner가 결과 JSON
-계약을 위해 request-window 값을 전달하더라도 이 값은 선택된 세 패턴의 제출 깊이를 제한하지
-않는다.
+`request-backpressure`에는 application in-flight 상한을 추가하지 않는다.
 
 포트 범위는 `5200`~`5219`다. framework 행은 source trigger/stats `5212`/`5213`, target
 RouteMesh/stats `5214`/`5215`를 사용한다. 결과는 기본적으로
-`framework/bench/grpc/log/dotnet/with_grpc_dotnet_<stamp>/` 아래에 기록된다.
+`framework/bench/grpc/log/<stamp>/dotnet/run<N>/` 아래에 셀마다 기록된다(§11).
 
 request 처리량은 정상 echo 완료 수(KOPS), `send-saturation`은 target이 active header로 받은
-메시지 수(KMSG/s)를 기준으로 한다. 판정 기준 패턴은 `request-backpressure`이며, 이전
-`request-window` 값과 비교하지 않는다.
+메시지 수(KMSG/s)를 기준으로 한다. 판정 기준 패턴은 `request-backpressure`다.

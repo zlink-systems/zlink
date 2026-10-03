@@ -6,8 +6,8 @@
 # never overlaps a measurement window. A C++ build saturates 20 cores, and plan
 # 3.2 / G7 require the measured span to contain no other build.
 #
-# spec 8.1: gRPC comes from the SYSTEM libgrpc++ and grpc_cpp_plugin (1.51.1 on
-# this machine). vcpkg does not build gRPC here.
+# gRPC and protobuf come from the Framework vcpkg manifest (feature "bench"), so one
+# process links one protobuf.
 cmake_minimum_required(VERSION 3.20)
 project(zlink_cpp_with_grpc_bench CXX)
 
@@ -40,14 +40,11 @@ read_zlink_version(BENCH_CORE_VERSION
   "${BENCH_REPO_ROOT}/VERSION" LIBZLINK_VERSION)
 
 find_package(Threads REQUIRED)
-find_package(PkgConfig REQUIRED)
 
-# --- protobuf + grpc from the system ----------------------------------------
-find_program(BENCH_PROTOC protoc REQUIRED)
-find_program(BENCH_GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
-pkg_check_modules(BENCH_GRPCPP REQUIRED grpc++)
-pkg_check_modules(BENCH_PROTOBUF REQUIRED protobuf)
-message(STATUS "with-grpc bench: grpc++ ${BENCH_GRPCPP_VERSION}, protobuf ${BENCH_PROTOBUF_VERSION}")
+# --- protobuf + grpc from vcpkg ----------------------------------------------
+find_package(protobuf CONFIG REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
+message(STATUS "with-grpc bench: grpc++ ${gRPC_VERSION}, protobuf ${protobuf_VERSION}")
 
 set(BENCH_PROTO_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../proto/bench.proto")
 set(BENCH_PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/proto_gen")
@@ -58,14 +55,13 @@ set(BENCH_GRPC_CC "${BENCH_PROTO_GEN_DIR}/bench.grpc.pb.cc")
 set(BENCH_GRPC_H "${BENCH_PROTO_GEN_DIR}/bench.grpc.pb.h")
 add_custom_command(
   OUTPUT ${BENCH_PROTO_CC} ${BENCH_PROTO_H} ${BENCH_GRPC_CC} ${BENCH_GRPC_H}
-  COMMAND ${BENCH_PROTOC}
+  COMMAND protobuf::protoc
     --cpp_out=${BENCH_PROTO_GEN_DIR}
     --grpc_out=${BENCH_PROTO_GEN_DIR}
-    --plugin=protoc-gen-grpc=${BENCH_GRPC_CPP_PLUGIN}
+    --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
     -I${CMAKE_CURRENT_SOURCE_DIR}/../proto
-    -I${BENCH_PROTOBUF_INCLUDEDIR}
     ${BENCH_PROTO_SRC}
-  DEPENDS ${BENCH_PROTO_SRC}
+  DEPENDS ${BENCH_PROTO_SRC} protobuf::protoc gRPC::grpc_cpp_plugin
   COMMENT "Generating with-grpc bench protobuf/gRPC sources")
 
 # --- the C++ binding under test ---------------------------------------------
@@ -110,29 +106,24 @@ function(bench_target name)
     BENCH_FRAMEWORK_VERSION="${BENCH_FRAMEWORK_VERSION}"
     BENCH_BINDING_VERSION="${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION}"
     BENCH_CORE_VERSION="${ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION}"
-    BENCH_GRPC_VERSION="${BENCH_GRPCPP_VERSION}"
-    BENCH_PROTOBUF_VERSION="${BENCH_PROTOBUF_VERSION}")
+    BENCH_GRPC_VERSION="${gRPC_VERSION}"
+    BENCH_PROTOBUF_VERSION="${protobuf_VERSION}")
   target_compile_options(${name} PRIVATE -O3)
   set_target_properties(${name} PROPERTIES
     BUILD_RPATH "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib")
 endfunction()
 
 function(bench_grpc_target name)
-  target_include_directories(${name} PRIVATE
-    ${BENCH_PROTO_GEN_DIR} ${BENCH_GRPCPP_INCLUDE_DIRS} ${BENCH_PROTOBUF_INCLUDE_DIRS})
-  target_link_directories(${name} PRIVATE
-    ${BENCH_GRPCPP_LIBRARY_DIRS} ${BENCH_PROTOBUF_LIBRARY_DIRS})
-  target_link_libraries(${name} PRIVATE
-    ${BENCH_GRPCPP_LIBRARIES} ${BENCH_PROTOBUF_LIBRARIES})
+  target_include_directories(${name} PRIVATE ${BENCH_PROTO_GEN_DIR})
+  target_link_libraries(${name} PRIVATE gRPC::grpc++ protobuf::libprotobuf)
 endfunction()
 
 # --- servers -----------------------------------------------------------------
 add_executable(bench_cpp_zlink_server zlink/bench_zlink_cpp_server.cpp ${BENCH_PROTO_CC})
 target_link_libraries(bench_cpp_zlink_server PRIVATE zlink::cpp Threads::Threads)
 bench_target(bench_cpp_zlink_server)
-target_include_directories(bench_cpp_zlink_server PRIVATE ${BENCH_PROTO_GEN_DIR} ${BENCH_PROTOBUF_INCLUDE_DIRS})
-target_link_directories(bench_cpp_zlink_server PRIVATE ${BENCH_PROTOBUF_LIBRARY_DIRS})
-target_link_libraries(bench_cpp_zlink_server PRIVATE ${BENCH_PROTOBUF_LIBRARIES})
+target_include_directories(bench_cpp_zlink_server PRIVATE ${BENCH_PROTO_GEN_DIR})
+target_link_libraries(bench_cpp_zlink_server PRIVATE protobuf::libprotobuf)
 
 add_executable(bench_cpp_grpc_server grpc/bench_grpc_cpp_server.cpp ${BENCH_PROTO_CC} ${BENCH_GRPC_CC})
 target_link_libraries(bench_cpp_grpc_server PRIVATE Threads::Threads)
@@ -160,7 +151,6 @@ bench_target(bench_cpp_server_metrics_test)
 target_link_libraries(bench_cpp_server_metrics_test PRIVATE opentelemetry-cpp::metrics)
 add_test(NAME bench_cpp_server_rejections COMMAND bench_cpp_server_metrics_test)
 add_executable(bench_cpp_raw_wire_test tests/raw_wire_test.cpp ${BENCH_PROTO_CC})
-target_include_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTO_GEN_DIR} ${BENCH_PROTOBUF_INCLUDE_DIRS})
-target_link_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTOBUF_LIBRARY_DIRS})
-target_link_libraries(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTOBUF_LIBRARIES})
+target_include_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTO_GEN_DIR})
+target_link_libraries(bench_cpp_raw_wire_test PRIVATE protobuf::libprotobuf)
 add_test(NAME bench_cpp_raw_wire_identity COMMAND bench_cpp_raw_wire_test)

@@ -94,8 +94,8 @@ class Cell:
     run: str
     source: str = ""
 
-    #: ``None`` is the client-driven legacy shape. Server-driven records
-    #: name the process that wrote them and are joined by ``run_id`` / ``cell_id``.
+    #: ``None`` is the client-driven shape (C). ``"source"`` is a server-driven
+    #: cell identified by ``run_id`` / ``cell_id`` from its trigger.
     role: str | None = None
     run_id: str | None = None
     cell_id: str | None = None
@@ -103,9 +103,8 @@ class Cell:
     streams: dict[str, Any] = field(default_factory=dict)
     target_stats: dict[str, Any] = field(default_factory=dict)
 
-    #: A server-driven source is complete only after target stats have either
-    #: been embedded by the runner or joined from a target record. Incomplete
-    #: records remain visible but never contribute to medians or judgements.
+    #: A server-driven source is complete only when the runner embedded its
+    #: ``target_stats``. Incomplete records remain visible but never contribute to medians or judgements.
     status: str = "complete"
     incomplete_reason: str | None = None
 
@@ -183,8 +182,8 @@ class Cell:
     contaminated: bool = False
     contamination_reason: str | None = None
 
-    #: Runner-specific columns kept verbatim (C: submitted/completed/errors/
-    #: blocked/max_outstanding/submit_wait_ms). Never used for judgement.
+    #: Runner-specific fields kept verbatim (submitted, completed, errors, ...).
+    #: Only ``errors`` is read, for the diagnostics table; never used for judgement.
     extra: dict[str, float] = field(default_factory=dict)
 
     @property
@@ -245,6 +244,11 @@ class Cell:
         return self.server_received_at_close is not None
 
     @property
+    def excluded_from_aggregation(self) -> bool:
+        """Whether this cell is omitted from every table and judgement."""
+        return self.contaminated or self.drain_bound_hit is True
+
+    @property
     def complete(self) -> bool:
         return self.status == "complete"
 
@@ -272,11 +276,14 @@ class RunSet:
             self.runs.append(cell.run)
 
     def for_key(self, key: CellKey) -> list[Cell]:
-        """Complete run copies, excluding contaminated and incomplete cells."""
+        """Complete run copies, excluding contaminated, drain-bound, and incomplete cells."""
         return [
             c for c in self.cells
-            if c.key == key and not c.contaminated and c.complete
+            if c.key == key and not c.excluded_from_aggregation and c.complete
         ]
+
+    def excluded(self) -> list[Cell]:
+        return [c for c in self.cells if c.excluded_from_aggregation]
 
     def contaminated(self) -> list[Cell]:
         return [c for c in self.cells if c.contaminated]
