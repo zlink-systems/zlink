@@ -5,6 +5,7 @@
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/provider_relocation_repository.hpp"
 #include "runtime/execution/infrastructure_wait_guard.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "../support/owner_lease_time_store.hpp"
 
 #include <gtest/gtest.h>
@@ -62,6 +63,78 @@ TEST (ProviderLocationRepositoryTest, OwnerLeaseReadContinuesAfterProviderComple
     ASSERT_FALSE (read.await_ready ());
     store.completion.complete (result_t<store_read_result_t>::success (store_missing_t{}));
     ASSERT_TRUE (std::holds_alternative<owner_lease_missing_t> (read.result ().value ()));
+}
+
+class deferred_relocation_provider_t final : public relocation_store_t
+{
+  public:
+    task_t<blob_put_result_t> put (blob_reference_t reference,
+                                   std::span<const std::byte> payload,
+                                   std::chrono::milliseconds retention) override
+    {
+        return inner.put (std::move (reference), payload, retention);
+    }
+    task_t<blob_read_result_t> read (blob_reference_t) override
+    {
+        entered.set_value ();
+        return read_completion.task ();
+    }
+    task_t<blob_renew_result_t> renew (blob_reference_t, std::chrono::milliseconds) override
+    {
+        entered.set_value ();
+        return renew_completion.task ();
+    }
+    task_t<void> erase (blob_reference_t) override
+    {
+        entered.set_value ();
+        return erase_completion.task ();
+    }
+    in_memory_relocation_store_t inner;
+    std::promise<void> entered;
+    task_completion_source_t<blob_read_result_t> read_completion;
+    task_completion_source_t<blob_renew_result_t> renew_completion;
+    task_completion_source_t<void> erase_completion;
+};
+
+TEST (CppFrameworkOpaqueRelocationStore, ProviderTasksYieldHandlerWorkerUntilCompletion)
+{
+    configure_handler_coroutine_executor (1);
+    install_host_context_hooks ();
+    for (int operation = 0; operation < 3; ++operation) {
+        SCOPED_TRACE (operation);
+        deferred_relocation_provider_t provider;
+        provider_relocation_repository_t repository (provider);
+        auto entered = provider.entered.get_future ();
+        std::promise<void> probe;
+        auto probed = probe.get_future ();
+        std::promise<bool> completion;
+        auto completed = completion.get_future ();
+        const auto observe = [&completion] (auto pending) {
+            detail::observe_task_completion (pending, [&completion] (const auto &result) {
+                completion.set_value (result.has_value ());
+            });
+        };
+        handler_coroutine_executor ().post_native_continuation ([&] {
+            if (operation == 0)
+                observe (repository.get_relocation ("held"));
+            else if (operation == 1)
+                observe (repository.renew_relocation ("held", std::chrono::hours (1)));
+            else
+                observe (repository.delete_relocation ("held"));
+        });
+        entered.wait ();
+        handler_coroutine_executor ().post_native_continuation ([&probe] { probe.set_value (); });
+        const bool yielded = probed.wait_for (300ms) == std::future_status::ready;
+        provider.read_completion.complete (
+          result_t<blob_read_result_t>::success (blob_missing_t{}));
+        provider.renew_completion.complete (
+          result_t<blob_renew_result_t>::success (blob_missing_t{}));
+        provider.erase_completion.complete (result_t<void>::success ());
+        EXPECT_TRUE (completed.get ());
+        probed.wait ();
+        EXPECT_TRUE (yielded);
+    }
+    shutdown_handler_coroutine_executor ();
 }
 
 std::vector<std::byte> bytes (std::string_view value)

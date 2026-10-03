@@ -29,11 +29,13 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -3849,6 +3851,146 @@ TEST (ZLinkFrameworkStoreLocationResolvers, OwnerReadOrderObservationCountsOnlyT
         read (owner_key);
     }
     EXPECT_TRUE (store.owner_was_read_in_expected_order ());
+}
+
+// The provider holds each handler's scan until the test has checked that
+// both executor workers can run another continuation.
+thread_local bool hold_user_spot_scan = false;
+
+class held_user_spot_store_t final : public zlink::framework::location_store_t
+{
+  public:
+    using completion_t =
+      zlink::framework::task_completion_source_t<zlink::framework::store_scan_result_t>;
+    zlink::framework::task_t<zlink::framework::store_read_result_t>
+    read (zlink::framework::store_key_t key) override
+    {
+        return inner.read (std::move (key));
+    }
+    zlink::framework::task_t<zlink::framework::store_write_result_t>
+    write (zlink::framework::store_write_request_t request) override
+    {
+        return inner.write (std::move (request));
+    }
+    zlink::framework::task_t<zlink::framework::store_scan_result_t>
+    scan (zlink::framework::store_scan_request_t request) override
+    {
+        if (!hold_user_spot_scan)
+            return inner.scan (std::move (request));
+        auto completion = std::make_shared<completion_t> ();
+        auto task = completion->task ();
+        {
+            std::lock_guard lock (mutex);
+            held.push_back (completion);
+        }
+        entered.notify_all ();
+        return task;
+    }
+    bool wait_for_handlers ()
+    {
+        std::unique_lock lock (mutex);
+        return entered.wait_for (lock, std::chrono::seconds (2), [&] { return held.size () == 2; });
+    }
+    void release ()
+    {
+        std::vector<std::shared_ptr<completion_t>> completions;
+        {
+            std::lock_guard lock (mutex);
+            completions.swap (held);
+        }
+        for (const auto &completion : completions)
+            completion->complete (
+              zlink::framework::result_t<zlink::framework::store_scan_result_t>::failure (
+                zlink::framework::framework_error_kind_t::unavailable, "held Store scan released"));
+    }
+    zlink::framework::runtime::in_memory_location_store_t inner;
+    std::mutex mutex;
+    std::condition_variable entered;
+    std::vector<std::shared_ptr<completion_t>> held;
+};
+
+class yielding_user_spot_client_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    yielding_user_spot_client_t (zlink::framework::app_t &app, held_user_spot_store_t &store) :
+        app (app), store (store)
+    {
+    }
+
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
+    {
+        namespace fw = zlink::framework;
+        auto &manager = services.get_required<fw::spot_manager_t> ();
+        fw::runtime::install_host_context_hooks ();
+        std::promise<void> probe;
+        auto probed = probe.get_future ();
+        std::promise<void> completed;
+        auto done = completed.get_future ();
+        std::atomic_int remaining{2};
+        for (int index = 0; index < 2; ++index) {
+            fw::runtime::handler_coroutine_executor ().post_native_continuation (
+              [&manager, &remaining, &completed, index] {
+                  hold_user_spot_scan = true;
+                  auto pending =
+                    manager
+                      .get_or_create (fw::spot_id_t ("yielding-spot-" + std::to_string (index)),
+                                      "room")
+                      .async ();
+                  hold_user_spot_scan = false;
+                  fw::detail::observe_task_completion (
+                    pending,
+                    [&remaining, &completed] (const fw::result_t<fw::spot_create_result_t> &) {
+                        if (--remaining == 0)
+                            completed.set_value ();
+                    });
+              });
+        }
+        both_handlers_entered = store.wait_for_handlers ();
+        fw::runtime::handler_coroutine_executor ().post_native_continuation (
+          [&probe] { probe.set_value (); });
+        worker_available =
+          probed.wait_for (std::chrono::milliseconds (300)) == std::future_status::ready;
+        store.release ();
+        done.wait ();
+        probed.wait ();
+        app.stop ();
+        co_return;
+    }
+    void stop () noexcept override {}
+    bool both_handlers_entered = false;
+    bool worker_available = false;
+    zlink::framework::app_t &app;
+    held_user_spot_store_t &store;
+};
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      UserSpotCreationOnEveryHandlerWorkerYieldsDuringStoreLookup)
+{
+    namespace fw = zlink::framework;
+    fw::runtime::configure_handler_coroutine_executor (2);
+    auto store = std::make_shared<held_user_spot_store_t> ();
+    auto app = fw::app_t::create ();
+    app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
+        options.handler_coroutine_workers (2);
+        options.add_location_store (store);
+        options.add_route_mesh ("yielding-spot-mesh")
+          .set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from ("yielding-spot-node"))
+          .listen ("tcp://127.0.0.1:0")
+          .add_spot_factory<local_user_spot_t> (
+            "room",
+            [] (fw::spot_context_t context) {
+                return std::make_shared<local_user_spot_t> (std::move (context));
+            },
+            [] (auto &factory) { factory.disable_relocation (); });
+    });
+    auto service = std::make_unique<yielding_user_spot_client_t> (app, *store);
+    auto *client = service.get ();
+    app.add_hosted_service (std::move (service));
+    EXPECT_EQ (0, app.run (0, nullptr));
+    EXPECT_TRUE (client->both_handlers_entered);
+    EXPECT_TRUE (client->worker_available);
+    fw::runtime::shutdown_handler_coroutine_executor ();
 }
 
 zlink::framework::task_t<void> resolve_on_handler_executor (store_location_resolvers_t &resolvers,
