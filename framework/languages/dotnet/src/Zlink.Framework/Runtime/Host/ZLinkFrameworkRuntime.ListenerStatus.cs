@@ -1,3 +1,5 @@
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
+
 namespace Zlink.Framework.Runtime.Host;
 
 internal sealed partial class ZLinkFrameworkRuntime

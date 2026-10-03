@@ -1,5 +1,6 @@
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -215,11 +216,6 @@ internal sealed class ZLinkRelocationChunkAssembler
             })
         );
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }
 
 /// <summary>
@@ -345,9 +341,4 @@ internal sealed class ZLinkRelocationTransferBudget
         }
         return admitted;
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

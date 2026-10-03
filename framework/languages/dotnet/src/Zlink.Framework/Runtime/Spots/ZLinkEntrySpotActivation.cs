@@ -3,6 +3,7 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Timers;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -168,9 +169,6 @@ internal sealed partial class ZLinkEntrySpotActivation
                 _ = Task.Run(() => CompleteFinalizationAsync(result.Completion));
         return new ValueTask(result.Task);
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 
     private async Task CompleteFinalizationAsync(TaskCompletionSource completion)
     {

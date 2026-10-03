@@ -959,6 +959,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_TESTS
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
+  add_executable(test_cpp_framework_result_lifetime
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_result_lifetime.cpp)
+  target_compile_features(test_cpp_framework_result_lifetime PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_result_lifetime PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include)
+  zlink_framework_cpp_add_test(NAME test_cpp_framework_result_lifetime
+    COMMAND test_cpp_framework_result_lifetime LABELS "framework-unit;framework-foundation" TIMEOUT 30)
+
   add_executable(test_cpp_framework_error_mapping
     tests/Zlink.Framework.UnitTests/test_cpp_framework_error_mapping.cpp
     framework/src/runtime/messaging/request_failure_mapper.cpp)

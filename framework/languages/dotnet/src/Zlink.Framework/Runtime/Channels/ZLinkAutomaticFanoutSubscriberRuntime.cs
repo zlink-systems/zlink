@@ -1,3 +1,5 @@
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
+
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed record ZLinkFanoutConnectionPlan(
@@ -253,8 +255,6 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
             lastFailure
         );
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
     private sealed class Connection(
         ZLinkAutomaticFanoutSubscriberRuntime owner,
         ZLinkFanoutPublisherDescriptor descriptor
@@ -477,11 +477,5 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
             }
             catch (OperationCanceledException) { }
         }
-
-        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-            operation.GetAwaiter().GetResult();
-
-        private static void AwaitStateLane(ValueTask operation) =>
-            operation.GetAwaiter().GetResult();
     }
 }

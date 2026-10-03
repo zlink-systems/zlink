@@ -99,7 +99,9 @@ function Protect-ConfigFile {
 
 function Get-LogCount {
     param([string[]]$Path, [string]$Evidence)
-    return @(Select-String -Path $Path -Pattern $Evidence -SimpleMatch -ErrorAction SilentlyContinue).Count
+    $existingPaths = @($Path | Where-Object { Test-Path -LiteralPath $_ })
+    if ($existingPaths.Count -eq 0) { return 0 }
+    return @(Select-String -LiteralPath $existingPaths -Pattern $Evidence -SimpleMatch).Count
 }
 
 function Wait-LogCount {

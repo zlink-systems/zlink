@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Timers;
 
@@ -159,11 +160,6 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
 
         return (true, _queue.Dequeue(), TimeSpan.Zero);
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private void SignalWake()
     {

@@ -2,6 +2,7 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Spots;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
@@ -1659,11 +1660,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             }
         }
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     //  Spec 32-framework-error-model:91-92 — an Ok terminal whose reply lacks
     //  the operation-specific completion cannot be processed: ProtocolError,

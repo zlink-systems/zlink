@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Configuration;
 
@@ -195,11 +196,6 @@ internal sealed class ZLinkEndpointConnections
                 "Connections are managed by the location store for this role."
             );
     }
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 
     private sealed record AttachmentPreparation(
         Attachment Attachment,

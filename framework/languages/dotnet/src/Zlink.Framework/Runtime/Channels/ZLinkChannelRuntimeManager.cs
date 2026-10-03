@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -344,9 +345,4 @@ internal sealed class ZLinkChannelRuntimeManager(
 
         return (sourceName[..separatorIndex], sourceName[(separatorIndex + 1)..]);
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

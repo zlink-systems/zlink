@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Host;
 
@@ -310,11 +311,6 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
             Cancellation.Dispose();
         }
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }
 
 internal readonly record struct ZLinkRemoteRelayFrameAppendResult(

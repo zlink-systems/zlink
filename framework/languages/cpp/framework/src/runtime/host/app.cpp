@@ -3110,13 +3110,13 @@ struct relocation_preflight_t
     std::int64_t source_application_version = 0;
 };
 
-relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &state,
-                                                           const relocation_options_t &options)
+task_t<relocation_preflight_t>
+relocation_topology_preflight_once (detail::app_state_t &state, const relocation_options_t &options)
 {
     if (state.has_manual_service_topology && state.has_manual_service_topology ())
-        return {relocation_reason_t::manual_topology_unsupported, 0};
+        co_return relocation_preflight_t{relocation_reason_t::manual_topology_unsupported, 0};
     if (state.route_mesh_nodes.empty ())
-        return {relocation_reason_t::target_unavailable, 0};
+        co_return relocation_preflight_t{relocation_reason_t::target_unavailable, 0};
 
     try {
         auto provider = state.services.build_provider ();
@@ -3138,14 +3138,12 @@ relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &
             const auto local_rid = node->routing_id ();
             const auto status = node->status ();
             if (!local_rid || status.lifecycle_generation () == 0)
-                return {relocation_reason_t::runtime_not_ready, 0};
+                co_return relocation_preflight_t{relocation_reason_t::runtime_not_ready, 0};
 
             std::vector<mesh_node_descriptor_t> descriptors;
             location_page_request_t page;
             do {
-                auto listed = runtime::infrastructure_result ([&] {
-                                  return store.list_mesh_nodes (node->mesh_name (), page);
-                              }).value ();
+                auto listed = co_await store.list_mesh_nodes (node->mesh_name (), page);
                 descriptors.insert (descriptors.end (),
                                     std::make_move_iterator (listed.items.begin ()),
                                     std::make_move_iterator (listed.items.end ()));
@@ -3158,15 +3156,15 @@ relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &
                   return descriptor.rid.to_hex () == local_rid->to_hex ()
                          && descriptor.lifecycle_generation == status.lifecycle_generation ();
               });
-            if (source == descriptors.end ()
-                || !runtime::infrastructure_result ([&] {
-                        return live.owner_admission_lifetime (source->owner_id);
-                    }).value ()) {
-                return {relocation_reason_t::store_unavailable, 0};
+            std::optional<std::chrono::steady_clock::duration> source_lifetime;
+            if (source != descriptors.end ())
+                source_lifetime = co_await live.owner_admission_lifetime (source->owner_id);
+            if (!source_lifetime) {
+                co_return relocation_preflight_t{relocation_reason_t::store_unavailable, 0};
             }
             if (source_application_version
                 && *source_application_version != source->application_version) {
-                return {relocation_reason_t::state_incompatible, 0};
+                co_return relocation_preflight_t{relocation_reason_t::state_incompatible, 0};
             }
             source_application_version = source->application_version;
             if (options.mode == relocation_mode_t::rolling_update
@@ -3180,32 +3178,35 @@ relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &
                 ? source->application_version
                 : *options.target_application_version;
 
-            const auto replacement = std::any_of (
-              descriptors.begin (), descriptors.end (),
-              [&] (const mesh_node_descriptor_t &candidate) {
-                  return !local_rids.contains (candidate.rid.to_hex ())
-                         && candidate.lifecycle_generation != 0
-                         && runtime::infrastructure_result ([&] {
-                                return live.owner_admission_lifetime (candidate.owner_id);
-                            }).value ()
-                         && supports_relocation_source (*source, candidate,
-                                                        target_application_version)
-                         && node->has_admitted_peer (candidate.rid, candidate.lifecycle_generation);
-              });
+            bool replacement = false;
+            for (const auto &candidate : descriptors) {
+                if (local_rids.contains (candidate.rid.to_hex ())
+                    || candidate.lifecycle_generation == 0)
+                    continue;
+                const auto candidate_lifetime =
+                  co_await live.owner_admission_lifetime (candidate.owner_id);
+                if (candidate_lifetime
+                    && supports_relocation_source (*source, candidate, target_application_version)
+                    && node->has_admitted_peer (candidate.rid, candidate.lifecycle_generation)) {
+                    replacement = true;
+                    break;
+                }
+            }
             if (!replacement) {
-                return {relocation_reason_t::target_unavailable, target_application_version};
+                co_return relocation_preflight_t{relocation_reason_t::target_unavailable,
+                                                 target_application_version};
             }
         }
         const auto effective = options.mode == relocation_mode_t::planned_maintenance
                                  ? *source_application_version
                                  : *options.target_application_version;
-        return {std::nullopt, effective, *source_application_version};
+        co_return relocation_preflight_t{std::nullopt, effective, *source_application_version};
     }
     catch (const std::invalid_argument &) {
         throw;
     }
     catch (...) {
-        return {relocation_reason_t::store_unavailable, 0};
+        co_return relocation_preflight_t{relocation_reason_t::store_unavailable, 0};
     }
 }
 
@@ -3223,26 +3224,21 @@ std::chrono::milliseconds relocation_topology_poll_interval (detail::app_state_t
     return std::chrono::milliseconds (25);
 }
 
-void wait_for_relocation_topology_poll (std::chrono::steady_clock::time_point deadline_at,
-                                        std::chrono::milliseconds polling_interval)
-{
-    std::this_thread::sleep_until (
-      std::min (deadline_at, std::chrono::steady_clock::now () + polling_interval));
-}
-
-relocation_preflight_t
+task_t<relocation_preflight_t>
 relocation_topology_preflight_until (detail::app_state_t &state,
                                      const relocation_options_t &options,
                                      std::chrono::steady_clock::time_point deadline_at)
 {
     const auto polling_interval = relocation_topology_poll_interval (state);
     for (;;) {
-        auto result = relocation_topology_preflight_once (state, options);
+        auto result = co_await relocation_topology_preflight_once (state, options);
         if (result.blocker != relocation_reason_t::target_unavailable
             || std::chrono::steady_clock::now () >= deadline_at) {
-            return result;
+            co_return result;
         }
-        wait_for_relocation_topology_poll (deadline_at, polling_interval);
+        co_await detail::delay (std::chrono::ceil<std::chrono::milliseconds> (
+          std::min (deadline_at, std::chrono::steady_clock::now () + polling_interval)
+          - std::chrono::steady_clock::now ()));
     }
 }
 
@@ -3370,7 +3366,13 @@ task_t<relocation_result_t> app_t::relocate (relocation_options_t options,
     if (deadline <= std::chrono::milliseconds::zero ())
         throw std::invalid_argument ("relocation deadline must be greater than zero");
     options.deadline = deadline;
-    const auto preflight_deadline_at = std::chrono::steady_clock::now () + deadline;
+    return relocate_async (std::move (options), wait_cancellation);
+}
+
+task_t<relocation_result_t> app_t::relocate_async (relocation_options_t options,
+                                                   std::stop_token wait_cancellation)
+{
+    const auto preflight_deadline_at = std::chrono::steady_clock::now () + *options.deadline;
 
     auto &operation = _state->relocation_operation;
     std::thread completed_worker;
@@ -3388,7 +3390,8 @@ task_t<relocation_result_t> app_t::relocate (relocation_options_t options,
     if (runtime_state () != framework_runtime_state_t::serving) {
         preflight.blocker = relocation_reason_t::runtime_not_ready;
     } else {
-        preflight = relocation_topology_preflight_until (*_state, options, preflight_deadline_at);
+        preflight =
+          co_await relocation_topology_preflight_until (*_state, options, preflight_deadline_at);
         if (!preflight.blocker
             && (!_state->services.contains (std::type_index (typeid (relocation_repository_t)))
                 || !_state->services.contains (std::type_index (typeid (location_repository_t))))) {
@@ -3418,35 +3421,34 @@ task_t<relocation_result_t> app_t::relocate (relocation_options_t options,
                   options.mode == relocation_mode_t::rolling_update
                     ? *options.target_application_version
                     : operation.source_application_version;
-                return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
+                co_return result_t<relocation_result_t>::success (
                   {options.mode, rejected_effective_target, relocation_outcome_t::blocked,
-                   relocation_reason_t::operation_in_progress}));
+                   relocation_reason_t::operation_in_progress});
             }
         } else if (operation.terminal) {
-            return task_t<relocation_result_t> (
-              result_t<relocation_result_t>::success (operation.result));
+            co_return result_t<relocation_result_t>::success (operation.result);
         } else {
             if (preflight.blocker) {
-                return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
+                co_return result_t<relocation_result_t>::success (
                   {options.mode, preflight.effective_target_application_version,
-                   relocation_outcome_t::blocked, *preflight.blocker}));
+                   relocation_outcome_t::blocked, *preflight.blocker});
             }
             const auto readiness_meshes = begin_application_relocation_readiness (*_state);
             if (!publish_mesh_descriptor_state (*_state, framework_runtime_state_t::relocating)) {
                 (void) publish_mesh_descriptor_state (*_state, framework_runtime_state_t::serving);
                 cancel_application_relocation_readiness (*_state, readiness_meshes);
-                return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
+                co_return result_t<relocation_result_t>::success (
                   {options.mode, preflight.effective_target_application_version,
-                   relocation_outcome_t::blocked, relocation_reason_t::store_unavailable}));
+                   relocation_outcome_t::blocked, relocation_reason_t::store_unavailable});
             }
             operation.deadline = std::chrono::duration_cast<std::chrono::milliseconds> (
               preflight_deadline_at - std::chrono::steady_clock::now ());
             if (operation.deadline <= std::chrono::milliseconds::zero ()) {
                 (void) publish_mesh_descriptor_state (*_state, framework_runtime_state_t::serving);
                 cancel_application_relocation_readiness (*_state, readiness_meshes);
-                return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
+                co_return result_t<relocation_result_t>::success (
                   {options.mode, preflight.effective_target_application_version,
-                   relocation_outcome_t::blocked, relocation_reason_t::target_unavailable}));
+                   relocation_outcome_t::blocked, relocation_reason_t::target_unavailable});
             }
             operation.started = true;
             operation.options = options;
@@ -3468,7 +3470,7 @@ task_t<relocation_result_t> app_t::relocate (relocation_options_t options,
         operation.waiters.push_back (waiter);
     }
     waiter->arm (wait_cancellation);
-    return task;
+    co_return co_await runtime::await_result (std::move (task));
 }
 
 task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
@@ -3979,7 +3981,7 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         bool spots_closed = true;
         for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
             auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
-            if (runtime && !runtime->close_all_user_spots ()) {
+            if (runtime && !runtime->close_all_user_spots (deadline_at)) {
                 spots_closed = false;
                 break;
             }

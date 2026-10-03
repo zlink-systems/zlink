@@ -54,327 +54,279 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken = default
     )
     {
-        // Authority writes share owner and capacity conditions. Apply the
-        // same contention rule to every mutation: an unchanged authority
-        // version permits resubmission; a changed version ends this CAS.
-        const int maximumAllocationContentionRetries = 8;
-        for (var attempt = 0; ; attempt++)
-        {
-            var result = await CompareExchangeAuthorityCoreAsync(
-                    key,
-                    expectedStoreVersion,
-                    mutation,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (
-                attempt >= maximumAllocationContentionRetries
-                || result
-                    is not ZLinkAuthorityCompareExchangeResult.Conflict
-                    {
-                        Current: ZLinkAuthorityReadResult.Found current
-                    }
-                || !string.Equals(
-                    current.Snapshot.StoreVersion,
-                    expectedStoreVersion,
-                    StringComparison.Ordinal
-                )
-                || current.Snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
-            )
-                return result;
-
-            var delayMilliseconds = Math.Min(32, 1 << Math.Min(attempt, 5));
-            await Task.Delay(TimeSpan.FromMilliseconds(delayMilliseconds), cancellationToken)
-                .ConfigureAwait(false);
-        }
-    }
-
-    private async ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityCoreAsync(
-        ZLinkAuthorityKey key,
-        string expectedStoreVersion,
-        ZLinkAuthorityMutation mutation,
-        CancellationToken cancellationToken
-    )
-    {
         ValidateAuthorityKey(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedStoreVersion);
         ArgumentNullException.ThrowIfNull(mutation);
         ValidateAuthorityMutation(mutation);
 
-        var metaKey = AuthorityMetaKey(key);
-        var current = await ReadAuthorityRecordAsync(key, cancellationToken).ConfigureAwait(false);
-        if (
-            current is null
-            || current.Snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
-            || current.Version.Value != expectedStoreVersion
-            || current.Meta.AggregateFence is not null
-        )
+        for (; ; )
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            var metaKey = AuthorityMetaKey(key);
+            var current = await ReadAuthorityRecordAsync(key, cancellationToken)
+                .ConfigureAwait(false);
             if (
-                mutation is ZLinkAuthorityMutation.Delete
-                && current is not null
-                && current.Version.Value != expectedStoreVersion
+                current is null
+                || current.Snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
+                || current.Version.Value != expectedStoreVersion
+                || current.Meta.AggregateFence is not null
             )
             {
-                // A source handoff cleanup can arrive after the target has
-                // published a newer authority version. Submit the old
-                // fence to the opaque provider so an in-flight cleanup
-                // remains observable and retryable. The expected version
-                // cannot match the target row, so this batch cannot delete
-                // the target's single authority row.
-                await provider
-                    .WriteAsync(
-                        new ZLinkStoreWriteRequest(
-                            [
-                                new ZLinkStoreCondition.Version(
-                                    metaKey,
-                                    new ZLinkStoreVersion(expectedStoreVersion)
-                                ),
-                            ],
-                            [new ZLinkStoreMutation.Delete(metaKey)]
+                if (
+                    mutation is ZLinkAuthorityMutation.Delete
+                    && current is not null
+                    && current.Version.Value != expectedStoreVersion
+                )
+                {
+                    // A source handoff cleanup can arrive after the target has
+                    // published a newer authority version. Submit the old
+                    // fence to the opaque provider so an in-flight cleanup
+                    // remains observable and retryable. The expected version
+                    // cannot match the target row, so this batch cannot delete
+                    // the target's single authority row.
+                    await provider
+                        .WriteAsync(
+                            new ZLinkStoreWriteRequest(
+                                [
+                                    new ZLinkStoreCondition.Version(
+                                        metaKey,
+                                        new ZLinkStoreVersion(expectedStoreVersion)
+                                    ),
+                                ],
+                                [new ZLinkStoreMutation.Delete(metaKey)]
+                            ),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                }
+
+                //  Four separate reasons collapse into one Conflict, and the caller
+                //  reports all of them as "authority changed".
+                if (Diagnostics.ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
+                    Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                        $"cas_conflict_reason missing={current is null} "
+                            + $"state={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(current?.Snapshot.Allocation.State)} "
+                            + $"version_match={current is not null && current.Version.Value == expectedStoreVersion} "
+                            + $"fence={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(current?.Meta.AggregateFence)}"
+                    );
+                return Conflict(current);
+            }
+
+            var conditions = new List<ZLinkStoreCondition>
+            {
+                new ZLinkStoreCondition.Version(metaKey, current.Version),
+            };
+            var mutations = new List<ZLinkStoreMutation>();
+            AuthorityMeta? meta = null;
+            if (mutation is ZLinkAuthorityMutation.Restore restore)
+            {
+                ValidateAuthorityPayload(restore.Payload);
+                if (
+                    current.Snapshot.OwnerId != restore.ExpectedOwner.OwnerId
+                    || current.Snapshot.OwnerLeaseGeneration
+                        != restore.ExpectedOwner.LeaseGeneration
+                )
+                    return Conflict(current);
+                meta = current.Meta with { Payload = restore.Payload.ToArray() };
+            }
+            else if (mutation is ZLinkAuthorityMutation.Delete)
+            {
+                var owner = await ReadLiveOwnerAsync(
+                        new ZLinkLocationOwnerToken(
+                            current.Snapshot.OwnerId,
+                            current.Snapshot.OwnerLeaseGeneration
                         ),
                         cancellationToken
                     )
                     .ConfigureAwait(false);
-            }
-
-            //  Four separate reasons collapse into one Conflict, and the caller
-            //  reports all of them as "authority changed".
-            if (Diagnostics.ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
-                Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"cas_conflict_reason missing={current is null} "
-                        + $"state={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(current?.Snapshot.Allocation.State)} "
-                        + $"version_match={current is not null && current.Version.Value == expectedStoreVersion} "
-                        + $"fence={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(current?.Meta.AggregateFence)}"
+                if (owner is null)
+                    return Conflict(current);
+                var target = await ReadCapacityAsync(
+                        current.Snapshot.Allocation.Descriptor,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                var capacity = target.Record.Clone();
+                ApplyCapacity(capacity, current.Snapshot.Allocation, activeDelta: -1);
+                conditions.Add(
+                    new ZLinkStoreCondition.Value(OwnerKey(owner.Token.OwnerId), owner.Value)
                 );
-            return Conflict(current);
-        }
-
-        if (mutation is ZLinkAuthorityMutation.Restore restore)
-        {
-            ValidateAuthorityPayload(restore.Payload);
-            if (
-                current.Snapshot.OwnerId != restore.ExpectedOwner.OwnerId
-                || current.Snapshot.OwnerLeaseGeneration != restore.ExpectedOwner.LeaseGeneration
-            )
-                return Conflict(current);
-            return await StoreAuthorityAsync(
-                    current,
-                    current.Meta with
-                    {
-                        Payload = restore.Payload.ToArray(),
-                    },
-                    restore.Payload,
-                    [new ZLinkStoreCondition.Version(metaKey, current.Version)],
-                    [],
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        }
-
-        if (mutation is ZLinkAuthorityMutation.Delete)
-        {
-            var owner = await ReadLiveOwnerAsync(
-                    new ZLinkLocationOwnerToken(
+                conditions.Add(target.Condition);
+                mutations.Add(new ZLinkStoreMutation.Delete(metaKey));
+                mutations.Add(new ZLinkStoreMutation.Put(target.Key, Encode(capacity), null));
+            }
+            else
+            {
+                var put = (ZLinkAuthorityMutation.Put)mutation;
+                ValidateAuthorityPayload(put.Payload);
+                var changesOwner =
+                    put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
+                var targetOwner =
+                    put.TargetOwner
+                    ?? new ZLinkLocationOwnerToken(
                         current.Snapshot.OwnerId,
                         current.Snapshot.OwnerLeaseGeneration
-                    ),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (owner is null)
-                return Conflict(current);
-            var target = await ReadCapacityAsync(
-                    current.Snapshot.Allocation.Descriptor,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            var capacity = target.Record.Clone();
-            ApplyCapacity(capacity, current.Snapshot.Allocation, activeDelta: -1);
+                    );
+                var liveOwner = await ReadLiveOwnerAsync(targetOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                if (liveOwner is null)
+                    return Conflict(current);
+
+                conditions.Add(
+                    new ZLinkStoreCondition.Value(OwnerKey(targetOwner.OwnerId), liveOwner.Value)
+                );
+                var nextAllocation = current.Snapshot.Allocation;
+                if (changesOwner)
+                {
+                    var targetAllocation = put.TargetAllocation!;
+                    if (
+                        targetAllocation.ObjectKind != current.Snapshot.Allocation.ObjectKind
+                        || !StringComparer.Ordinal.Equals(
+                            targetAllocation.StableType,
+                            current.Snapshot.Allocation.StableType
+                        )
+                        || targetAllocation.Capacity != current.Snapshot.Allocation.Capacity
+                    )
+                        return Conflict(current);
+                    var target = await ReadEligibleTargetAsync(
+                            targetAllocation.Descriptor,
+                            targetAllocation.DescriptorLifecycleGeneration,
+                            targetOwner,
+                            targetAllocation.ObjectKind,
+                            targetAllocation.StableType,
+                            cancellationToken,
+                            requireNewPlacementEligibility: false
+                        )
+                        .ConfigureAwait(false);
+                    if (target is null)
+                        return Conflict(current);
+                    AddCondition(conditions, target.DescriptorCondition);
+                    AddCondition(conditions, target.OwnerCondition);
+
+                    var sourceCapacity = await ReadCapacityAsync(
+                            current.Snapshot.Allocation.Descriptor,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    var targetCapacity = await ReadCapacityAsync(
+                            targetAllocation.Descriptor,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    AddCondition(conditions, sourceCapacity.Condition);
+                    AddCondition(conditions, targetCapacity.Condition);
+                    var sourceUsage = sourceCapacity.Record.Clone();
+                    var targetUsage =
+                        sourceCapacity.Key == targetCapacity.Key
+                            ? sourceUsage
+                            : targetCapacity.Record.Clone();
+                    ApplyCapacity(sourceUsage, current.Snapshot.Allocation, activeDelta: -1);
+                    ApplyCapacity(targetUsage, targetAllocation, activeDelta: 1);
+                    mutations.Add(
+                        new ZLinkStoreMutation.Put(sourceCapacity.Key, Encode(sourceUsage), null)
+                    );
+                    if (targetCapacity.Key != sourceCapacity.Key)
+                        mutations.Add(
+                            new ZLinkStoreMutation.Put(
+                                targetCapacity.Key,
+                                Encode(targetUsage),
+                                null
+                            )
+                        );
+                    nextAllocation = targetAllocation;
+                }
+
+                var nextObjectGeneration = current.Meta.ObjectGeneration;
+                var nextAuthorityOwnerGeneration = current.Meta.AuthorityOwnerGeneration;
+                if (put.GenerationTransition == ZLinkAuthorityGenerationTransition.Reincarnate)
+                {
+                    var objectCounter = await ReadObjectGenerationCounterAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    var ownerCounter = await ReadAuthorityOwnerGenerationCounterAsync(
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    if (
+                        objectCounter.Value == MaximumGeneration
+                        || ownerCounter.Value == MaximumGeneration
+                    )
+                        return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
+                    nextObjectGeneration = objectCounter.Value;
+                    nextAuthorityOwnerGeneration = ownerCounter.Value;
+                    AddCondition(conditions, objectCounter.Condition);
+                    AddCondition(conditions, ownerCounter.Condition);
+                    mutations.Add(
+                        new ZLinkStoreMutation.Put(
+                            ObjectGenerationCounterKey(),
+                            EncodeGenerationCounter(nextObjectGeneration + 1),
+                            null
+                        )
+                    );
+                    mutations.Add(
+                        new ZLinkStoreMutation.Put(
+                            AuthorityOwnerGenerationCounterKey(),
+                            EncodeGenerationCounter(nextAuthorityOwnerGeneration + 1),
+                            null
+                        )
+                    );
+                }
+                if (changesOwner)
+                {
+                    var counter = await ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    nextAuthorityOwnerGeneration =
+                        put.TargetAuthorityOwnerGeneration == 0
+                            ? counter.Value == MaximumGeneration
+                                ? 0
+                                : counter.Value
+                            : put.TargetAuthorityOwnerGeneration;
+                    if (nextAuthorityOwnerGeneration == 0)
+                        return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
+                    if (
+                        nextAuthorityOwnerGeneration <= current.Meta.AuthorityOwnerGeneration
+                        || nextAuthorityOwnerGeneration > long.MaxValue
+                    )
+                        return Conflict(current);
+                    if (nextAuthorityOwnerGeneration >= counter.Value)
+                    {
+                        if (nextAuthorityOwnerGeneration == MaximumGeneration)
+                            return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
+                        AddCondition(conditions, counter.Condition);
+                        mutations.Add(
+                            new ZLinkStoreMutation.Put(
+                                AuthorityOwnerGenerationCounterKey(),
+                                EncodeGenerationCounter(nextAuthorityOwnerGeneration + 1),
+                                null
+                            )
+                        );
+                    }
+                }
+                meta = current.Meta with
+                {
+                    Payload = put.Payload.ToArray(),
+                    ObjectGeneration = nextObjectGeneration,
+                    AuthorityOwnerGeneration = nextAuthorityOwnerGeneration,
+                    OwnerId = targetOwner.OwnerId,
+                    OwnerLeaseGeneration = targetOwner.LeaseGeneration,
+                    Allocation = nextAllocation,
+                };
+            }
+            if (meta is not null)
+                mutations.Add(new ZLinkStoreMutation.Put(metaKey, Encode(meta), null));
             var result = await provider
-                .WriteAsync(
-                    new ZLinkStoreWriteRequest(
-                        [
-                            new ZLinkStoreCondition.Version(metaKey, current.Version),
-                            new ZLinkStoreCondition.Value(
-                                OwnerKey(owner.Token.OwnerId),
-                                owner.Value
-                            ),
-                            target.Condition,
-                        ],
-                        [
-                            new ZLinkStoreMutation.Delete(metaKey),
-                            new ZLinkStoreMutation.Put(target.Key, Encode(capacity), null),
-                        ]
-                    ),
-                    cancellationToken
-                )
+                .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
                 .ConfigureAwait(false);
-            return result is ZLinkStoreWriteResult.Applied applied
+            if (result is not ZLinkStoreWriteResult.Applied applied)
+                continue;
+            return meta is null
                 ? new ZLinkAuthorityCompareExchangeResult.Deleted(
-                    applied.PutVersions[target.Key].Value,
+                    applied.PutVersions.Values.Single().Value,
                     applied.StoreNow
                 )
-                : Conflict(
-                    await ReadAuthorityRecordAsync(key, cancellationToken).ConfigureAwait(false)
+                : new ZLinkAuthorityCompareExchangeResult.Stored(
+                    Snapshot(meta, applied.PutVersions[metaKey], applied.StoreNow, meta.Payload)
                 );
         }
-
-        var put = (ZLinkAuthorityMutation.Put)mutation;
-        ValidateAuthorityPayload(put.Payload);
-        var changesOwner = put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
-        var targetOwner =
-            put.TargetOwner
-            ?? new ZLinkLocationOwnerToken(
-                current.Snapshot.OwnerId,
-                current.Snapshot.OwnerLeaseGeneration
-            );
-        var liveOwner = await ReadLiveOwnerAsync(targetOwner, cancellationToken)
-            .ConfigureAwait(false);
-        if (liveOwner is null)
-            return Conflict(current);
-
-        var conditions = new List<ZLinkStoreCondition>
-        {
-            new ZLinkStoreCondition.Version(metaKey, current.Version),
-            new ZLinkStoreCondition.Value(OwnerKey(targetOwner.OwnerId), liveOwner.Value),
-        };
-        var mutations = new List<ZLinkStoreMutation>();
-        var nextAllocation = current.Snapshot.Allocation;
-        if (changesOwner)
-        {
-            var targetAllocation = put.TargetAllocation!;
-            if (
-                targetAllocation.ObjectKind != current.Snapshot.Allocation.ObjectKind
-                || !StringComparer.Ordinal.Equals(
-                    targetAllocation.StableType,
-                    current.Snapshot.Allocation.StableType
-                )
-                || targetAllocation.Capacity != current.Snapshot.Allocation.Capacity
-            )
-                return Conflict(current);
-            var target = await ReadEligibleTargetAsync(
-                    targetAllocation.Descriptor,
-                    targetAllocation.DescriptorLifecycleGeneration,
-                    targetOwner,
-                    targetAllocation.ObjectKind,
-                    targetAllocation.StableType,
-                    cancellationToken,
-                    requireNewPlacementEligibility: false
-                )
-                .ConfigureAwait(false);
-            if (target is null)
-                return Conflict(current);
-            AddCondition(conditions, target.DescriptorCondition);
-            AddCondition(conditions, target.OwnerCondition);
-
-            var sourceCapacity = await ReadCapacityAsync(
-                    current.Snapshot.Allocation.Descriptor,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            var targetCapacity = await ReadCapacityAsync(
-                    targetAllocation.Descriptor,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            AddCondition(conditions, sourceCapacity.Condition);
-            AddCondition(conditions, targetCapacity.Condition);
-            var sourceUsage = sourceCapacity.Record.Clone();
-            var targetUsage =
-                sourceCapacity.Key == targetCapacity.Key
-                    ? sourceUsage
-                    : targetCapacity.Record.Clone();
-            ApplyCapacity(sourceUsage, current.Snapshot.Allocation, activeDelta: -1);
-            ApplyCapacity(targetUsage, targetAllocation, activeDelta: 1);
-            mutations.Add(
-                new ZLinkStoreMutation.Put(sourceCapacity.Key, Encode(sourceUsage), null)
-            );
-            if (targetCapacity.Key != sourceCapacity.Key)
-                mutations.Add(
-                    new ZLinkStoreMutation.Put(targetCapacity.Key, Encode(targetUsage), null)
-                );
-            nextAllocation = targetAllocation;
-        }
-
-        var nextObjectGeneration = current.Meta.ObjectGeneration;
-        var nextAuthorityOwnerGeneration = current.Meta.AuthorityOwnerGeneration;
-        if (put.GenerationTransition == ZLinkAuthorityGenerationTransition.Reincarnate)
-        {
-            var objectCounter = await ReadObjectGenerationCounterAsync(cancellationToken)
-                .ConfigureAwait(false);
-            var ownerCounter = await ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
-                .ConfigureAwait(false);
-            if (objectCounter.Value == MaximumGeneration || ownerCounter.Value == MaximumGeneration)
-                return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
-            nextObjectGeneration = objectCounter.Value;
-            nextAuthorityOwnerGeneration = ownerCounter.Value;
-            AddCondition(conditions, objectCounter.Condition);
-            AddCondition(conditions, ownerCounter.Condition);
-            mutations.Add(
-                new ZLinkStoreMutation.Put(
-                    ObjectGenerationCounterKey(),
-                    EncodeGenerationCounter(nextObjectGeneration + 1),
-                    null
-                )
-            );
-            mutations.Add(
-                new ZLinkStoreMutation.Put(
-                    AuthorityOwnerGenerationCounterKey(),
-                    EncodeGenerationCounter(nextAuthorityOwnerGeneration + 1),
-                    null
-                )
-            );
-        }
-        if (changesOwner)
-        {
-            var counter = await ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
-                .ConfigureAwait(false);
-            nextAuthorityOwnerGeneration =
-                put.TargetAuthorityOwnerGeneration == 0
-                    ? counter.Value == MaximumGeneration
-                        ? 0
-                        : counter.Value
-                    : put.TargetAuthorityOwnerGeneration;
-            if (nextAuthorityOwnerGeneration == 0)
-                return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
-            if (
-                nextAuthorityOwnerGeneration <= current.Meta.AuthorityOwnerGeneration
-                || nextAuthorityOwnerGeneration > long.MaxValue
-            )
-                return Conflict(current);
-            if (nextAuthorityOwnerGeneration >= counter.Value)
-            {
-                if (nextAuthorityOwnerGeneration == MaximumGeneration)
-                    return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
-                AddCondition(conditions, counter.Condition);
-                mutations.Add(
-                    new ZLinkStoreMutation.Put(
-                        AuthorityOwnerGenerationCounterKey(),
-                        EncodeGenerationCounter(nextAuthorityOwnerGeneration + 1),
-                        null
-                    )
-                );
-            }
-        }
-        var meta = current.Meta with
-        {
-            Payload = put.Payload.ToArray(),
-            ObjectGeneration = nextObjectGeneration,
-            AuthorityOwnerGeneration = nextAuthorityOwnerGeneration,
-            OwnerId = targetOwner.OwnerId,
-            OwnerLeaseGeneration = targetOwner.LeaseGeneration,
-            Allocation = nextAllocation,
-        };
-        return await StoreAuthorityAsync(
-                current,
-                meta,
-                put.Payload,
-                conditions,
-                mutations,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
     }
 
     public async ValueTask<ZLinkAuthorityScanResult> ListAuthoritiesAsync(
@@ -3933,32 +3885,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                 )
             );
         }
-    }
-
-    private async ValueTask<ZLinkAuthorityCompareExchangeResult> StoreAuthorityAsync(
-        StoredAuthority current,
-        AuthorityMeta meta,
-        ReadOnlyMemory<byte> payload,
-        IReadOnlyList<ZLinkStoreCondition> conditions,
-        IReadOnlyList<ZLinkStoreMutation> extraMutations,
-        CancellationToken cancellationToken
-    )
-    {
-        var metaKey = AuthorityMetaKey(current.Key);
-        var mutations = new List<ZLinkStoreMutation>(extraMutations)
-        {
-            new ZLinkStoreMutation.Put(metaKey, Encode(meta), null),
-        };
-        var result = await provider
-            .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
-            .ConfigureAwait(false);
-        if (result is not ZLinkStoreWriteResult.Applied applied)
-            return Conflict(
-                await ReadAuthorityRecordAsync(current.Key, cancellationToken).ConfigureAwait(false)
-            );
-        return new ZLinkAuthorityCompareExchangeResult.Stored(
-            Snapshot(meta, applied.PutVersions[metaKey], applied.StoreNow, payload)
-        );
     }
 
     private async ValueTask<StoredAuthority?> ReadAuthorityRecordAsync(

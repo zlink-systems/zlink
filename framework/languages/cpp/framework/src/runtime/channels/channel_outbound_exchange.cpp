@@ -1038,11 +1038,12 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                 }
                 const auto mapped = map_native_exception (error);
                 terminal_trace.failed_as (mapped);
-                const auto *framework = detail::framework_error (mapped);
+                auto failure = detail::result_access_t::failure<zlink::message_t> (mapped);
+                const auto *framework = failure.error ();
                 request_metrics.timed_out =
                   framework
                   && detail::boundary_state (*framework) == detail::boundary_error_t::timed_out;
-                co_return detail::result_access_t::failure<zlink::message_t> (mapped);
+                co_return failure;
             }
         }
         try {
@@ -1159,11 +1160,12 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
             }
             const auto mapped = map_native_exception (error);
             terminal_trace.failed_as (mapped);
-            const auto *framework = detail::framework_error (mapped);
+            auto failure = detail::result_access_t::failure<zlink::message_t> (mapped);
+            const auto *framework = failure.error ();
             request_metrics.timed_out =
               framework
               && detail::boundary_state (*framework) == detail::boundary_error_t::timed_out;
-            co_return detail::result_access_t::failure<zlink::message_t> (mapped);
+            co_return failure;
         }
     }
     request_metrics.timed_out = true;

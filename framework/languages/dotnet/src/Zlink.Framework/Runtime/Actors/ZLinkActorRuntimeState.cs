@@ -1,6 +1,7 @@
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Identifiers;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Actors;
 
@@ -101,11 +102,6 @@ internal sealed class ZLinkActorRuntimeState(
 
     /// <summary>MeshNode that activated this Actor in the current process.</summary>
     internal string? MeshName => Activation?.MeshName ?? Context?.MeshName;
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private T RunState<T>(Func<T> operation) => AwaitStateLane(_lane.RunAsync(operation));
 

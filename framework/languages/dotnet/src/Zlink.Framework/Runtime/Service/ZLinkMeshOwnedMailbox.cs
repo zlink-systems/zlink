@@ -1,6 +1,7 @@
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Service;
 
@@ -68,90 +69,78 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
 
     internal int Count => AwaitStateLane(_lane.RunAsync(() => _records.Count));
 
-    internal bool TryEnqueue(ZLinkMeshQueuedRecord record)
+    // The admission decision depends only on the record, so the producer does
+    // not wait for the mailbox turn. The record joins the mailbox FIFO before
+    // this returns; `enqueued` runs in that turn after the record is visible,
+    // so a readiness signal can never precede the record it announces.
+    internal bool TryEnqueue(ZLinkMeshQueuedRecord record, Action? enqueued = null)
     {
         var pendingBytes = record.PendingBytes;
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (pendingBytes == ulong.MaxValue)
-                    return false;
-                _records.Enqueue(record);
-                if (record.HasApplicationJobAdmission)
-                    _applicationAdmissionRecords++;
-                _pendingBytes = checked(_pendingBytes + pendingBytes);
+        if (pendingBytes == ulong.MaxValue)
+            return false;
+        return _lane.TryPost(() =>
+        {
+            _records.Enqueue(record);
+            if (record.HasApplicationJobAdmission)
+                _applicationAdmissionRecords++;
+            _pendingBytes = checked(_pendingBytes + pendingBytes);
 
-                // Publish accounting before another mailbox turn can dequeue
-                // this record. Readiness reads this existing aggregate directly.
-                onRecordEnqueued(pendingBytes);
-                return true;
-            })
-        );
+            // Publish accounting before another mailbox turn can dequeue
+            // this record. Readiness reads this existing aggregate directly.
+            onRecordEnqueued(pendingBytes);
+            enqueued?.Invoke();
+        });
     }
 
-    internal bool TryClaim(
+    internal ValueTask<(bool Ready, int Count, bool Admitted)> TryClaimAsync(
         bool requireApplicationAdmission,
-        bool claim,
-        out int count,
-        out bool applicationAdmissionReserved
-    )
-    {
-        var result = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                var admitted = _applicationAdmissionRecords == _records.Count;
-                if (
-                    _claimedRecordCount >= 0
-                    || _records.Count == 0
-                    || (requireApplicationAdmission && !admitted)
-                )
-                    return (Ready: false, Count: 0, Admitted: false);
-                if (claim)
-                    _claimedRecordCount = _records.Count;
-                return (Ready: true, Count: _records.Count, Admitted: admitted);
-            })
-        );
-        count = result.Count;
-        applicationAdmissionReserved = result.Admitted;
-        return result.Ready;
-    }
+        bool claim
+    ) =>
+        _lane.RunAsync(() =>
+        {
+            var admitted = _applicationAdmissionRecords == _records.Count;
+            if (
+                _claimedRecordCount >= 0
+                || _records.Count == 0
+                || (requireApplicationAdmission && !admitted)
+            )
+                return (Ready: false, Count: 0, Admitted: false);
+            if (claim)
+                _claimedRecordCount = _records.Count;
+            return (Ready: true, Count: _records.Count, Admitted: admitted);
+        });
 
-    internal bool Drain(MeshReceiveBatch batch, int maximumRecords)
-    {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
+    internal ValueTask<bool> DrainAsync(MeshReceiveBatch batch, int maximumRecords) =>
+        _lane.RunAsync(() =>
+        {
+            var count = 0;
+            var limit = Math.Min(maximumRecords, _claimedRecordCount);
+            while (count < limit && _records.Count != 0)
             {
-                var count = 0;
-                var limit = Math.Min(maximumRecords, _claimedRecordCount);
-                while (count < limit && _records.Count != 0)
-                {
-                    var candidate = _records.Peek();
-                    if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
-                        break;
-                    var record = _records.Dequeue();
-                    _claimedRecordCount--;
-                    if (record.HasApplicationJobAdmission)
-                        _applicationAdmissionRecords--;
-                    _pendingBytes -= record.PendingBytes;
-                    onRecordDequeued(record.PendingBytes);
-                    batch.Add(record.Record, record.TakeParts(), record.TakePayloadOwner());
-                    count++;
-                }
-                return count != 0;
-            })
-        );
-    }
+                var candidate = _records.Peek();
+                if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
+                    break;
+                var record = _records.Dequeue();
+                _claimedRecordCount--;
+                if (record.HasApplicationJobAdmission)
+                    _applicationAdmissionRecords--;
+                _pendingBytes -= record.PendingBytes;
+                onRecordDequeued(record.PendingBytes);
+                batch.Add(record.Record, record.TakeParts(), record.TakePayloadOwner());
+                count++;
+            }
+            return count != 0;
+        });
 
-    internal bool Release()
-    {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                _claimedRecordCount = -1;
-                return _records.Count != 0;
-            })
-        );
-    }
+    // Releasing a claim decides nothing for the releasing worker. The release
+    // joins the mailbox FIFO before this returns, so the next claim observes it.
+    internal void Release(Action recordsRemain) =>
+        _lane.TryPost(() =>
+        {
+            _claimedRecordCount = -1;
+            if (_records.Count != 0)
+                recordsRemain();
+        });
 
     internal void Dispose()
     {
@@ -174,11 +163,6 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         foreach (var record in removed)
             record.Dispose();
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }
 
 internal sealed class ZLinkMeshQueuedRecord : IDisposable
