@@ -2353,10 +2353,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                                     contentType,
                                     reply,
                                     failure)) {
+                                // The release ended after the admission read: this node no longer
+                                // holds the route's owner fence, so the message was never accepted.
                                 closeRemoteInstancePayload(parts);
                                 failure.accept(
-                                        new IllegalStateException(
-                                                "Instance Spot target rejected admission"));
+                                        systems.zlink.framework.runtime.messaging
+                                                .ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
+                                                "Spot owner fence has changed: "
+                                                        + header.route().targetSpotId()));
                             }
                         });
         return true;
