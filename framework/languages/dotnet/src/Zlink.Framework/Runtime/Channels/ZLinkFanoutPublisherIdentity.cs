@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -45,9 +46,6 @@ internal sealed class ZLinkFanoutPublisherIdentity(
     internal Snapshot MarkRetiring() => AwaitStateLane(MarkRetiringAsync());
 
     internal Snapshot MarkServing() => AwaitStateLane(MarkServingAsync());
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 
     internal readonly record struct Snapshot(
         ulong DescriptorRevision,

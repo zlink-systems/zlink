@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -1458,13 +1459,13 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private T RunState<T>(Func<T> work)
     {
         _stateLane.ThrowIfReentrant();
-        return _stateLane.RunAsync(work).AsTask().GetAwaiter().GetResult();
+        return AwaitStateLane(_stateLane.RunAsync(work));
     }
 
     private void RunState(Action work)
     {
         _stateLane.ThrowIfReentrant();
-        _stateLane.RunAsync(work).AsTask().GetAwaiter().GetResult();
+        AwaitStateLane(_stateLane.RunAsync(work));
     }
 
     private IDisposable EnterRelocationAdmissionOpening(
@@ -1538,7 +1539,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private void CompleteChildLanes()
     {
         _stateLane.ThrowIfReentrant();
-        _ = _stateLane.RunAsync(CompleteChildLanesOnStateLane).AsTask().GetAwaiter().GetResult();
+        _ = AwaitStateLane(_stateLane.RunAsync(CompleteChildLanesOnStateLane));
     }
 
     private ZLinkSerialExecutionQueue[] CompleteChildLanesOnStateLane()

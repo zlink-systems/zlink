@@ -4,6 +4,7 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Host;
 
@@ -852,11 +853,6 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             return Interlocked.CompareExchange(ref _executionScope, created, null) ?? created;
         }
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     internal ZLinkRuntimeOperationLease EnterOperation(bool countAsRequest = false)
     {

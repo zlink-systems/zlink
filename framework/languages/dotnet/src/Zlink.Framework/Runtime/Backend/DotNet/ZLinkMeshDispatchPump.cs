@@ -6,6 +6,7 @@ using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Messaging;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet;
 
@@ -982,11 +983,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         _disposed = true;
         return (_stop, _loop);
     }
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 
     // Per-spot decoded-record queues plus the registered dispatch-event handler.
     internal sealed class SpotDispatchState

@@ -1,6 +1,7 @@
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Service;
 
@@ -174,11 +175,6 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         foreach (var record in removed)
             record.Dispose();
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }
 
 internal sealed class ZLinkMeshQueuedRecord : IDisposable

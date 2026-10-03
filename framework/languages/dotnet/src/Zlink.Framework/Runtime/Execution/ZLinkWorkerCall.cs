@@ -1,3 +1,5 @@
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
+
 namespace Zlink.Framework.Runtime.Execution;
 
 /// <summary>
@@ -273,11 +275,5 @@ internal sealed class ZLinkWorkerCall<TResult>(
                 )
             );
         }
-
-        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-            operation.GetAwaiter().GetResult();
-
-        private static void AwaitStateLane(ValueTask operation) =>
-            operation.GetAwaiter().GetResult();
     }
 }

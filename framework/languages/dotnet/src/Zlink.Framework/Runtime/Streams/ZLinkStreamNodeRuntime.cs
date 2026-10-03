@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -835,9 +836,4 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         header.Dispose();
         payload.Dispose();
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

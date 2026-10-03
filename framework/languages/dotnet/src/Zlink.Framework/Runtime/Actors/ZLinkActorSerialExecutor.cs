@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Actors;
 
@@ -205,11 +206,6 @@ internal sealed class ZLinkActorSerialExecutor
             })
         );
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private static async ValueTask<Turn> AwaitTurnAsync(Waiter waiter)
     {

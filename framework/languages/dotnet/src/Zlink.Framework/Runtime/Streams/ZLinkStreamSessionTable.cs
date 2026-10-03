@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -240,8 +241,6 @@ internal sealed class ZLinkStreamSessionTable(
         _sessions.Add(routingId, created);
         return new(created, false, false, CancellationToken.None);
     }
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private readonly record struct SessionCreationAdmission(
         ZLinkStreamSessionRuntime? Existing,

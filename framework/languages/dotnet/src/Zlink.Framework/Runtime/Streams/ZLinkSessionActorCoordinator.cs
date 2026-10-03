@@ -1,3 +1,5 @@
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
+
 namespace Zlink.Framework.Runtime.Streams;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -168,9 +170,6 @@ internal sealed class ZLinkSessionActorCoordinator(
                 })
             );
         }
-
-        private static void AwaitStateLane(ValueTask operation) =>
-            operation.GetAwaiter().GetResult();
 
         internal sealed class Lease(ActorOperationGate owner) : IDisposable
         {

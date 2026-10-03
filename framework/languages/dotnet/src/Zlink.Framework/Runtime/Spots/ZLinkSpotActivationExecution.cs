@@ -3,6 +3,7 @@ using System.Numerics;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -2421,11 +2422,6 @@ internal abstract partial class ZLinkSpotActivation
                 return pending;
             })
         );
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     internal ValueTask RestoreLogicalTimersAsync(
         IReadOnlyList<ZLinkRelocationLogicalTimer> logicalTimers

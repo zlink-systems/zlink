@@ -255,3 +255,21 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         await _completed.Task.ConfigureAwait(false);
     }
 }
+
+/// <summary>
+/// The blocking compatibility boundary for state lanes (spec 06 §5 "완료 신호와 블로킹 호환
+/// 경계").
+/// </summary>
+/// <remarks>
+/// A synchronous surface that must return after its lane work has finished blocks here. Lane
+/// completions run their continuations asynchronously, so the wait never runs the caller's
+/// continuation inside the lane turn it waits for. Code that runs in a framework execution context
+/// (handler, lane turn, dispatch worker, completion callback) uses the asynchronous surface instead.
+/// </remarks>
+internal static class ZLinkStateLaneWait
+{
+    internal static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    internal static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+}

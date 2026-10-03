@@ -1,5 +1,6 @@
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Dispatch;
 
@@ -692,11 +693,6 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         ZLinkApplicationJobQueueLease? AdmittedLease,
         bool PressureChanged
     );
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }
 
 /// <summary>
@@ -958,11 +954,6 @@ internal sealed class ZLinkReceiveFlowController
     );
 
     private readonly record struct ApplyPreparation(bool ShouldApply, FlowUpdate Update);
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private sealed class Registration : IAsyncDisposable
     {
