@@ -16,7 +16,6 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.locations.ZLinkLocationReadiness;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.locations.ZLinkLocationRuntimeQuery;
-import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.monitoring.ZLinkClientServerRuntime;
 import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
 import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
@@ -93,7 +92,6 @@ import java.util.logging.Logger;
 
 public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageFlowControl {
     public static final Duration DEFAULT_TERMINATION_DEADLINE = Duration.ofSeconds(30);
-    private static final long MONITORING_STORE_QUERY_TIMEOUT_MILLIS = 500;
     private static final long RELOCATION_TARGET_WAIT_POLL_MILLIS = 25;
     private static final long EXECUTOR_GRACEFUL_SHUTDOWN_SECONDS = 1;
     private static final long EXECUTOR_FORCED_SHUTDOWN_SECONDS = 4;
@@ -762,7 +760,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     public systems.zlink.framework.runtime.internal.monitoring.ZLinkMeshNodeMonitoringProjection
-            monitoringMeshNodeProjection(String meshName, RoutingId rid) {
+            monitoringMeshNodeProjection(String meshName) {
         var configured =
                 registration.meshNodes().stream()
                         .filter(candidate -> candidate.meshName().equals(meshName))
@@ -775,44 +773,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (node == null) {
             throw new ZLinkConfigurationException("RouteMesh is not configured: " + meshName);
         }
-        if (locationStores != null) {
-            var store = locationStores.unifiedStore();
-            try {
-                long storeDeadlineNanos =
-                        System.nanoTime()
-                                + TimeUnit.MILLISECONDS.toNanos(
-                                        MONITORING_STORE_QUERY_TIMEOUT_MILLIS);
-                String continuation = null;
-                do {
-                    long remainingMillis =
-                            TimeUnit.NANOSECONDS.toMillis(storeDeadlineNanos - System.nanoTime());
-                    if (remainingMillis <= 0) {
-                        throw new CompletionException(
-                                new TimeoutException(
-                                        "Runtime monitoring Store query deadline exceeded"));
-                    }
-                    var page =
-                            store.listMeshNodes(meshName, new ZLinkPageRequest(128, continuation))
-                                    .toCompletableFuture()
-                                    .orTimeout(remainingMillis, TimeUnit.MILLISECONDS)
-                                    .join();
-                    for (var descriptor : page.items()) {
-                        if (descriptor.rid().equals(rid)) {
-                            return systems.zlink.framework.runtime.internal.monitoring
-                                    .ZLinkMeshNodeMonitoringProjection.fromDescriptor(descriptor)
-                                    .withLocalActivationRecords(
-                                            activeActorCount(meshName),
-                                            activeSpotCount(meshName),
-                                            activationConcurrency(configured));
-                        }
-                    }
-                    continuation = page.continuationToken();
-                } while (continuation != null);
-            } catch (RuntimeException ignored) {
-                // Monitoring keeps the configured limits available while the
-                // descriptor store is unavailable.
-            }
-        }
+        // The MeshNode descriptor publisher builds the descriptor from this same projection, so
+        // status reads the values this process publishes and never waits on the Location Store.
         return systems.zlink.framework.runtime.internal.monitoring.ZLinkMeshNodeMonitoringProjection
                 .fromRegistration(
                         configured, node.status().descriptorRevision(), node.placementWeight())
