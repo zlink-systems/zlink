@@ -189,7 +189,6 @@ class mesh_node_runtime_t
                                          host::user_spot_closer_t closer = {});
     void configure_spot_route_fence_resolver (
       host::spot_route_fence_resolver_t resolver,
-      std::chrono::milliseconds route_cache_max_age,
       std::chrono::milliseconds owner_lease_fencing_margin = std::chrono::seconds (5),
       std::chrono::milliseconds session_relocation_seal_timeout =
         location_options_t{}.session_relocation_seal_timeout);
@@ -617,7 +616,6 @@ class mesh_node_runtime_t
     std::function<task_t<std::optional<runtime::spot_address_t>> (actor_ref_t)>
       _actor_route_resolver;
     std::function<void (const runtime::protocol::actor_route_fence_t &)> _actor_route_invalidator;
-    std::chrono::milliseconds _route_cache_max_age{15'000};
     std::chrono::milliseconds _owner_lease_fencing_margin{5'000};
     std::chrono::milliseconds _session_relocation_seal_timeout =
       location_options_t{}.session_relocation_seal_timeout;

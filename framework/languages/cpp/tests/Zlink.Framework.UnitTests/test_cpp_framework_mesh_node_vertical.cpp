@@ -378,8 +378,7 @@ void configure_vertical_route_fences (zlink::framework::detail::mesh_node_runtim
       [] (zlink::routing_id_t, std::string, std::uint64_t)
         -> zlink::framework::task_t<std::optional<zlink::framework::runtime::host::route_fence_t>> {
           co_return zlink::framework::runtime::host::route_fence_t{1, 1};
-      },
-      std::chrono::minutes (1));
+      });
 }
 
 bool receive_one (zlink::framework::detail::mesh_node_runtime_t &node,

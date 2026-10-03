@@ -1984,7 +1984,6 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     address.authority_owner_generation,
                     static_cast<std::uint64_t> (address.owner.lease_generation)};
               },
-              location_options_at_startup.route_cache_max_age,
               location_options_at_startup.owner_lease_fencing_margin,
               location_options_at_startup.session_relocation_seal_timeout);
             node->configure_actor_route_resolver (
