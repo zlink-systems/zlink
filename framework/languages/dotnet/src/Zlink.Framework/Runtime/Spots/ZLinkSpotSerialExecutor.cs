@@ -469,6 +469,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     internal bool HasPendingAcceptedState(Func<object, bool> predicate) =>
         _queue.HasPendingAcceptedState(predicate);
 
+    internal bool HasPendingAcceptedStateOrCloseApplicationAdmission(
+        Func<object, bool> predicate
+    ) => _queue.HasPendingAcceptedStateOrCloseApplicationAdmission(predicate);
+
     internal void VisitPendingAcceptedState(
         ZLinkSpotSerialExecutor? successor,
         Action<object> visit,
@@ -890,6 +894,13 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         }
         if (admission == ZLinkAcceptedWorkAdmission.Accepted)
             return (admission, item.Completion);
+        // A queue closed under the Close seal is the release decision of
+        // Close step 3: this incarnation no longer admits the message.
+        if (
+            admission == ZLinkAcceptedWorkAdmission.Closed
+            && _relocationBarrier?.Kind == ZLinkExecutionSealKind.Close
+        )
+            return (ZLinkAcceptedWorkAdmission.Closing, Task.CompletedTask);
         return (admission, Task.CompletedTask);
     }
 

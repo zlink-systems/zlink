@@ -1139,6 +1139,21 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             );
     }
 
+    // Spot messaging §7 step 3 under the admission gate: an accepted state
+    // already waiting keeps admission open for the next incarnation; otherwise
+    // application admission closes in the same decision, so a later message is
+    // refused before admission.
+    internal bool HasPendingAcceptedStateOrCloseApplicationAdmission(Func<object, bool> predicate)
+    {
+        lock (_admissionGate)
+        {
+            if (_applicationQueue.Any(item => item.AcceptedState is { } state && predicate(state)))
+                return true;
+            _applicationAdmissionClosed = true;
+            return false;
+        }
+    }
+
     internal void VisitPendingAcceptedState(
         ZLinkSerialExecutionQueue? successor,
         Action<object> visit,
