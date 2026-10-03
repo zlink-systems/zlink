@@ -292,7 +292,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
       throw translateBindingResultError(error, 'submit');
     }
     try {
-      const replies = await submission.reply;
+      const replies = await requestReply(submission);
       return copyAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error, 'completion');
@@ -355,7 +355,7 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
       throw translateBindingResultError(error, 'submit');
     }
     try {
-      const replies = await submission.reply;
+      const replies = await requestReply(submission);
       return copyAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error, 'completion');
@@ -366,6 +366,14 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
     this.requireOpen();
     return receiveRecord(this.socket, dontWait);
   }
+}
+
+async function requestReply(submission: ReturnType<RequestSubmitOperation['submit']>): Promise<Message[]> {
+  if (submission.result === SubmitResult.Backpressured) {
+    const [, replies] = await Promise.all([submission.admitted, submission.reply]);
+    return replies;
+  }
+  return submission.reply;
 }
 
 class NodeRawMonitorPort implements ZLinkRawMonitorPort {
