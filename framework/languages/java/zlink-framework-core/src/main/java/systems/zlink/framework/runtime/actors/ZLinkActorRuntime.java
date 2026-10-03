@@ -2263,10 +2263,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return locations.actorJoinedSpot(actor, spotId);
     }
 
-    private CompletionStage<Void> renewActorLeftLocation(ZLinkActor actor) {
-        return locations.actorLeftSpot(actor);
-    }
-
     private CompletionStage<Void> renewActorMovedToEntrySpotLocation(
             ZLinkActor actor, RoutingId nodeRid) {
         return locations.actorMovedToEntrySpot(actor, nodeRid);
@@ -4410,12 +4406,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         context.markJoined(actorRef, spotId, spot);
     }
 
-    public CompletionStage<Void> markJoined(
-            ZLinkActor actor, ZLinkBackendActorRef actorRef, String spotId, ZLinkSpot<?> spot) {
-        markJoinedState(actor, actorRef, spotId, spot);
-        return renewActorJoinedLocation(actor, spotId);
-    }
-
     /** Applies the membership already selected by the canonical target CAS. */
     public void markRelocatedActorJoined(
             ZLinkActor actor, ZLinkBackendActorRef actorRef, String spotId, ZLinkSpot<?> spot) {
@@ -4531,20 +4521,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public void setEntryRouterChannelId(ZLinkActor actor, String entryRouterChannelId) {
         requireContext(actor).setEntryRouterChannelId(entryRouterChannelId);
-    }
-
-    private void markLeftState(ZLinkActor actor) {
-        DefaultActorContext context = actorRegistry.context(actor);
-        if (context == null) {
-            throw new ZLinkConfigurationException(
-                    "actor is not managed by this runtime: " + actor.context().actorId());
-        }
-        context.markLeft();
-    }
-
-    public CompletionStage<Void> markLeft(ZLinkActor actor) {
-        markLeftState(actor);
-        return renewActorLeftLocation(actor);
     }
 
     public CompletionStage<Void> destroyFromEntrySpot(RoutingId entryNodeRid, ZLinkActor actor) {

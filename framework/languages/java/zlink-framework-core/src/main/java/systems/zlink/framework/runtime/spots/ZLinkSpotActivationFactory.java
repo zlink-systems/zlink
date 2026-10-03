@@ -431,14 +431,6 @@ final class ZLinkSpotActivationFactory {
                                     messages) {
                         return activation.admitActor(messages);
                     }
-
-                    @Override
-                    public CompletionStage<Void> handleLifecycle(
-                            systems.zlink.framework.runtime.internal.backend
-                                            .ZLinkBackendActorLifecycleEvent
-                                    event) {
-                        return activation.admitLifecycle(event);
-                    }
                 });
     }
 

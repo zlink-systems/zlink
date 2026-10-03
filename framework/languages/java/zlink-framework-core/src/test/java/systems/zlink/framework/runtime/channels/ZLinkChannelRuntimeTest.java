@@ -3027,11 +3027,6 @@ final class ZLinkChannelRuntimeTest {
                 ZLinkBackendActorJoinRequest request, int joinResultCode, List<Message> parts) {}
 
         @Override
-        public ZLinkBackendActorLifecycleEvent recvActorLifecycle(ZLinkBackendRecvMode mode) {
-            return null;
-        }
-
-        @Override
         public String name() {
             return "fake-spot";
         }

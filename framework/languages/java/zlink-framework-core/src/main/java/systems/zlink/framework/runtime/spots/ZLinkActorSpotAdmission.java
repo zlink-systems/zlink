@@ -9,9 +9,7 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
-import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 
 import java.time.Duration;
@@ -72,10 +70,6 @@ final class ZLinkActorSpotAdmission {
         return requireActors().destroyFromEntrySpot(nodeRid, actor);
     }
 
-    CompletionStage<Void> markLeft(ZLinkActor actor) {
-        return requireActors().markLeft(actor);
-    }
-
     CompletionStage<Void> leaveRoutedActorToLocalEntry(
             ZLinkActor actor,
             RoutingId entryNodeRid,
@@ -98,15 +92,7 @@ final class ZLinkActorSpotAdmission {
                                 runtime.commitEntryLocation(
                                         actor, entryNodeRid, entrySpotId, entrySpotGeneration))
                 .thenRun(() -> runtime.completeRemoteMove(actor))
-                .thenCompose(
-                        ignored ->
-                                runtime.invokeActorLifecycle(
-                                        actor, () -> joinedCallback.apply(actor)));
-    }
-
-    CompletionStage<Void> markJoined(
-            ZLinkActor actor, ZLinkBackendActorRef actorRef, String spotId, ZLinkSpot<?> spot) {
-        return requireActors().markJoined(actor, actorRef, spotId, spot);
+                .thenCompose(ignored -> joinedCallback.apply(actor));
     }
 
     CompletionStage<ZLinkSpotActorJoinResult> prepareCanonicalRoutedActor(

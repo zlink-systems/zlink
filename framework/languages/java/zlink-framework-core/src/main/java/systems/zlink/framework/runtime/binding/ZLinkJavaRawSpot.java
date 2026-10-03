@@ -4,7 +4,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEvent;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
@@ -36,7 +35,6 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
     private final long lifecycleGeneration;
     private final Queue<ZLinkBackendReceived> routes = new ConcurrentLinkedQueue<>();
     private final Queue<ZLinkBackendTopicMessage> subscriptions = new ConcurrentLinkedQueue<>();
-    private final Queue<ZLinkBackendActorLifecycleEvent> lifecycles = new ConcurrentLinkedQueue<>();
     private final Set<String> topics = ConcurrentHashMap.newKeySet();
     private volatile String spotId;
     private volatile ZLinkBackendSpotDispatchHandler dispatchHandler;
@@ -225,11 +223,6 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
                 "raw Spot local Actor Join records are not supported");
     }
 
-    @Override
-    public ZLinkBackendActorLifecycleEvent recvActorLifecycle(ZLinkBackendRecvMode mode) {
-        return lifecycles.poll();
-    }
-
     boolean accepts(String topic) {
         return topics.contains(topic);
     }
@@ -286,23 +279,6 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
         return true;
     }
 
-    CompletionStage<Void> enqueueLifecycle(ZLinkBackendActorLifecycleEvent event) {
-        ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
-        if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
-            CompletionStage<Void> direct = async.handleLifecycle(event);
-            if (direct != null) {
-                return direct;
-            }
-        }
-        synchronized (this) {
-            if (owner.localSpot(spotId) != this) {
-                return CompletableFuture.completedFuture(null);
-            }
-            lifecycles.add(event);
-        }
-        return raise(ZLinkBackendSpotDispatchEvent.ACTOR_LIFECYCLE_READABLE);
-    }
-
     CompletionStage<Void> enqueueActor(List<ZLinkBackendActorReceived> messages) {
         ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
         if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
@@ -356,7 +332,6 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
         while ((topic = subscriptions.poll()) != null) {
             topic.parts().forEach(Message::close);
         }
-        lifecycles.clear();
     }
 
     static List<Message> copy(List<Message> parts) {

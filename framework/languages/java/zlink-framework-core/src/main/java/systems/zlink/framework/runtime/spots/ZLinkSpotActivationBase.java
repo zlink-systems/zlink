@@ -11,7 +11,6 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorRe
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 
 import java.util.ArrayList;
@@ -128,12 +127,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         if (admission != null) admission.complete(null);
         return submitted;
     }
-
-    abstract CompletionStage<Void> appendActorLifecycle(
-            CompletionStage<Void> tail,
-            ZLinkBackendActorLifecycleEvent event,
-            ZLinkBackendActorRef actorRef,
-            ZLinkActor actor);
 
     final void trackRouteReceived(ZLinkBackendReceived received) {
         activeRouteReceives.add(received);
@@ -281,62 +274,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 dispatches.stream()
                         .map(CompletionStage::toCompletableFuture)
                         .toArray(CompletableFuture[]::new));
-    }
-
-    final CompletionStage<Void> drainActorLifecycleEvents() {
-        CompletionStage<Void> tail = CompletableFuture.completedFuture(null);
-        ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
-        while (batch.canReceiveNext()) {
-            var permit = host.reserveApplicationJob();
-            if (permit == null) {
-                return tail;
-            }
-            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                            .QueuedOwnership
-                    ownership = null;
-            ZLinkBackendActorLifecycleEvent event;
-            ZLinkBackendActorRef actorRef = null;
-            Optional<ZLinkActor> actor = Optional.empty();
-            try (var ignored =
-                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                            .enter(permit)) {
-                event = backendSpot.recvActorLifecycle(ZLinkBackendRecvMode.DONT_WAIT);
-                if (event == null) {
-                    return tail;
-                }
-                batch.record(0);
-                if (host.actorSessions().available()) {
-                    actorRef = host.actorLifecycleRef(event);
-                    actor = host.actorSessions().localActor(actorRef.actorId());
-                    if (actor.isPresent()) {
-                        ownership =
-                                systems.zlink.framework.runtime.internal.dispatch
-                                        .ZLinkApplicationJobContext.transferToQueuedJob();
-                    }
-                }
-            } finally {
-                permit.abandonReservation();
-            }
-            if (ownership != null) {
-                CompletionStage<Void> prior = tail;
-                var queuedOwnership = ownership;
-                var capturedActorRef = actorRef;
-                ZLinkActor capturedActor = actor.orElseThrow();
-                tail =
-                        prior.thenCompose(
-                                ignored ->
-                                        host.runQueuedApplicationJob(
-                                                queuedOwnership,
-                                                () ->
-                                                        appendActorLifecycle(
-                                                                CompletableFuture.completedFuture(
-                                                                        null),
-                                                                event,
-                                                                capturedActorRef,
-                                                                capturedActor)));
-            }
-        }
-        return tail;
     }
 
     final CompletionStage<Void> dispatchSpotRouteHandler(

@@ -596,21 +596,6 @@ final class ZLinkActorSessionCoordinator {
                         0);
     }
 
-    boolean isJoinedTo(ZLinkActor actor, ZLinkBackendActorRef actorRef, String spotId) {
-        if (actors == null || actor == null || actorRef == null || spotId == null) {
-            return false;
-        }
-        return actors.spotId(actor).filter(spotId::equals).isPresent()
-                && actorRef.equals(actors.currentRef(actor));
-    }
-
-    boolean isJoinedToDifferentSpot(ZLinkActor actor, String spotId) {
-        if (actors == null || actor == null || spotId == null) {
-            return false;
-        }
-        return actors.spotId(actor).map(current -> !spotId.equals(current)).orElse(false);
-    }
-
     Object spotSurface(
             ZLinkActor actor, Function<String, Object> resolver, Supplier<Object> fallback) {
         Object current = currentSpotSurface(actor);

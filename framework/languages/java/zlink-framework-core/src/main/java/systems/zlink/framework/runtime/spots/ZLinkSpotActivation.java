@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
@@ -61,46 +60,9 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         return tail.thenCompose(ignored -> operation.get());
     }
 
-    @Override
-    CompletionStage<Void> appendActorLifecycle(
-            CompletionStage<Void> tail,
-            ZLinkBackendActorLifecycleEvent event,
-            ZLinkBackendActorRef actorRef,
-            ZLinkActor actor) {
-        return host.actorSessions()
-                .dispatch(
-                        actor,
-                        () ->
-                                context.enqueueActorDispatch(
-                                        actor.context().actorId(),
-                                        () -> {
-                                            Supplier<CompletionStage<Void>> transition =
-                                                    host.actorLifecycleTransition(
-                                                            spot,
-                                                            event,
-                                                            actorRef,
-                                                            actor,
-                                                            context.spotId());
-                                            if (transition == null) {
-                                                return CompletableFuture.completedFuture(null);
-                                            }
-                                            return beginApplicationLifecycle(transition);
-                                        }));
-    }
-
-    private static CompletionStage<Void> beginApplicationLifecycle(
-            Supplier<CompletionStage<Void>> transition) {
-        systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                .beforeFirstApplicationInstruction();
-        return transition.get();
-    }
-
     CompletionStage<Void> handleDispatchEvent(ZLinkBackendSpotDispatchInfo info) {
         if (info.event() == ZLinkBackendSpotDispatchEvent.ROUTED_READABLE) {
             return drainRoutesForDispatch();
-        }
-        if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_LIFECYCLE_READABLE) {
-            return drainActorLifecycleEvents();
         }
         if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_READABLE
                 && host.isActorInfrastructureControl(info.actorMessages())) {
@@ -135,9 +97,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         }
         if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
             return dispatchActorMessages(info.actorMessages());
-        }
-        if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_LIFECYCLE_READABLE) {
-            return drainActorLifecycleEvents();
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -353,60 +312,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                         (done, failure) -> messages.forEach(ZLinkBackendActorReceived::close));
     }
 
-    CompletionStage<Void> admitLifecycle(ZLinkBackendActorLifecycleEvent event) {
-        if (!host.actorSessions().available()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        ZLinkBackendActorRef actorRef = host.actorLifecycleRef(event);
-        var actor = host.actorSessions().localActor(actorRef.actorId());
-        if (actor.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        var permit = host.reserveApplicationJob();
-        if (permit == null) {
-            Thread.currentThread().interrupt();
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("application job reservation was interrupted"));
-        }
-        try (var ignored =
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
-                        permit)) {
-            var hostRejection = host.spotHostAdmissionFailure(context.spotId());
-            if (hostRejection != null) {
-                return CompletableFuture.failedFuture(hostRejection);
-            }
-            var ownership =
-                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                            .transferToQueuedJob();
-            CompletionStage<Void> admitted;
-            try {
-                admitted =
-                        context.admitIngress(
-                                () ->
-                                        host.runQueuedApplicationJob(
-                                                ownership,
-                                                () ->
-                                                        appendActorLifecycle(
-                                                                CompletableFuture.completedFuture(
-                                                                        null),
-                                                                event,
-                                                                actorRef,
-                                                                actor.orElseThrow())));
-            } catch (RuntimeException | Error failure) {
-                ownership.close();
-                throw failure;
-            }
-            return admitted.whenComplete(
-                    (done, failure) -> {
-                        if (failure != null) {
-                            ownership.close();
-                        }
-                    });
-        } finally {
-            permit.abandonReservation();
-        }
-    }
-
     private CompletionStage<Void> dispatchRoutesAsync(List<ZLinkBackendReceived> routes) {
         CompletionStage<Void> tail = CompletableFuture.completedFuture(null);
         for (ZLinkBackendReceived received : routes) {
@@ -417,7 +322,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
 
     void drainPolledDispatchQueues() {
         drainRoutesForDispatch();
-        drainActorLifecycleEvents();
     }
 
     private CompletionStage<Void> drainRoutesAsync() {
@@ -647,9 +551,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                         canonicalJoin,
                         requestContentType,
                         payload.toByteArray(),
-                        actor ->
-                                host.notifySpotActorLifecycleAndSuppressBackendEvent(
-                                        spot, actor, backendSpot.spotId(), true),
+                        actor -> host.notifySpotActorLifecycle(spot, actor, true),
                         actorId ->
                                 host.runWithOutbound(
                                         context.dispatchOutbound(),
