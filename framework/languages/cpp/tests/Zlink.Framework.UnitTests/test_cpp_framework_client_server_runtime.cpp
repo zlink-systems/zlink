@@ -22,6 +22,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <future>
 #include <fstream>
@@ -107,6 +108,92 @@ void verify_client_server_send_does_not_wait_on_infrastructure_worker ()
     assert (slow_send_handler_t::completed.load (std::memory_order_acquire));
     app.stop ();
     app_thread.join ();
+}
+
+struct concurrency_request_t
+{
+    static constexpr const char *packet_name = "concurrency.request";
+};
+void to_json (nlohmann::json &json, const concurrency_request_t &)
+{
+    json = nlohmann::json::object ();
+}
+void from_json (const nlohmann::json &, concurrency_request_t &)
+{
+}
+
+struct concurrency_request_handler_t
+{
+    using request_type = concurrency_request_t;
+    using reply_type = std::string;
+    std::string handle (const concurrency_request_t &) { return "ok"; }
+};
+
+// #1383: a server receive turn reads every request already queued on the connection, as the
+// client receive turn does. N concurrent requests then cost well under N sequential round
+// trips; reading one request per worker turn made them cost N turns.
+void verify_client_server_concurrent_requests_share_receive_turns ()
+{
+    auto app = zlink::framework::app_t::create ();
+    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.handlers ().group ("concurrency").add<concurrency_request_handler_t> ();
+        auto channel = options.add_client_server_channel ("concurrency");
+        channel.server ().listen ().add_handler_group ("concurrency");
+        channel.client ();
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime = provider.get_required<zlink::framework::client_server_runtime_t> ();
+    auto &channels = provider.get_required<zlink::framework::channel_client_t> ();
+    char program[] = "client-server-concurrency";
+    char *arguments[] = {program, nullptr};
+    std::thread app_thread ([&] { (void) app.run (1, arguments); });
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while (!runtime.snapshot ("concurrency").is_ready
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (runtime.snapshot ("concurrency").is_ready);
+    const auto request_once = [&] {
+        const auto reply = channels.request_to_channel ("concurrency", concurrency_request_t{})
+                             .async<std::string> ()
+                             .result ();
+        assert (reply && reply.value () == "ok");
+    };
+    for (int i = 0; i < 20; ++i)
+        request_once ();
+    constexpr int sequential_count = 50;
+    const auto sequential_started = std::chrono::steady_clock::now ();
+    for (int i = 0; i < sequential_count; ++i)
+        request_once ();
+    const auto sequential_one =
+      (std::chrono::steady_clock::now () - sequential_started) / sequential_count;
+    constexpr int concurrent_count = 64;
+    const auto concurrent_started = std::chrono::steady_clock::now ();
+    std::vector<zlink::framework::task_t<std::string>> pending;
+    pending.reserve (concurrent_count);
+    for (int i = 0; i < concurrent_count; ++i)
+        pending.push_back (channels.request_to_channel ("concurrency", concurrency_request_t{})
+                             .async<std::string> ());
+    for (auto &call : pending) {
+        const auto reply = call.result ();
+        assert (reply && reply.value () == "ok");
+    }
+    const auto concurrent_all = std::chrono::steady_clock::now () - concurrent_started;
+    app.stop ();
+    app_thread.join ();
+    // Measured on WSL under load: one request per receive turn gave 1.5-1.8, reading the queued
+    // requests in one turn gave 2.6-3.3.
+    const auto speedup = std::chrono::duration<double> (sequential_one * concurrent_count).count ()
+                         / std::chrono::duration<double> (concurrent_all).count ();
+    std::printf ("client-server concurrency: sequential one=%lldus concurrent %d=%lldus "
+                 "speedup=%.2f\n",
+                 static_cast<long long> (
+                   std::chrono::duration_cast<std::chrono::microseconds> (sequential_one).count ()),
+                 concurrent_count,
+                 static_cast<long long> (
+                   std::chrono::duration_cast<std::chrono::microseconds> (concurrent_all).count ()),
+                 speedup);
+    std::fflush (stdout);
+    assert (speedup > 2.2);
 }
 
 struct metadata_send_handler_t
@@ -1149,6 +1236,7 @@ int main ()
     verify_invalid_metadata_is_a_protocol_error ();
     verify_client_server_metadata_snapshot ();
     verify_client_server_send_does_not_wait_on_infrastructure_worker ();
+    verify_client_server_concurrent_requests_share_receive_turns ();
     verify_client_server_readiness_counts_local_ready_servers ();
     verify_network_defaults_are_deferred_until_apply ();
     verify_client_server_terminal_errors_preserve_public_boundaries ();

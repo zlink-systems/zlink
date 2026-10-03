@@ -9,6 +9,7 @@
 #include <zlink/framework/contracts/errors/error.hpp>
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/mesh/service_liveness_registry.hpp"
 #include "runtime/mesh/service_mailbox.hpp"
@@ -93,7 +94,8 @@ class raw_client_server_server_t
     drain_monitor_events_task (mesh::service_liveness_registry_t::clock_t::time_point now);
     task_t<client_server_pump_result_t>
     pump_one (mesh::service_liveness_registry_t::clock_t::time_point now,
-              std::shared_ptr<application_job_queue_t::permit_t> application_permit = {});
+              std::shared_ptr<application_job_queue_t::permit_t> application_permit = {},
+              receive_batch_budget_t *budget = nullptr);
     task_t<mesh::service_liveness_tick_t>
     tick_liveness (mesh::service_liveness_registry_t::clock_t::time_point now);
     task_t<std::optional<mesh::service_liveness_registry_t::clock_t::time_point>>
@@ -108,6 +110,7 @@ class raw_client_server_server_t
   private:
     task_t<client_server_pump_result_t> enqueue_application_record (
       detail::backend::raw_received_t received,
+      std::string channel_name,
       std::shared_ptr<application_job_queue_t::permit_t> application_permit);
 
   public:
@@ -135,7 +138,6 @@ class raw_client_server_server_t
     std::map<std::vector<std::uint8_t>, std::vector<std::uint8_t>, byte_vector_less_t> _connections;
     bool _closed = false;
     bool _descriptor_update_pending = false;
-    std::size_t _last_pump_bytes = 0;
 };
 
 struct raw_client_server_client_options_t

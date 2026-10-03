@@ -240,13 +240,29 @@ struct client_server_location_runtime_t::client_channel_t
 namespace
 {
 
+/* One receive turn reads the queued records within the receive batch budget, as the client
+ * turn does. Each record takes its own Application Job Queue permit: the first comes from the
+ * worker's supply slot, the rest only while the queue has room. */
 task_t<void>
 pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        mesh::service_liveness_registry_t::clock_t::time_point now,
+                       std::shared_ptr<application_job_queue_t> application_jobs,
                        std::shared_ptr<application_job_queue_t::permit_t> application_permit)
 {
     (void) co_await server->drain_monitor_events_task (now);
-    (void) co_await server->pump_one (now, std::move (application_permit));
+    receive_batch_budget_t budget;
+    while (application_permit && budget.can_receive ()) {
+        const auto result =
+          co_await server->pump_one (now, std::move (application_permit), &budget);
+        if (result == client_server_pump_result_t::no_data
+            || result == client_server_pump_result_t::backpressured)
+            break;
+        if (budget.exhausted ())
+            break;
+        if (auto next = application_jobs->try_reserve_supply ())
+            application_permit =
+              std::make_shared<application_job_queue_t::permit_t> (std::move (*next));
+    }
     (void) co_await server->tick_liveness (now);
 }
 
@@ -1085,17 +1101,11 @@ task_t<void> client_server_location_runtime_t::pump ()
                 server.pump_task.reset ();
             }
             if (!server.pump_task) {
-                std::shared_ptr<application_job_queue_t::permit_t> application_permit;
                 _application_supply->ensure_waiter ();
-                auto reserved = _application_supply->take ();
-                const bool may_pump = reserved.has_value ();
-                if (reserved) {
-                    application_permit =
-                      std::make_shared<application_job_queue_t::permit_t> (std::move (*reserved));
-                }
-                if (may_pump) {
-                    server.pump_task = start_task (
-                      pump_server_transport (server.owner, now, std::move (application_permit)));
+                if (auto reserved = _application_supply->take ()) {
+                    server.pump_task = start_task (pump_server_transport (
+                      server.owner, now, _application_jobs,
+                      std::make_shared<application_job_queue_t::permit_t> (std::move (*reserved))));
                 }
             }
             if (const auto completed = take_completed (server.dispatch_task)) {
