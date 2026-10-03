@@ -504,9 +504,9 @@ public interface IZLinkSocketConfig
     TimeSpan? SendTimeout { get; set; }
     TimeSpan? ConnectTimeout { get; set; }
     TimeSpan? HandshakeInterval { get; set; }
-    bool IPv6 { get; set; }
-    bool TcpNoDelay { get; set; }
-    bool Immediate { get; set; }
+    bool? IPv6 { get; set; }
+    bool? TcpNoDelay { get; set; }
+    bool? Immediate { get; set; }
     int Weight { get; set; }
 }
 
@@ -521,9 +521,9 @@ public interface IZLinkStreamSocketConfig
     TimeSpan? SendTimeout { get; set; }
     TimeSpan? ConnectTimeout { get; set; }
     TimeSpan? HandshakeInterval { get; set; }
-    bool IPv6 { get; set; }
-    bool TcpNoDelay { get; set; }
-    bool Immediate { get; set; }
+    bool? IPv6 { get; set; }
+    bool? TcpNoDelay { get; set; }
+    bool? Immediate { get; set; }
 }
 
 public interface IZLinkRouteConfig
@@ -565,6 +565,8 @@ public interface IZLinkMeshNodeSocketConfig
 ```
 
 `MaxMessageSize`는 .NET ClientServer application listener option이다. 기본 한도, `0`의 의미와 RouteMesh 제외 범위는 [Framework API §4](../../../00-foundation/06-framework-api.ko.md#4-routemesh-등록)가 정한다.
+
+`null`인 socket option은 socket에 적용하지 않으며 Core 기본값이 그대로 남는다.
 
 `ConfigureSpotPublisher()`는 publish 전용 전달 정책 option을 제공하지 않는다.
 Logical Multicast의 완료 경계는 [Submit과 completion §6](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.
