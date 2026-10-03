@@ -682,6 +682,10 @@ final class ZLinkJavaRawMeshNode
             // selected route and Core reports a new route generation. The
             // .NET, C++ and Node mesh routers use the same policy.
             opened.options().handover(true);
+            // Closing this ROUTER discards its unsent output, as the .NET, C++ and Node mesh
+            // routers do. The Core default linger (-1) keeps the socket open for a reply queued
+            // to a peer that has already shut down, and context termination then waits for it.
+            opened.options().linger(Duration.ZERO);
             var queue = applicationJobQueue;
             if (queue != null) {
                 // Apply the host's current absolute receive-flow state before
