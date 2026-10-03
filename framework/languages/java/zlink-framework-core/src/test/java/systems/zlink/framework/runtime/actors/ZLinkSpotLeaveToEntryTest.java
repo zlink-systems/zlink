@@ -42,15 +42,24 @@ final class ZLinkSpotLeaveToEntryTest {
     /** The Bingo cleanup: the first OnLeaveActor yields and the Entry Spot destroys the Actor. */
     @Test
     void spotLeavesTwoActorsWhileFirstOnLeaveActorYields() throws Exception {
-        leaveTwoActors(true, true);
+        leaveTwoActors(true, true, false);
     }
 
     @Test
     void spotLeavesTwoActorsToEntrySpot() throws Exception {
-        leaveTwoActors(false, false);
+        leaveTwoActors(false, false, false);
     }
 
-    private static void leaveTwoActors(boolean yieldFirstLeave, boolean destroyOnEntry)
+    /**
+     * The TicTacToe leave: each Actor leaves from its own Spot handler and the Entry destroys it.
+     */
+    @Test
+    void actorHandlersLeaveTheirSpot() throws Exception {
+        leaveTwoActors(false, true, true);
+    }
+
+    private static void leaveTwoActors(
+            boolean yieldFirstLeave, boolean destroyOnEntry, boolean fromActorHandler)
             throws Exception {
         firstLeaveYields = yieldFirstLeave;
         destroyOnEntryJoin = destroyOnEntry;
@@ -97,13 +106,7 @@ final class ZLinkSpotLeaveToEntryTest {
             EVENTS.clear();
 
             String left =
-                    runtime.route()
-                            .requestToSpot(ROOM, new LeaveAll())
-                            .timeout(Duration.ofSeconds(5))
-                            .submit(String.class)
-                            .toCompletableFuture()
-                            .handle((value, error) -> error == null ? value : error.toString())
-                            .get(10, TimeUnit.SECONDS);
+                    fromActorHandler ? leaveFromActorHandlers(runtime) : leaveFromSpot(runtime);
 
             assertEquals("left", left, EVENTS.toString());
             assertTrue(roomLeft.await(3, TimeUnit.SECONDS), EVENTS.toString());
@@ -121,9 +124,38 @@ final class ZLinkSpotLeaveToEntryTest {
         }
     }
 
+    private static String leaveFromSpot(ZLinkFrameworkRuntime runtime) throws Exception {
+        return runtime.route()
+                .requestToSpot(ROOM, new LeaveAll())
+                .timeout(Duration.ofSeconds(5))
+                .submit(String.class)
+                .toCompletableFuture()
+                .handle((value, error) -> error == null ? value : error.toString())
+                .get(10, TimeUnit.SECONDS);
+    }
+
+    private static String leaveFromActorHandlers(ZLinkFrameworkRuntime runtime) throws Exception {
+        for (String actorId : PLAYERS) {
+            String left =
+                    runtime.actorClient()
+                            .requestToActor(actorId, new LeaveSelf())
+                            .timeout(Duration.ofSeconds(5))
+                            .submit(String.class)
+                            .toCompletableFuture()
+                            .handle((value, error) -> error == null ? value : error.toString())
+                            .get(10, TimeUnit.SECONDS);
+            if (!left.equals("left")) {
+                return left;
+            }
+        }
+        return "left";
+    }
+
     public record JoinRoom() {}
 
     public record LeaveAll() {}
+
+    public record LeaveSelf() {}
 
     public static final class Player implements ZLinkActor {
         private final ZLinkActorContext context;
@@ -202,6 +234,7 @@ final class ZLinkSpotLeaveToEntryTest {
         @Override
         public void configure() {
             context.handlers().addHandler(LeaveAllHandler.class);
+            context.handlers().addHandler(LeaveSelfHandler.class);
         }
 
         @Override
@@ -265,6 +298,22 @@ final class ZLinkSpotLeaveToEntryTest {
         @Override
         public CompletionStage<String> handle(Room spot, LeaveAll request) {
             return spot.leaveAll();
+        }
+    }
+
+    public static final class LeaveSelfHandler
+            implements ZLinkSpotActorRequestHandler<Room, Player, LeaveSelf, String> {
+        @Override
+        public CompletionStage<String> handle(
+                Room spot, Player actor, ZLinkMessageContext context, LeaveSelf request) {
+            String actorId = actor.context().actorId();
+            return spot.context()
+                    .leaveActor(actor)
+                    .thenApply(
+                            ignored -> {
+                                EVENTS.add("leave-completed:" + actorId);
+                                return "left";
+                            });
         }
     }
 }
