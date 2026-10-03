@@ -92,7 +92,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         CancellationToken cancellationToken = default
     )
     {
-        using var operation = runtime.EnterOperation();
+        using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
         cancellationToken.ThrowIfCancellationRequested();
         var store = runtime.Registration.Locations.ResolveStore();
         if (store is null)
@@ -134,7 +134,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         CancellationToken cancellationToken = default
     )
     {
-        using var operation = runtime.EnterOperation();
+        using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
         cancellationToken.ThrowIfCancellationRequested();
         var store = runtime.Registration.Locations.ResolveStore();
         if (store is null)
@@ -276,7 +276,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         var started = Stopwatch.GetTimestamp();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
-        using var operation = runtime.EnterOperation();
+        using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
         var source = runtime.ResolveActorCreationSource(meshName);
         var store =
             runtime.Registration.Locations.ResolveStore()

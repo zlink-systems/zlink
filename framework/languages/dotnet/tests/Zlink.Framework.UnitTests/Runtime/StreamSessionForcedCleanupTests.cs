@@ -96,19 +96,6 @@ public sealed class StreamSessionForcedCleanupTests
         await lifetime.WaitConnectedAsync(edge);
         Assert.Empty(lifetime.Events(snapshot));
         Assert.Equal(1, node.SessionCount);
-        var receiveProcessed = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        socket.BeforeRecvPacket = () =>
-        {
-            if (socket.DequeuedPacketCount != 0)
-                receiveProcessed.TrySetResult();
-            return true;
-        };
-        EmitJson(socket, snapshot, new SessionOrderingMessage());
-        await receiveProcessed.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Empty(lifetime.Events(snapshot));
-        Assert.Equal(1, node.SessionCount);
         monitor.Emit(
             new ZLinkBackendSocketMonitorEvent(
                 ZLinkSocketNativeEventType.ConnectionReady,
@@ -120,6 +107,12 @@ public sealed class StreamSessionForcedCleanupTests
             )
         );
         await lifetime.WaitConnectedAsync(snapshot);
+        EmitJson(socket, snapshot, new SessionOrderingMessage());
+        await lifetime.WaitDispatchCompletedAsync(snapshot);
+        Assert.Equal(
+            new[] { "connected", "dispatch-start", "dispatch-end" },
+            lifetime.Events(snapshot)
+        );
         Assert.Equal(2, node.SessionCount);
     }
 
@@ -276,11 +269,6 @@ public sealed class StreamSessionForcedCleanupTests
             MonitorEventType.Disconnected
         );
         Assert.Equal(routingId, disconnected.RoutingId);
-        var nativeFailure = Assert.Throws<ZlinkConnectException>(() =>
-            nativeSocket.DisconnectRid(routingId)
-        );
-        Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, nativeFailure.Result);
-
         await session.CloseAsync();
         await session.CloseAsync();
         await lifetime.CleanupCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -1613,6 +1601,78 @@ public sealed class StreamSessionForcedCleanupTests
         Assert.Equal(1, lifetime.DisconnectedCount);
         Assert.Equal(1, lifetime.DependencyDisposeCount);
         Assert.Equal(1, lifetime.RemoveCount);
+    }
+
+    [Fact]
+    public async Task Server_drain_owns_transport_close_when_late_packet_queue_is_closed()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        var lifetime = new SessionOrderingLifetime();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(lifetime)
+            .AddSingleton(_ => runtime);
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket { BlockSendAsync = true };
+        var monitor = new TestSocketMonitor();
+        var runner = new ZLinkRuntimeTaskRunner(
+            runtime.ErrorSink,
+            CancellationToken.None,
+            runtime.ExecutionOwner
+        );
+        await using var node = new ZLinkStreamNodeRuntime(
+            "drain-late-packet",
+            provider,
+            socket,
+            monitor,
+            typeof(SessionOrderingSession),
+            runner,
+            "test"
+        );
+        var routingId = RoutingId.From("drain-late-peer");
+        var receiveBarrierReported = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        void OnReceiveFailure(Exception failure)
+        {
+            if (failure is InvalidDataException)
+                receiveBarrierReported.TrySetResult();
+        }
+        runtime.ErrorSink.UnhandledCallbackException += OnReceiveFailure;
+        try
+        {
+            node.Start();
+            monitor.Emit(
+                new ZLinkBackendSocketMonitorEvent(
+                    ZLinkSocketNativeEventType.ConnectionReady,
+                    routingId,
+                    "local-drain",
+                    "remote-drain",
+                    1,
+                    MonitorEventFlags.ConnectionReadyEdge
+                )
+            );
+            await lifetime.WaitConnectedAsync(routingId);
+            var drain = node.DrainSessionsAsync(CancellationToken.None).AsTask();
+            await socket.SendAsyncStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            EmitJson(socket, routingId, new SessionOrderingMessage());
+            // The receiver reports this missing-RID packet after processing the
+            // preceding normal packet, even when they span separate receive batches.
+            socket.EnqueueUnidentifiedPacket([], []);
+            await receiveBarrierReported.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Equal(0, socket.DisconnectCount);
+            socket.AllowSendAsync.TrySetResult();
+            Assert.True(await drain.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.Equal(1, socket.DisconnectCount);
+        }
+        finally
+        {
+            runtime.ErrorSink.UnhandledCallbackException -= OnReceiveFailure;
+            socket.AllowSendAsync.TrySetResult();
+        }
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using Zlink.Framework.Internal.Locations;
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -889,11 +890,6 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         if (!IsOwnerAdmissionOpenOnLane())
             throw new InvalidOperationException("The owner lease admission deadline has expired.");
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private readonly record struct StopState(
         CancellationTokenSource? Heartbeat,

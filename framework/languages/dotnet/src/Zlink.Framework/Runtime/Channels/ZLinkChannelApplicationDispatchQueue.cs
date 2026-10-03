@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -229,9 +230,4 @@ internal sealed class ZLinkChannelReplyGate
     internal bool TryInvoke(Action reply) => AwaitStateLane(TryInvokeAsync(reply));
 
     internal void Close() => AwaitStateLane(CloseAsync());
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 }

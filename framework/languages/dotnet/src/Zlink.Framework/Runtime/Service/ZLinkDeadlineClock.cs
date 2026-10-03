@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Service;
 
@@ -41,7 +42,4 @@ internal sealed class ZLinkDeadlineClock
 
     internal TimeSpan FromUnixTimeMilliseconds(long deadline) =>
         Elapsed + TimeSpan.FromMilliseconds(deadline - GetUnixTimeMilliseconds());
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 }

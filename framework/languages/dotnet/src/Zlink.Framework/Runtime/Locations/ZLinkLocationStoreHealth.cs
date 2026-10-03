@@ -1,3 +1,5 @@
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 /// <summary>
@@ -102,11 +104,6 @@ internal sealed class ZLinkLocationStoreHealth
         DateTimeOffset? LastFailureAt,
         string? LastError
     );
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }
 
 internal static class ZLinkLocationStoreRead

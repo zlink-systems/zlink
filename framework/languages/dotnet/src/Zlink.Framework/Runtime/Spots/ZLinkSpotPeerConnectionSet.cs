@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -136,11 +137,6 @@ internal sealed class ZLinkSpotPeerConnectionSet
         left is { Size: > 0 } leftRid && right is { Size: > 0 } rightRid
             ? leftRid == rightRid
             : left is not { Size: > 0 } && right is not { Size: > 0 };
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 }
 
 internal enum ZLinkSpotAutoPeerClaimKind

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Diagnostics;
 
@@ -209,6 +210,4 @@ internal sealed class ZLinkObservationQueue<TStatus>
         value >= LossMaximum ? LossMaximum : value + 1;
 
     private sealed record RetainedStatus(string Source, TStatus Status, ulong PublishOrdinal);
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

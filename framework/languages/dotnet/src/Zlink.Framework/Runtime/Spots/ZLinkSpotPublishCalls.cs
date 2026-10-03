@@ -91,7 +91,7 @@ internal sealed class ZLinkExternalSpotPublishCall<TEvent>(
     public async ValueTask Async(CancellationToken cancellationToken = default)
     {
         _submission.Claim();
-        using var operation = runtime.EnterOperation();
+        using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled

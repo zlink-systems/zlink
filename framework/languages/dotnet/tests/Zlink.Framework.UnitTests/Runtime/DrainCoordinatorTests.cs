@@ -169,29 +169,29 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         );
         using var host = builder.Build();
         using var cancellation = new CancellationTokenSource();
+        var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+        Task<ZLinkFrameworkTerminationResult>? shutdown = null;
+        // Shutdown and cancellation are requested while the claim is pending, so the
+        // 25 ms renew timeout cannot end the claim before the startup is cancelled.
+        store.OnClaimStarted = () =>
+        {
+            shutdown = runtime.ShutdownAsync(TimeSpan.FromMilliseconds(150)).AsTask();
+            cancellation.Cancel();
+        };
         var start = host.StartAsync(cancellation.Token);
         await store.ClaimStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        var shutdown = host
-            .Services.GetRequiredService<IZLinkFrameworkRuntime>()
-            .ShutdownAsync(TimeSpan.FromMilliseconds(150))
-            .AsTask();
-        cancellation.Cancel();
         try
         {
-            await Assert.ThrowsAsync<TimeoutException>(() =>
-                start.WaitAsync(TimeSpan.FromMilliseconds(80))
-            );
             var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 start.WaitAsync(TimeSpan.FromSeconds(2))
             );
             Assert.True(failure.CancellationToken.IsCancellationRequested);
+            Assert.False(store.ClaimResponse.Task.IsCompleted);
             Assert.Equal(0, store.ReadCalls);
             Assert.Equal(0, store.ReleaseCalls);
             Assert.Equal(0, store.RenewCalls);
-            Assert.Equal(
-                ZLinkFrameworkTerminationOutcome.ForceStopped,
-                (await shutdown.WaitAsync(TimeSpan.FromSeconds(2))).Outcome
-            );
+            var result = await shutdown!.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, result.Outcome);
         }
         finally
         {
@@ -990,6 +990,42 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             relocation.WaitAsync(TimeSpan.FromSeconds(2))
         );
         Assert.Equal(ZLinkFrameworkRelocationReason.ShutdownRequested, blocked.Reason);
+    }
+
+    [Fact]
+    public async Task Shutdown_Drain_Uses_The_Already_Expired_Host_Deadline()
+    {
+        var probe = new DrainExecutionProbe();
+        var operations = probe.Operations with
+        {
+            StopRuntime = token =>
+            {
+                token.ThrowIfCancellationRequested();
+                return ValueTask.CompletedTask;
+            },
+        };
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
+            operations,
+            new ZLinkLocationOptions()
+        );
+        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        coordinator.RequestShutdown(TimeSpan.FromMilliseconds(50));
+        var deadlineExpired = Task.Delay(
+            Timeout.InfiniteTimeSpan,
+            executor.ShutdownCancellationToken
+        );
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            deadlineExpired.WaitAsync(TimeSpan.FromSeconds(2))
+        );
+
+        var result = await coordinator
+            .DrainAsync(TimeSpan.FromSeconds(30))
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        var forced = Assert.IsType<ForceStopped>(result);
+        Assert.Equal(ZLinkDrainForceReason.DeadlineExceeded, forced.Reason);
     }
 
     [Fact]

@@ -8,6 +8,7 @@ using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
@@ -1327,11 +1328,6 @@ internal static class ZLinkEnvelopeCodec
                 Volatile.Write(ref DecodedHeaderCache, next);
             })
         );
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private static ulong HashBytes(ReadOnlySpan<byte> bytes)
     {

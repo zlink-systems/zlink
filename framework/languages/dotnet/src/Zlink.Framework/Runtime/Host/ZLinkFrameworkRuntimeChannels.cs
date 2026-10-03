@@ -51,7 +51,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkSpotNodeRuntime nodeRuntime;
         try
         {
-            nodeRuntime = ResolveRouteMeshNodeForChannel(channelName);
+            nodeRuntime = await ResolveRouteMeshNodeForChannelAsync(channelName)
+                .ConfigureAwait(false);
         }
         catch
         {
@@ -138,7 +139,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkSpotNodeRuntime nodeRuntime;
         try
         {
-            nodeRuntime = ResolveRouteMeshNodeForChannel(channelName);
+            nodeRuntime = await ResolveRouteMeshNodeForChannelAsync(channelName)
+                .ConfigureAwait(false);
         }
         catch
         {
@@ -248,9 +250,33 @@ internal sealed partial class ZLinkFrameworkRuntime
         string routerChannelId,
         RoutingId targetNodeRid,
         string targetDescription
+    ) =>
+        EnsureKnownRouteMeshPeer(
+            GetMeshNodeRuntime(routerChannelId),
+            routerChannelId,
+            targetNodeRid,
+            targetDescription
+        );
+
+    private async ValueTask EnsureKnownRouteMeshPeerAsync(
+        string routerChannelId,
+        RoutingId targetNodeRid,
+        string targetDescription
+    ) =>
+        EnsureKnownRouteMeshPeer(
+            await GetMeshNodeRuntimeAsync(routerChannelId).ConfigureAwait(false),
+            routerChannelId,
+            targetNodeRid,
+            targetDescription
+        );
+
+    private void EnsureKnownRouteMeshPeer(
+        ZLinkSpotNodeRuntime nodeRuntime,
+        string routerChannelId,
+        RoutingId targetNodeRid,
+        string targetDescription
     )
     {
-        var nodeRuntime = GetMeshNodeRuntime(routerChannelId);
         if (nodeRuntime.Node.RoutingId == targetNodeRid)
         {
             if (nodeRuntime.Registration.ObjectRole == ZLinkMeshNodeObjectRole.Client)
@@ -323,11 +349,16 @@ internal sealed partial class ZLinkFrameworkRuntime
             null
     )
     {
-        using var operation = EnterOperation();
+        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         var handedOff = false;
         try
         {
-            EnsureKnownRouteMeshPeer(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'");
+            await EnsureKnownRouteMeshPeerAsync(
+                    routerChannelId,
+                    targetNodeRid,
+                    $"SPOT '{targetSpotId}'"
+                )
+                .ConfigureAwait(false);
 
             var accepted = _spotRouteRouter.SendAsync(
                 routerChannelId,
@@ -405,12 +436,19 @@ internal sealed partial class ZLinkFrameworkRuntime
     {
         try
         {
-            using var operation = EnterOperation(countAsRequest: true);
+            using var operation = (
+                await AdmitOperationAsync(countAsRequest: true).ConfigureAwait(false)
+            ).Enter();
             var metric = ZLinkRuntimeMetrics.StartRequest(routerChannelId, "spot");
             var outcome = "completed";
             try
             {
-                EnsureKnownRouteMeshPeer(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'");
+                await EnsureKnownRouteMeshPeerAsync(
+                        routerChannelId,
+                        targetNodeRid,
+                        $"SPOT '{targetSpotId}'"
+                    )
+                    .ConfigureAwait(false);
 
                 return await _spotRouteRouter
                     .RequestAsync(

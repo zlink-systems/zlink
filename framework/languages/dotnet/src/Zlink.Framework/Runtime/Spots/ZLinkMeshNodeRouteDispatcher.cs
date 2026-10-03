@@ -5,6 +5,7 @@ using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Streams;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -402,11 +403,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         );
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
     private async ValueTask DispatchAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader? decodedHeader,
@@ -464,10 +460,14 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 //  This dispatcher only invokes registered channel and node
                 //  route handlers. Neither is object work, so an expired owner
                 //  lease must not turn them away (spec 21 §4).
-                : _runtime.TryEnterInboundOperation(
-                    header.Kind == ZLinkMessageKind.Request,
-                    ownsObjectWork: false
-                );
+                : (
+                    await _runtime
+                        .TryAdmitInboundOperationAsync(
+                            header.Kind == ZLinkMessageKind.Request,
+                            ownsObjectWork: false
+                        )
+                        .ConfigureAwait(false)
+                ).EnterInbound();
             if (!admission.Accepted)
             {
                 //  With ownsObjectWork false the only refusal here is the drain

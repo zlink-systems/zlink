@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Handlers;
 
@@ -277,11 +278,6 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
             StartDisposeCore(result.Completion, result.Instances!);
         return new ValueTask(result.Task);
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private void StartDisposeCore(TaskCompletionSource completion, object[] instances)
     {

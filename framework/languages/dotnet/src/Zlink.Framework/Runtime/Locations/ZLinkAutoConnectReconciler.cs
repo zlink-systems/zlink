@@ -2,6 +2,7 @@ using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -921,5 +922,5 @@ internal sealed class ZLinkAutoConnectReconciler
 
     private ZLinkMeshNodeDescriptorKey LocalKey() => new(_localRow!.MeshName, _localRow.Rid);
 
-    private T RunState<T>(Func<T> work) => _lane.RunAsync(work).GetAwaiter().GetResult();
+    private T RunState<T>(Func<T> work) => AwaitStateLane(_lane.RunAsync(work));
 }

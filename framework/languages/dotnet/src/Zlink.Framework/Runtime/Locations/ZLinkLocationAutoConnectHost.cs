@@ -1,6 +1,7 @@
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Identifiers;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -841,7 +842,4 @@ internal sealed class ZLinkLocationAutoConnectHost
             return node.DisconnectPeerAuto(target.NodeRid, target.Endpoint);
         }
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 }
