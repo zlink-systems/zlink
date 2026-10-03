@@ -850,10 +850,16 @@ int main ()
     gate.require (channel_outbound_exchange.find ("client topology changed; rotate transport")
                     == std::string::npos,
                   "E2E-CP-40", "topology diff still reconnects every surviving endpoint");
-    gate.require (app_runtime.find ("propagation_bound") != std::string::npos
-                    && app_runtime.find ("polling_interval") != std::string::npos
-                    && app_runtime.find ("std::chrono::seconds (5)") != std::string::npos,
-                  "E2E-CP-43", "drain removes owner rows before the polling propagation bound");
+    /* E2E-CP-43 — Shutdown publishes the Draining owner rows and descriptor and
+     * waits only for the publish terminal; no time wait for propagation follows
+     * (host-relocation-flow §14 step 2). */
+    gate.require (app_runtime.find ("republish_peer_rows_draining") != std::string::npos
+                    && app_runtime.find (
+                         "publish_mesh_descriptor_state (state, framework_runtime_state_t::draining)")
+                         != std::string::npos
+                    && app_runtime.find ("propagation_bound") == std::string::npos,
+                  "E2E-CP-43",
+                  "drain must publish Draining rows and descriptor without a propagation wait");
     gate.require (client_server_location_runtime.find ("descriptor.state") != std::string::npos
                     && client_server_location_runtime.find ("!= framework_runtime_state_t::serving")
                          != std::string::npos,
