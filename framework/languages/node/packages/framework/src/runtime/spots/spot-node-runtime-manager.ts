@@ -815,17 +815,12 @@ export class ZLinkSpotNodeRuntimeManager {
   }
 
   async dispose(signal?: AbortSignal, deadline?: Date): Promise<void> {
-    this.disposed = true;
     const autoConnectLoops = [...this.autoConnectLoops];
     const entryActivations = [...this.entryActivations.values()];
     const meshPumps = [...this.meshPumps.values()];
     const meshNodes = [...this.meshNodes.values()];
     const meshCompletions = [...this.meshCompletions.values()];
-    this.entryActivations.clear();
-    this.autoConnectLoops.length = 0;
-    this.meshPumps.clear();
     const publishers = [...this.publishers.values()];
-    this.publishers.clear();
     const errors: unknown[] = [];
     const settle = async (operations: readonly Promise<unknown>[]) => {
       const results = await Promise.allSettled(operations);
@@ -848,11 +843,16 @@ export class ZLinkSpotNodeRuntimeManager {
     for (const completions of meshCompletions) {
       completions.dispose();
     }
-    this.meshNodes.clear();
-    this.meshCompletions.clear();
     await settle(autoConnectLoops.map((loop) => loop.finishTransportShutdown(signal)));
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'SPOT node runtime cleanup failed.');
+    this.entryActivations.clear();
+    this.autoConnectLoops.length = 0;
+    this.meshPumps.clear();
+    this.publishers.clear();
+    this.meshNodes.clear();
+    this.meshCompletions.clear();
+    this.disposed = true;
   }
 
   private async dispatchMeshRecord(

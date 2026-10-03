@@ -40,9 +40,9 @@ export class ZLinkNodeEventLoopPoller {
 
   dispose(): void {
     if (this.disposed) return;
-    this.disposed = true;
-    this.events.close();
     this.poller.close();
+    this.events.close();
+    this.disposed = true;
   }
 
   private readonly onReady = (): void => {
