@@ -67,23 +67,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             ZLinkBackendActorLifecycleEvent event,
             ZLinkBackendActorRef actorRef,
             ZLinkActor actor) {
-        if (host.shouldRunActorLifecycleInSpotDispatch(event, actor)) {
-            return tail.thenCompose(
-                    ignored ->
-                            context.enqueueLifecycle(
-                                    () -> {
-                                        Supplier<CompletionStage<Void>> transition =
-                                                host.actorLifecycleTransition(
-                                                        spot,
-                                                        event,
-                                                        actorRef,
-                                                        actor,
-                                                        context.spotId());
-                                        return transition == null
-                                                ? CompletableFuture.completedFuture(null)
-                                                : beginApplicationLifecycle(transition);
-                                    }));
-        }
         return host.actorSessions()
                 .dispatch(
                         actor,

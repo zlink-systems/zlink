@@ -320,9 +320,6 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
     CompletionStage<ZLinkBackendActorJoinEntrySpotResult> joinActorEntrySpot(
             ZLinkBackendActorRef actor, RoutingId targetNodeRid, Message request, Duration timeout);
 
-    CompletionStage<List<Message>> leaveActor(
-            ZLinkBackendActorRef actor, String currentSpotId, Duration timeout);
-
     CompletionStage<Void> destroyActor(ZLinkBackendActorRef actor, Duration timeout);
 
     default PrepareActorTransferResult prepareActorTransfer(

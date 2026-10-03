@@ -1,18 +1,15 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
@@ -21,8 +18,6 @@ import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -50,10 +45,6 @@ final class ZLinkActorSpotAdmission {
     private ZLinkActorRuntime actors;
     private ZLinkSessionRelocationPeerClient sessionRoutes;
     private BooleanSupplier draining = () -> false;
-    private final ConcurrentMap<String, CompletableFuture<Void>> pendingEntryJoins =
-            new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, CompletableFuture<Void>> pendingLeaves =
-            new ConcurrentHashMap<>();
 
     void attach(
             ZLinkActorRuntime actors,
@@ -79,81 +70,6 @@ final class ZLinkActorSpotAdmission {
 
     CompletionStage<Void> destroyFromEntry(RoutingId nodeRid, ZLinkActor actor) {
         return requireActors().destroyFromEntrySpot(nodeRid, actor);
-    }
-
-    CompletionStage<Void> leaveSpot(
-            ZLinkInternalSpotNode node,
-            ZLinkActor actor,
-            String fallbackSpotId,
-            RoutingId entryNodeRid,
-            Duration timeout) {
-        ZLinkActorRuntime runtime = requireActors();
-        String currentSpotId = runtime.spotId(actor).orElse(fallbackSpotId);
-        ZLinkBackendActorRef actorRef = runtime.actorRef(actor);
-        CompletableFuture<Void> entryJoined =
-                entryNodeRid == null ? null : new CompletableFuture<>();
-        CompletableFuture<Void> actorLeft = new CompletableFuture<>();
-        if (entryJoined != null) {
-            CompletableFuture<Void> previous =
-                    pendingEntryJoins.putIfAbsent(actor.context().actorId(), entryJoined);
-            if (previous != null) {
-                return CompletableFuture.failedFuture(
-                        new ZLinkConfigurationException(
-                                "actor Entry Spot join is already pending: "
-                                        + actor.context().actorId()));
-            }
-        }
-        CompletableFuture<Void> previousLeave =
-                pendingLeaves.putIfAbsent(actor.context().actorId(), actorLeft);
-        if (previousLeave != null) {
-            if (entryJoined != null) {
-                pendingEntryJoins.remove(actor.context().actorId(), entryJoined);
-            }
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "actor leave is already pending: " + actor.context().actorId()));
-        }
-        CompletionStage<Void> leaving =
-                node.leaveActor(actorRef, currentSpotId, timeout)
-                        .whenComplete(
-                                (replyParts, error) -> {
-                                    if (replyParts != null) {
-                                        replyParts.forEach(Message::close);
-                                    }
-                                    if (error != null
-                                            && entryJoined != null
-                                            && pendingEntryJoins.remove(
-                                                    actor.context().actorId(), entryJoined)) {
-                                        entryJoined.completeExceptionally(error);
-                                    }
-                                    if (error != null
-                                            && pendingLeaves.remove(
-                                                    actor.context().actorId(), actorLeft)) {
-                                        actorLeft.completeExceptionally(error);
-                                    }
-                                })
-                        .thenCompose(ignored -> actorLeft)
-                        .thenCompose(
-                                ignored ->
-                                        entryNodeRid == null
-                                                ? CompletableFuture.completedFuture(null)
-                                                : joinEntrySpotAfterLeave(
-                                                                runtime,
-                                                                actor,
-                                                                entryNodeRid,
-                                                                timeout)
-                                                        .thenCompose(joined -> entryJoined));
-        return ZLinkSerialExecutionQueue.yieldCurrent(leaving);
-    }
-
-    private static CompletionStage<Void> joinEntrySpotAfterLeave(
-            ZLinkActorRuntime runtime, ZLinkActor actor, RoutingId entryNodeRid, Duration timeout) {
-        try (systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext.Scope
-                ignored =
-                        systems.zlink.framework.runtime.internal.handlers
-                                .ZLinkSuspendInvocationContext.enterApplicationExecution(null)) {
-            return runtime.joinEntrySpot(actor, entryNodeRid, timeout);
-        }
     }
 
     CompletionStage<Void> markLeft(ZLinkActor actor) {
@@ -191,34 +107,6 @@ final class ZLinkActorSpotAdmission {
     CompletionStage<Void> markJoined(
             ZLinkActor actor, ZLinkBackendActorRef actorRef, String spotId, ZLinkSpot<?> spot) {
         return requireActors().markJoined(actor, actorRef, spotId, spot);
-    }
-
-    void completeEntryJoin(String actorId, Throwable error) {
-        CompletableFuture<Void> pending = pendingEntryJoins.remove(actorId);
-        if (pending == null) {
-            return;
-        }
-        if (error == null) {
-            pending.complete(null);
-        } else {
-            pending.completeExceptionally(error);
-        }
-    }
-
-    void completeLeave(String actorId, Throwable error) {
-        CompletableFuture<Void> pending = pendingLeaves.remove(actorId);
-        if (pending == null) {
-            return;
-        }
-        if (error == null) {
-            pending.complete(null);
-        } else {
-            pending.completeExceptionally(error);
-        }
-    }
-
-    boolean isLeavePending(String actorId) {
-        return pendingLeaves.containsKey(actorId);
     }
 
     CompletionStage<ZLinkSpotActorJoinResult> prepareCanonicalRoutedActor(

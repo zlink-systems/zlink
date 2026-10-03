@@ -1231,13 +1231,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         }
 
         @Override
-        public CompletionStage<List<Message>> leaveActor(
-                ZLinkBackendActorRef actor, String currentSpotId, Duration timeout) {
-            record("leaveActor." + actor.actorId() + "." + currentSpotId);
-            return CompletableFuture.completedFuture(List.of());
-        }
-
-        @Override
         public CompletionStage<Void> destroyActor(ZLinkBackendActorRef actor, Duration timeout) {
             record("destroyActor." + actor.actorId());
             owner.actors.remove(actor.actorId());

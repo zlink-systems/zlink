@@ -4584,21 +4584,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     @Override
-    CompletionStage<Void> leaveActor(
-            RoutingId nodeRid, ZLinkSpot<?> spot, ZLinkActor actor, String fallbackSpotId) {
+    CompletionStage<Void> leaveActor(ZLinkActor actor) {
         if (actor == null) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException("actor is required"));
         }
         try {
+            EntrySpotActivation entry = entrySpotActivationFor(primaryNode.entrySpot().spotId());
+            if (entry == null) {
+                return CompletableFuture.failedFuture(
+                        new ZLinkConfigurationException(
+                                "Entry Spot activation is not available for actor leave"));
+            }
             if (actorAdmissionsRuntime().isRoutedTransferActor(actor)) {
-                EntrySpotActivation entry =
-                        entrySpotActivationFor(primaryNode.entrySpot().spotId());
-                if (entry == null) {
-                    return CompletableFuture.failedFuture(
-                            new ZLinkConfigurationException(
-                                    "Entry Spot activation is not available for actor leave"));
-                }
                 @SuppressWarnings({"rawtypes", "unchecked"})
                 ZLinkEntrySpot rawEntrySpot = entry.entrySpot();
                 return actorAdmissions.leaveRoutedActorToLocalEntry(
@@ -4616,13 +4614,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         primaryNode.entrySpot().spotId(),
                                         true));
             }
-            EntrySpotActivation entry = entrySpotActivationFor(primaryNode.entrySpot().spotId());
-            return actorAdmissions.leaveSpot(
-                    nodeByRid(nodeRid),
-                    actor,
-                    fallbackSpotId,
-                    entry == null ? null : primaryNode.routingId(),
-                    defaultRequestTimeout);
+            // A same-node Actor returns to the Entry Spot through the same-node Join path:
+            // Entry commit, Entry OnJoinedActor, then the one-way source OnLeaveActor.
+            try (Message request = Message.from(new byte[0]);
+                    var ignored = ZLinkSuspendInvocationContext.enterApplicationExecution(null)) {
+                return ZLinkSerialExecutionQueue.yieldCurrent(
+                        joinLocalActor(actor, entry.context.spotId(), request)
+                                .thenApply(result -> (Void) null));
+            }
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -5777,11 +5776,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     actorAdmissions
                             .markLeft(actor)
                             .thenCompose(
-                                    ignored -> notifySpotActorLifecycle(spotSurface, actor, false))
-                            .whenComplete(
-                                    (ignored, error) ->
-                                            actorAdmissions.completeLeave(
-                                                    actor.context().actorId(), error));
+                                    ignored -> notifySpotActorLifecycle(spotSurface, actor, false));
         }
         return () ->
                 actorAdmissions
@@ -5790,20 +5785,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 actorRef,
                                 spotId,
                                 spotSurfaceFor(spotId) instanceof ZLinkSpot<?> spot ? spot : null)
-                        .thenCompose(ignored -> notifySpotActorLifecycle(spotSurface, actor, true))
-                        .whenComplete(
-                                (ignored, error) -> {
-                                    if (spotSurface instanceof ZLinkEntrySpot<?>) {
-                                        actorAdmissions.completeEntryJoin(
-                                                actor.context().actorId(), error);
-                                    }
-                                });
-    }
-
-    boolean shouldRunActorLifecycleInSpotDispatch(
-            ZLinkBackendActorLifecycleEvent event, ZLinkActor actor) {
-        return event.kind() == ZLinkBackendActorLifecycleEventKind.LEFT
-                && actorAdmissions.isLeavePending(actor.context().actorId());
+                        .thenCompose(ignored -> notifySpotActorLifecycle(spotSurface, actor, true));
     }
 
     CompletionStage<Void> dispatchLocalActorPacket(

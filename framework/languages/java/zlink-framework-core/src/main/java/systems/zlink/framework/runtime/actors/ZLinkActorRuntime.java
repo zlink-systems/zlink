@@ -1934,7 +1934,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public CompletionStage<Void> cleanupSourceForLocalMove(
             ZLinkActor actor, LocalMoveSource source) {
-        requireContext(actor);
         if (source == null || source.spotId() == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -1947,7 +1946,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     public void completeRemoteMove(ZLinkActor actor) {
-        requireContext(actor).endMove();
+        // An Actor destroyed by the target OnJoinedActor has no move to end: destroy ended it.
+        DefaultActorContext context = actorRegistry.context(actor);
+        if (context != null) {
+            context.endMove();
+        }
         Long started = transferStarts.remove(actor.context().actorId());
         ZLinkRuntimeMetrics.increment("zlink.actor.transfers", Map.of());
         if (started != null) {
@@ -4528,37 +4531,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public void setEntryRouterChannelId(ZLinkActor actor, String entryRouterChannelId) {
         requireContext(actor).setEntryRouterChannelId(entryRouterChannelId);
-    }
-
-    public CompletionStage<Void> joinEntrySpot(
-            ZLinkActor actor, RoutingId entrySpotNodeRid, Duration timeout) {
-        DefaultActorContext context = requireContext(actor);
-        Message request = Message.from(new byte[0]);
-        return new ZLinkActorEntrySpotJoinCall(
-                        context,
-                        ignored ->
-                                CompletableFuture.completedFuture(
-                                        new EntrySpotTarget(
-                                                entrySpotNodeRid, context.entrySpotId())),
-                        request,
-                        timeout,
-                        context.entrySpotJoinServices())
-                .execute()
-                .thenCompose(
-                        result ->
-                                result instanceof ZLinkActorJoinOutcome.Accepted
-                                        ? CompletableFuture.<Void>completedFuture(null)
-                                        //  Spec 15-spot-actor:404,459 — the internal
-                                        // return-to-Entry path
-                                        //  has no application admission, so a received Rejected
-                                        // reply
-                                        //  violates this operation's reply contract: ProtocolError.
-                                        : CompletableFuture.<Void>failedFuture(
-                                                new ZLinkFrameworkException(
-                                                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                                        "actor Entry Spot join was rejected: "
-                                                                + actor.context().actorId())))
-                .whenComplete((ignored, error) -> request.close());
     }
 
     private void markLeftState(ZLinkActor actor) {

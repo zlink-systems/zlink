@@ -5,7 +5,6 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
-import systems.zlink.framework.spots.ZLinkSpot;
 
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
@@ -31,8 +30,7 @@ abstract class ZLinkSpotContextHost {
 
     abstract CompletionStage<Void> destroyActorFromEntry(RoutingId nodeRid, ZLinkActor actor);
 
-    abstract CompletionStage<Void> leaveActor(
-            RoutingId nodeRid, ZLinkSpot<?> spot, ZLinkActor actor, String fallbackSpotId);
+    abstract CompletionStage<Void> leaveActor(ZLinkActor actor);
 
     abstract CompletionStage<Boolean> closeSpot(String spotId, long objectGeneration);
 
