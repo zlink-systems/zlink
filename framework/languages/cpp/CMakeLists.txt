@@ -1886,6 +1886,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_location_runtime)
   target_link_libraries(test_cpp_framework_location_runtime PRIVATE
     zlink::framework
+    opentelemetry-cpp::metrics
     GTest::gtest_main)
   target_include_directories(test_cpp_framework_location_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
