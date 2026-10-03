@@ -782,8 +782,7 @@ void verify_public_host_local_spot_and_actor_requests ()
               || object->node_id != local.to_string ())
               co_return std::nullopt;
           co_return host::route_fence_t{object->authority_owner_generation, 1};
-      },
-      0ms);
+      });
     node.start ();
     const auto node_id = node.status ().routing_id ();
     const std::vector<zlink::message_t> request_parts{

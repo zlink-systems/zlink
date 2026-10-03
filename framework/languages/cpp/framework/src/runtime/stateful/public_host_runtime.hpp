@@ -236,7 +236,6 @@ struct host_options_t
     mesh::raw_mesh_node_options_t mesh;
     std::string entry_spot_name = "entry";
     std::set<std::string> object_stable_types;
-    std::chrono::milliseconds route_cache_max_age{15'000};
     std::chrono::milliseconds owner_lease_fencing_margin{5'000};
     std::shared_ptr<zlink::context_t> core_context;
     std::chrono::milliseconds session_relocation_seal_timeout =
@@ -902,7 +901,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     resolve_spot_route_fence (zlink::routing_id_t target_node_rid,
                               std::string target_spot_id,
                               std::uint64_t target_spot_generation);
-    void invalidate_spot_route_fence (const protocol::message_follow_notice_t &notice);
     bool complete_local_request (const pending_operation_t &operation,
                                  const std::vector<zlink::message_t> &parts);
     void complete_operation (const pending_operation_t &operation,
@@ -931,14 +929,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     user_spot_materializer_t _user_spot_materializer;
     user_spot_closer_t _user_spot_closer;
     spot_route_fence_resolver_t _spot_route_fence_resolver;
-    struct cached_spot_route_fence_t
-    {
-        route_fence_t fence;
-        std::chrono::steady_clock::time_point expires_at;
-    };
-    runtime::offload_executor_t _route_cache_lane_executor;
-    mutable runtime::state_lane_t _route_cache_lane{_route_cache_lane_executor};
-    std::map<std::string, cached_spot_route_fence_t> _spot_route_fences;
     actor_create_operation_target_t _actor_create_target;
     actor_join_operation_target_t _actor_join_target;
     actor_join_relocation_prepare_validator_t _actor_join_relocation_prepare_validator;

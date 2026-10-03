@@ -1061,14 +1061,15 @@ int main ()
       "CPP-LAYER-003", "Actor dispatch still holds a redundant per-Actor mailbox mutex");
 
     /* CPP-ROUTE-002 — the direct-store fallback uses the same owner
-     * admission deadline as the shared location resolver and never extends
-     * it while converting store time to a steady-clock cache deadline. */
-    gate.require (public_host_runtime.find ("live.owner_admission_lifetime (snapshot->owner)")
-                      != std::string::npos
-                    && public_host_runtime.find ("measured_at + *read->admission_lifetime")
-                         != std::string::npos
-                    && public_host_runtime.find ("measured_at + lifetime") != std::string::npos,
-                  "CPP-ROUTE-002", "direct-store Spot route cache outlives owner admission");
+     * admission deadline as the shared location resolver and keeps no route
+     * copy of its own: the Location Store and the shared resolver cache are
+     * the only owners of a Spot route fence. */
+    gate.require (
+      public_host_runtime.find ("live.owner_admission_lifetime (snapshot->owner)")
+          != std::string::npos
+        && public_host_runtime.find ("measured_at + *read->admission_lifetime") != std::string::npos
+        && public_host_runtime.find ("_spot_route_fences") == std::string::npos,
+      "CPP-ROUTE-002", "direct-store Spot route fence is cached outside the Location Store");
 
     /* CPP-OBS-001 — Instance Spot activation must not allocate its trace DTO
      * or correlation strings while message-flow diagnostics are off. */
