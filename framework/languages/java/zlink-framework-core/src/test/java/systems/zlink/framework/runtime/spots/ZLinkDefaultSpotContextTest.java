@@ -26,7 +26,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
-import systems.zlink.framework.spots.ZLinkSpot;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -870,8 +869,7 @@ final class ZLinkDefaultSpotContextTest {
         }
 
         @Override
-        CompletionStage<Void> leaveActor(
-                RoutingId nodeRid, ZLinkSpot<?> spot, ZLinkActor actor, String fallbackSpotId) {
+        CompletionStage<Void> leaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
 

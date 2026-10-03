@@ -100,27 +100,6 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         return context.enqueueDispatch(payloadBytes, operation, admission);
     }
 
-    @Override
-    CompletionStage<Void> appendActorLifecycle(
-            CompletionStage<Void> tail,
-            ZLinkBackendActorLifecycleEvent event,
-            ZLinkBackendActorRef actorRef,
-            ZLinkActor actor) {
-        if (host.isClosing()) {
-            return tail;
-        }
-        Supplier<CompletionStage<Void>> transition =
-                host.actorLifecycleTransition(entrySpot, event, actorRef, actor, context.spotId());
-        return transition == null
-                ? tail
-                : context.enqueueDispatch(
-                        () -> {
-                            systems.zlink.framework.runtime.internal.dispatch
-                                    .ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
-                            return transition.get();
-                        });
-    }
-
     CompletionStage<Void> handleDispatchEvent(ZLinkBackendSpotDispatchInfo info) {
         if (host.isClosing()) {
             return CompletableFuture.completedFuture(null);
@@ -136,9 +115,6 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                     .whenComplete(
                             (ignored, error) ->
                                     info.actorMessages().forEach(ZLinkBackendActorReceived::close));
-        }
-        if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_LIFECYCLE_READABLE) {
-            drainActorLifecycleEvents();
         }
         for (ZLinkBackendActorReceived actorMessage : info.actorMessages()) {
             actorMessage.close();
@@ -218,7 +194,6 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
 
     void drainPolledDispatchQueues() {
         drainRoutes();
-        drainActorLifecycleEvents();
     }
 
     private void dispatchRoute(ZLinkBackendReceived received) {
@@ -338,9 +313,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                         null,
                         "application/octet-stream",
                         new byte[0],
-                        actor ->
-                                host.notifySpotActorLifecycleAndSuppressBackendEvent(
-                                        entrySpot, actor, backendSpot.spotId(), true),
+                        actor -> host.notifySpotActorLifecycle(entrySpot, actor, true),
                         actorId ->
                                 CompletableFuture.completedFuture(
                                         ZLinkSpotActorJoinResult.accept()));

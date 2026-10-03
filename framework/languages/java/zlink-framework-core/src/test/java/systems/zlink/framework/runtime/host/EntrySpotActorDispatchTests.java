@@ -27,7 +27,6 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEvent;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
@@ -1625,12 +1624,6 @@ final class EntrySpotActorDispatchTests {
         }
 
         @Override
-        public CompletionStage<List<Message>> leaveActor(
-                ZLinkBackendActorRef actor, String currentSpotId, Duration timeout) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public CompletionStage<Void> destroyActor(ZLinkBackendActorRef actor, Duration timeout) {
             throw new UnsupportedOperationException();
         }
@@ -1822,11 +1815,6 @@ final class EntrySpotActorDispatchTests {
         public void replyActorJoin(
                 ZLinkBackendActorJoinRequest request, int joinResultCode, List<Message> parts) {
             throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public ZLinkBackendActorLifecycleEvent recvActorLifecycle(ZLinkBackendRecvMode mode) {
-            return null;
         }
 
         @Override

@@ -196,7 +196,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
             userSpotPayloads =
                     new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec();
-    private final Set<String> suppressedActorLifecycleCallbacks = ConcurrentHashMap.newKeySet();
     private final ZLinkSpotRelocationReplyRoutes relocationReplyRoutes =
             new ZLinkSpotRelocationReplyRoutes();
     private final ZLinkSpotOutboundScope outboundScope = new ZLinkSpotOutboundScope();
@@ -3774,7 +3773,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private CompletionStage<Void> notifySpotActorLifecycle(
+    CompletionStage<Void> notifySpotActorLifecycle(
             Object spotSurface, ZLinkActor actor, boolean joined) {
         if (spotSurface instanceof ZLinkSpot spot) {
             DefaultSpotContext context = spotLifecycle.contextFor(spot);
@@ -3796,87 +3795,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             () -> spot.onLeaveActor(actor))));
         }
         if (spotSurface instanceof ZLinkEntrySpot entrySpot) {
+            // Entry OnJoinedActor runs as the Actor's own lifecycle turn, so an Entry Spot that
+            // destroys the returning Actor does not wait for that Actor to go idle.
             return joined
-                    ? ZLinkHandlerStages.fromStageSupplier(() -> entrySpot.onJoinedActor(actor))
+                    ? actorSessions
+                            .runtime()
+                            .invokeActorLifecycle(
+                                    actor,
+                                    () ->
+                                            ZLinkHandlerStages.fromStageSupplier(
+                                                    () -> entrySpot.onJoinedActor(actor)))
                     : ZLinkHandlerStages.fromStageSupplier(() -> entrySpot.onLeaveActor(actor));
         }
         return CompletableFuture.completedFuture(null);
-    }
-
-    private boolean isAlreadyJoinedTo(
-            ZLinkActor actor, ZLinkBackendActorRef actorRef, String spotId) {
-        return actorSessions.isJoinedTo(actor, actorRef, spotId);
-    }
-
-    private boolean isJoinedToDifferentSpot(ZLinkActor actor, String spotId) {
-        return actorSessions.isJoinedToDifferentSpot(actor, spotId);
-    }
-
-    ZLinkBackendActorRef actorLifecycleRef(ZLinkBackendActorLifecycleEvent event) {
-        return event.kind() == ZLinkBackendActorLifecycleEventKind.LEFT
-                ? event.info().previousActor()
-                : event.info().currentActor();
-    }
-
-    private String actorLifecycleSpotId(
-            ZLinkBackendActorLifecycleEvent event, String fallbackSpotId) {
-        return event.kind() == ZLinkBackendActorLifecycleEventKind.LEFT
-                ? event.info().previousSpotId().orElse(fallbackSpotId)
-                : event.info().currentSpotId().orElse(fallbackSpotId);
-    }
-
-    private boolean shouldIgnoreJoinedOrLeftLifecycle(
-            ZLinkBackendActorLifecycleEvent event,
-            ZLinkBackendActorRef actorRef,
-            ZLinkActor actor,
-            String spotId) {
-        if (isJoinedToDifferentSpot(actor, spotId)) {
-            return true;
-        }
-        if (consumeSuppressedActorLifecycleCallback(event.kind(), actor, spotId)) {
-            return true;
-        }
-        return event.kind() != ZLinkBackendActorLifecycleEventKind.LEFT
-                && isAlreadyJoinedTo(actor, actorRef, spotId);
-    }
-
-    CompletionStage<Void> notifySpotActorLifecycleAndSuppressBackendEvent(
-            Object spotSurface, ZLinkActor actor, String spotId, boolean joined) {
-        suppressActorLifecycleCallback(
-                joined
-                        ? ZLinkBackendActorLifecycleEventKind.JOINED
-                        : ZLinkBackendActorLifecycleEventKind.LEFT,
-                actor,
-                spotId);
-        if (joined && spotSurface instanceof ZLinkEntrySpot<?>) {
-            return actorSessions
-                    .runtime()
-                    .invokeActorLifecycle(
-                            actor, () -> notifySpotActorLifecycle(spotSurface, actor, true));
-        }
-        return notifySpotActorLifecycle(spotSurface, actor, joined);
-    }
-
-    private void suppressActorLifecycleCallback(
-            ZLinkBackendActorLifecycleEventKind kind, ZLinkActor actor, String spotId) {
-        if (kind != null && actor != null && spotId != null) {
-            suppressedActorLifecycleCallbacks.add(
-                    actorLifecycleCallbackKey(kind, actor.context().actorId(), spotId));
-        }
-    }
-
-    private boolean consumeSuppressedActorLifecycleCallback(
-            ZLinkBackendActorLifecycleEventKind kind, ZLinkActor actor, String spotId) {
-        return kind != null
-                && actor != null
-                && spotId != null
-                && suppressedActorLifecycleCallbacks.remove(
-                        actorLifecycleCallbackKey(kind, actor.context().actorId(), spotId));
-    }
-
-    private static String actorLifecycleCallbackKey(
-            ZLinkBackendActorLifecycleEventKind kind, String actorId, String spotId) {
-        return kind.name() + "|" + actorId + "|" + spotId;
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -3903,11 +3834,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         if (spotSurface == null) {
             return CompletableFuture.completedFuture(null);
         }
-        String spotId =
-                spotSurface instanceof ZLinkSpot<?> spot
-                        ? spot.context().spotId()
-                        : ((ZLinkEntrySpot<?>) spotSurface).context().spotId();
-        return notifySpotActorLifecycleAndSuppressBackendEvent(spotSurface, actor, spotId, false);
+        return notifySpotActorLifecycle(spotSurface, actor, false);
     }
 
     private CompletionStage<Void> notifySourceActorLeftForLocalMove(
@@ -4665,21 +4592,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     @Override
-    CompletionStage<Void> leaveActor(
-            RoutingId nodeRid, ZLinkSpot<?> spot, ZLinkActor actor, String fallbackSpotId) {
+    CompletionStage<Void> leaveActor(ZLinkActor actor) {
         if (actor == null) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException("actor is required"));
         }
         try {
+            EntrySpotActivation entry = entrySpotActivationFor(primaryNode.entrySpot().spotId());
+            if (entry == null) {
+                return CompletableFuture.failedFuture(
+                        new ZLinkConfigurationException(
+                                "Entry Spot activation is not available for actor leave"));
+            }
             if (actorAdmissionsRuntime().isRoutedTransferActor(actor)) {
-                EntrySpotActivation entry =
-                        entrySpotActivationFor(primaryNode.entrySpot().spotId());
-                if (entry == null) {
-                    return CompletableFuture.failedFuture(
-                            new ZLinkConfigurationException(
-                                    "Entry Spot activation is not available for actor leave"));
-                }
                 @SuppressWarnings({"rawtypes", "unchecked"})
                 ZLinkEntrySpot rawEntrySpot = entry.entrySpot();
                 return actorAdmissions.leaveRoutedActorToLocalEntry(
@@ -4690,20 +4615,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         actorId ->
                                 CompletableFuture.completedFuture(
                                         ZLinkSpotActorJoinResult.accept()),
-                        joinedActor ->
-                                notifySpotActorLifecycleAndSuppressBackendEvent(
-                                        rawEntrySpot,
-                                        joinedActor,
-                                        primaryNode.entrySpot().spotId(),
-                                        true));
+                        joinedActor -> notifySpotActorLifecycle(rawEntrySpot, joinedActor, true));
             }
-            EntrySpotActivation entry = entrySpotActivationFor(primaryNode.entrySpot().spotId());
-            return actorAdmissions.leaveSpot(
-                    nodeByRid(nodeRid),
-                    actor,
-                    fallbackSpotId,
-                    entry == null ? null : primaryNode.routingId(),
-                    defaultRequestTimeout);
+            // A same-node Actor returns to the Entry Spot through the same-node Join path:
+            // Entry commit, Entry OnJoinedActor, then the one-way source OnLeaveActor.
+            try (Message request = Message.from(new byte[0]);
+                    var ignored = ZLinkSuspendInvocationContext.enterApplicationExecution(null)) {
+                return ZLinkSerialExecutionQueue.yieldCurrent(
+                        joinLocalActor(actor, entry.context.spotId(), request)
+                                .thenApply(result -> (Void) null));
+            }
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -5838,53 +5759,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         } catch (RuntimeException malformed) {
             return false;
         }
-    }
-
-    Supplier<CompletionStage<Void>> actorLifecycleTransition(
-            Object spotSurface,
-            ZLinkBackendActorLifecycleEvent event,
-            ZLinkBackendActorRef actorRef,
-            ZLinkActor actor,
-            String defaultSpotId) {
-        if (event.kind() == ZLinkBackendActorLifecycleEventKind.DISCONNECTED) {
-            return () -> notifySpotActorDisconnected(actor);
-        }
-        String spotId = actorLifecycleSpotId(event, defaultSpotId);
-        if (shouldIgnoreJoinedOrLeftLifecycle(event, actorRef, actor, spotId)) {
-            return null;
-        }
-        if (event.kind() == ZLinkBackendActorLifecycleEventKind.LEFT) {
-            return () ->
-                    actorAdmissions
-                            .markLeft(actor)
-                            .thenCompose(
-                                    ignored -> notifySpotActorLifecycle(spotSurface, actor, false))
-                            .whenComplete(
-                                    (ignored, error) ->
-                                            actorAdmissions.completeLeave(
-                                                    actor.context().actorId(), error));
-        }
-        return () ->
-                actorAdmissions
-                        .markJoined(
-                                actor,
-                                actorRef,
-                                spotId,
-                                spotSurfaceFor(spotId) instanceof ZLinkSpot<?> spot ? spot : null)
-                        .thenCompose(ignored -> notifySpotActorLifecycle(spotSurface, actor, true))
-                        .whenComplete(
-                                (ignored, error) -> {
-                                    if (spotSurface instanceof ZLinkEntrySpot<?>) {
-                                        actorAdmissions.completeEntryJoin(
-                                                actor.context().actorId(), error);
-                                    }
-                                });
-    }
-
-    boolean shouldRunActorLifecycleInSpotDispatch(
-            ZLinkBackendActorLifecycleEvent event, ZLinkActor actor) {
-        return event.kind() == ZLinkBackendActorLifecycleEventKind.LEFT
-                && actorAdmissions.isLeavePending(actor.context().actorId());
     }
 
     CompletionStage<Void> dispatchLocalActorPacket(
