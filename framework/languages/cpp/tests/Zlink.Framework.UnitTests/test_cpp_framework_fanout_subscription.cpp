@@ -125,7 +125,8 @@ class gate_publish_client_t final : public zlink::framework::hosted_service_t
                 catch (const zlink::framework::framework_exception_t &error) {
                     last_error = error.what ();
                 }
-                other_completed = other_submitted && other.wait_for (2s) == std::future_status::ready;
+                other_completed =
+                  other_submitted && other.wait_for (2s) == std::future_status::ready;
                 if (other_completed) {
                     std::this_thread::sleep_for (100ms);
                     later_before_release =

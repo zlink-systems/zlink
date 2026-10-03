@@ -9,6 +9,190 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MeshNode_Channel_Handlers_Run_Serially_Per_ChannelName(bool separateBatches)
+    {
+        var probe = new MeshChannelTurnProbe();
+        await using var services = new ServiceCollection()
+            .AddSingleton(probe)
+            .AddTransient<MeshChannelTurnHandler>()
+            .BuildServiceProvider();
+        var registration = new ZLinkFrameworkRegistration
+        {
+            ImplicitHandlerAutoRegistrationEnabled = false,
+        };
+        registration.FreezeScannedHandlerCatalog();
+        var spotNode = new ZLinkSpotNodeRegistration
+        {
+            SpotNodeName = "mesh",
+            RoutingId = RoutingId.From("mesh-node"),
+        };
+        foreach (var channelName in new[] { "play", "chat" })
+        {
+            var membership = new ZLinkMeshChannelMembership { ChannelName = channelName };
+            membership.SendHandlers.Add(
+                new ZLinkChannelHandlerRegistration(
+                    typeof(MeshChannelTurnHandler),
+                    typeof(MeshRequest),
+                    null,
+                    "Turn"
+                )
+            );
+            spotNode.ChannelMemberships.Add(membership);
+        }
+
+        var runtime = new ZLinkFrameworkRuntime(
+            services,
+            null!,
+            registration,
+            new ZLinkHandlerRegistry([]),
+            new ZLinkHandlerDispatcher(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                registration
+            )
+        );
+        var taskRunner = new ZLinkRuntimeTaskRunner(
+            new ThrowingRuntimeErrorSink(),
+            CancellationToken.None
+        );
+        var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+            ZLinkMeshNodeRouteDispatcher.Create(
+                services,
+                registration,
+                spotNode,
+                runtime,
+                taskRunner
+            )
+        );
+
+        Task dispatch = Task.CompletedTask;
+        try
+        {
+            if (separateBatches)
+            {
+                var first = dispatcher
+                    .DispatchBatchAsync([CreateRecord("play", "first")], CancellationToken.None)
+                    .AsTask();
+                await probe.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var following = dispatcher
+                    .DispatchBatchAsync(
+                        [CreateRecord("play", "second"), CreateRecord("chat", "other")],
+                        CancellationToken.None
+                    )
+                    .AsTask();
+                dispatch = Task.WhenAll(first, following);
+            }
+            else
+            {
+                dispatch = dispatcher
+                    .DispatchBatchAsync(
+                        [
+                            CreateRecord("play", "first"),
+                            CreateRecord("play", "second"),
+                            CreateRecord("chat", "other"),
+                        ],
+                        CancellationToken.None
+                    )
+                    .AsTask();
+                await probe.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            await probe.OtherCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(probe.SecondStarted.Task.IsCompleted);
+            Assert.Equal(1, probe.MaximumPlayConcurrency);
+        }
+        finally
+        {
+            probe.ReleaseFirst.TrySetResult();
+            await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
+            await dispatcher.DisposeAsync();
+            await taskRunner.StopAsync();
+        }
+        Assert.True(probe.SecondStarted.Task.IsCompletedSuccessfully);
+        Assert.Equal(1, probe.MaximumPlayConcurrency);
+
+        static ZLinkBackendRouteReceived CreateRecord(string channelName, string value)
+        {
+            var header = new ZLinkEnvelopeHeader(
+                ZLinkMessageKind.Command,
+                channelName,
+                "Turn",
+                ZLinkEnvelopeCodec.DefaultContentType,
+                null,
+                null,
+                null,
+                null,
+                null
+            );
+            return new ZLinkBackendRouteReceived(
+                ZLinkEnvelopeCodec.EncodeParts(
+                    header,
+                    new MeshRequest(value),
+                    typeof(MeshRequest),
+                    null
+                ),
+                sourceNodeRid: RoutingId.From("source-node"),
+                spotId: null,
+                requestSeq: null,
+                reply: null,
+                channelName
+            );
+        }
+    }
+
+    private sealed class MeshChannelTurnProbe
+    {
+        public TaskCompletionSource FirstStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirst { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource OtherCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int MaximumPlayConcurrency;
+        public int ActivePlayHandlers;
+    }
+
+    private sealed class MeshChannelTurnHandler(MeshChannelTurnProbe probe)
+        : IZLinkSendHandler<MeshRequest>
+    {
+        public async ValueTask HandleAsync(
+            MeshRequest request,
+            IZLinkMessageContext context,
+            CancellationToken cancellationToken
+        )
+        {
+            _ = context;
+            if (request.Value == "other")
+            {
+                probe.OtherCompleted.TrySetResult();
+                return;
+            }
+
+            var active = Interlocked.Increment(ref probe.ActivePlayHandlers);
+            if (active > 1)
+                Interlocked.Exchange(ref probe.MaximumPlayConcurrency, active);
+            else
+                Interlocked.CompareExchange(ref probe.MaximumPlayConcurrency, 1, 0);
+            try
+            {
+                if (request.Value == "first")
+                {
+                    probe.FirstStarted.TrySetResult();
+                    await probe.ReleaseFirst.Task.WaitAsync(cancellationToken);
+                }
+                else
+                    probe.SecondStarted.TrySetResult();
+            }
+            finally
+            {
+                Interlocked.Decrement(ref probe.ActivePlayHandlers);
+            }
+        }
+    }
+
     [Fact]
     public async Task MeshNode_Rid_Send_Decodes_The_Retained_Body_View_Directly()
     {

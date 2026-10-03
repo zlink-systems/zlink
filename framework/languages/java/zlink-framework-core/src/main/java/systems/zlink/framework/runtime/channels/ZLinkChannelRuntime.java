@@ -484,8 +484,7 @@ public final class ZLinkChannelRuntime
                         this.handlerExecutor,
                         suspendHandlerInvokers,
                         filterTypes);
-        this.receiveLoops =
-                new ZLinkChannelReceiveLoops(registration.applicationJobQueue());
+        this.receiveLoops = new ZLinkChannelReceiveLoops(registration.applicationJobQueue());
         this.defaultRequestTimeout = registration.defaultRequestTimeout();
         this.spotRouteBridgeDrainer = new ZLinkSpotRouteBridgeDrainer(sockets.spotRouteBridges());
         this.backendFactory = backendFactory;
@@ -1479,7 +1478,14 @@ public final class ZLinkChannelRuntime
 
     @Override
     public void close() {
-        closeAsyncInternal(null).toCompletableFuture().join();
+        try {
+            closeCore(null);
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new CompletionException(failure);
+        } catch (TimeoutException | ExecutionException failure) {
+            throw new CompletionException(failure);
+        }
     }
 
     /** Completes the channel teardown using the host's absolute shutdown deadline. */

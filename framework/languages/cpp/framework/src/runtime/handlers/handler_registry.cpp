@@ -39,20 +39,9 @@ std::shared_ptr<runtime::offload_executor_t> &handler_invocation_executor_ref ()
     return executor;
 }
 
-std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor_core ()
-{
-    std::lock_guard lock (handler_invocation_executor_mutex ());
-    if (!handler_invocation_executor_ref ()) {
-        handler_invocation_executor_ref () = std::make_shared<runtime::offload_executor_t> (
-          0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
-          std::chrono::milliseconds (100), "zlink-handler");
-    }
-    return handler_invocation_executor_ref ();
-}
-
 void ensure_handler_invocation_executor ()
 {
-    (void) handler_invocation_executor_core ();
+    (void) detail::handler_invocation_executor ();
 }
 
 handler_dispatch_kind_t dispatch_kind_for (handler_kind_t kind)
@@ -301,7 +290,13 @@ void configure_handler_invocation_executor ()
 
 std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor ()
 {
-    return handler_invocation_executor_core ();
+    std::lock_guard lock (handler_invocation_executor_mutex ());
+    if (!handler_invocation_executor_ref ()) {
+        handler_invocation_executor_ref () = std::make_shared<runtime::offload_executor_t> (
+          0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
+          std::chrono::milliseconds (100), "zlink-handler");
+    }
+    return handler_invocation_executor_ref ();
 }
 
 void shutdown_handler_invocation_executor () noexcept

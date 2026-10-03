@@ -112,9 +112,7 @@ final class ZLinkChannelDispatchRegistry {
 
     CompletionStage<Void> awaitQuiescence() {
         List<CompletableFuture<Void>> waiters =
-                queues()
-                        .map(queue -> queue.awaitQuiescence().toCompletableFuture())
-                        .toList();
+                queues().map(queue -> queue.awaitQuiescence().toCompletableFuture()).toList();
         return CompletableFuture.allOf(waiters.toArray(CompletableFuture[]::new));
     }
 

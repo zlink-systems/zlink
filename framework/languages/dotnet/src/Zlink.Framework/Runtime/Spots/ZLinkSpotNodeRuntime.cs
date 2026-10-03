@@ -834,6 +834,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         Capture(RequestStop);
         if (_entryDispatchPump is { } entryDispatchPump)
             await CaptureAsync(entryDispatchPump.DisposeAsync).ConfigureAwait(false);
+        if (_nodeRouteDispatcher is { } nodeRouteDispatcher)
+            await CaptureAsync(nodeRouteDispatcher.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_taskRunner.StopAsync).ConfigureAwait(false);
         await CaptureAsync(
                 forceStopToken.CanBeCanceled ? _spots.ForceStopAsync : _spots.DisposeAsync

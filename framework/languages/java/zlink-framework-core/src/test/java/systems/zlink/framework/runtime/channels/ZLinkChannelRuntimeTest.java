@@ -114,6 +114,22 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
+    void closeRunsOnCallingThread() {
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        ZLinkChannelRuntime runtime =
+                new ZLinkChannelRuntime(
+                        backend,
+                        new DefaultZLinkFrameworkOptions().registration(),
+                        new ZLinkJsonMessageSerializer(),
+                        handlers());
+        Thread caller = Thread.currentThread();
+
+        runtime.close();
+
+        assertSame(caller, backend.context.closeThread);
+    }
+
+    @Test
     void closeWaitsForAcceptedChannelHandlerTerminal() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
@@ -214,11 +230,13 @@ final class ZLinkChannelRuntimeTest {
             ExecutionException failure =
                     assertThrows(
                             ExecutionException.class,
-                            () -> runtime.closeAsync(Instant.now().plusMillis(150))
-                                    .toCompletableFuture()
-                                    .get(2, TimeUnit.SECONDS));
+                            () ->
+                                    runtime.closeAsync(Instant.now().plusMillis(150))
+                                            .toCompletableFuture()
+                                            .get(2, TimeUnit.SECONDS));
             assertInstanceOf(java.util.concurrent.TimeoutException.class, failure.getCause());
             assertEquals(1, backend.context.closeCount.get());
+            assertTrue(backend.context.closeThread.isVirtual());
         } finally {
             release.complete(null);
         }
@@ -2533,6 +2551,7 @@ final class ZLinkChannelRuntimeTest {
 
     private static final class FakeContext implements ZLinkBackendContext {
         private final AtomicInteger closeCount = new AtomicInteger();
+        private volatile Thread closeThread;
 
         @Override
         public void shutdown() {}
@@ -2544,6 +2563,7 @@ final class ZLinkChannelRuntimeTest {
 
         @Override
         public void close() {
+            closeThread = Thread.currentThread();
             closeCount.incrementAndGet();
         }
     }

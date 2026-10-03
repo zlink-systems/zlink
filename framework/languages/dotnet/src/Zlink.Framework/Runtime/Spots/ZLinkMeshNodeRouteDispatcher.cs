@@ -25,7 +25,7 @@ namespace Zlink.Framework.Runtime.Spots;
 // invocation reuses the existing route/channel handler-invocation paths
 // (ZLinkRouteHandlerInvoker for route handlers, the channel dispatch pipelines for
 // channel handlers) rather than a parallel implementation.
-internal sealed class ZLinkMeshNodeRouteDispatcher
+internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
 {
     // Node RID-direct route handlers are not channel-scoped; they share one
     // internal registry channel key so the inbound envelope's channel name is not
@@ -45,6 +45,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     private readonly ZLinkDispatchErrorReporter _dispatchErrors;
     private readonly ZLinkFrameworkRuntime _runtime;
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
+    private readonly IReadOnlyDictionary<string, ZLinkSerialExecutionQueue> _channelQueues;
     private readonly ZLinkStateLane _orderedActorRelayLane = new();
     private readonly Dictionary<ZLinkActorId, TaskCompletionSource> _orderedActorRelayTails = [];
 
@@ -57,7 +58,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkCodecRegistryBuilder codecs,
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkFrameworkRuntime runtime,
-        ZLinkRuntimeTaskRunner taskRunner
+        ZLinkRuntimeTaskRunner taskRunner,
+        IReadOnlyDictionary<string, ZLinkSerialExecutionQueue> channelQueues
     )
     {
         _meshName = meshName;
@@ -69,6 +71,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         _dispatchErrors = dispatchErrors;
         _runtime = runtime;
         _taskRunner = taskRunner;
+        _channelQueues = channelQueues;
     }
 
     // Builds a dispatcher from the SpotNode's registered node-route and
@@ -225,8 +228,23 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             registration.Codecs,
             dispatchErrors,
             runtime,
-            taskRunner
+            taskRunner,
+            spotNode.ChannelMemberships.ToDictionary(
+                static membership => membership.ChannelName,
+                membership => new ZLinkSerialExecutionQueue(
+                    taskRunner,
+                    taskRunner.ErrorSink,
+                    taskRunner.ShutdownToken
+                ),
+                StringComparer.Ordinal
+            )
         );
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var queue in _channelQueues.Values)
+            await queue.DisposeAsync().ConfigureAwait(false);
     }
 
     // Pump entry point (invoked on the single node drain loop). Dispatch runs on a
@@ -266,9 +284,13 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             }
 
             var invocation =
-                header is not null && TryGetOrderedActorRelayKey(received, header, out var actorId)
+                received.ChannelName is { } channelName
+                && _channelQueues.TryGetValue(channelName, out var queue)
+                    ? DispatchChannelSerialAsync(queue, received, header, cancellationToken)
+                : header is not null
+                && TryGetOrderedActorRelayKey(received, header, out var actorId)
                     ? DispatchOrderedActorRelayAsync(actorId, received, header, cancellationToken)
-                    : DispatchAsync(received, header, cancellationToken);
+                : DispatchAsync(received, header, cancellationToken);
             if (invocation.IsCompletedSuccessfully)
                 invocation.GetAwaiter().GetResult();
             else
@@ -277,6 +299,27 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
 
         if (pending is not null)
             await Task.WhenAll(pending).ConfigureAwait(false);
+    }
+
+    private ValueTask DispatchChannelSerialAsync(
+        ZLinkSerialExecutionQueue queue,
+        ZLinkBackendRouteReceived received,
+        ZLinkEnvelopeHeader? header,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            !queue.TryPostApplication(
+                _ => DispatchAsync(received, header, cancellationToken),
+                out var item
+            )
+        )
+        {
+            received.Dispose();
+            return ValueTask.CompletedTask;
+        }
+
+        return new ValueTask(item.Completion);
     }
 
     internal bool TryDispatch(ZLinkBackendRouteReceived received) =>
