@@ -6,7 +6,6 @@
 #include <chrono>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <utility>
 
 namespace zlink::framework::tests
@@ -37,7 +36,7 @@ class owner_lease_time_store_t final : public location_store_t
         const auto inject_owner_time = key.value == _owner_key;
         {
             const std::lock_guard lock (_observation_mutex);
-            if (std::this_thread::get_id () == _observation_thread) {
+            if (_observing) {
                 if (!_watched_authority_fragment.empty ()
                     && key.value.find (_watched_authority_fragment) != std::string::npos)
                     ++_watched_authority_reads;
@@ -68,11 +67,13 @@ class owner_lease_time_store_t final : public location_store_t
         return _inner->scan (std::move (request));
     }
 
+    /* Observes reads from every thread: a request that awaits the store
+     * resumes on a handler worker, not on the thread that started it. */
     void observe_owner_read_order (std::string authority_fragment,
                                    unsigned authority_reads_before_owner)
     {
         const std::lock_guard lock (_observation_mutex);
-        _observation_thread = std::this_thread::get_id ();
+        _observing = true;
         _watched_authority_fragment = std::move (authority_fragment);
         _authority_reads_before_owner = authority_reads_before_owner;
         _watched_authority_reads = 0;
@@ -90,7 +91,7 @@ class owner_lease_time_store_t final : public location_store_t
     std::string _owner_key;
     lease_view_t _lease_view;
     mutable std::mutex _observation_mutex;
-    std::thread::id _observation_thread;
+    bool _observing = false;
     std::string _watched_authority_fragment;
     unsigned _authority_reads_before_owner = 0;
     unsigned _watched_authority_reads = 0;

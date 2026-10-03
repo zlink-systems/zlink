@@ -3158,7 +3158,8 @@ relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &
                   return descriptor.rid.to_hex () == local_rid->to_hex ()
                          && descriptor.lifecycle_generation == status.lifecycle_generation ();
               });
-            if (source == descriptors.end () || !live.owner_admission_lifetime (source->owner_id)) {
+            if (source == descriptors.end ()
+                || !live.owner_admission_lifetime (source->owner_id).result ().value ()) {
                 return {relocation_reason_t::store_unavailable, 0};
             }
             if (source_application_version
@@ -3182,7 +3183,7 @@ relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &
               [&] (const mesh_node_descriptor_t &candidate) {
                   return !local_rids.contains (candidate.rid.to_hex ())
                          && candidate.lifecycle_generation != 0
-                         && live.owner_admission_lifetime (candidate.owner_id)
+                         && live.owner_admission_lifetime (candidate.owner_id).result ().value ()
                          && supports_relocation_source (*source, candidate,
                                                         target_application_version)
                          && node->has_admitted_peer (candidate.rid, candidate.lifecycle_generation);

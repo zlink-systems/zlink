@@ -694,7 +694,8 @@ class actor_client_impl_t final : public actor_client_t
                            snapshot->authority_owner_generation,
                            static_cast<std::uint64_t> (snapshot->owner.lease_generation),
                            snapshot->owner};
-        const auto lease_lifetime = _store->owner_admission_lifetime (snapshot->owner);
+        const auto lease_lifetime =
+          _store->owner_admission_lifetime (snapshot->owner).result ().value ();
         if (_location_options.route_cache_max_age > std::chrono::milliseconds::zero ()
             && lease_lifetime) {
             const auto lifetime =

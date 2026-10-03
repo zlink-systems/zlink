@@ -28,22 +28,22 @@ class live_location_reader_t final
     {
     }
 
-    std::optional<std::chrono::steady_clock::duration>
-    owner_admission_lifetime (const std::string &owner_id)
+    task_t<std::optional<std::chrono::steady_clock::duration>>
+    owner_admission_lifetime (std::string owner_id)
     {
-        const auto lease = _store->read_owner_lease (owner_id).result ().value ();
+        const auto lease = co_await _store->read_owner_lease (std::move (owner_id));
         const auto *found = std::get_if<owner_lease_found_t> (&lease);
         if (found == nullptr)
-            return std::nullopt;
-        return admission_lifetime (found->token, found);
+            co_return std::nullopt;
+        co_return admission_lifetime (found->token, found);
     }
 
-    std::optional<std::chrono::steady_clock::duration>
-    owner_admission_lifetime (const location_owner_token_t &owner)
+    task_t<std::optional<std::chrono::steady_clock::duration>>
+    owner_admission_lifetime (location_owner_token_t owner)
     {
-        const auto lease = _store->read_owner_lease (owner.owner_id).result ().value ();
+        const auto lease = co_await _store->read_owner_lease (owner.owner_id);
         const auto *found = std::get_if<owner_lease_found_t> (&lease);
-        return admission_lifetime (owner, found);
+        co_return admission_lifetime (owner, found);
     }
 
   private:

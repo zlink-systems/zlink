@@ -14,6 +14,7 @@
 #include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "../support/owner_lease_time_store.hpp"
 
 #include <gtest/gtest.h>
@@ -29,6 +30,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <future>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -2272,7 +2276,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ReadyAuthorityWithExpiredOwnerIsUnav
 
     store_location_resolvers_t resolvers (store);
     try {
-        (void) resolvers.resolve_spot_address ({}, "expired-spot").result ();
+        (void) resolvers.resolve_spot_address ({}, "expired-spot").result ().value ();
         FAIL () << "an expired authority owner must be unavailable";
     }
     catch (const zlink::framework::framework_exception_t &error) {
@@ -3766,6 +3770,106 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppStreamHostStartsAndStopsTcpListen
     EXPECT_EQ (0, app.run (0, nullptr));
     ASSERT_NE (nullptr, client_ptr);
     EXPECT_TRUE (client_ptr->observed) << client_ptr->last_error_message ();
+}
+
+
+zlink::framework::task_t<void> resolve_on_handler_executor (store_location_resolvers_t &resolvers,
+                                                            std::atomic_int &resolved,
+                                                            std::atomic_int &remaining,
+                                                            std::promise<void> &all_resolved)
+{
+    try {
+        const auto address = co_await resolvers.resolve_spot_address ({}, "spot-1");
+        if (address && address->node_rid.to_string () == "node-1")
+            ++resolved;
+    }
+    catch (...) {
+    }
+    if (--remaining == 0)
+        all_resolved.set_value ();
+}
+
+/* Execution gate §12: a handler that awaits a Spot request yields its
+ * executor worker, so the Location Store read that completes the request
+ * still progresses when every worker runs such a handler. Before #1380 the
+ * resolver read the authority with blocking waits whose continuations were
+ * queued behind those same workers. */
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      SpotResolutionOnEveryHandlerWorkerDoesNotBlockStoreContinuations)
+{
+    using namespace std::chrono_literals;
+    namespace fw = zlink::framework;
+    constexpr std::size_t workers = 2;
+    constexpr int requests = 8;
+
+    fw::runtime::in_memory_location_store_t provider;
+    fw::runtime::provider_location_repository_t repository (provider);
+    const auto claim = repository.claim_owner_lease ("owner-1", 30s).result ().value ();
+    const auto *claimed = std::get_if<fw::owner_lease_claimed_t> (&claim);
+    ASSERT_NE (claimed, nullptr);
+    fw::mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "mesh-1";
+    descriptor.rid = zlink::routing_id_t::from (std::string{"node-1"});
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = claimed->token.owner_id;
+    descriptor.lease_generation = claimed->token.lease_generation;
+    descriptor.object_role = fw::object_role_t::server;
+    descriptor.state = fw::framework_runtime_state_t::serving;
+    descriptor.object_capabilities.push_back ({fw::placement_object_kind_t::user_spot, "room",
+                                               fw::maintenance_policy_kind_t::snapshot, true, 10});
+    descriptor.capacity.spots.limit = 10;
+    descriptor.capacity.spot_types.push_back (
+      {fw::placement_object_kind_t::user_spot, "room", {0, 0, 10}});
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    fw::object_reserve_request_t request;
+    request.key = {fw::placement_object_kind_t::user_spot, "spot-1"};
+    request.intent.stable_type = "room";
+    request.target = {"mesh-1", fw::node_rid_t::from_string ("node-1"), 1, claimed->token};
+    request.creating_payload = {std::byte{0}};
+    request.capacity_bundle.spot_slots = 1;
+    request.capacity_bundle.spot_type =
+      fw::spot_type_capacity_delta_t{fw::placement_object_kind_t::user_spot, "room", 1};
+    const auto reserved = repository.reserve (request).result ().value ();
+    const auto *reservation = std::get_if<fw::object_reserved_t> (&reserved);
+    ASSERT_NE (reservation, nullptr);
+    const auto committed =
+      repository
+        .commit ({request.key, reservation->fence, user_spot_authority_payload ("spot-1", 1)})
+        .result ()
+        .value ();
+    ASSERT_TRUE (std::holds_alternative<fw::object_committed_t> (committed));
+
+    location_options_t options;
+    options.route_cache_max_age = std::chrono::milliseconds::zero ();
+    store_location_resolvers_t resolvers (repository, options);
+
+    fw::runtime::configure_handler_coroutine_executor (workers);
+    fw::runtime::install_host_context_hooks ();
+    std::atomic_int resolved{0};
+    std::atomic_int remaining{requests};
+    std::promise<void> all_resolved;
+    auto finished = all_resolved.get_future ();
+    for (int index = 0; index < requests; ++index) {
+        fw::runtime::handler_coroutine_executor ().post_native_continuation ([&] {
+            (void) resolve_on_handler_executor (resolvers, resolved, remaining, all_resolved);
+        });
+    }
+    if (finished.wait_for (10s) != std::future_status::ready) {
+        // Every handler worker is parked in a blocking wait; the executor
+        // cannot be drained, so end the process instead of hanging teardown.
+        std::fprintf (stderr, "Spot resolution deadlocked the handler executor (%d/%d)\n",
+                      resolved.load (), requests);
+        std::fflush (stderr);
+        std::_Exit (EXIT_FAILURE);
+    }
+    fw::runtime::shutdown_handler_coroutine_executor ();
+    EXPECT_EQ (requests, resolved.load ());
 }
 
 } // namespace

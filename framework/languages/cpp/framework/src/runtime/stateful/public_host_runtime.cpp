@@ -321,7 +321,8 @@ read_route_owner_fence (const std::shared_ptr<zlink::framework::location_reposit
         location_options_t location_options;
         location_options.owner_lease_fencing_margin = owner_lease_fencing_margin;
         live_location_reader_t live (*store, std::move (location_options));
-        const auto admission_lifetime = live.owner_admission_lifetime (snapshot->owner);
+        const auto admission_lifetime =
+          live.owner_admission_lifetime (snapshot->owner).result ().value ();
         if (!admission_lifetime) {
             trace_mesh_host ("route-owner-fence-read",
                              "reason=admission-lifetime-null owner=" + snapshot->owner.owner_id

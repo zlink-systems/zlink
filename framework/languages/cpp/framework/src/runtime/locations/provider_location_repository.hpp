@@ -268,18 +268,17 @@ class provider_location_repository_t final : public location_repository_t
                                                     std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
-            return cancelled<authority_read_result_t> ();
-        auto current = read (key_authority (key.value));
+            co_return co_await cancelled<authority_read_result_t> ();
+        auto current = co_await _store->read (key_authority (key.value));
         if (const auto *found = std::get_if<store_found_t> (&current)) {
-            auto snapshot = effective_authority (key.value, found->value.bytes,
-                                                 found->value.version, found->value.store_now);
+            auto snapshot = co_await effective_authority_async (
+              key.value, found->value.bytes, found->value.version, found->value.store_now);
             if (!snapshot)
-                return completed (
-                  authority_read_result_t{authority_missing_t{found->value.store_now}});
-            return completed (authority_read_result_t{std::move (*snapshot)});
+                co_return authority_read_result_t{authority_missing_t{found->value.store_now}};
+            co_return authority_read_result_t{std::move (*snapshot)};
         }
-        return completed (authority_read_result_t{
-          authority_missing_t{std::get<store_missing_t> (current).store_now}});
+        co_return authority_read_result_t{
+          authority_missing_t{std::get<store_missing_t> (current).store_now}};
     }
 
     task_t<authority_compare_exchange_result_t>

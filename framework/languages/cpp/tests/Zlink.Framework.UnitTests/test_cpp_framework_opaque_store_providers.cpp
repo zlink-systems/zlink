@@ -2946,7 +2946,7 @@ TEST (CppFrameworkOpaqueLocationStore, MissingRecordVersionFailsClosed)
     EXPECT_NE (std::string (owner_failure.error ()->what ()).find ("recordVersion"),
                std::string::npos);
     try {
-        (void) reopened.read_authority (actor_key);
+        (void) reopened.read_authority (actor_key).result ().value ();
         FAIL () << "Missing authority recordVersion must fail";
     }
     catch (const framework_exception_t &error) {
