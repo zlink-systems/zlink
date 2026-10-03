@@ -11,6 +11,7 @@
 #include <array>
 #include <filesystem>
 #include <iostream>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,35 @@ std::string read_source_tree (const std::filesystem::path &root)
         }
     }
     return source;
+}
+
+// GCC 13 evaluates a co_await operand of ||, && or ?: even when the other
+// operand already decides the result, so a guarded null dereference runs.
+// Runtime sources split such awaits into if statements.
+std::vector<std::string> short_circuit_awaits (const std::filesystem::path &root)
+{
+    static const std::regex same_line (R"((\|\||&&|\?)[^;]*co_await)");
+    static const std::regex continued (R"(^\s*(\|\||&&|\?|:)\s*[!(]*\s*co_await)");
+    std::vector<std::string> found;
+    for (const auto &entry : std::filesystem::recursive_directory_iterator (root)) {
+        const auto ext = entry.path ().extension ();
+        if (!entry.is_regular_file () || (ext != ".hpp" && ext != ".cpp"))
+            continue;
+        const auto text = read_text_file (entry.path ());
+        std::size_t line_number = 0;
+        std::size_t start = 0;
+        while (start < text.size ()) {
+            const auto end = text.find ('\n', start);
+            const auto line = text.substr (start, end == std::string::npos ? end : end - start);
+            ++line_number;
+            if (std::regex_search (line, same_line) || std::regex_search (line, continued))
+                found.push_back (entry.path ().string () + ":" + std::to_string (line_number));
+            if (end == std::string::npos)
+                break;
+            start = end + 1;
+        }
+    }
+    return found;
 }
 
 struct gate_t
@@ -1361,6 +1391,12 @@ int main ()
                     && connector_contract.find ("namespace zlink::stream_connector::assertions")
                          != std::string::npos,
                   "TH-CP-01", "C++ stream connector contract omits the common test helper surface");
+
+    for (const auto &scanned : {root / "framework/src", include_root}) {
+        for (const auto &site : short_circuit_awaits (scanned))
+            gate.require (false, "GCC-COAWAIT-01",
+                          "co_await inside a short-circuit or conditional operand: " + site);
+    }
 
     if (gate.failures != 0) {
         std::cerr << "target contract gate failures: " << gate.failures << '\n';

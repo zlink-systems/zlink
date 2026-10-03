@@ -1229,7 +1229,11 @@ run_request_turn_probe (std::shared_ptr<zlink::framework::task_completion_source
     }
     zlink::framework::request_call_t<int> call (
       "TurnProbe", [reply] (const auto &, auto, const auto &) { return reply->task (); });
-    const auto value = release_turn ? co_await call.yield () : co_await call.async ();
+    int value = 0;
+    if (release_turn)
+        value = co_await call.yield ();
+    else
+        value = co_await call.async ();
     if (value != 7) {
         throw std::runtime_error ("turn probe reply mismatch");
     }

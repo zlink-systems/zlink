@@ -4404,7 +4404,9 @@ class aggregate_materialized_spot_t final
     }
     zlink::framework::task_t<void> on_actor_joined (aggregate_materialized_actor_t &actor) override
     {
-        const auto visible = membership_visible ? co_await membership_visible () : false;
+        bool visible = false;
+        if (membership_visible)
+            visible = co_await membership_visible ();
         joined_saw_membership.store (visible, std::memory_order_release);
         joined_saw_state.store (actor.value == 37, std::memory_order_release);
         joined_before_cas.store (authority_commit_count && authority_commit_count () == 0,

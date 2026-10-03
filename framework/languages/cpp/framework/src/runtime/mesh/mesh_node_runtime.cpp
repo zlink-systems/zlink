@@ -1464,12 +1464,13 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
         result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
         co_return result;
     }
-    if (result.terminal == runtime::stateful::relocation_terminal_t::blocked
-        && !co_await route_bound_sessions (
-          session_seal->checkpoints, {},
-          runtime::protocol::session_relocation_route_action_t::abort)) {
-        result.terminal = runtime::stateful::relocation_terminal_t::recovery_required;
-        result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+    if (result.terminal == runtime::stateful::relocation_terminal_t::blocked) {
+        if (!co_await route_bound_sessions (
+              session_seal->checkpoints, {},
+              runtime::protocol::session_relocation_route_action_t::abort)) {
+            result.terminal = runtime::stateful::relocation_terminal_t::recovery_required;
+            result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+        }
     }
     co_return result;
 }
@@ -1709,12 +1710,13 @@ mesh_node_runtime_t::relocate_application_unit (
                                 : relocation_terminal_t::blocked;
             result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
         }
-        if (result.terminal == relocation_terminal_t::blocked
-            && !co_await route_bound_sessions (
-              session_seal->checkpoints, {},
-              runtime::protocol::session_relocation_route_action_t::abort)) {
-            result.terminal = relocation_terminal_t::recovery_required;
-            result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+        if (result.terminal == relocation_terminal_t::blocked) {
+            if (!co_await route_bound_sessions (
+                  session_seal->checkpoints, {},
+                  runtime::protocol::session_relocation_route_action_t::abort)) {
+                result.terminal = relocation_terminal_t::recovery_required;
+                result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+            }
         }
         co_return runtime::stateful::aggregate_relocation_result_t{
           result.terminal, result.reason, {}, result.replay_records, result.target_handoff};
@@ -1727,12 +1729,13 @@ mesh_node_runtime_t::relocate_application_unit (
                                                           : relocation_terminal_t::blocked;
         result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
     }
-    if (result.terminal == relocation_terminal_t::blocked
-        && !co_await route_bound_sessions (
-          session_seal->checkpoints, {},
-          runtime::protocol::session_relocation_route_action_t::abort)) {
-        result.terminal = relocation_terminal_t::recovery_required;
-        result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+    if (result.terminal == relocation_terminal_t::blocked) {
+        if (!co_await route_bound_sessions (
+              session_seal->checkpoints, {},
+              runtime::protocol::session_relocation_route_action_t::abort)) {
+            result.terminal = relocation_terminal_t::recovery_required;
+            result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+        }
     }
     co_return result;
 }
