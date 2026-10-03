@@ -93,6 +93,8 @@ final class ZLinkChannelSocketRegistry {
     private boolean unmanagedBackendClientMode;
     private static final long CLIENT_SERVER_PROBE_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(5);
     private static final long CLIENT_SERVER_DEADLINE_NANOS = TimeUnit.SECONDS.toNanos(15);
+    private static final Duration CLIENT_SERVER_CONTROL_RECEIVE_WAIT = Duration.ofMillis(250);
+    private volatile BiConsumer<String, Throwable> clientServerReceiveFailures = (channel, f) -> {};
 
     ZLinkChannelSocketRegistry() {
         this(null);
@@ -1149,8 +1151,7 @@ final class ZLinkChannelSocketRegistry {
         return true;
     }
 
-    void tickClientServerLiveness(
-            long nowNanos, BiConsumer<String, Throwable> reportReceiveFailure) {
+    void tickClientServerLiveness(long nowNanos) {
         LivenessSnapshot snapshot =
                 inStateLane(
                         () -> {
@@ -1179,11 +1180,6 @@ final class ZLinkChannelSocketRegistry {
                         clientServerControlCursor = nextCursor;
                         return null;
                     });
-            try {
-                drainClientServerControls(connection);
-            } catch (systems.zlink.contracts.errors.ZlinkRecvException failure) {
-                reportReceiveFailure.accept(connection.descriptor.channelName(), failure);
-            }
             flushClientServerLivenessAck(connection);
             ClientLivenessAction action =
                     inStateLane(
@@ -1271,6 +1267,57 @@ final class ZLinkChannelSocketRegistry {
                 }
             }
         }
+    }
+
+    void reportClientServerReceiveFailuresTo(BiConsumer<String, Throwable> sink) {
+        clientServerReceiveFailures = java.util.Objects.requireNonNull(sink, "sink");
+    }
+
+    /**
+     * Starts the one receive owner of a ClientServer DEALER. Its poller wait is also where the
+     * binding completes the DEALER's requests (the public {@code POLLCOMPLETION} owner), so a reply
+     * completes as soon as Core delivers it.
+     */
+    void startClientServerControlReceive(String connectionId) {
+        ClientServerConnection connection =
+                inStateLane(() -> clientServerConnections.get(connectionId));
+        if (connection == null) {
+            return;
+        }
+        Thread.ofVirtual()
+                .name("zlink-client-server-control")
+                .start(
+                        () -> {
+                            while (receiveClientServerControls(
+                                    connection, CLIENT_SERVER_CONTROL_RECEIVE_WAIT)) {
+                                // The wait bounds only how long a closing DEALER waits for
+                                // this owner; readiness and completions end it at once.
+                            }
+                        });
+    }
+
+    /** Receives the controls the connection's DEALER has ready now, without a poller wait. */
+    void receiveClientServerControls(String connectionId) {
+        ClientServerConnection connection =
+                inStateLane(() -> clientServerConnections.get(connectionId));
+        if (connection != null) {
+            receiveClientServerControls(connection, Duration.ZERO);
+        }
+    }
+
+    private boolean receiveClientServerControls(ClientServerConnection connection, Duration wait) {
+        if (connection.physicalClosed) {
+            return false;
+        }
+        if (!connection.dealer.waitForReadable(wait)) {
+            return true;
+        }
+        try {
+            drainClientServerControls(connection);
+        } catch (systems.zlink.contracts.errors.ZlinkRecvException failure) {
+            clientServerReceiveFailures.accept(connection.descriptor.channelName(), failure);
+        }
+        return true;
     }
 
     private void drainClientServerControls(ClientServerConnection connection) {
@@ -2019,7 +2066,8 @@ final class ZLinkChannelSocketRegistry {
         private final Consumer<AdmissionFence> restartAdmission;
         private ZLinkBackendSocketMonitor monitor;
         private boolean ready;
-        private boolean physicalClosed;
+        // Written once in the state lane; the DEALER's receive owner reads it to stop.
+        private volatile boolean physicalClosed;
         private long pendingLivenessAckId;
         private long physicalGeneration = 1;
         private long admissionGeneration = 1;

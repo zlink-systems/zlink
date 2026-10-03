@@ -147,6 +147,39 @@ final class ChannelMessagingTest {
     }
 
     @Test
+    void manualClientServer_replyCompletesWithoutWaitingForTheLivenessTick() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        var channel = options.addClientServerChannel("profile").server().listen();
+        options.addClientServerChannel("profile").client();
+        channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
+
+        try (ZLinkFrameworkRuntime runtime =
+                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+            var client = runtime.client();
+            assertEquals(
+                    "warmup",
+                    client.requestToChannel("profile", new EchoRequest("warmup"))
+                            .submit(String.class)
+                            .toCompletableFuture()
+                            .join());
+            int requests = 20;
+            long started = System.nanoTime();
+            for (int index = 0; index < requests; index++) {
+                assertEquals(
+                        "r" + index,
+                        client.requestToChannel("profile", new EchoRequest("r" + index))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .join());
+            }
+            long meanMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) / requests;
+            // The ClientServer liveness tick runs every 100 ms. A reply whose completion
+            // waits for that tick costs about 100 ms per request.
+            assertTrue(meanMillis < 20, "mean ClientServer round trip " + meanMillis + " ms");
+        }
+    }
+
+    @Test
     void processLocalClientServer_requestReplySucceedsWithoutStoreOrManualClientEndpoint() {
         String endpoint = "inproc://zlink-java-local-profile-" + UUID.randomUUID();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();

@@ -541,6 +541,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                         }
                     });
             dealer.connect(descriptor.endpoint());
+            sockets.startClientServerControlReceive(connectionId);
         } catch (Throwable failure) {
             if (connection != null) {
                 removeConnection(connectionId, connection);

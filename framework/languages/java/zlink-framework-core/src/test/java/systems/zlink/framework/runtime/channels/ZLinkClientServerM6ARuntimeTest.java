@@ -58,7 +58,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkClientServerM6ARuntimeTest {
     @Test
-    void typedControlReceiveFailureIsReportedAndTheNextTickReceivesUpdates() {
+    void typedControlReceiveFailureIsReportedAndTheNextReceiveTakesUpdates() {
         for (var result :
                 List.of(
                         systems.zlink.contracts.sockets.RecvResult.BUSY,
@@ -74,12 +74,12 @@ final class ZLinkClientServerM6ARuntimeTest {
             var failure = new systems.zlink.contracts.errors.ZlinkRecvException(result);
             dealer.receiveFailure = failure;
             var failures = new ArrayList<Throwable>();
-            sockets.tickClientServerLiveness(
-                    System.nanoTime(),
+            sockets.reportClientServerReceiveFailuresTo(
                     (channel, error) -> {
                         assertEquals("orders", channel);
                         failures.add(error);
                     });
+            sockets.receiveClientServerControls("automatic");
             assertEquals(List.of(failure), failures);
             assertSame(dealer, sockets.clientForOutbound("orders"));
             var updated =
@@ -87,8 +87,7 @@ final class ZLinkClientServerM6ARuntimeTest {
             dealer.inbound.add(
                     received(
                             ZLinkClientServerServiceWire.encodeUpdate(updated, Integer.MAX_VALUE)));
-            sockets.tickClientServerLiveness(
-                    System.nanoTime(), (channel, error) -> failures.add(error));
+            sockets.receiveClientServerControls("automatic");
             assertEquals(25, sockets.clientServerConnectionDescriptor("automatic").weight());
             assertEquals(1, failures.size());
         }
@@ -252,65 +251,47 @@ final class ZLinkClientServerM6ARuntimeTest {
         assertTrue(sockets.admitClientServerConnection("automatic", value, fence));
 
         long base = System.nanoTime();
-        sockets.tickClientServerLiveness(
-                base + TimeUnit.SECONDS.toNanos(6),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.receiveClientServerControls("automatic");
+        sockets.tickClientServerLiveness(base + TimeUnit.SECONDS.toNanos(6));
         ZLinkClientServerServiceWire.LivenessProbe probe =
                 (ZLinkClientServerServiceWire.LivenessProbe)
                         ZLinkClientServerServiceWire.decode(dealer.sent.get(0));
         assertTrue(dealer.requests.isEmpty());
         dealer.inbound.add(
                 received(ZLinkClientServerServiceWire.encodeLivenessAck(probe.probeId() + 1)));
-        sockets.tickClientServerLiveness(
-                base + TimeUnit.SECONDS.toNanos(16),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.receiveClientServerControls("automatic");
+        sockets.tickClientServerLiveness(base + TimeUnit.SECONDS.toNanos(16));
         assertNull(sockets.clientForOutbound("orders"));
 
         ZLinkChannelSocketRegistry.AdmissionFence nextFence =
                 sockets.clientServerTransportReady("automatic");
         assertTrue(sockets.admitClientServerConnection("automatic", value, nextFence));
         long nextBase = System.nanoTime();
-        sockets.tickClientServerLiveness(
-                nextBase + TimeUnit.SECONDS.toNanos(6),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.receiveClientServerControls("automatic");
+        sockets.tickClientServerLiveness(nextBase + TimeUnit.SECONDS.toNanos(6));
         ZLinkClientServerServiceWire.LivenessProbe nextProbe =
                 (ZLinkClientServerServiceWire.LivenessProbe)
                         ZLinkClientServerServiceWire.decode(dealer.sent.get(1));
         dealer.inbound.add(
                 received(ZLinkClientServerServiceWire.encodeLivenessAck(nextProbe.probeId())));
-        sockets.tickClientServerLiveness(
-                System.nanoTime(),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.receiveClientServerControls("automatic");
+        sockets.tickClientServerLiveness(System.nanoTime());
         assertSame(dealer, sockets.clientForOutbound("orders"));
 
         ZLinkClientServerServerDescriptor updated =
                 descriptor("orders", value.serverRid(), 7, 2, value.endpoint(), 25);
         dealer.inbound.add(
                 received(ZLinkClientServerServiceWire.encodeUpdate(updated, Integer.MAX_VALUE)));
-        sockets.tickClientServerLiveness(
-                System.nanoTime(),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.receiveClientServerControls("automatic");
+        sockets.tickClientServerLiveness(System.nanoTime());
         assertEquals(25, sockets.clientServerConnectionDescriptor("automatic").weight());
 
         ZLinkClientServerServerDescriptor conflict =
                 descriptor("orders", value.serverRid(), 7, 2, value.endpoint(), 50);
         dealer.inbound.add(
                 received(ZLinkClientServerServiceWire.encodeUpdate(conflict, Integer.MAX_VALUE)));
-        sockets.tickClientServerLiveness(
-                System.nanoTime(),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.receiveClientServerControls("automatic");
+        sockets.tickClientServerLiveness(System.nanoTime());
         assertNull(sockets.clientForOutbound("orders"));
     }
 
@@ -324,11 +305,8 @@ final class ZLinkClientServerM6ARuntimeTest {
         var fence = sockets.clientServerTransportReady("manual");
         assertTrue(sockets.admitClientServerConnection("manual", value, fence));
 
-        sockets.tickClientServerLiveness(
-                System.nanoTime() + TimeUnit.SECONDS.toNanos(16),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.receiveClientServerControls("manual");
+        sockets.tickClientServerLiveness(System.nanoTime() + TimeUnit.SECONDS.toNanos(16));
 
         assertNull(sockets.clientForOutbound("orders"));
         assertEquals(0, dealer.disconnects);
@@ -346,11 +324,8 @@ final class ZLinkClientServerM6ARuntimeTest {
         var first = sockets.clientServerTransportReady("manual");
         assertTrue(sockets.admitClientServerConnection("manual", value, first));
 
-        sockets.tickClientServerLiveness(
-                System.nanoTime() + TimeUnit.SECONDS.toNanos(16),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.receiveClientServerControls("manual");
+        sockets.tickClientServerLiveness(System.nanoTime() + TimeUnit.SECONDS.toNanos(16));
         assertEquals(1, restarts.size());
         var second = restarts.getFirst();
         assertEquals(first.physicalGeneration(), second.physicalGeneration());
@@ -359,11 +334,8 @@ final class ZLinkClientServerM6ARuntimeTest {
         assertTrue(sockets.admitClientServerConnection("manual", value, second));
 
         dealer.inbound.add(received(new byte[] {1, 2, 3}));
-        sockets.tickClientServerLiveness(
-                System.nanoTime(),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.receiveClientServerControls("manual");
+        sockets.tickClientServerLiveness(System.nanoTime());
         assertEquals(2, restarts.size());
         var third = restarts.getLast();
         assertFalse(sockets.admitClientServerConnection("manual", value, second));
@@ -623,20 +595,12 @@ final class ZLinkClientServerM6ARuntimeTest {
         assertTrue(sockets.tryHandleClientServerControl("orders", router, received));
 
         long base = System.nanoTime();
-        sockets.tickClientServerLiveness(
-                base + TimeUnit.SECONDS.toNanos(6),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.tickClientServerLiveness(base + TimeUnit.SECONDS.toNanos(6));
         ZLinkClientServerServiceWire.LivenessProbe probe =
                 (ZLinkClientServerServiceWire.LivenessProbe)
                         ZLinkClientServerServiceWire.decode(router.sent.get(0));
         router.acceptSend = false;
-        sockets.tickClientServerLiveness(
-                base + TimeUnit.SECONDS.toNanos(12),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.tickClientServerLiveness(base + TimeUnit.SECONDS.toNanos(12));
         ZLinkClientServerServiceWire.LivenessProbe retry =
                 (ZLinkClientServerServiceWire.LivenessProbe)
                         ZLinkClientServerServiceWire.decode(router.sent.get(1));
@@ -651,11 +615,7 @@ final class ZLinkClientServerM6ARuntimeTest {
                         Optional.empty(),
                         Optional.empty(),
                         List.of(wrongAck)));
-        sockets.tickClientServerLiveness(
-                base + TimeUnit.SECONDS.toNanos(16),
-                (channel, failure) -> {
-                    throw new AssertionError(failure);
-                });
+        sockets.tickClientServerLiveness(base + TimeUnit.SECONDS.toNanos(16));
         assertEquals(List.of(client), router.disconnected);
     }
 
