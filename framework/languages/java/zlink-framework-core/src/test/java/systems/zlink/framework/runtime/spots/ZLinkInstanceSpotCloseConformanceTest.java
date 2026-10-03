@@ -51,7 +51,8 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                     "release-without-pending-intent",
                     "release-during-host-drain-or-relocation",
                     "reincarnate-initialization-fails",
-                    "closing-message-without-intent");
+                    "closing-message-without-intent",
+                    "intent-after-release-decision-refused-before-admission");
     private static Observation current;
 
     @Test
@@ -345,7 +346,9 @@ final class ZLinkInstanceSpotCloseConformanceTest {
     static void runBranch(JsonNode branch) throws Exception {
         String name = branch.path("name").asText();
         assertTrue(BRANCHES.contains(name), "unknown close branch " + name);
-        if (name.equals("release-during-host-drain-or-relocation")) {
+        if (name.equals("intent-after-release-decision-refused-before-admission")) {
+            runIntentAfterReleaseDecision(branch);
+        } else if (name.equals("release-during-host-drain-or-relocation")) {
             for (JsonNode host : branch.path("given").path("host")) {
                 if (host.asText().equals("Relocating")) {
                     for (JsonNode seal : branch.path("given").path("relocationSeal"))
@@ -358,6 +361,161 @@ final class ZLinkInstanceSpotCloseConformanceTest {
             boolean intent = branch.path("given").path("pendingIntent").asBoolean(false);
             boolean failing = name.equals("reincarnate-initialization-fails");
             run(branch, "Serving", intent, false, failing);
+        }
+    }
+
+    /**
+     * Close step 3 decides release with no Instance intent message waiting, and the Store holds its
+     * Delete. An Instance intent message arriving at the owner in that window is refused before
+     * admission with the owner fence code, so the caller re-reads authority instead of waiting for
+     * an incarnation this Close never creates.
+     */
+    @SuppressWarnings("unchecked")
+    private static void runIntentAfterReleaseDecision(JsonNode branch) throws Exception {
+        String spotId = "java-close-late-intent-" + UUID.randomUUID();
+        Observation observation = new Observation(false, false);
+        current = observation;
+        ObservedStore store = new ObservedStore(spotId, observation);
+        var repository = new ZLinkProviderLocationRepository(store);
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        options.addRouteMesh(MESH)
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(RoutingId.from(spotId))
+                .objects()
+                .server()
+                .addEntrySpot(Entry.class)
+                .addInstanceSpotFactory(
+                        TYPE, Instance.class, factory -> factory.disableRelocation());
+        CapturingBackend backend = new CapturingBackend();
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
+            try {
+                runtime.route()
+                        .requestToSpot(spotId, new InitialProbe())
+                        .instanceSpot(TYPE)
+                        .inMesh(MESH)
+                        .timeout(WAIT)
+                        .submit(Reply.class)
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                var before = snapshot(repository, spotId);
+                var authority =
+                        new ZLinkServiceAuthorityPayloadCodec()
+                                .decode(before.payload())
+                                .orElseThrow();
+                var route =
+                        new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                                authority.nodeRid(),
+                                authority.nodeGeneration(),
+                                spotId,
+                                before.objectGeneration(),
+                                before.ownerId(),
+                                before.authorityOwnerGeneration(),
+                                before.ownerLeaseGeneration(),
+                                before.storeVersion());
+                var activations =
+                        ZLinkSpotRuntime.class.getDeclaredField("instanceSpotActivations");
+                activations.setAccessible(true);
+                ZLinkInstanceSpotActivation activation =
+                        ((Map<String, ZLinkInstanceSpotActivation>)
+                                        activations.get(runtime.spotManager()))
+                                .get(spotId);
+                store.deleteHold = new CompletableFuture<>();
+                runtime.route()
+                        .sendToSpot(spotId, new CloseProbe())
+                        .instanceSpot(TYPE)
+                        .inMesh(MESH)
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                observation.closingEntered.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                observation.closingRelease.complete(null);
+                //  Step 3 has decided release: its Delete waits in the Store.
+                store.deleteRequested.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                AtomicInteger terminalCount = new AtomicInteger();
+                var serializer = new ZLinkJsonMessageSerializer();
+                CompletableFuture<Throwable> terminal;
+                try (Message payload =
+                        Message.from(serializer.serialize(new PendingProbe()).bytes())) {
+                    terminal =
+                            ZLinkJavaReadyRouteTestAccess.rejectReadyRequest(
+                                    backend.mesh,
+                                    route,
+                                    true,
+                                    new ZLinkSpotRouteMessages(serializer)
+                                            .encodeRequest(
+                                                    MESH,
+                                                    Optional.of(PendingProbe.class.getSimpleName()),
+                                                    payload,
+                                                    null,
+                                                    Map.of(),
+                                                    null),
+                                    terminalCount);
+                }
+                long deadline = System.nanoTime() + WAIT.toNanos();
+                while (!terminal.isDone()
+                        && activation.context.ownerQueue().pendingMessages().isEmpty()) {
+                    if (System.nanoTime() > deadline)
+                        throw new TimeoutException("late Instance intent message was not decided");
+                    Thread.sleep(2);
+                }
+                store.deleteHold.complete(null);
+                assertTrue(observation.closeResult.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                Throwable terminalError = terminal.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                while (terminalError instanceof CompletionException)
+                    terminalError = terminalError.getCause();
+                ZLinkFrameworkException failure =
+                        assertInstanceOf(ZLinkFrameworkException.class, terminalError);
+                JsonNode expected = branch.path("expect");
+                Set<String> expectedKeys =
+                        Set.of(
+                                "order",
+                                "authority",
+                                "oldHandlerCalls",
+                                "newHandlerCalls",
+                                "factoryCalls",
+                                "messageTerminal",
+                                "messageFailureCode",
+                                "messageTerminalCount");
+                expected.fieldNames()
+                        .forEachRemaining(
+                                key ->
+                                        assertTrue(
+                                                expectedKeys.contains(key),
+                                                "unknown close branch expectation " + key));
+                List<String> order = new ArrayList<>();
+                expected.path("order").forEach(item -> order.add(item.asText()));
+                assertOrdered(observation.events, order);
+                assertEquals("Missing", expected.path("authority").asText());
+                assertInstanceOf(
+                        ZLinkAuthorityMissing.class,
+                        repository
+                                .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false)
+                                .toCompletableFuture()
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                assertEquals(
+                        expected.path("oldHandlerCalls").asInt()
+                                + expected.path("newHandlerCalls").asInt(),
+                        observation.pendingGenerations.size());
+                assertEquals(
+                        expected.path("factoryCalls").asInt(),
+                        observation.initializations.size() - 1);
+                assertEquals("Unavailable", expected.path("messageTerminal").asText());
+                assertEquals(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE, failure.kind(), failure.toString());
+                assertEquals("spotMoving", expected.path("messageFailureCode").asText());
+                assertEquals(
+                        (int)
+                                systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                        .FRAMEWORK_ERROR_SPOT_MOVING,
+                        systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping
+                                .causeCode(failure));
+                assertEquals(expected.path("messageTerminalCount").asInt(), terminalCount.get());
+            } finally {
+                if (store.deleteHold != null) store.deleteHold.complete(null);
+                observation.closingRelease.complete(null);
+            }
         }
     }
 
@@ -1156,6 +1314,13 @@ final class ZLinkInstanceSpotCloseConformanceTest {
 
         private volatile ZLinkStoreKey authorityKey;
 
+        /**
+         * When set, the authority Delete waits for it after completing {@link #deleteRequested}.
+         */
+        volatile CompletableFuture<Void> deleteHold;
+
+        final CompletableFuture<Void> deleteRequested = new CompletableFuture<>();
+
         ObservedStore(String spotId, Observation observation) {
             this.spotId = spotId;
             this.observation = observation;
@@ -1199,7 +1364,13 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                     item ->
                                             item instanceof ZLinkStoreDelete write
                                                     && authority(write.key()));
-            return inner.write(request, cancellation)
+            CompletableFuture<Void> hold = delete ? deleteHold : null;
+            CompletionStage<Void> admitted = CompletableFuture.completedFuture(null);
+            if (hold != null) {
+                deleteRequested.complete(null);
+                admitted = hold;
+            }
+            return admitted.thenCompose(ignored -> inner.write(request, cancellation))
                     .thenCompose(
                             result -> {
                                 if (!(result instanceof ZLinkStoreWriteApplied))

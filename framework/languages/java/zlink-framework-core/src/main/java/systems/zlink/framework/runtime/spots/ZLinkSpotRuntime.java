@@ -4925,10 +4925,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     @Override
     CompletionStage<Boolean> completeInstanceSpotClose(ZLinkInstanceSpotActivation activation) {
-        boolean hasIntent =
-                activation.context.ownerQueue().pendingMessages().stream()
-                        .map(ZLinkBackendReceived.class::cast)
-                        .anyMatch(received -> received.activationMessage().isPresent());
+        boolean hasIntent = activation.context.ownerQueue().retainsPendingOrSealClosingAdmission();
         if (!hasIntent || instanceCloseReleaseFailure() != null) {
             return releaseInstanceSpotAuthority(activation)
                     .thenApply(

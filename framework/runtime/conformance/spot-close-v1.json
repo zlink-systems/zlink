@@ -234,6 +234,26 @@
         "messageTerminal": "NotFound",
         "messageTerminalCount": 1
       }
+    },
+    {
+      "name": "intent-after-release-decision-refused-before-admission",
+      "given": {
+        "host": "Serving",
+        "pendingIntent": false,
+        "lateIntent": "afterReleaseDecision"
+      },
+      "expect": {
+        "order": [
+          "authorityReleased"
+        ],
+        "authority": "Missing",
+        "oldHandlerCalls": 0,
+        "newHandlerCalls": 0,
+        "factoryCalls": 0,
+        "messageTerminal": "Unavailable",
+        "messageFailureCode": "spotMoving",
+        "messageTerminalCount": 1
+      }
     }
   ],
   "readyRouteCases": [
