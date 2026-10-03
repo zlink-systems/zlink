@@ -6203,9 +6203,12 @@ void verify_remote_user_spot_create_close_terminal_once ()
                     std::vector<std::string> expected_diagnostics;
                     for (const auto &expected_kind : expected.at ("diagnostics")) {
                         assert (expected_kind == "Unavailable");
+                        // The owner refuses a stale Ready owner fence before admission.
                         const auto wire =
                           runtime::messaging::request_failure_mapper_t{}.target_failure_reply (
-                            framework_error_kind_t::unavailable);
+                            framework_error_kind_t::unavailable,
+                            static_cast<std::uint32_t> (
+                              protocol::framework_error_code::spotMoving));
                         assert (wire);
                         expected_diagnostics.emplace_back (
                           runtime::messaging::request_failure_mapper_t{}

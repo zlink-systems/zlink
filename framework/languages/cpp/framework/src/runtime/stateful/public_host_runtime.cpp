@@ -4426,9 +4426,12 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                     || snapshot->allocation.target.node_rid.value ()
                          != zlink::routing_id_t::from (request.target.target_node_routing_id)
                               .to_string ()) {
+                    // Refused before admission: spotMoving tells the caller that no
+                    // message was accepted (Spot address messaging §9, failover §4.4).
                     const auto failure =
                       messaging::request_failure_mapper_t{}.target_failure_reply (
-                        framework_error_kind_t::unavailable);
+                        framework_error_kind_t::unavailable,
+                        static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
                     reply_terminal (
                       {failure->terminal_result, failure->failure_code, std::nullopt});
                     co_return true;

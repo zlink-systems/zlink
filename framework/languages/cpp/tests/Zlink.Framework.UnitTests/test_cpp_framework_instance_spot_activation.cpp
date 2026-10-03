@@ -551,12 +551,13 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CachedRouteFenceRefusalReadsAuthorit
     };
 
     const messaging::request_failure_mapper_t mapper;
-    // The owner's Ready owner-fence refusal and an Unavailable with another code.
-    const auto refusal = *mapper.target_failure_reply (framework_error_kind_t::unavailable);
-    const auto moving = *mapper.target_failure_reply (
+    // The owner's Ready owner-fence refusal, and the Unavailable terminal of a message
+    // the owner accepted (a relocating host ending the Instance intent messages it kept).
+    const auto refusal = *mapper.target_failure_reply (
       framework_error_kind_t::unavailable,
       static_cast<std::uint32_t> (
         zlink::framework::runtime::protocol::framework_error_code::spotMoving));
+    const auto accepted = *mapper.target_failure_reply (framework_error_kind_t::unavailable);
     struct case_t
     {
         messaging::request_wire_failure_t owner_failure;
@@ -567,7 +568,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CachedRouteFenceRefusalReadsAuthorit
     };
     for (const auto &scenario :
          {case_t{refusal, false, true, {true, false}, 1}, case_t{refusal, true, false, {true}, 1},
-          case_t{moving, false, false, {true}, 0}}) {
+          case_t{accepted, false, false, {true}, 0}}) {
         zlink::framework::serializer_registry_t serializers;
         zlink::framework::zlink_builder_t builder;
         auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
