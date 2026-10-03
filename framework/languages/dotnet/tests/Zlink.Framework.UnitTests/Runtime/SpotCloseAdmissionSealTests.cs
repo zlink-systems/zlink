@@ -22,7 +22,7 @@ public sealed class SpotCloseAdmissionSealTests
         var boundary = Signal();
         var releaseCAS = Signal();
         var messageCalls = 0;
-        var close = executor.PostCloseLifecycle(
+        var close = executor.PostLifecycleOperation(
             async (_, ct) =>
             {
                 await executor.BeginCloseBoundaryAsync(ct);
@@ -83,7 +83,7 @@ public sealed class SpotCloseAdmissionSealTests
             )
         );
         await started.Task.WaitAsync(Wait);
-        var close = executor.PostCloseLifecycle(
+        var close = executor.PostLifecycleOperation(
             async (_, ct) =>
             {
                 await executor.BeginCloseBoundaryAsync(ct);
@@ -131,7 +131,7 @@ public sealed class SpotCloseAdmissionSealTests
                 CancellationToken.None
             )
             .AsTask();
-        var close = executor.PostCloseLifecycle(
+        var close = executor.PostLifecycleOperation(
             async (_, ct) =>
             {
                 await executor.BeginCloseBoundaryAsync(ct);
@@ -185,7 +185,7 @@ public sealed class SpotCloseAdmissionSealTests
             )
         );
 
-        var close = executor.PostCloseLifecycle(
+        var close = executor.PostLifecycleOperation(
             async (_, ct) =>
             {
                 await executor.BeginCloseBoundaryAsync(ct).ConfigureAwait(false);
@@ -208,7 +208,7 @@ public sealed class SpotCloseAdmissionSealTests
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateExecutor(errorSink);
-        var close = executor.PostCloseLifecycle(
+        var close = executor.PostLifecycleOperation(
             async (_, ct) =>
             {
                 await executor.BeginCloseBoundaryAsync(ct).ConfigureAwait(false);

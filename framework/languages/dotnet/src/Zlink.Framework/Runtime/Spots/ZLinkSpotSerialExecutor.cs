@@ -405,10 +405,11 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         }
     }
 
-    // Posts one Close attempt to the lifecycle lane. Only the queue's own
+    // Posts one lifecycle operation (a Close attempt or a cold activation's
+    // first-terminal record) to the lifecycle lane. Only the queue's own
     // admission decides. Null means the lane no longer admits work.
-    internal Task<T>? PostCloseLifecycle<T>(
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> close
+    internal Task<T>? PostLifecycleOperation<T>(
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation
     )
     {
         var outcome = new TaskCompletionSource<T>(
@@ -422,12 +423,12 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                         try
                         {
                             outcome.TrySetResult(
-                                await close(activation, token).ConfigureAwait(false)
+                                await operation(activation, token).ConfigureAwait(false)
                             );
                         }
                         catch (Exception exception)
                         {
-                            // The Close caller owns the failure; the lane item ends normally.
+                            // The posting caller owns the failure; the lane item ends normally.
                             outcome.TrySetException(exception);
                         }
                     },
