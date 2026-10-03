@@ -214,9 +214,10 @@ final class ZLinkChannelRuntimeTest {
             ExecutionException failure =
                     assertThrows(
                             ExecutionException.class,
-                            () -> runtime.closeAsync(Instant.now().plusMillis(150))
-                                    .toCompletableFuture()
-                                    .get(2, TimeUnit.SECONDS));
+                            () ->
+                                    runtime.closeAsync(Instant.now().plusMillis(150))
+                                            .toCompletableFuture()
+                                            .get(2, TimeUnit.SECONDS));
             assertInstanceOf(java.util.concurrent.TimeoutException.class, failure.getCause());
             assertEquals(1, backend.context.closeCount.get());
         } finally {

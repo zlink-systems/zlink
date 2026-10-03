@@ -11,10 +11,10 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
-import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
 import systems.zlink.framework.channels.ZLinkRouteSendHandler;
+import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
@@ -90,16 +90,24 @@ final class ZLinkChannelMessageDispatcherTest {
                     registry.registerRoute(
                             "orders",
                             Map.of(),
-                            Map.of("Request", new ChannelRouteRequestHandlerRegistration(
-                                    ProbeRouteRequestHandler.class, String.class, String.class,
-                                    "Request")));
+                            Map.of(
+                                    "Request",
+                                    new ChannelRouteRequestHandlerRegistration(
+                                            ProbeRouteRequestHandler.class,
+                                            String.class,
+                                            String.class,
+                                            "Request")));
                 } else {
                     registry.registerClientServer(
                             "orders",
                             Map.of(),
-                            Map.of("Request", new ChannelRequestHandlerRegistration(
-                                    ProbeRequestHandler.class, String.class, String.class,
-                                    "Request")));
+                            Map.of(
+                                    "Request",
+                                    new ChannelRequestHandlerRegistration(
+                                            ProbeRequestHandler.class,
+                                            String.class,
+                                            String.class,
+                                            "Request")));
                 }
                 registry.sealClosingAdmission();
                 ZLinkChannelDispatchReporter reporter = new ZLinkChannelDispatchReporter(errors);
@@ -108,7 +116,12 @@ final class ZLinkChannelMessageDispatcherTest {
                                 registry, invoker(), reporter, errors.flow());
                 ZLinkChannelRouteDispatcher mesh =
                         new ZLinkChannelRouteDispatcher(
-                                null, registry, invoker(), reporter, errors.flow(), null,
+                                null,
+                                registry,
+                                invoker(),
+                                reporter,
+                                errors.flow(),
+                                null,
                                 ignored -> null);
                 CompletableFuture<ZLinkFrameworkErrorKind> rejected = new CompletableFuture<>();
                 ZLinkBackendReceived received =
@@ -127,8 +140,8 @@ final class ZLinkChannelMessageDispatcherTest {
                 } else {
                     client.dispatchRequest("orders", null, received);
                 }
-                assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN,
-                        rejected.get(2, TimeUnit.SECONDS));
+                assertEquals(
+                        ZLinkFrameworkErrorKind.SHUTTING_DOWN, rejected.get(2, TimeUnit.SECONDS));
                 assertFalse(probe.firstEntered.isDone());
             } finally {
                 gateProbe = null;
@@ -149,19 +162,31 @@ final class ZLinkChannelMessageDispatcherTest {
                 if (route) {
                     registry.registerRoute(
                             channel,
-                            Map.of("Send", new ChannelRouteSendHandlerRegistration(
-                                    ProbeRouteSendHandler.class, String.class, "Send")),
-                            Map.of("Request", new ChannelRouteRequestHandlerRegistration(
-                                    ProbeRouteRequestHandler.class, String.class, String.class,
-                                    "Request")));
+                            Map.of(
+                                    "Send",
+                                    new ChannelRouteSendHandlerRegistration(
+                                            ProbeRouteSendHandler.class, String.class, "Send")),
+                            Map.of(
+                                    "Request",
+                                    new ChannelRouteRequestHandlerRegistration(
+                                            ProbeRouteRequestHandler.class,
+                                            String.class,
+                                            String.class,
+                                            "Request")));
                 } else {
                     registry.registerClientServer(
                             channel,
-                            Map.of("Send", new ChannelSendHandlerRegistration(
-                                    ProbeSendHandler.class, String.class, "Send")),
-                            Map.of("Request", new ChannelRequestHandlerRegistration(
-                                    ProbeRequestHandler.class, String.class, String.class,
-                                    "Request")));
+                            Map.of(
+                                    "Send",
+                                    new ChannelSendHandlerRegistration(
+                                            ProbeSendHandler.class, String.class, "Send")),
+                            Map.of(
+                                    "Request",
+                                    new ChannelRequestHandlerRegistration(
+                                            ProbeRequestHandler.class,
+                                            String.class,
+                                            String.class,
+                                            "Request")));
                 }
             }
             ZLinkChannelDispatchReporter reporter = new ZLinkChannelDispatchReporter(errors);
@@ -169,7 +194,12 @@ final class ZLinkChannelMessageDispatcherTest {
                     new ZLinkChannelMessageDispatcher(registry, invoker(), reporter, errors.flow());
             ZLinkChannelRouteDispatcher mesh =
                     new ZLinkChannelRouteDispatcher(
-                            null, registry, invoker(), reporter, errors.flow(), null,
+                            null,
+                            registry,
+                            invoker(),
+                            reporter,
+                            errors.flow(),
+                            null,
                             ignored -> null);
 
             dispatch(route, client, mesh, "orders", "Request", "first", probe.firstReply);
@@ -179,7 +209,9 @@ final class ZLinkChannelMessageDispatcherTest {
             dispatch(route, client, mesh, "other", "Request", "other", probe.otherReply);
             probe.otherReply.get(2, TimeUnit.SECONDS);
 
-            assertThrows(TimeoutException.class, () -> probe.sendEntered.get(250, TimeUnit.MILLISECONDS));
+            assertThrows(
+                    TimeoutException.class,
+                    () -> probe.sendEntered.get(250, TimeUnit.MILLISECONDS));
             assertFalse(probe.sendEntered.isDone());
             assertFalse(probe.laterEntered.isDone());
             assertTrue(probe.maximumRunning.get() <= 1);
@@ -213,7 +245,9 @@ final class ZLinkChannelMessageDispatcherTest {
                         List.of(
                                 Message.from(packet.getBytes(StandardCharsets.UTF_8)),
                                 Message.from(body.getBytes(StandardCharsets.UTF_8))),
-                        reply == null ? null : parts -> reply.complete(parts.getLast().toUtf8String()),
+                        reply == null
+                                ? null
+                                : parts -> reply.complete(parts.getLast().toUtf8String()),
                         () -> {});
         if (route) {
             mesh.dispatch(channel, null, received);

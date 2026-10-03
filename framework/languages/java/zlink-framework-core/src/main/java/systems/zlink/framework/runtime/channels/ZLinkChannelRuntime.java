@@ -67,7 +67,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
@@ -484,8 +483,7 @@ public final class ZLinkChannelRuntime
                         this.handlerExecutor,
                         suspendHandlerInvokers,
                         filterTypes);
-        this.receiveLoops =
-                new ZLinkChannelReceiveLoops(registration.applicationJobQueue());
+        this.receiveLoops = new ZLinkChannelReceiveLoops(registration.applicationJobQueue());
         this.defaultRequestTimeout = registration.defaultRequestTimeout();
         this.spotRouteBridgeDrainer = new ZLinkSpotRouteBridgeDrainer(sockets.spotRouteBridges());
         this.backendFactory = backendFactory;

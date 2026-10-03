@@ -242,7 +242,8 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
                             if (record.parts().getFirst().toUtf8String().equals("request")) {
                                 serial.enqueue(
                                         () -> {
-                                            ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
+                                            ZLinkApplicationJobContext
+                                                    .beforeFirstApplicationInstruction();
                                             handlerEntered.complete(null);
                                             return releaseHandler;
                                         },
