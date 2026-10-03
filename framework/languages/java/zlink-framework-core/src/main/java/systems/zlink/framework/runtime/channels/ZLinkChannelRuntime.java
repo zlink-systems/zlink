@@ -567,16 +567,15 @@ public final class ZLinkChannelRuntime
                 attachManualClientServerAdmissions(registration.channels());
             }
             attachProcessLocalClientServerAdmissions(registration.channels());
+            sockets.reportClientServerReceiveFailuresTo(
+                    (channelName, failure) ->
+                            reportReceiveFailure(
+                                    ZLinkDispatchErrorSurface.CHANNEL,
+                                    ZLinkDispatchMessageKind.REQUEST,
+                                    channelName,
+                                    failure));
             scheduleInfrastructureAtFixedRate(
-                    () ->
-                            sockets.tickClientServerLiveness(
-                                    System.nanoTime(),
-                                    (channelName, failure) ->
-                                            reportReceiveFailure(
-                                                    ZLinkDispatchErrorSurface.CHANNEL,
-                                                    ZLinkDispatchMessageKind.REQUEST,
-                                                    channelName,
-                                                    failure)),
+                    () -> sockets.tickClientServerLiveness(System.nanoTime()),
                     CLIENT_SERVER_LIVENESS_TICK_MILLIS,
                     CLIENT_SERVER_LIVENESS_TICK_MILLIS,
                     TimeUnit.MILLISECONDS);
@@ -910,6 +909,7 @@ public final class ZLinkChannelRuntime
                         }
                     });
             dealer.connect(endpoint);
+            sockets.startClientServerControlReceive(connectionId);
         } catch (RuntimeException failure) {
             sockets.removeClientServerConnection(connectionId, dealer);
             throw failure;
