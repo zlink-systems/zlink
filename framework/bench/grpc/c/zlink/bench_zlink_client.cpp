@@ -13,6 +13,9 @@
 
 namespace
 {
+// Maximum wait before the completion poll returns to recheck completion or its deadline.
+constexpr long k_completion_poll_interval_ms = 50;
+
 constexpr const char *k_request_envelope =
   "{\"kind\":1,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}";
 
@@ -186,7 +189,7 @@ double drain_requests (void *poller, void *dealer, callback_state_t *cb)
     const auto deadline = begin + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms);
     while (cb->outstanding.load (std::memory_order_acquire) > 0
            && std::chrono::steady_clock::now () < deadline) {
-        (void) poll_once (poller, dealer, cb, 50);
+        (void) poll_once (poller, dealer, cb, k_completion_poll_interval_ms);
     }
     return std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - begin)
       .count ();
@@ -230,7 +233,7 @@ zlink_c_bench::result_t run_request_serial (void *dealer,
         if (submit_request_once (dealer, target_rid, size, run_id, seq++, ZLINK_SEND_FLAGS_NONE,
                                  &cb, &metrics)) {
             while (cb.outstanding.load (std::memory_order_acquire) > 0)
-                (void) poll_once (poller, dealer, &cb, 50);
+                (void) poll_once (poller, dealer, &cb, k_completion_poll_interval_ms);
         }
     }
     zlink_c_bench::result_t r;
@@ -371,7 +374,7 @@ zlink_c_bench::result_t run_send_saturation (void *dealer,
             ++blocked;
             while (cb.writable.load (std::memory_order_relaxed) < blocked
                    && std::chrono::steady_clock::now () < deadline)
-                if (!poll_once (poller, dealer, &cb, 50))
+                if (!poll_once (poller, dealer, &cb, k_completion_poll_interval_ms))
                     break;
         } else {
             ++errors;
@@ -385,7 +388,7 @@ zlink_c_bench::result_t run_send_saturation (void *dealer,
                                 + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms);
     while (cb.writable.load (std::memory_order_relaxed) < blocked
            && std::chrono::steady_clock::now () < drain_deadline)
-        if (!poll_once (poller, dealer, &cb, 50))
+        if (!poll_once (poller, dealer, &cb, k_completion_poll_interval_ms))
             break;
     r.implementation = "zlink-c";
     r.pattern = "send-saturation";
@@ -433,7 +436,6 @@ int main ()
     zlink_connect (send_router, send_endpoint.c_str ());
     zlink_poller_add (poller, request_router, request_router, ZLINK_POLLCOMPLETION);
     zlink_poller_add (send_poller, send_router, send_router, ZLINK_POLLCOMPLETION);
-    std::this_thread::sleep_for (std::chrono::milliseconds (500));
     const bool ready = await_request_ready (request_router, &request_target, poller,
                                             zlink_c_bench::k_route_ready_ms);
     std::fprintf (stderr, "[bench] route ready=%s\n", ready ? "true" : "false");

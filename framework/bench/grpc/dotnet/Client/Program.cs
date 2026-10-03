@@ -108,6 +108,10 @@ static async Task<BenchResult> RunActiveAsync(
     var resources = ResourceSample.Start();
     var deadline = Stopwatch.GetTimestamp()
         + checked((long)(Stopwatch.Frequency * (trigger.durationMs / 1000.0)));
+    var send = trigger.pattern == "send-saturation";
+    var targetAtClose = send
+        ? CaptureTargetAtDeadlineAsync(http, options.TargetStatsUrl, deadline, adminCancellation.Token)
+        : null;
     var runId = HeaderRunId(trigger.runId);
     var next = new Sequence();
 
@@ -160,12 +164,12 @@ static async Task<BenchResult> RunActiveAsync(
 
     var elapsedSeconds = trigger.durationMs / 1000.0;
     var sourceResources = resources.Finish();
+    var receivedAtClose = targetAtClose is null ? (long?)null : (await targetAtClose).Received;
     var target = await http.GetFromJsonAsync<BenchServerSnapshot>(
                      $"{options.TargetStatsUrl}/bench/stats",
                      adminCancellation.Token)
                  ?? BenchServerSnapshot.Empty;
     var snapshot = metrics.Result();
-    var send = trigger.pattern == "send-saturation";
     var completed = send ? target.Received : snapshot.Completed;
     return new BenchResult(
         $"{options.Implementation}-{trigger.pattern}",
@@ -177,7 +181,7 @@ static async Task<BenchResult> RunActiveAsync(
         snapshot.Errors,
         target.Errors,
         options.Warmup,
-        completed / Math.Max(0.001, elapsedSeconds),
+        (send ? receivedAtClose!.Value : completed) / Math.Max(0.001, elapsedSeconds),
         snapshot.MeanMicros,
         snapshot.P95Micros,
         snapshot.P99Micros,
@@ -191,8 +195,23 @@ static async Task<BenchResult> RunActiveAsync(
         snapshot.PeakInFlight,
         trigger.pattern == "request-window" ? trigger.requestWindow : null,
         snapshot.Abandoned,
+        receivedAtClose,
         snapshot.ErrorSummary,
         snapshot.OtherErrors);
+}
+
+static async Task<BenchServerSnapshot> CaptureTargetAtDeadlineAsync(
+    HttpClient http,
+    string targetStatsUrl,
+    long deadline,
+    CancellationToken cancellationToken)
+{
+    var remaining = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), deadline);
+    if (remaining > TimeSpan.Zero)
+        await Task.Delay(remaining, cancellationToken);
+    return await http.GetFromJsonAsync<BenchServerSnapshot>(
+               $"{targetStatsUrl}/bench/stats", cancellationToken)
+           ?? throw new InvalidOperationException("Target stats were empty at the active boundary.");
 }
 
 static async Task RunRequestWorkersAsync(
@@ -417,7 +436,9 @@ static int RemainingPollTimeoutMs(long deadline)
     var remainingTicks = deadline - Stopwatch.GetTimestamp();
     if (remainingTicks <= 0) return 0;
     var remainingMs = remainingTicks * 1000.0 / Stopwatch.Frequency;
-    return Math.Min(50, Math.Max(1, (int)Math.Ceiling(remainingMs)));
+    return Math.Min(
+        BenchPolling.CompletionPollIntervalMs,
+        Math.Max(1, (int)Math.Ceiling(remainingMs)));
 }
 
 static async Task RunSendWorkersAsync(
@@ -557,6 +578,12 @@ static string FormatText(BenchResult result, BenchMetadata metadata)
     if (result.OtherErrors != 0) lines.AppendLine($"client_error_other: {result.OtherErrors}");
     foreach (var line in result.PerfLines) lines.AppendLine(line);
     return lines.ToString();
+}
+
+internal static class BenchPolling
+{
+    // Maximum wait before the completion poll returns to recheck completion or its deadline.
+    public const int CompletionPollIntervalMs = 50;
 }
 
 internal interface IBenchTransport : IAsyncDisposable
@@ -820,7 +847,7 @@ internal sealed class RawBenchTransport : IBenchTransport
     {
         var socket = request ?? commands[0];
         while (!pending.IsCompleted)
-            socket.WaitCompletion(50);
+            socket.WaitCompletion(BenchPolling.CompletionPollIntervalMs);
         return pending;
     }
 
@@ -1252,7 +1279,7 @@ internal sealed record BenchCell(
         result.PeakInFlight,
         result.RequestWindow,
         result.Abandoned,
-        result.Pattern == "send-saturation" ? result.Completed : null,
+        result.ServerReceivedAtClose,
         result.ErrorSummary,
         result.OtherErrors);
 }
@@ -1376,6 +1403,7 @@ internal sealed record BenchResult(
     long PeakInFlight,
     int? RequestWindow,
     long Abandoned,
+    long? ServerReceivedAtClose,
     IReadOnlyList<ClientErrorSummary> ErrorSummary,
     long OtherErrors)
 {

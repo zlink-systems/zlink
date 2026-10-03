@@ -58,6 +58,7 @@ for run in $(seq 1 "${RUNS}"); do
         cell_id="${impl}-${pattern}-${payload}"
         cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"
         mkdir -p "${cell_dir}"
+        bench_measurement_load_gate
         target_log="${cell_dir}/target.log"
         source_log="${cell_dir}/source.log"
         target_stats_file="${cell_dir}/target-stats.json"
@@ -87,21 +88,9 @@ for run in $(seq 1 "${RUNS}"); do
 
         # The warmup is a call count, so target may still be receiving warmup requests when
         # A goes idle; settle before active so they do not leak into the active count.
-        trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" "${payload}" warmup "$((DURATION_SECONDS * 1000))"
-        wait_for_idle "${source_stats_url}"
-        settle_and_capture "${source_stats_url}" "${target_stats_url}" /dev/null || {
-          echo "warmup settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id}" >&2; exit 1;
-        }
-        trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" "${payload}" active "$((DURATION_SECONDS * 1000))"
-        wait_for_idle "${source_stats_url}"
-
-        result_file="${cell_dir}/results.json"
-        [[ -s "${result_file}" ]] || { echo "missing source result: ${result_file}" >&2; exit 1; }
-        settle_and_capture "${source_stats_url}" "${target_stats_url}" "${target_stats_file}" || {
-          echo "cell settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id}" >&2; exit 1;
-        }
-        merge_target_stats "${result_file}" "${target_stats_file}" "${SETTLE_MS}" "${SETTLE_BOUND_HIT}"
-        if [[ "${pattern}" == request-* ]]; then verify_request_counts "${result_file}"; fi
+        bench_run_cell "${trigger_url}" "${source_stats_url}" "${target_stats_url}" \
+          "${run_id}" "${cell_id}" "${impl}" "${pattern}" "${payload}" \
+          "$((DURATION_SECONDS * 1000))" "${cell_dir}/results.json" "${target_stats_file}"
 
         cleanup_cell
         wait_for_ports_free 5200 5219

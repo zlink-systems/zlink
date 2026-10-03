@@ -57,6 +57,7 @@ for run in $(seq 1 "${RUNS}"); do
         cell_id="${impl}-${pattern}-${payload}"
         cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"
         mkdir -p "${cell_dir}"
+        bench_measurement_load_gate
         target_log="${cell_dir}/target.log"
         source_log="${cell_dir}/source.log"
         target_stats_file="${cell_dir}/target-stats.json"
@@ -78,20 +79,9 @@ for run in $(seq 1 "${RUNS}"); do
         a_pid=$!
         wait_for_stats "${source_stats_url}" 1
 
-        trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" \
-          "${payload}" warmup "$((WARMUP_SECONDS * 1000))"
-        wait_for_idle "${source_stats_url}"
-        trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" \
-          "${payload}" active "$((DURATION_SECONDS * 1000))"
-        wait_for_idle "${source_stats_url}"
-
-        result_file="${cell_dir}/results.json"
-        [[ -s "${result_file}" ]] || { echo "missing source result: ${result_file}" >&2; exit 1; }
-        settle_and_capture "${source_stats_url}" "${target_stats_url}" "${target_stats_file}" || {
-          echo "cell settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id}" >&2; exit 1;
-        }
-        merge_target_stats "${result_file}" "${target_stats_file}" "${SETTLE_MS}" "${SETTLE_BOUND_HIT}"
-        verify_request_counts "${result_file}"
+        bench_run_cell "${trigger_url}" "${source_stats_url}" "${target_stats_url}" \
+          "${run_id}" "${cell_id}" "${impl}" "${pattern}" "${payload}" \
+          "$((WARMUP_SECONDS * 1000))" "${cell_dir}/results.json" "${target_stats_file}"
 
         cleanup_cell
         wait_for_ports_free 5240 5259

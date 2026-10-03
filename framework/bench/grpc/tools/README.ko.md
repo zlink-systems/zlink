@@ -79,7 +79,7 @@ B(target)의 결과는 runner가 source 셀의 `target_stats`와 `server_*` 자�
 | 항목 | 처리 |
 |---|---|
 | workload 값, source 자원, `trigger`, `streams` | source 셀 |
-| `send-saturation` 처리량·bandwidth | `target_stats.received / trigger.durationMs`로 계산. source 제출 수는 사용하지 않음 |
+| `send-saturation` 처리량·bandwidth | source 셀의 `server_received_at_close * 1000 / trigger.durationMs`로 계산. `target_stats.received`는 settle 뒤 값으로 오류·drain 판정에만 사용 |
 | `target_stats`가 없는 source 셀 | 셀을 `incomplete`로 남기고 중앙값·`RESULT`·판정에서 제외 |
 | `role`이 `source`가 아닌 값(`target` 포함) | 입력 오류로 중단 |
 
@@ -99,7 +99,7 @@ Phase 0에서 그럴듯해 보이는 잘못된 수치가 두 번 나왔다. 세 
 |---|---|
 | 분자 행과 분모 행이 **모두** G5를 통과한다 | FB-011 |
 | payload `1024`와 `4096`을 따로 판정하고, 둘 다 통과해야 그 언어가 통과다 | FB-005, 규격 §7.2 |
-| 오염된 셀은 중앙값에도 판정에도 들어가지 않는다 | FB-008 |
+| 오염되거나 settle 상한에 닿은 셀은 중앙값과 판정에서 제외한다 | FB-008 |
 | 사용한 core 수가 **선언한 client 병렬성 상한**의 0.95배에 이른 행은 처리량 우열 판정에 쓰지 않는다 | 규격 §5.1, G6, FB-019 |
 | `send-saturation` 처리량이 server 수신 수여야 한다 | 규격 §5, G3 |
 | run이 3회 미만이면 G5를 통과할 수 없다 | 계획 §6 |

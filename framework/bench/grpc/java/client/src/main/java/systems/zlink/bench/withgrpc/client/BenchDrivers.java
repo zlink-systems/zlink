@@ -19,11 +19,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.util.concurrent.locks.LockSupport;
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 
 /** Pattern-to-logical-stream implementation shared by the Java and Kotlin sources. */
 public final class BenchDrivers {
+    // Maximum wait before the completion poll returns to recheck completion or its deadline.
+    private static final long COMPLETION_POLL_INTERVAL_NS = 50_000_000L;
+
     private final BenchOptions options;
     private final StatsClient stats = new StatsClient();
     private volatile SourceMetrics metrics = new SourceMetrics(1);
@@ -85,13 +89,31 @@ public final class BenchDrivers {
         SourceMetrics activeMetrics = new SourceMetrics(options.latencySampleLimit);
         metrics = activeMetrics;
         ClientResources resources = new ClientResources();
+        boolean send = "send-saturation".equals(trigger.pattern());
+        CompletableFuture<StatsClient.ServerSnapshot> targetAtClose = send
+            ? new CompletableFuture<>() : null;
+        if (targetAtClose != null) {
+            long boundaryDeadline = BenchMetricHeader.nowNs()
+                + trigger.durationMs() * 1_000_000L;
+            Thread.ofVirtual().start(() -> {
+                try {
+                    long remaining;
+                    while ((remaining = boundaryDeadline - BenchMetricHeader.nowNs()) > 0) {
+                        LockSupport.parkNanos(remaining);
+                    }
+                    targetAtClose.complete(stats.stats(options.targetStatsUrl));
+                } catch (Exception error) {
+                    targetAtClose.completeExceptionally(error);
+                }
+            });
+        }
         int submitParallelism = runPattern(
             trigger, operation, BenchMetricHeader.PHASE_ACTIVE, activeMetrics, resources);
         ClientResources.Usage usage = resources.finish();
+        StatsClient.ServerSnapshot boundary = targetAtClose == null ? null : targetAtClose.get();
         StatsClient.ServerSnapshot target = stats.stats(options.targetStatsUrl);
         Latencies.Summary latency = activeMetrics.latencySummary();
-        boolean send = "send-saturation".equals(trigger.pattern());
-        long rateCount = send ? target.received() : activeMetrics.completed();
+        long rateCount = send ? boundary.received() : activeMetrics.completed();
         double seconds = Math.max(0.001, trigger.durationMs() / 1000.0);
         double throughput = rateCount / seconds;
 
@@ -127,7 +149,7 @@ public final class BenchDrivers {
         result.put("abandoned", activeMetrics.abandoned());
         result.put("warmup_abandoned", warmupAbandoned);
         result.put("latency_samples", latency.count());
-        result.put("server_received_at_close", target.received());
+        result.put("server_received_at_close", send ? boundary.received() : target.received());
         return result;
     }
 
@@ -185,7 +207,7 @@ public final class BenchDrivers {
             if (admissionPending != null) {
                 try {
                     if (!operation.await(admissionPending, Duration.ofNanos(Math.min(
-                        50_000_000L, Math.max(1L,
+                        COMPLETION_POLL_INTERVAL_NS, Math.max(1L,
                             deadline - BenchMetricHeader.nowNs()))))) {
                         continue;
                     }

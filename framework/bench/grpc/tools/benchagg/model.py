@@ -244,6 +244,11 @@ class Cell:
         return self.server_received_at_close is not None
 
     @property
+    def excluded_from_aggregation(self) -> bool:
+        """Whether this cell is omitted from every table and judgement."""
+        return self.contaminated or self.drain_bound_hit is True
+
+    @property
     def complete(self) -> bool:
         return self.status == "complete"
 
@@ -271,11 +276,14 @@ class RunSet:
             self.runs.append(cell.run)
 
     def for_key(self, key: CellKey) -> list[Cell]:
-        """Complete run copies, excluding contaminated and incomplete cells."""
+        """Complete run copies, excluding contaminated, drain-bound, and incomplete cells."""
         return [
             c for c in self.cells
-            if c.key == key and not c.contaminated and c.complete
+            if c.key == key and not c.excluded_from_aggregation and c.complete
         ]
+
+    def excluded(self) -> list[Cell]:
+        return [c for c in self.cells if c.excluded_from_aggregation]
 
     def contaminated(self) -> list[Cell]:
         return [c for c in self.cells if c.contaminated]

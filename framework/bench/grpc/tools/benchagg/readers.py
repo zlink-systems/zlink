@@ -226,9 +226,13 @@ def read_run(run_dir: str) -> tuple[list[Cell], list[str]]:
             raise ReportError(f"{path}: cell JSON must be an object")
         cells.extend(cells_from_cell_json(payload, run, path))
     notes = [f"{run}: read cell data from {len(paths)} file(s)"]
-    excluded = [c for c in cells if c.contaminated]
-    if excluded:
-        notes.append(f"{run}: {len(excluded)} contaminated cell(s) excluded (FB-008)")
+    excluded = [c for c in cells if c.excluded_from_aggregation]
+    contaminated = [c for c in excluded if c.contaminated]
+    drain_bound = [c for c in excluded if c.drain_bound_hit]
+    if contaminated:
+        notes.append(f"{run}: {len(contaminated)} contaminated cell(s) excluded (FB-008)")
+    if drain_bound:
+        notes.append(f"{run}: {len(drain_bound)} drain-bound cell(s) excluded (FB-008)")
     incomplete = [c for c in cells if not c.complete]
     if incomplete:
         notes.append(f"{run}: {len(incomplete)} incomplete cell(s)")

@@ -163,14 +163,14 @@ def _median(cells: list[Cell], name: str) -> float | None:
 def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | None:
     """Aggregate one cell over the runs that measured it.
 
-    Contaminated runs are dropped first (FB-008): a contaminated cell is not
-    measured badly, it is not measured at all, so it may not move a median.
+    Contaminated and drain-bound cells are dropped first (FB-008): their
+    measurements are excluded and may not move a median.
     """
     cells = run_set.for_key(key)
     all_cells = [c for c in run_set.cells if c.key == key]
     if not all_cells:
         return None
-    excluded = [c.run for c in all_cells if c.contaminated]
+    excluded = [c.run for c in all_cells if c.excluded_from_aggregation]
     incomplete = [c for c in all_cells if not c.complete]
 
     row = Row(
@@ -197,7 +197,9 @@ def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | 
     row.peak_in_flight_min = min(peaks) if peaks else None
     windows = [c.request_window for c in cells if c.request_window is not None]
     row.request_window = max(windows) if windows else None
-    abandoned = [c.abandoned for c in cells if c.abandoned is not None]
+    # Keep observed error and drain counts visible even when their cell's measured
+    # performance is excluded from the aggregate.
+    abandoned = [c.abandoned for c in all_cells if c.abandoned is not None]
     row.abandoned = max(abandoned) if abandoned else None
     ceilings = [c.client_parallelism_ceiling for c in cells if c.client_parallelism_ceiling]
     row.client_parallelism_ceiling = max(ceilings) if ceilings else None
@@ -208,10 +210,10 @@ def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | 
         row.client_saturation_metric = None
     elif metrics:
         row.client_saturation_metric = metrics.pop()
-    row.drain_bound_hit = any(c.drain_bound_hit for c in cells)
-    target_errors = [c.target_errors for c in cells if c.target_errors is not None]
+    row.drain_bound_hit = any(c.drain_bound_hit for c in all_cells)
+    target_errors = [c.target_errors for c in all_cells if c.target_errors is not None]
     row.target_errors = max(target_errors) if target_errors else None
-    errors = [int(c.extra["errors"]) for c in cells if c.extra.get("errors") is not None]
+    errors = [int(c.extra["errors"]) for c in all_cells if c.extra.get("errors") is not None]
     errors.extend(target_errors)
     row.errors = max(errors) if errors else None
     reported_streams = [c for c in cells if c.streams]
@@ -281,10 +283,12 @@ def _block_reason(role: str, row: Row | None, key: CellKey) -> str | None:
             f"{role} {key} is incomplete: "
             + "; ".join(row.incomplete_reasons)
         )
-    if row is None or row.throughput is None:
+    if row is None:
         return f"{role} {key} was not measured"
     if row.excluded_runs and row.run_count == 0:
-        return f"{role} {key} was contaminated in every run (FB-008)"
+        return f"{role} {key} was excluded in every run by contamination or a drain bound (FB-008)"
+    if row.throughput is None:
+        return f"{role} {key} was not measured"
     if row.g5_status == "insufficient-runs":
         return f"{role} {key} has {row.run_count} run(s); G5 needs 3"
     if row.g5_status == "fail":

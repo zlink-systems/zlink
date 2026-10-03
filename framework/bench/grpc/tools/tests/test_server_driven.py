@@ -14,6 +14,7 @@ from benchagg.analysis import build_rows, judge_pair  # noqa: E402
 from benchagg.model import PATTERNS, CellKey  # noqa: E402
 from benchagg.readers import ReportError, cells_from_cell_json, read_run, read_runs  # noqa: E402
 from benchagg.render import (  # noqa: E402
+    render_excluded,
     render_companion_table,
     render_doc_table,
     render_result_lines,
@@ -63,6 +64,26 @@ class ServerDrivenCellTest(unittest.TestCase):
         self.assertEqual(row.g5_status, "pass")
         self.assertAlmostEqual(row.spread_percent, 2.0)
         self.assertEqual((row.stream_count, row.in_flight_per_stream), (1, 100))
+
+    def test_drain_bound_cell_is_excluded_from_aggregates(self):
+        path = os.path.join(PAIRED[0], "zlink-dotnet-send-saturation-1024", "results.json")
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        raw = payload["cells"][0]
+        raw["server_received_at_close"] = 999_999_999
+        raw["drain_bound_hit"] = True
+        raw["throughput_per_second"] = 999_999_999
+        run_set = read_runs(PAIRED)
+        bound_cells = cells_from_cell_json(payload, "drain-bound-run", "results.json")
+        run_set.cells.extend(bound_cells)
+
+        key = CellKey("zlink-dotnet", "send-saturation", 1024)
+        row = build_rows(run_set)[key]
+        self.assertEqual(row.run_count, 3)
+        self.assertEqual(row.throughput, self.rows[key].throughput)
+        self.assertTrue(row.drain_bound_hit)
+        self.assertIn("drain-bound-run", row.excluded_runs)
+        self.assertIn("drain bound hit", render_excluded(run_set.excluded()))
 
     def test_missing_target_stats_is_visible_and_excluded(self):
         cells, notes = read_run(MISSING_TARGET)

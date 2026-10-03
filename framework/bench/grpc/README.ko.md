@@ -167,6 +167,7 @@ bench에서 옳은 비교인 이유는 아래와 같다.
   reply 없는 단방향 수신량을 보려면 request echo reply가 같은 socket에 섞이면 안 되기 때문이다.
 - TLS, compression, service mesh, gateway, broker는 사용하지 않는다.
 - 언어를 동시에 측정하지 않는다. 한 번에 한 언어만 측정한다.
+- 각 셀의 측정 전 1분 load average가 2.0 미만이 될 때까지 최대 600초 기다린다.
 
 ZLink 두 행의 endpoint 개수는 서로 다르다. raw binding 행은 request echo endpoint와 command
 endpoint를 분리해 두 개를 사용하고, framework 행은 request 처리기와 send 처리기를 함께 두는
@@ -179,9 +180,10 @@ RouteMesh 연결 하나를 사용한다. 이 차이는 의도한 구성이며 �
 
 셀 사이의 settle은 다음 계약을 따른다. 한 셀을 끝낸 뒤에는 고정 시간을 기다리지 않는다.
 server가 받은 수를 폴링해 그 값이 더는 증가하지 않을 때까지 기다리고, 이 대기에는 상한을 둔다.
-상한 안에 값이 멈추지 않으면 그 사실과 관측한 drain 시간을 결과에 기록하고, 같은 server를 쓰는
-다음 셀을 오염된 것으로 표시해 표와 판정에서 제외한다. 오염된 셀은 측정해서 싣지 않는다.
-관측한 drain 시간은 셀마다 결과에 기록한다. 이 상한은 형식적인 값이 아니라 측정을 좌우하는
+상한 안에 값이 멈추지 않으면 해당 셀의 `drain_bound_hit`와 관측한 drain 시간을 기록하고 집계에서
+제외한다. Warmup settle이 상한에 닿으면 해당 셀만 오염된 것으로 기록해 집계에서 제외한다. 각
+셀은 새 process 쌍으로 시작하므로 다음 셀은 앞 셀의 잔여 상태에 영향을 받지 않는다. 관측한 drain
+시간은 셀마다 결과에 기록한다. 이 상한은 형식적인 값이 아니라 측정을 좌우하는
 값이다. 상한을 작게 잡으면 정상적인 실행에서도 셀을 잃게 되므로, 건강한 실행이 상한에 닿지
 않을 만큼 충분히 크게 잡는다. 기준값은 30초다.
 
@@ -445,7 +447,7 @@ gRPC 라이브러리이고, 이 bench는 그 원인을 분리하지 않는다.
 | `node` | `@grpc/grpc-js` | `framework/languages/node/packages/framework` | `bindings/node` | `packages/framework-codec-protobuf` |
 | `java` | grpc-java | `zlink-framework-core` | `bindings/java` | `zlink-framework-codec-protobuf` |
 | `kotlin` | grpc-kotlin coroutine stub | `zlink-framework-kotlin` | `bindings/kotlin` | Java와 같은 codec을 사용 |
-| `cpp` | 시스템 `libgrpc++`와 `grpc_cpp_plugin` | `framework/languages/cpp/framework` | `bindings/cpp` | `zlink::framework_codec_protobuf` |
+| `cpp` | Framework vcpkg manifest의 `bench` feature에서 받는 `grpc++`와 `grpc_cpp_plugin` | `framework/languages/cpp/framework` | `bindings/cpp` | `zlink::framework_codec_protobuf` |
 
 A의 HTTP trigger listener는 각 언어의 표준 HTTP 서버(ASP.NET Core minimal API, Node `http`,
 JDK `HttpServer`, C++ framework HTTP hosting)를 쓴다. 이 listener는 측정 경로 밖이며 어떤 셀의
@@ -456,8 +458,8 @@ Kotlin은 전체 matrix에서 제외하고 보조 셀만 잰다(§10.5). Kotlin�
 사용한다. coroutine stub을 사용할 수 없을 때에만 grpc-java blocking stub을 사용하고, 그 사유를
 결과에 기록한다.
 
-C++는 시스템에 설치된 `libgrpc++`를 사용한다. vcpkg로 gRPC를 빌드하지 않는다. 이 머신의
-version은 1.51.1이며, 오래된 version이므로 결과에 반드시 기록한다.
+C++는 Framework vcpkg manifest의 `bench` feature에서 gRPC와 protobuf를 받는다. 사용한 gRPC·protobuf
+버전을 셀 metadata에 기록한다.
 
 ### 8.1.1 메시지당 payload 작업 대조
 
@@ -574,11 +576,10 @@ stream 수와 stream당 in-flight는 셀 원본에 기록한다(§4). 언어 har
 4. `phase=warmup` trigger → A가 warmup을 끝내고 stats에 `phase=idle`을 보고할 때까지 기다린다.
 5. `phase=active` trigger → `durationMs` 뒤 A가 measured 구간을 닫는다.
 6. settle: B(그리고 A)의 stats를 폴링해 수신·완료 수가 더는 늘지 않을 때까지 기다린다(상한 30초,
-   §3의 오염 규칙 그대로).
-7. A가 셀 원본 JSON을 §11의 셀 디렉터리에 쓰고 `RESULT` 라인을 낸다. runner가 B의 stats를
-   같은 JSON의 `target_stats`에 합친다.
-8. A·B를 종료한다. 다음 셀은 새 process 쌍으로 시작한다(같은 process를 여러 셀에 재사용하지
-   않는다 — 앞 셀의 잔여 상태가 다음 셀에 들어가는 것을 막기 위해).
+   상한에 닿은 active 셀은 `drain_bound_hit`로 기록해 집계에서 제외한다).
+7. A가 셀 원본 JSON을 §11의 셀 디렉터리에 쓴다. text report를 지원하는 구현은 `RESULT` 라인도
+   기록한다. runner가 B의 stats를 같은 JSON의 `target_stats`에 합친다.
+8. A·B를 종료한다. 다음 셀은 새 process 쌍으로 시작하므로 앞 셀의 잔여 상태에 영향을 받지 않는다.
 
 gRPC 구현의 A는 같은 trigger listener를 갖고, B로 향하는 unary stub을 stream 수만큼 돌린다.
 gRPC server 구성은 언어 기본값을 두고 결과에 기록한다(§8.2).

@@ -14,6 +14,8 @@ DRAIN_BOUND_MS=30000
 REQUEST_TIMEOUT_MS=30000
 ROUTE_READY_MS=30000
 LATENCY_SAMPLE_LIMIT=200000
+MEASUREMENT_LOAD_GATE=2.0
+MEASUREMENT_LOAD_GATE_WAIT_SECONDS=600
 
 bench_fail_input() {
   echo "$1" >&2
@@ -81,6 +83,23 @@ bench_require_low_load() {
     echo "load average must be below 10 before build (current ${load_average})" >&2
     return 1
   }
+}
+
+# Measurement gate shared by every runner. Build admission has a separate threshold.
+bench_measurement_load_gate() {
+  local load deadline=$((SECONDS + MEASUREMENT_LOAD_GATE_WAIT_SECONDS))
+  while :; do
+    load="$(awk '{print $1}' /proc/loadavg)"
+    if awk -v measured_load="${load}" -v gate="${MEASUREMENT_LOAD_GATE}" \
+      'BEGIN { exit !(measured_load < gate) }'; then
+      return 0
+    fi
+    ((SECONDS < deadline)) || {
+      echo "load average ${load} stayed above measurement gate ${MEASUREMENT_LOAD_GATE} for ${MEASUREMENT_LOAD_GATE_WAIT_SECONDS}s" >&2
+      return 1
+    }
+    sleep 10
+  done
 }
 
 select_java_home() {
@@ -187,17 +206,20 @@ trigger_phase() {
 
 settle_and_capture() {
   local source_url="$1" target_url="$2" target_file="$3"
-  local started_ms deadline previous="" stable=0
+  local target_counter="${4:-received}" bound_ms="${5:-${DRAIN_BOUND_MS}}"
+  local started_ms now_ms previous="" stable=0 source_body target_body counts
   local stable_needed=$(((COMMAND_SETTLE_MS + 99) / 100))
   started_ms="$(date +%s%3N)"
-  deadline=$((SECONDS + DRAIN_BOUND_MS / 1000))
-  while ((SECONDS <= deadline)); do
-    local source_body target_body counts
-    source_body="$(curl --silent --show-error --fail "${source_url}/bench/stats")"
-    target_body="$(curl --silent --show-error --fail "${target_url}/bench/stats")"
-    counts="$(python3 -c \
-      'import json,sys; a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2]); print(a.get("completed",0),a.get("currentInFlight",0),b.get("received",0),b.get("errors",0))' \
-      "${source_body}" "${target_body}")"
+  while :; do
+    source_body="$(curl --silent --show-error --fail --max-time 5 "${source_url}/bench/stats")"
+    target_body="$(curl --silent --show-error --fail --max-time 5 "${target_url}/bench/stats")"
+    counts="$(python3 -c '
+import json,sys
+a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2])
+received=b["anyPhaseMessages"] if sys.argv[3] == "any" else b["received"]
+print(a.get("completed",0), a.get("currentInFlight", a.get("inFlight",0)),
+      received, b.get("errors",0), b.get("rejected"))
+' "${source_body}" "${target_body}" "${target_counter}")"
     if [[ "${counts}" == "${previous}" ]]; then
       stable=$((stable + 1))
       if ((stable >= stable_needed)); then
@@ -210,16 +232,17 @@ settle_and_capture() {
       previous="${counts}"
       stable=0
     fi
+    now_ms="$(date +%s%3N)"
+    if ((now_ms - started_ms >= bound_ms)); then break; fi
     sleep 0.1
   done
-  curl --silent --show-error --fail "${target_url}/bench/stats" >"${target_file}"
+  curl --silent --show-error --fail --max-time 5 "${target_url}/bench/stats" >"${target_file}"
   SETTLE_MS=$(($(date +%s%3N) - started_ms))
   SETTLE_BOUND_HIT=true
-  return 1
 }
 
-# Adds B's counters and the drain result to the cell JSON A wrote. The aggregator
-# (tools/bench_aggregate.py) recomputes send-saturation throughput from target_stats.
+# A owns the active-boundary receive count used for send throughput. B's later snapshot
+# records settle counts separately.
 merge_target_stats() {
   local result_file="$1" target_file="$2" drain_ms="$3" bound_hit="$4"
   python3 - "${result_file}" "${target_file}" "${drain_ms}" "${bound_hit}" <<'PY'
@@ -230,14 +253,22 @@ with open(result_path, encoding="utf-8") as handle:
 with open(target_path, encoding="utf-8") as handle:
     target = json.load(handle)
 cell = result["cells"][0]
+received = target["received"]
+rejected = target.get("rejected")
 cell["target_stats"] = {
-    "received": int(target["received"]),
+    "received": int(received),
     "errors": int(target["errors"]),
-    "drainMs": float(drain_ms),
 }
-cell["drain_ms"] = float(drain_ms)
-cell["drain_bound_hit"] = bound_hit == "true"
-cell["server_received_at_close"] = int(target["received"])
+if "rejected" in target:
+    cell["target_stats"]["rejected"] = int(rejected) if rejected is not None else None
+    cell["server_rejected_count"] = cell["target_stats"]["rejected"]
+source_drain_ms = float(cell.get("source_drain_ms", cell.get("drain_ms", 0.0)))
+if "source_drain_ms" in cell or "drain_ms" in cell:
+    cell["source_drain_ms"] = source_drain_ms
+    cell["runner_settle_ms"] = float(drain_ms)
+cell["drain_ms"] = source_drain_ms + float(drain_ms)
+cell["target_stats"]["drainMs"] = cell["drain_ms"]
+cell["drain_bound_hit"] = bool(cell.get("drain_bound_hit", False)) or bound_hit == "true"
 temporary = result_path + ".merge"
 with open(temporary, "w", encoding="utf-8") as handle:
     json.dump(result, handle, indent=2)
@@ -255,16 +286,94 @@ import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     cell = json.load(handle)["cells"][0]
 completed = int(cell["completed"])
-errors = int(cell.get("errors", 0))
-abandoned = int(cell.get("abandoned", 0))
+submitted = int(cell["submitted"]) if "submitted" in cell else None
+errors = int(cell["errors"])
+abandoned = int(cell["abandoned"])
 received = int(cell["target_stats"]["received"])
-if not completed <= received <= completed + errors + abandoned:
+target_errors = int(cell["target_stats"]["errors"])
+target_reports_rejections = "rejected" in cell["target_stats"]
+rejected = cell.get("server_rejected_count")
+if target_reports_rejections and cell["pattern"] == "send-saturation" and rejected is None:
+    raise SystemExit("target rejection count unavailable: completed == received + rejected cannot be verified")
+if rejected is not None:
+    rejected = int(rejected)
+if submitted is not None and submitted != completed + errors + abandoned:
+    raise SystemExit(f"source count mismatch: submitted={submitted} completed={completed} "
+                     f"errors={errors} abandoned={abandoned}")
+if target_errors != 0:
+    raise SystemExit(f"target reported errors={target_errors}")
+if cell["pattern"].startswith("request-") and not completed <= received <= completed + errors + abandoned:
     raise SystemExit(
         f"request count mismatch: completed={completed} received={received} "
         f"errors={errors} abandoned={abandoned}")
-if errors == 0 and abandoned == 0 and completed != received:
-    raise SystemExit(f"request count mismatch: completed={completed} received={received}")
+accounted = received + rejected if cell["pattern"] == "send-saturation" and target_reports_rejections else received
+if (rejected is not None and rejected < 0) or (submitted is not None and accounted > submitted):
+    raise SystemExit(f"target count mismatch: submitted={submitted} received={received} rejected={rejected}")
+if errors == 0 and abandoned == 0 and completed != accounted:
+    raise SystemExit(f"{cell['pattern']} count mismatch: completed={completed} "
+                     f"received={received} rejected={rejected}")
+print(f"counts: completed={completed} received={received} server_rejected_count={rejected} "
+      f"difference={completed - received}")
 PY
+}
+
+bench_record_contaminated_cell() {
+  local result_file="$1" implementation="$2" pattern="$3" payload="$4" reason="$5"
+  python3 - "${result_file}" "${implementation}" "${pattern}" "${payload}" "${reason}" <<'PY'
+import json, sys
+path, implementation, pattern, payload, reason = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as handle:
+    cell = {
+        "implementation": implementation, "pattern": pattern, "payload_size": int(payload),
+        "contaminated": True, "contamination_reason": reason,
+    }
+    json.dump({"schema": "with-grpc-cell-v1", "cells": [cell]}, handle, indent=2)
+    handle.write("\n")
+PY
+}
+
+# One server-driven cell, from warmup through the B snapshot. The optional reset
+# endpoint is for B implementations whose warmup counters need an explicit reset.
+bench_run_cell() {
+  local trigger_url="$1" source_url="$2" target_url="$3" run_id="$4" cell_id="$5"
+  local implementation="$6" pattern="$7" payload="$8" warmup_ms="$9"
+  local result_file="${10}" target_file="${11}" reset_url="${12:-}"
+  local remaining_drain_ms source_bound_hit drain_state
+  trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" "${payload}" warmup "${warmup_ms}"
+  wait_for_idle "${source_url}"
+  if [[ -n "${reset_url}" ]]; then
+    settle_and_capture "${source_url}" "${target_url}" /dev/null any
+  else
+    settle_and_capture "${source_url}" "${target_url}" /dev/null
+  fi
+  if [[ "${SETTLE_BOUND_HIT}" == true ]]; then
+    bench_record_contaminated_cell "${result_file}" "${implementation}" "${pattern}" "${payload}" \
+      "warmup settle bound hit"
+    echo "warmup settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id} (recorded; cell excluded)" >&2
+    return 0
+  fi
+  if [[ -n "${reset_url}" ]]; then
+    curl --silent --show-error --fail --max-time 5 -X POST "${reset_url}/bench/reset" >/dev/null
+  fi
+  trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" "${payload}" active "$((DURATION_SECONDS * 1000))"
+  wait_for_idle "${source_url}"
+  [[ -s "${result_file}" ]] || { echo "missing source result: ${result_file}" >&2; return 1; }
+  drain_state="$(python3 - "${result_file}" "${DRAIN_BOUND_MS}" <<'PY'
+import json, math, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    cell = json.load(handle)["cells"][0]
+print(max(0, int(sys.argv[2]) - math.ceil(float(cell.get("source_drain_ms", cell.get("drain_ms", 0))))),
+      str(bool(cell.get("drain_bound_hit", False))).lower())
+PY
+)" || return 1
+  read -r remaining_drain_ms source_bound_hit <<<"${drain_state}"
+  settle_and_capture "${source_url}" "${target_url}" "${target_file}" received "${remaining_drain_ms}"
+  merge_target_stats "${result_file}" "${target_file}" "${SETTLE_MS}" "${SETTLE_BOUND_HIT}"
+  if [[ "${SETTLE_BOUND_HIT}" == true || "${source_bound_hit}" == true ]]; then
+    echo "cell settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id} (recorded; run continues)" >&2
+    return 0
+  fi
+  verify_request_counts "${result_file}"
 }
 
 cleanup_cell() {

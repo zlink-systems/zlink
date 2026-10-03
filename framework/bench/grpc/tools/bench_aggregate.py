@@ -34,7 +34,7 @@ from benchagg.analysis import (  # noqa: E402
 from benchagg.model import JUDGEMENT_PATTERN, PATTERNS, PAYLOAD_SIZES  # noqa: E402
 from benchagg.readers import ReportError, read_runs  # noqa: E402
 from benchagg.render import (  # noqa: E402
-    render_contaminated,
+    render_excluded,
     render_companion_table,
     render_diagnostics_table,
     render_doc_table,
@@ -135,8 +135,8 @@ def emit(args, run_set, rows, sizes, judgements) -> str:
         out.append(render_g5_note())
         out.append("")
         out.append(render_g5_table(rows, sizes))
-        out.append("\n## Contaminated cells (FB-008, excluded from tables and judgement)\n")
-        out.append(render_contaminated(run_set.contaminated()))
+        out.append("\n## Excluded cells (FB-008, excluded from tables and judgement)\n")
+        out.append(render_excluded(run_set.excluded()))
         out.append("\n## Incomplete server-driven cells (excluded from tables and judgement)\n")
         out.append(render_incomplete(run_set.incomplete()))
     if args.format in ("full", "judgement"):

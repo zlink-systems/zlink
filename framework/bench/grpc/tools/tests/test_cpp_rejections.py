@@ -1,4 +1,4 @@
-"""C++ target rejection accounting and compatibility with existing readers."""
+"""Shared runner rejection accounting and compatibility with existing readers."""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
 from benchagg.readers import ReportError, cells_from_cell_json  # noqa: E402
 
-RUNNER = (TOOLS.parent / "cpp" / "run_local.sh").read_text()
+RUNNER = (TOOLS.parent / "runner_common.sh").read_text()
 
 
 def runner_python(function: str, *args: object) -> subprocess.CompletedProcess:
-    # Run the real runner's Python body without starting benchmark processes.
+    # Run the shared runner's Python body without starting benchmark processes.
     body = RUNNER.split(f"{function}() {{", 1)[1].split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
     return subprocess.run(
         [sys.executable, "-", *(str(arg) for arg in args)],
@@ -50,17 +50,19 @@ class CppRejectionTest(unittest.TestCase):
 
     def verify(self, succeeds: bool):
         self.write()
-        result = runner_python("cpp_verify_counts", self.result)
+        result = runner_python("verify_request_counts", self.result)
         self.assertEqual(result.returncode == 0, succeeds, result.stdout + result.stderr)
         return result
 
-    def test_send_requires_observed_rejections_to_explain_difference(self):
+    def test_send_uses_rejections_when_target_stats_report_them(self):
         self.verify(False)
+        self.cell["target_stats"]["rejected"] = 3
         self.cell["server_rejected_count"] = 3
         result = self.verify(True)
         self.assertIn("server_rejected_count=3 difference=3", result.stdout)
         for rejected in (-1, 2, 4, 9):
             with self.subTest(rejected=rejected):
+                self.cell["target_stats"]["rejected"] = rejected
                 self.cell["server_rejected_count"] = rejected
                 self.verify(False)
 
@@ -68,30 +70,29 @@ class CppRejectionTest(unittest.TestCase):
         self.cell.update(pattern="request-serial", server_rejected_count=3)
         self.verify(False)
 
-    def test_unknown_count_is_preserved_and_rejected_even_when_received_matches(self):
-        for target_count in ({}, {"rejected": None}):
-            with self.subTest(target_count=target_count):
-                self.cell["target_stats"]["received"] = 8
-                self.write()
-                self.target.write_text(json.dumps({"snapshot": {
-                    "received": 8, "errors": 0, **target_count,
-                }}))
-                result = runner_python("cpp_merge_target_stats", self.result, self.target, 20, "false")
-                self.assertEqual(result.returncode, 0, result.stderr)
-                document = json.loads(self.result.read_text())
-                cell = document["cells"][0]
-                self.assertIsNone(cell["server_rejected_count"])
-                self.assertIsNone(cell["target_stats"]["rejected"])
-                result = runner_python("cpp_verify_counts", self.result)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("target rejection count unavailable", result.stderr)
-                with self.assertRaisesRegex(ReportError, "target rejection count unavailable"):
-                    cells_from_cell_json(document, "test")
-
-    def test_missing_result_count_is_not_zero(self):
+    def test_absent_rejection_count_uses_received_count_for_any_implementation(self):
         self.cell["target_stats"]["received"] = 8
+        self.verify(True)
+        cells_from_cell_json(json.loads(self.result.read_text()), "test")
+
+    def test_null_rejection_count_is_not_zero_for_send(self):
+        self.cell["target_stats"]["received"] = 8
+        self.cell["target_stats"]["rejected"] = None
+        self.cell["server_rejected_count"] = None
         result = self.verify(False)
         self.assertIn("target rejection count unavailable", result.stderr)
+        with self.assertRaisesRegex(ReportError, "target rejection count unavailable"):
+            cells_from_cell_json(json.loads(self.result.read_text()), "test")
+
+    def test_missing_rejection_count_does_not_use_implementation_name(self):
+        self.write()
+        self.target.write_text(json.dumps({"received": 8, "errors": 0}))
+        result = runner_python("merge_target_stats", self.result, self.target, 20, "false")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cell = json.loads(self.result.read_text())["cells"][0]
+        self.assertNotIn("rejected", cell["target_stats"])
+        self.assertNotIn("server_rejected_count", cell)
+        self.assertEqual(runner_python("verify_request_counts", self.result).returncode, 0)
 
     def test_requests_validate_receipts_without_a_send_drop_count(self):
         self.cell.update(pattern="request-serial", server_rejected_count=None)
@@ -103,6 +104,7 @@ class CppRejectionTest(unittest.TestCase):
 
     def test_legacy_zero_drop_result_and_source_error_equation(self):
         self.cell["target_stats"]["received"] = 8
+        self.cell["target_stats"]["rejected"] = 0
         self.cell["server_rejected_count"] = 0
         self.verify(True)
         self.cell["submitted"] = 9
@@ -110,8 +112,8 @@ class CppRejectionTest(unittest.TestCase):
 
     def test_merge_adds_count_without_changing_existing_measurements(self):
         self.write()
-        self.target.write_text(json.dumps({"snapshot": {"received": 5, "errors": 0, "rejected": 3}}))
-        result = runner_python("cpp_merge_target_stats", self.result, self.target, 20, "false")
+        self.target.write_text(json.dumps({"received": 5, "errors": 0, "rejected": 3}))
+        result = runner_python("merge_target_stats", self.result, self.target, 20, "false")
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads(self.result.read_text())
         cell = document["cells"][0]
@@ -119,7 +121,7 @@ class CppRejectionTest(unittest.TestCase):
         self.assertEqual(cell["target_stats"]["rejected"], 3)
         for key in self.cell.keys() - {"target_stats"}:
             self.assertEqual(cell[key], self.cell[key], key)
-        self.assertEqual(runner_python("cpp_verify_counts", self.result).returncode, 0)
+        self.assertEqual(runner_python("verify_request_counts", self.result).returncode, 0)
         legacy = copy.deepcopy(document)
         del legacy["cells"][0]["server_rejected_count"]
         del legacy["cells"][0]["target_stats"]["rejected"]

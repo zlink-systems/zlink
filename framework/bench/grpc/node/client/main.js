@@ -185,7 +185,7 @@ function createRawTransport(options) {
       (error) => { outcome = { error }; }
     );
     while (outcome === null) {
-      pump.poll(50);
+      pump.poll(core.COMPLETION_POLL_INTERVAL_MS);
       await core.sleepImmediate();
     }
     if ('error' in outcome) throw outcome.error;
