@@ -324,6 +324,9 @@ class provider_location_repository_t final : public location_repository_t
                 if (const auto *applied = std::get_if<store_write_applied_t> (&written))
                     co_return authority_compare_exchange_result_t{
                       authority_deleted_t{snapshot.store_version, applied->store_now}};
+                if (co_await conflict_qualification_unchanged (row_key, found->value.version,
+                                                               snapshot.owner, std::nullopt))
+                    continue;
                 co_return co_await authority_conflict (co_await _store->read (row_key));
             }
 
