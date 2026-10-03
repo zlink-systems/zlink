@@ -4689,8 +4689,8 @@ int local_bound_session_refreshes_cached_route_before_fast_path ()
                                           18};
     bool invalidated = false;
     runtime.configure_actor_route_resolver (
-      [&] (const actor_ref_t &) -> std::optional<runtime::spot_address_t> {
-          return invalidated ? current : stale;
+      [&] (actor_ref_t) -> task_t<std::optional<runtime::spot_address_t>> {
+          co_return invalidated ? current : stale;
       },
       [&] (const runtime::protocol::actor_route_fence_t &route) {
           invalidated = route.actor_id == "reconnected-player"
@@ -4700,10 +4700,11 @@ int local_bound_session_refreshes_cached_route_before_fast_path ()
                         && route.owner_lease_generation
                              == static_cast<std::uint64_t> (stale.owner.lease_generation);
       });
-    const auto cached = runtime.resolve_application_actor_route (actor);
+    const auto cached = runtime.resolve_application_actor_route (actor).result ().value ();
     if (!cached || cached->node_rid != stale.node_rid)
         return 1;
-    const auto refreshed = runtime.refresh_application_actor_route (actor, *cached);
+    const auto refreshed =
+      runtime.refresh_application_actor_route (actor, *cached).result ().value ();
     return invalidated && refreshed && refreshed->node_rid == current.node_rid
                && refreshed->node_generation == current.node_generation
                && refreshed->authority_owner_generation == current.authority_owner_generation

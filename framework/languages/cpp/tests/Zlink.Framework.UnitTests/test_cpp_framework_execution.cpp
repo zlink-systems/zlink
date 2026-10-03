@@ -6511,15 +6511,15 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
         runtime::host::route_fence_t fence;
     };
     std::map<std::string, spot_route_fixture_t> spot_routes;
-    const auto resolve_spot_route =
-      [&spot_routes] (const zlink::routing_id_t &node, std::string_view spot_id,
-                      std::uint64_t generation) -> std::optional<runtime::host::route_fence_t> {
-        const auto found = spot_routes.find (std::string (spot_id));
+    const auto resolve_spot_route = [&spot_routes] (zlink::routing_id_t node, std::string spot_id,
+                                                    std::uint64_t generation)
+      -> zlink::framework::task_t<std::optional<runtime::host::route_fence_t>> {
+        const auto found = spot_routes.find (spot_id);
         if (found == spot_routes.end () || found->second.node != node
             || found->second.generation != generation) {
-            return std::nullopt;
+            co_return std::nullopt;
         }
-        return found->second.fence;
+        co_return found->second.fence;
     };
     source.bind_serializers (serializers);
     target.bind_serializers (serializers);

@@ -126,8 +126,8 @@ class spot_node_builder_state_t
     std::function<task_t<bool> (spot_ref_t)> close_user_spot;
     instance_spot_idle_eviction_callback_t admit_instance_spot_idle_eviction;
     instance_spot_close_begin_callback_t begin_instance_spot_close;
-    std::function<result_t<runtime::protocol::instance_spot_activation_header_t> (
-      const runtime::protocol::instance_spot_activation_header_t &)>
+    std::function<task_t<result_t<runtime::protocol::instance_spot_activation_header_t>> (
+      runtime::protocol::instance_spot_activation_header_t)>
       select_instance_spot_target;
     user_spot_close_begin_callback_t begin_user_spot_close;
     std::shared_ptr<channel_runtime_state_t> channel_runtime;
@@ -1701,7 +1701,7 @@ class spot_node_runtime_t
     task_t<zlink::submit_result_t>
     send_actor_leave_notification (const zlink::routing_id_t &target_node_rid,
                                    runtime::messaging::message_parts_t parts) const;
-    std::optional<std::uint64_t>
+    task_t<std::optional<std::uint64_t>>
     resolve_spot_generation (const zlink::routing_id_t &target_node_rid,
                              const spot_id_t &target_spot_id) const;
     // Canonical actorJoin(28) reaches this boundary without a stable type.
