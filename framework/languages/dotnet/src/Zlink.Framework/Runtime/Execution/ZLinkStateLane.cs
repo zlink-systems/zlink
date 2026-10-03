@@ -32,10 +32,6 @@ namespace Zlink.Framework.Runtime.Execution;
 /// </remarks>
 internal sealed class ZLinkStateLane : IAsyncDisposable
 {
-    //  Draining a bounded batch keeps one saturated lane from occupying a thread-pool thread
-    //  indefinitely: the drain yields after this many items and reschedules if work remains.
-    private const int DrainBatchLimit = 100;
-
     private readonly ConcurrentQueue<Func<ValueTask>> _mailbox = new();
     private readonly TaskCompletionSource _completed = new(
         TaskCreationOptions.RunContinuationsAsynchronously
@@ -70,11 +66,13 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         if (Volatile.Read(ref _closed) != 0)
             throw new ObjectDisposedException(nameof(ZLinkStateLane));
 
-        // Claim the same drain ownership used by queued work before inspecting
-        // the queue. An earlier enqueue must run first, even if its producer has
-        // not reached ScheduleDrain yet. With no predecessor, the caller owns
-        // this turn and can return its value without a completion allocation.
-        if (Interlocked.CompareExchange(ref _scheduled, 1, 0) == 0)
+        // A running thread holds the claim only while it executes turns; a
+        // queued ThreadPool item takes it when it runs, not when it is queued.
+        // With no predecessor the caller runs its own turn without a completion
+        // allocation. With predecessors the caller queues behind them and
+        // drains them itself, so a caller that then blocks on the result never
+        // waits for a ThreadPool worker to start the drain.
+        if (TryClaimDrain())
         {
             if (_mailbox.IsEmpty)
             {
@@ -92,13 +90,26 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
                 finally
                 {
                     CurrentLane.Value = previous;
-                    ReleaseDrain();
+                    if (ReleaseDrain())
+                        _ = DrainAsync();
                 }
             }
 
-            ReleaseDrain();
+            var queued = Enqueue(work);
+            _ = DrainAsync();
+            return queued;
         }
 
+        var completion = Enqueue(work);
+        // The holder may have released between the claim attempt and the
+        // enqueue; its release re-check and this attempt cannot both miss.
+        if (TryClaimDrain())
+            _ = DrainAsync();
+        return completion;
+    }
+
+    private ValueTask<T> Enqueue<T>(Func<T> work)
+    {
         var completion = new TaskCompletionSource<T>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -115,7 +126,6 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
 
             return ValueTask.CompletedTask;
         });
-        ScheduleDrain(inline: true);
         return new ValueTask<T>(completion.Task);
     }
 
@@ -180,51 +190,54 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
             );
     }
 
-    private void ScheduleDrain(bool inline = false)
-    {
-        //  Exactly one drain runs at a time. The drain clears the flag and re-checks the mailbox
-        //  before exiting, so an item enqueued during that window is never left unscheduled.
-        if (Interlocked.CompareExchange(ref _scheduled, 1, 0) != 0)
-            return;
-        if (inline)
-            _ = DrainAsync();
-        else
-            ThreadPool.UnsafeQueueUserWorkItem(
-                static state => _ = state.DrainAsync(),
-                this,
-                preferLocal: true
-            );
-    }
+    private bool TryClaimDrain() => Interlocked.CompareExchange(ref _scheduled, 1, 0) == 0;
 
+    //  Deferred drain for submissions that must not run turns on the caller's
+    //  thread. The worker claims the lane only when it runs; until then any
+    //  caller can claim it and drain the same FIFO.
+    private void ScheduleDrain() =>
+        ThreadPool.UnsafeQueueUserWorkItem(
+            static state =>
+            {
+                if (state.TryClaimDrain())
+                    _ = state.DrainAsync();
+            },
+            this,
+            preferLocal: false
+        );
+
+    //  Runs with the claim held and keeps it until the mailbox is empty. Turns
+    //  queued while it runs are drained by this same owner, as the C++ lane's
+    //  drain_loop does, instead of being handed to another ThreadPool worker.
     private async Task DrainAsync()
     {
         CurrentLane.Value = this;
         try
         {
-            var processed = 0;
-            while (processed < DrainBatchLimit && _mailbox.TryDequeue(out var work))
+            do
             {
-                await work().ConfigureAwait(false);
-
-                processed++;
-            }
+                while (_mailbox.TryDequeue(out var work))
+                    await work().ConfigureAwait(false);
+            } while (ReleaseDrain());
         }
         finally
         {
             CurrentLane.Value = null;
-            ReleaseDrain();
         }
     }
 
-    private void ReleaseDrain()
+    //  Returns true when the caller has reclaimed the lane for work queued
+    //  after its last turn and must drain it.
+    private bool ReleaseDrain()
     {
         // The full fence orders the ownership release before the queue check;
         // otherwise a racing producer and drainer can both miss the wakeup.
         Interlocked.Exchange(ref _scheduled, 0);
         if (!_mailbox.IsEmpty)
-            ScheduleDrain();
-        else if (Volatile.Read(ref _closed) != 0 && Volatile.Read(ref _scheduled) == 0)
+            return TryClaimDrain();
+        if (Volatile.Read(ref _closed) != 0 && Volatile.Read(ref _scheduled) == 0)
             _completed.TrySetResult();
+        return false;
     }
 
     public async ValueTask DisposeAsync()

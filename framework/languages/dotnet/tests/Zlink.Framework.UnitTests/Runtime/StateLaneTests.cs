@@ -168,8 +168,7 @@ public sealed class StateLaneTests
     [Fact]
     public async Task DrainingMoreThanOneBatch_StillRunsEveryItem()
     {
-        //  The drain yields after a bounded batch. Everything queued past that boundary has to be
-        //  picked up by the reschedule, not dropped.
+        //  One drain owner keeps the lane until the mailbox is empty. Every queued item runs.
         await using var lane = new ZLinkStateLane();
         var count = 0;
 
@@ -200,6 +199,42 @@ public sealed class StateLaneTests
         await producer.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal(1_000_000, count);
         await lane.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ContendedSynchronousTurn_CompletesWithoutAnotherThreadPoolWorker()
+    {
+        //  A caller blocked on a queued turn occupies its ThreadPool worker. The thread that holds
+        //  the lane must run that turn itself; a drain handed to another worker cannot start while
+        //  every worker waits like this (#1384). The scheduling regression host runs this with one
+        //  ThreadPool worker.
+        await Task.Yield();
+        await using var lane = new ZLinkStateLane();
+        using var held = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var owner = new Thread(() =>
+            lane.RunAsync(() =>
+                {
+                    held.Set();
+                    release.Wait();
+                    return 0;
+                })
+                .AsTask()
+                .GetAwaiter()
+                .GetResult()
+        )
+        {
+            IsBackground = true,
+        };
+        owner.Start();
+        held.Wait();
+
+        var queued = lane.RunAsync(() => 1).AsTask();
+        release.Set();
+
+        Assert.True(queued.Wait(TimeSpan.FromSeconds(10)));
+        Assert.Equal(1, queued.Result);
+        owner.Join();
     }
 
     // ---- 재진입: 행 대신 진단 가능한 실패 ---------------------------------------------
