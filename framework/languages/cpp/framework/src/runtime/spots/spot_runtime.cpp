@@ -16,6 +16,7 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/execution/task_result.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/live_location_reader.hpp"
@@ -871,7 +872,8 @@ void stamp_handoff_actor_route (std::map<std::string, std::string> &metadata,
 std::optional<std::string> actor_type_from_authority (runtime::live_location_reader_t &store,
                                                       std::string_view actor_id)
 {
-    const auto read = store.read_authority (runtime::actor_authority_key (actor_id)).result ();
+    const auto read = runtime::infrastructure_result (
+      [&] { return store.read_authority (runtime::actor_authority_key (actor_id)); });
     if (!read)
         return std::nullopt;
     const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
@@ -908,7 +910,8 @@ result_t<std::string> actor_type_from_authority (runtime::live_location_reader_t
                                                "remote Actor Join authority fence is incomplete");
     }
     try {
-        const auto read = store.read_authority (runtime::actor_authority_key (actor_id)).result ();
+        const auto read = runtime::infrastructure_result (
+          [&] { return store.read_authority (runtime::actor_authority_key (actor_id)); });
         if (!read) {
             return result_t<std::string>::failure (
               framework_error_kind_t::unavailable,
@@ -13372,10 +13375,10 @@ std::optional<spot_route_t> spot_node_runtime_t::resolve_spot (spot_id_t spot_id
         }
     }
     if (plan.location_resolver) {
-        const auto address =
-          plan.location_resolver->resolve_spot_address (std::move (plan.mesh_name), spot_id)
-            .result ()
-            .value ();
+        const auto address = runtime::infrastructure_result ([&] {
+                                 return plan.location_resolver->resolve_spot_address (
+                                   std::move (plan.mesh_name), spot_id);
+                             }).value ();
         if (address) {
             return spot_route_t{node_rid_t::from_string (address->node_rid.to_string ()),
                                 spot_id_t (address->spot_id),
@@ -14167,8 +14170,8 @@ result_t<std::uint64_t> spot_node_runtime_t::resolve_wire_actor_join_target (
         // store_location_resolvers_t may return a valid-but-stale cache
         // projection, which is suitable for routing but cannot authorize a
         // canonical actorJoin target.
-        const auto read =
-          store->read_authority (runtime::spot_authority_key (fence.spot_id)).result ();
+        const auto read = runtime::infrastructure_result (
+          [&] { return store->read_authority (runtime::spot_authority_key (fence.spot_id)); });
         if (!read) {
             return result_t<std::uint64_t>::failure (
               framework_error_kind_t::unavailable,
