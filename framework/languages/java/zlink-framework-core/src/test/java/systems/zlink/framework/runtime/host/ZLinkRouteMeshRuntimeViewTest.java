@@ -19,6 +19,7 @@ import systems.zlink.framework.monitoring.ZLinkTopologyState;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 
 import java.net.ServerSocket;
 import java.time.Duration;
@@ -527,6 +528,103 @@ final class ZLinkRouteMeshRuntimeViewTest {
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS));
             assertTrue(removed.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    /**
+     * #1379: a status query rebuilds the RouteMesh status from this process's own descriptor
+     * values. It never reads the Location Store, so a held Store response (for example a Store I/O
+     * thread that runs the caller) cannot delay the query.
+     */
+    @Test
+    void statusQueryDoesNotReadTheLocationStoreWhileStoreResponsesAreHeld() throws Exception {
+        var store = new HeldScanStore(new ZLinkInMemoryProviderLocationStore());
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        options.addRouteMesh(MESH)
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(rid("held-store"))
+                .objects()
+                .server();
+        try (var runtime = start(options)) {
+            awaitSnapshot(runtime, status -> status.placement().isAvailable());
+            store.holdScansFrom(Thread.currentThread());
+            try {
+                var held = runtime.routeMeshRuntime().snapshot(MESH);
+                assertEquals(0, store.heldScanCount(), "status query read the Location Store");
+                assertTrue(held.placement().isAvailable(), held::toString);
+            } finally {
+                store.release();
+            }
+        }
+    }
+
+    /** Holds the scans one thread issues until the test releases them. */
+    private static final class HeldScanStore
+            implements systems.zlink.framework.locationprovider.ZLinkLocationStore {
+        private final systems.zlink.framework.locationprovider.ZLinkLocationStore delegate;
+        private final List<Runnable> held = new java.util.concurrent.CopyOnWriteArrayList<>();
+        private volatile Thread holding;
+
+        HeldScanStore(systems.zlink.framework.locationprovider.ZLinkLocationStore delegate) {
+            this.delegate = delegate;
+        }
+
+        void holdScansFrom(Thread thread) {
+            holding = thread;
+        }
+
+        int heldScanCount() {
+            return held.size();
+        }
+
+        void release() {
+            holding = null;
+            held.forEach(Runnable::run);
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<
+                        systems.zlink.framework.locationprovider.ZLinkStoreReadResult>
+                read(
+                        systems.zlink.framework.locationprovider.ZLinkStoreKey key,
+                        systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+                                cancellation) {
+            return delegate.read(key, cancellation);
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<
+                        systems.zlink.framework.locationprovider.ZLinkStoreWriteResult>
+                write(
+                        systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest request,
+                        systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+                                cancellation) {
+            return delegate.write(request, cancellation);
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<
+                        systems.zlink.framework.locationprovider.ZLinkStoreScanResult>
+                scan(
+                        systems.zlink.framework.locationprovider.ZLinkStoreScanRequest request,
+                        systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+                                cancellation) {
+            if (Thread.currentThread() != holding) {
+                return delegate.scan(request, cancellation);
+            }
+            var result =
+                    new java.util.concurrent.CompletableFuture<
+                            systems.zlink.framework.locationprovider.ZLinkStoreScanResult>();
+            held.add(
+                    () ->
+                            delegate.scan(request, cancellation)
+                                    .whenComplete(
+                                            (value, failure) -> {
+                                                if (failure == null) result.complete(value);
+                                                else result.completeExceptionally(failure);
+                                            }));
+            return result;
         }
     }
 
