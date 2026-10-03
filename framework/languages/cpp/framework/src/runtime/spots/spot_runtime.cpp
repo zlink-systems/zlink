@@ -3116,6 +3116,7 @@ void spot_context_state_t::defer_relocation_ready ()
     const auto complete_without_relocation = state_sync ([this, barrier = reserved.value ()] {
         relocation_ready_deferred = true;
         relocation_ready_barrier = barrier;
+        relocation_ready_turn = detail::capture_current_serial_turn ();
         return !relocation_boundary_active;
     });
     if (complete_without_relocation)
@@ -3127,8 +3128,8 @@ void spot_context_state_t::ensure_relocation_turn_open () const
     const auto current_turn = detail::capture_current_serial_turn ();
     if (!owns_current_serial_turn () || !current_turn || current_turn->is_after_active_phase ())
         return;
-    const auto deferred = state_sync ([this] { return relocation_ready_deferred; });
-    if (deferred) {
+    const auto deferring_turn = state_sync ([this] { return relocation_ready_turn.lock (); });
+    if (deferring_turn == current_turn) {
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "Framework operations are not allowed after relocation "
                                      "readiness is deferred in the current Spot turn");
