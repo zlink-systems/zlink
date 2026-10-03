@@ -108,7 +108,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
-        using var operation = EnterOperation();
+        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         _drainAdmission.RequireSpotAdmission();
         return await _spots
             .CreateByStableTypeAsync(
@@ -126,7 +126,7 @@ internal sealed partial class ZLinkFrameworkRuntime
 
     internal ZLinkSpotPublisherBundle GetSpotPublisherBundle(string channelName)
     {
-        var nodeRuntime = ResolveRouteMeshNodeForChannel(channelName);
+        var nodeRuntime = AwaitStateLane(ResolveRouteMeshNodeForChannelAsync(channelName));
         return nodeRuntime.GetOrCreatePublisherBundle(channelName);
     }
 
@@ -144,7 +144,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
         where TSpot : IZLinkSpot
     {
-        using var operation = EnterOperation();
+        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         _drainAdmission.RequireSpotAdmission();
         return await _spots
             .CreateAsync(GetOrStartState(), typeof(TSpot), request, cancellationToken)
@@ -159,7 +159,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         where TSpot : IZLinkSpot
     {
         ZLinkSpotId.RequireCallerProvided(spotId, nameof(spotId));
-        using var operation = EnterOperation();
+        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         _drainAdmission.RequireSpotAdmission();
         return await _spots
             .GetOrCreateAsync(GetOrStartState(), typeof(TSpot), spotId, request, cancellationToken)
@@ -188,7 +188,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken = default
     )
     {
-        using var operation = EnterOperation();
+        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         return await _spots.ListAsync(GetOrStartState(), cancellationToken).ConfigureAwait(false);
     }
 
@@ -197,7 +197,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken = default
     )
     {
-        using var operation = EnterOperation();
+        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         return await _spots
             .CloseAsync(GetOrStartState(), spot, cancellationToken)
             .ConfigureAwait(false);
@@ -210,7 +210,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
-        using var operation = EnterOperation();
+        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         return await _spots
             .CloseLocalByIdAsync(
                 GetOrStartState(),
@@ -293,35 +293,34 @@ internal sealed partial class ZLinkFrameworkRuntime
     /// <summary>The registered MeshNode for a physical mesh. ChannelName
     /// select-one calls (IZLinkRouteClient) submit through this node's entry
     /// spot so weight, ready and drain admission stay Core-owned (spec 11 §3).</summary>
-    internal ZLinkSpotNodeRuntime GetMeshNodeRuntime(string meshName)
+    internal ZLinkSpotNodeRuntime GetMeshNodeRuntime(string meshName) =>
+        AwaitStateLane(GetMeshNodeRuntimeAsync(meshName));
+
+    internal ValueTask<ZLinkSpotNodeRuntime> GetMeshNodeRuntimeAsync(string meshName)
     {
         var state = GetOrStartState();
-        return AwaitStateLane(
-            state.RunStateAsync(() =>
-                state.SpotNodes.TryGetValue(meshName, out var nodeRuntime)
-                    ? nodeRuntime
-                    : throw new ZLinkConfigurationException(
-                        $"RouteMesh '{meshName}' is not registered."
-                    )
-            )
+        return state.RunStateAsync(() =>
+            state.SpotNodes.TryGetValue(meshName, out var nodeRuntime)
+                ? nodeRuntime
+                : throw new ZLinkConfigurationException(
+                    $"RouteMesh '{meshName}' is not registered."
+                )
         );
     }
 
-    internal ZLinkSpotNodeRuntime ResolveRouteMeshNodeForChannel(string channelName)
+    internal ValueTask<ZLinkSpotNodeRuntime> ResolveRouteMeshNodeForChannelAsync(string channelName)
     {
         var state = GetOrStartState();
-        return AwaitStateLane(
-            state.RunStateAsync(() =>
-            {
-                if (state.RouteMeshNodesByChannel.TryGetValue(channelName, out var nodeRuntime))
-                    return nodeRuntime;
+        return state.RunStateAsync(() =>
+        {
+            if (state.RouteMeshNodesByChannel.TryGetValue(channelName, out var nodeRuntime))
+                return nodeRuntime;
 
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.NotFound,
-                    $"No process-local RouteMesh or ClientServer client is registered for ChannelName '{channelName}'."
-                );
-            })
-        );
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"No process-local RouteMesh or ClientServer client is registered for ChannelName '{channelName}'."
+            );
+        });
     }
 
     internal ZLinkSpotNodeRuntime GetActorClientSpotNodeRuntime()
@@ -413,7 +412,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken = default
     )
     {
-        using var operation = EnterOperation();
+        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         if (_state is null)
             return ZLinkActorCreateResponse.Accept();
 
@@ -434,7 +433,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken = default
     )
     {
-        using var operation = EnterOperation();
+        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         if (_state is null)
             return;
 
@@ -449,7 +448,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken = default
     )
     {
-        using var operation = EnterOperation();
+        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         if (_state is null)
             return false;
 
@@ -468,7 +467,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken = default
     )
     {
-        using var operation = EnterOperation();
+        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         if (_state is null)
             return false;
 

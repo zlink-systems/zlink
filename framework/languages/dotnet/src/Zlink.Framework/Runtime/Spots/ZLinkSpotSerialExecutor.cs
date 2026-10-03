@@ -577,9 +577,15 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
         Action? onSkipped = null,
         bool reportUnobservedAdmission = false
+    ) => AwaitStateLane(QueueWithAdmissionAsync(operation, onSkipped, reportUnobservedAdmission));
+
+    internal async ValueTask<ZLinkSerialPostAdmission> QueueWithAdmissionAsync(
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
+        Action? onSkipped = null,
+        bool reportUnobservedAdmission = false
     )
     {
-        var claim = TryAcquireApplicationClaim();
+        var claim = await TryAcquireApplicationClaimAsync().ConfigureAwait(false);
         if (claim is null)
         {
             onSkipped?.Invoke();
@@ -601,7 +607,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 }
                 finally
                 {
-                    claim.Release();
+                    await claim.ReleaseAsync().ConfigureAwait(false);
                 }
             },
             out _
@@ -675,7 +681,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 }
                 finally
                 {
-                    claim.Release();
+                    await claim.ReleaseAsync().ConfigureAwait(false);
                 }
             },
             out _
@@ -803,14 +809,40 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         return result.Item1;
     }
 
-    internal void RunIngress(Action work) =>
-        RunBarrierState(() =>
-        {
-            work();
-            return true;
-        });
+    internal async ValueTask RunIngressAsync(Action work) =>
+        await RunBarrierStateAsync(() =>
+            {
+                work();
+                return true;
+            })
+            .ConfigureAwait(false);
 
-    internal T RunIngress<T>(Func<T> work) => RunBarrierState(work);
+    // An ingress turn that awaits another owner's decision (the runtime inbound
+    // admission) keeps the state lane for its whole duration without holding a
+    // thread. A relocation opening defers it exactly like a synchronous turn.
+    internal async ValueTask RunIngressAsync(Func<ValueTask> work)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        _stateLane.ThrowIfReentrant();
+        while (true)
+        {
+            Task? retry = null;
+            await _stateLane
+                .RunAsync(() =>
+                {
+                    if (_relocationAdmissionOpening is { } opening)
+                    {
+                        retry = opening.Completion.Task;
+                        return ValueTask.CompletedTask;
+                    }
+                    return work();
+                })
+                .ConfigureAwait(false);
+            if (retry is null)
+                return;
+            await retry.ConfigureAwait(false);
+        }
+    }
 
     internal ZLinkAcceptedWorkAdmission QueueAcceptedOnLane(
         int acceptedJournalLength,
@@ -900,14 +932,14 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     ) =>
         async ct =>
         {
-            var claim = AcquireAdmittedApplicationClaim();
+            var claim = await AcquireAdmittedApplicationClaimAsync().ConfigureAwait(false);
             try
             {
                 await ExecuteOperationAsync(operation, relocationRelease, ct).ConfigureAwait(false);
             }
             finally
             {
-                claim.Release();
+                await claim.ReleaseAsync().ConfigureAwait(false);
             }
         };
 
@@ -1579,7 +1611,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                         }
                         finally
                         {
-                            claim.Release();
+                            await claim.ReleaseAsync().ConfigureAwait(false);
                         }
                     },
                     payloadBytes,
@@ -1665,16 +1697,14 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         return new ZLinkExecutionClaim(this, actorLane: false);
     }
 
-    private ZLinkExecutionClaim AcquireAdmittedApplicationClaim()
-    {
-        return RunBarrierState(() =>
+    private ValueTask<ZLinkExecutionClaim> AcquireAdmittedApplicationClaimAsync() =>
+        RunBarrierStateAsync(() =>
         {
             _activeApplicationClaims++;
             if (_relocationBarrier is { } barrier)
                 barrier.ActiveClaims++;
             return new ZLinkExecutionClaim(this, actorLane: false);
         });
-    }
 
     private (
         ZLinkSerialExecutionQueue Lane,
@@ -1761,29 +1791,34 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         );
     }
 
-    private void ReleaseApplicationClaim(bool actorLane)
-    {
-        RunBarrierState(() =>
-        {
-            if (_activeApplicationClaims <= 0)
-                throw new InvalidOperationException("SPOT execution claim count is inconsistent.");
-            _activeApplicationClaims--;
-            if (actorLane)
+    private async ValueTask ReleaseApplicationClaimAsync(bool actorLane) =>
+        await RunBarrierStateAsync(() =>
             {
-                if (_activeActorClaims <= 0)
-                    throw new InvalidOperationException(
-                        "SPOT Actor execution claim count is inconsistent."
-                    );
-                _activeActorClaims--;
-            }
-            if (
-                _relocationBarrier is { } barrier
-                && (!actorLane || !barrier.AllowActorClaims)
-                && --barrier.ActiveClaims == 0
-                && barrier.BoundaryReached
-            )
-                barrier.Quiescent.TrySetResult();
-        });
+                ReleaseApplicationClaimOnLane(actorLane);
+                return true;
+            })
+            .ConfigureAwait(false);
+
+    private void ReleaseApplicationClaimOnLane(bool actorLane)
+    {
+        if (_activeApplicationClaims <= 0)
+            throw new InvalidOperationException("SPOT execution claim count is inconsistent.");
+        _activeApplicationClaims--;
+        if (actorLane)
+        {
+            if (_activeActorClaims <= 0)
+                throw new InvalidOperationException(
+                    "SPOT Actor execution claim count is inconsistent."
+                );
+            _activeActorClaims--;
+        }
+        if (
+            _relocationBarrier is { } barrier
+            && (!actorLane || !barrier.AllowActorClaims)
+            && --barrier.ActiveClaims == 0
+            && barrier.BoundaryReached
+        )
+            barrier.Quiescent.TrySetResult();
     }
 
     private bool TryBeginRelocationBarrier(
@@ -1874,11 +1909,13 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     {
         private int _released;
 
-        public void Release()
-        {
-            if (Interlocked.Exchange(ref _released, 1) == 0)
-                owner.ReleaseApplicationClaim(actorLane);
-        }
+        // Blocking compatibility surface for the synchronous admission paths.
+        public void Release() => AwaitStateLane(ReleaseAsync());
+
+        public ValueTask ReleaseAsync() =>
+            Interlocked.Exchange(ref _released, 1) == 0
+                ? owner.ReleaseApplicationClaimAsync(actorLane)
+                : ValueTask.CompletedTask;
     }
 
     private sealed class ZLinkExecutionBarrierState(

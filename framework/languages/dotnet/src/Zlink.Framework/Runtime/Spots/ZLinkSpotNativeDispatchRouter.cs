@@ -4,9 +4,9 @@ internal static class ZLinkSpotNativeDispatchRouter
 {
     public static void Attach(
         IZLinkBackendSpot nativeSpot,
-        Action<IReadOnlyList<ZLinkBackendRouteReceived>> routeReadable,
+        Func<IReadOnlyList<ZLinkBackendRouteReceived>, ValueTask> routeReadable,
         Action<Action?> channelReplyReadable,
-        Action subscribeReadable,
+        Func<ValueTask> subscribeReadable,
         Action actorJoinReadable,
         Action actorLifecycleReadable,
         Action<IReadOnlyList<ZLinkBackendActorPart>, IDisposable?> actorPartsReadable
@@ -18,15 +18,15 @@ internal static class ZLinkSpotNativeDispatchRouter
             {
                 switch (info.Event)
                 {
+                    // Route admission runs on the Spot state lane; the dispatch
+                    // worker keeps its completion instead of waiting for it.
                     case ZLinkBackendSpotDispatchEvent.RouteReadable:
-                        routeReadable(info.RoutedMessages ?? []);
-                        break;
+                        return (routeReadable(info.RoutedMessages ?? []), null);
                     case ZLinkBackendSpotDispatchEvent.ChannelReplyReadable:
                         channelReplyReadable(info.DrainChannelReply);
                         break;
                     case ZLinkBackendSpotDispatchEvent.SubscribeReadable:
-                        subscribeReadable();
-                        break;
+                        return (subscribeReadable(), null);
                     case ZLinkBackendSpotDispatchEvent.ActorJoinReadable:
                         actorJoinReadable();
                         break;

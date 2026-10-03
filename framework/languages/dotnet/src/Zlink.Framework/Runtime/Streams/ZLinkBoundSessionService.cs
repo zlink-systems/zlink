@@ -22,7 +22,7 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
         CancellationToken cancellationToken = default
     )
     {
-        using var operation = runtime.EnterOperation();
+        using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
         if (
             ZLinkBoundSessionDispatchScope.TryDeferClose(
                 actorId,
@@ -61,7 +61,7 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
         CancellationToken cancellationToken
     )
     {
-        using var operation = runtime.EnterOperation();
+        using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
         cancellationToken.ThrowIfCancellationRequested();
         var route = ResolveSessionRoute(actorId);
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(

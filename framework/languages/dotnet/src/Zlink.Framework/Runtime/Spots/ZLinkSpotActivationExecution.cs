@@ -150,7 +150,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         var failures = new List<Exception>();
         Capture(RequestStop);
-        Capture(DrainNativeRoutes);
+        await CaptureAsync(DrainNativeRoutesAsync).ConfigureAwait(false);
         await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
         if (await ReleaseLocalResourcesAsync().ConfigureAwait(false) is { } releaseFailure)
             failures.AddRange(releaseFailure.InnerExceptions);
@@ -434,20 +434,20 @@ internal abstract partial class ZLinkSpotActivation
         {
             ZLinkSpotNativeDispatchRouter.Attach(
                 NativeSpot,
-                receivedMessages =>
+                async receivedMessages =>
                 {
                     if (receivedMessages.Count == 0)
                     {
-                        DrainNativeRoutes();
+                        await DrainNativeRoutesAsync().ConfigureAwait(false);
                         return;
                     }
 
                     foreach (var received in receivedMessages)
-                        AdmitNativeRoute(received);
+                        await AdmitNativeRouteAsync(received).ConfigureAwait(false);
                 },
                 drain => drain?.Invoke(),
                 () =>
-                    QueueApplicationSerialized(
+                    QueueApplicationSerializedAsync(
                         static (activation, ct) => activation.DispatchSubscriptionsAsync(ct),
                         countAsRequest: false,
                         () =>
@@ -486,17 +486,37 @@ internal abstract partial class ZLinkSpotActivation
         });
     }
 
-    private void DrainNativeRoutes() =>
-        _serial.RunIngress(() =>
+    // Native routes are dequeued inside one ingress turn, so their FIFO order is
+    // the queue order. The turn awaits the runtime inbound admission instead of
+    // blocking the dispatch worker that raised the event.
+    private ValueTask DrainNativeRoutesAsync() =>
+        _serial.RunIngressAsync(async () =>
         {
             while (NativeSpot.RecvRoute(RecvFlags.DontWait) is { } received)
-                AdmitNativeRouteOnLane(received);
+                await AdmitNativeRouteOnLaneAsync(received).ConfigureAwait(false);
         });
 
-    private void AdmitNativeRoute(ZLinkBackendRouteReceived received) =>
-        _serial.RunIngress(() => AdmitNativeRouteOnLane(received));
+    private ValueTask AdmitNativeRouteAsync(ZLinkBackendRouteReceived received) =>
+        _serial.RunIngressAsync(() => AdmitNativeRouteOnLaneAsync(received));
 
-    private void AdmitNativeRouteOnLane(ZLinkBackendRouteReceived received)
+    private async ValueTask AdmitNativeRouteOnLaneAsync(ZLinkBackendRouteReceived received)
+    {
+        if (
+            !ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+                RequiresApplicationQueueOnLane(received)
+            )
+        )
+            return;
+        var operationAdmission = (
+            await _runtime.TryAdmitInboundOperationAsync(received.CanReply).ConfigureAwait(false)
+        ).EnterInbound();
+        ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+            QueueApplicationRouteSerialized(received, operationAdmission)
+        );
+    }
+
+    // Returns false when the route was handled without the application queue.
+    private bool RequiresApplicationQueueOnLane(ZLinkBackendRouteReceived received)
     {
         if (ZLinkSpotActivationDispatcher.IsInfrastructureRoute(received))
         {
@@ -504,38 +524,35 @@ internal abstract partial class ZLinkSpotActivation
             // lifecycle callbacks. Keep that wait off the native route drain
             // so a slow handoff cannot delay the next admission or commit.
             if (
-                !ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
-                    _serial.TryRunDetached(
-                        "user-spot-infrastructure-route",
-                        ct => _dispatcher.DispatchRouteAsync(received, ct)
-                    )
+                !_serial.TryRunDetached(
+                    "user-spot-infrastructure-route",
+                    ct => _dispatcher.DispatchRouteAsync(received, ct)
                 )
             )
                 received.Dispose();
-            return;
+            return false;
         }
 
         switch (TryMessageFollow(received))
         {
             case ZLinkSpotMessageFollowResult.Followed:
-                return;
+                return false;
             case ZLinkSpotMessageFollowResult.StaleRejected:
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForStaleMessageFollow(
                     received,
                     ChannelName,
                     _runtime
                 );
-                return;
+                return false;
             case ZLinkSpotMessageFollowResult.Full:
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
                     received,
                     ChannelName,
                     _runtime
                 );
-                return;
+                return false;
             case ZLinkSpotMessageFollowResult.NotApplicable:
-                QueueApplicationRouteSerialized(received);
-                return;
+                return !RejectNonIntentClosing(received, received.InstanceIntent);
             default:
                 throw new InvalidOperationException("Unknown Spot Message Follow result.");
         }
@@ -702,29 +719,50 @@ internal abstract partial class ZLinkSpotActivation
             );
         }
 
-        _serial.RunIngress(() =>
-            QueueApplicationSerialized(
-                static (activation, state, ct) =>
-                    activation.DispatchQueuedApplicationRouteAsync(state, ct),
-                state,
-                acceptedJournalLength,
-                acceptedJournalFactory,
-                false,
-                request,
-                _ =>
+        // The record must be accepted in this call's synchronous prefix when no
+        // other turn holds either lane, as the blocking turn did; contention now
+        // suspends this call instead of blocking its thread. The ingress turn
+        // owns the admission once it starts; a turn that never starts returns it.
+        var operationAdmission = (
+            await _runtime.TryAdmitInboundOperationAsync(request).ConfigureAwait(false)
+        ).EnterInbound();
+        var admissionHandedOff = false;
+        try
+        {
+            await _serial
+                .RunIngressAsync(() =>
                 {
-                    received.Dispose();
-                    completion.TrySetException(
-                        new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.ShuttingDown,
-                            "The Instance Spot activation queue stopped before admission."
-                        )
+                    admissionHandedOff = true;
+                    QueueApplicationSerialized(
+                        static (activation, state, ct) =>
+                            activation.DispatchQueuedApplicationRouteAsync(state, ct),
+                        state,
+                        acceptedJournalLength,
+                        acceptedJournalFactory,
+                        false,
+                        operationAdmission,
+                        _ =>
+                        {
+                            received.Dispose();
+                            completion.TrySetException(
+                                new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.ShuttingDown,
+                                    "The Instance Spot activation queue stopped before admission."
+                                )
+                            );
+                        },
+                        state.ReleaseForRelocation,
+                        state.ReleaseForRelocation
                     );
-                },
-                state.ReleaseForRelocation,
-                state.ReleaseForRelocation
-            )
-        );
+                })
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            if (!admissionHandedOff)
+                operationAdmission.Lease.Dispose();
+            throw;
+        }
         // Once admitted, caller cancellation no longer removes the accepted
         // queue record or prevents terminal publication. A refused admission
         // has already completed the terminal with its failure.
@@ -1230,7 +1268,11 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
-        var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest: false);
+        var operationAdmission = (
+            await _runtime
+                .TryAdmitInboundOperationAsync(countAsRequest: false)
+                .ConfigureAwait(false)
+        ).EnterInbound();
         if (!operationAdmission.Accepted)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ShuttingDown,
@@ -1259,36 +1301,39 @@ internal abstract partial class ZLinkSpotActivation
         );
     }
 
-    private bool QueueApplicationSerialized(
+    private async ValueTask QueueApplicationSerializedAsync(
         Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
         bool countAsRequest,
         Action? onRejected = null
     )
     {
-        var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest);
+        var operationAdmission = (
+            await _runtime.TryAdmitInboundOperationAsync(countAsRequest).ConfigureAwait(false)
+        ).EnterInbound();
         if (!operationAdmission.Accepted)
         {
             onRejected?.Invoke();
             ReportUnobservedInboundAdmission("spot-inbound-admission", onRejected is null);
-            return false;
+            return;
         }
 
-        var admission = _serial.QueueWithAdmission(
-            async (activation, ct) =>
-            {
-                using (operationAdmission.Lease)
-                    await operation(activation, ct).ConfigureAwait(false);
-            },
-            () =>
-            {
-                operationAdmission.Lease.Dispose();
-                onRejected?.Invoke();
-            },
-            reportUnobservedAdmission: onRejected is null
-        );
+        var admission = await _serial
+            .QueueWithAdmissionAsync(
+                async (activation, ct) =>
+                {
+                    using (operationAdmission.Lease)
+                        await operation(activation, ct).ConfigureAwait(false);
+                },
+                () =>
+                {
+                    operationAdmission.Lease.Dispose();
+                    onRejected?.Invoke();
+                },
+                reportUnobservedAdmission: onRejected is null
+            )
+            .ConfigureAwait(false);
         if (admission != ZLinkSerialPostAdmission.Accepted)
             operationAdmission.Lease.Dispose();
-        return admission == ZLinkSerialPostAdmission.Accepted;
     }
 
     private bool QueueApplicationSerializedNext(
@@ -1374,13 +1419,12 @@ internal abstract partial class ZLinkSpotActivation
         int acceptedJournalLength,
         Func<ReadOnlyMemory<byte>> acceptedJournalFactory,
         bool previousOwnerMessageFollow,
-        bool countAsRequest,
+        ZLinkInboundOperationAdmission operationAdmission,
         Action<ZLinkAcceptedWorkAdmission> onRejected,
         Action onMoving,
         Action relocationRelease
     )
     {
-        var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest);
         if (!operationAdmission.Accepted)
         {
             onRejected(ZLinkAcceptedWorkAdmission.Closed);
@@ -1422,10 +1466,11 @@ internal abstract partial class ZLinkSpotActivation
         return false;
     }
 
-    private bool QueueApplicationRouteSerialized(ZLinkBackendRouteReceived received)
+    private bool QueueApplicationRouteSerialized(
+        ZLinkBackendRouteReceived received,
+        ZLinkInboundOperationAdmission operationAdmission
+    )
     {
-        if (RejectNonIntentClosing(received, received.InstanceIntent))
-            return true;
         var replyRouteId = 0UL;
         if (received.CanReply)
         {
@@ -1436,6 +1481,7 @@ internal abstract partial class ZLinkSpotActivation
                 || correlation != received.OperationId.Low
             )
             {
+                operationAdmission.Lease.Dispose();
                 received.Dispose();
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Rejected,
@@ -1454,6 +1500,7 @@ internal abstract partial class ZLinkSpotActivation
         }
         catch
         {
+            operationAdmission.Lease.Dispose();
             received.Dispose();
             throw;
         }
@@ -1482,7 +1529,7 @@ internal abstract partial class ZLinkSpotActivation
                 acceptedJournalLength,
                 acceptedJournalFactory,
                 received.MessageFollowHopCount != 0,
-                received.CanReply,
+                operationAdmission,
                 admission =>
                     ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
                         received,
@@ -1501,7 +1548,7 @@ internal abstract partial class ZLinkSpotActivation
             acceptedJournalLength,
             acceptedJournalFactory,
             received.MessageFollowHopCount != 0,
-            received.CanReply,
+            operationAdmission,
             admission =>
             {
                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
@@ -2256,7 +2303,7 @@ internal abstract partial class ZLinkSpotActivation
         var pending = TakePendingMessageFollowRoutes();
 
         foreach (var route in pending)
-            AdmitNativeRoute(route.Received);
+            AwaitStateLane(AdmitNativeRouteAsync(route.Received));
     }
 
     private void RejectPendingMessageFollowRoutes()
@@ -2563,7 +2610,11 @@ internal abstract partial class ZLinkSpotActivation
         if (_timers.IsFrozen)
             return false;
         var state = new TimerDispatchState(descriptor, tick);
-        var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest: false);
+        var operationAdmission = (
+            await _runtime
+                .TryAdmitInboundOperationAsync(countAsRequest: false)
+                .ConfigureAwait(false)
+        ).EnterInbound();
         if (!operationAdmission.Accepted)
         {
             // Host admission or the owner fence can close before this Spot

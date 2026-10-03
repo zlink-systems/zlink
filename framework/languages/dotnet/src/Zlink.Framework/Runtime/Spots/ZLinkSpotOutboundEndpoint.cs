@@ -50,7 +50,9 @@ internal sealed class ZLinkSpotOutboundEndpoint(
     )
     {
         activation.EnsureOperationAllowed();
-        using var operation = runtime.EnterOperation(countAsRequest: true);
+        using var operation = (
+            await runtime.AdmitOperationAsync(countAsRequest: true).ConfigureAwait(false)
+        ).Enter();
         var requestTimeout = timeout ?? activation.DefaultRequestTimeout;
         var metric = ZLinkRuntimeMetrics.StartRequest(activation.ChannelName, "channel");
         var outcome = ZLinkRuntimeMetrics.RequestCompleted;
@@ -98,7 +100,7 @@ internal sealed class ZLinkSpotOutboundEndpoint(
     )
     {
         activation.EnsureOperationAllowed();
-        using var operation = runtime.EnterOperation();
+        using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
         return await runtime
             .SendToChannelAsync(channelName, parts, cancellationToken, metadata)
             .ConfigureAwait(false);
@@ -145,7 +147,7 @@ internal sealed class ZLinkSpotOutboundEndpoint(
     )
     {
         activation.EnsureOperationAllowed();
-        using var operation = runtime.EnterOperation();
+        using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
         var backgroundOperation = runtime.RetainOperationForBackgroundWork();
         var released = 0;
 

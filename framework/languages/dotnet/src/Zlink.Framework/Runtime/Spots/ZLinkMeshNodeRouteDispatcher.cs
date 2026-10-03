@@ -460,10 +460,14 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 //  This dispatcher only invokes registered channel and node
                 //  route handlers. Neither is object work, so an expired owner
                 //  lease must not turn them away (spec 21 §4).
-                : _runtime.TryEnterInboundOperation(
-                    header.Kind == ZLinkMessageKind.Request,
-                    ownsObjectWork: false
-                );
+                : (
+                    await _runtime
+                        .TryAdmitInboundOperationAsync(
+                            header.Kind == ZLinkMessageKind.Request,
+                            ownsObjectWork: false
+                        )
+                        .ConfigureAwait(false)
+                ).EnterInbound();
             if (!admission.Accepted)
             {
                 //  With ownsObjectWork false the only refusal here is the drain
