@@ -183,6 +183,7 @@
         <Compile Include="Runtime/StreamSessionLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
+        <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>
         <Compile Include="Runtime/SessionJobQueueLoadTests.cs"/>
         <Compile Include="Runtime/TimerLifecycleTests.cs"/>
         <Compile Include="Runtime/SpotHandlerInvokerTests.cs"/>
