@@ -34,7 +34,6 @@ import systems.zlink.framework.spots.ZLinkSpotClosingContext;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -265,13 +264,6 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
         String spotId = "release-failure-" + suffix;
-        String sourceEndpoint;
-        String targetEndpoint;
-        try (ServerSocket sourcePort = new ServerSocket(0);
-                ServerSocket targetPort = new ServerSocket(0)) {
-            sourceEndpoint = "tcp://127.0.0.1:" + sourcePort.getLocalPort();
-            targetEndpoint = "tcp://127.0.0.1:" + targetPort.getLocalPort();
-        }
         var store =
                 new GatedDeleteStore(
                         new ZLinkInMemoryLocationStore(),
@@ -318,7 +310,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
         targetOptions
                 .addRouteMesh("game")
-                .listen(targetEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("release-failure-target-" + suffix))
                 .objects()
                 .server()
@@ -331,7 +323,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var sourceNode = sourceOptions.addRouteMesh("game");
         sourceNode
-                .listen(sourceEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("release-failure-source-" + suffix));
         sourceNode.objects().client();
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
@@ -683,13 +675,6 @@ final class InstanceSpotRuntimeIntegrationTest {
         SourceEntrySpot.afterCloseStart = new CompletableFuture<>();
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
         String spotId = "closing-verdict-" + suffix;
-        String targetEndpoint;
-        String sourceEndpoint;
-        try (ServerSocket targetPort = new ServerSocket(0);
-                ServerSocket sourcePort = new ServerSocket(0)) {
-            targetEndpoint = "tcp://127.0.0.1:" + targetPort.getLocalPort();
-            sourceEndpoint = "tcp://127.0.0.1:" + sourcePort.getLocalPort();
-        }
         var store = new ZLinkInMemoryLocationStore();
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
@@ -697,7 +682,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         targetOptions
                 .addRouteMesh("game")
-                .listen(targetEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("closing-verdict-target-" + suffix))
                 .objects()
                 .server()
@@ -711,7 +696,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var sourceNode = sourceOptions.addRouteMesh("game");
         sourceNode
-                .listen(sourceEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("closing-verdict-source-" + suffix));
         sourceNode.objects().client();
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
