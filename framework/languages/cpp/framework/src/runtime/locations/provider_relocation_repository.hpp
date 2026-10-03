@@ -2,6 +2,7 @@
 #pragma once
 
 #include <runtime/locations/location_repository.hpp>
+#include <runtime/execution/task_result.hpp>
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/detail/crc32c.hpp>
 
@@ -117,15 +118,15 @@ class provider_relocation_repository_t final : public relocation_repository_t
                                                      std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
-            return cancelled<relocation_read_result_t> ();
-        auto result = _store->read (blob_reference_t{std::move (reference)}).result ();
+            co_return co_await cancelled<relocation_read_result_t> ();
+        auto pending = _store->read (blob_reference_t{std::move (reference)});
+        auto result = co_await await_result (std::move (pending));
         if (!result)
-            return task_t<relocation_read_result_t> (
-              detail::propagate_failure<relocation_read_result_t> (result,
-                                                                   "relocation Store read failed"));
+            co_return detail::propagate_failure<relocation_read_result_t> (
+              result, "relocation Store read failed");
         if (const auto *found = std::get_if<blob_found_t> (&result.value ()))
-            return completed (relocation_read_result_t{relocation_found_t{found->bytes}});
-        return completed (relocation_read_result_t{relocation_missing_t{}});
+            co_return relocation_read_result_t{relocation_found_t{found->bytes}};
+        co_return relocation_read_result_t{relocation_missing_t{}};
     }
 
     task_t<relocation_renew_result_t> renew_relocation (std::string reference,
@@ -133,35 +134,34 @@ class provider_relocation_repository_t final : public relocation_repository_t
                                                         std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
-            return cancelled<relocation_renew_result_t> ();
+            co_return co_await cancelled<relocation_renew_result_t> ();
         if (retention <= std::chrono::hours::zero ())
-            return failed<relocation_renew_result_t> (framework_error_kind_t::protocol_error,
-                                                      "relocation retention must be positive");
-        auto result = _store
-                        ->renew (blob_reference_t{std::move (reference)},
-                                 std::chrono::duration_cast<std::chrono::milliseconds> (retention))
-                        .result ();
+            co_return co_await failed<relocation_renew_result_t> (
+              framework_error_kind_t::protocol_error, "relocation retention must be positive");
+        auto pending =
+          _store->renew (blob_reference_t{std::move (reference)},
+                         std::chrono::duration_cast<std::chrono::milliseconds> (retention));
+        auto result = co_await await_result (std::move (pending));
         if (!result)
-            return task_t<relocation_renew_result_t> (
-              detail::propagate_failure<relocation_renew_result_t> (
-                result, "relocation Store renew failed"));
+            co_return detail::propagate_failure<relocation_renew_result_t> (
+              result, "relocation Store renew failed");
         if (const auto *renewed = std::get_if<blob_renewed_t> (&result.value ()))
-            return completed (relocation_renew_result_t{
-              relocation_renewed_t{renewed->expires_at, renewed->store_now}});
-        return completed (relocation_renew_result_t{relocation_renew_missing_t{}});
+            co_return relocation_renew_result_t{
+              relocation_renewed_t{renewed->expires_at, renewed->store_now}};
+        co_return relocation_renew_result_t{relocation_renew_missing_t{}};
     }
 
     task_t<relocation_delete_result_t>
     delete_relocation (std::string reference, std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
-            return cancelled<relocation_delete_result_t> ();
-        auto result = _store->erase (blob_reference_t{std::move (reference)}).result ();
+            co_return co_await cancelled<relocation_delete_result_t> ();
+        auto pending = _store->erase (blob_reference_t{std::move (reference)});
+        auto result = co_await await_result (std::move (pending));
         if (!result)
-            return task_t<relocation_delete_result_t> (
-              detail::propagate_failure<relocation_delete_result_t> (
-                result, "relocation Store erase failed"));
-        return completed (relocation_delete_result_t::deleted);
+            co_return detail::propagate_failure<relocation_delete_result_t> (
+              result, "relocation Store erase failed");
+        co_return relocation_delete_result_t::deleted;
     }
 
   private:

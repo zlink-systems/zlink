@@ -162,6 +162,11 @@ namespace zlink::framework::detail
 
 task_scheduler_t capture_host_continuation_scheduler ()
 {
+    // Execution gate §13: a Store chain awaited by an infrastructure wait
+    // resumes on the thread that completes each Store step, not behind
+    // application handlers.
+    if (current_infrastructure_wait ())
+        return {};
     {
         std::lock_guard lock (runtime::executor_mutex ());
         if (runtime::executor_shutdown_requested () || runtime::executor_owner_count () == 0) {

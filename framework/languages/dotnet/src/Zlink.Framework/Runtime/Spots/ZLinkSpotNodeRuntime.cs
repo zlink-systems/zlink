@@ -4,6 +4,7 @@ using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Timers;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -981,11 +982,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     {
         return _monitoringSnapshots.MonitorStatus();
     }
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 
     internal IReadOnlyList<ZLinkInstanceSpotTypeSnapshot> GetInstanceSpotMonitoringSnapshots()
     {

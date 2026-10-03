@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -173,11 +174,6 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
         if (deactivate is not null)
             TryRunBackground(deactivate);
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private async ValueTask PauseBackgroundWorkCoreAsync(bool pauseActorOwnership)
     {

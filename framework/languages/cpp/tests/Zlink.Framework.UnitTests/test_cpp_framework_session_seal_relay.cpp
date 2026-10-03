@@ -341,16 +341,18 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
     source_state->routing_id = zlink::routing_id_t::from ("seal-wire-source");
     mesh_node_runtime_t source (source_state);
     source.configure_actor_route_resolver (
-      [&] (const actor_ref_t &) -> std::optional<zlink::framework::runtime::spot_address_t> {
-          return zlink::framework::runtime::spot_address_t{"seal-wire-mesh",
-                                                           target_rid,
-                                                           "entry",
-                                                           1,
-                                                           {},
-                                                           object->object_generation,
-                                                           object->authority_owner_generation,
-                                                           {"seal-wire-target-owner", 37},
-                                                           target_status.lifecycle_generation ()};
+      [&] (actor_ref_t)
+        -> zlink::framework::task_t<std::optional<zlink::framework::runtime::spot_address_t>> {
+          co_return zlink::framework::runtime::spot_address_t{
+            "seal-wire-mesh",
+            target_rid,
+            "entry",
+            1,
+            {},
+            object->object_generation,
+            object->authority_owner_generation,
+            {"seal-wire-target-owner", 37},
+            target_status.lifecycle_generation ()};
       });
     source.start ();
     source.connect_peer (target_rid, target_status.local_endpoint (),

@@ -2427,14 +2427,28 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
             )
         )
         {
-            var now = await inner.ReadAsync(
-                new ZLinkStoreKey("spot-close-clock"),
-                cancellationToken
+            ConflictPutsFor = null;
+            var put = request
+                .Mutations.OfType<ZLinkStoreMutation.Put>()
+                .Single(put =>
+                    put.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                    && put.Key.Value.EndsWith("\0" + conflict, StringComparison.Ordinal)
+                );
+            var current = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await inner.ReadAsync(put.Key, cancellationToken)
             );
-            return new ZLinkStoreWriteResult.Conflict(
-                now is ZLinkStoreReadResult.Missing missing
-                    ? missing.StoreNow
-                    : DateTimeOffset.UtcNow
+            var rewritten = Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                await inner.WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [],
+                        [new ZLinkStoreMutation.Put(put.Key, current.Value.Bytes, null)]
+                    ),
+                    cancellationToken
+                )
+            );
+            Assert.NotEqual(current.Value.Version, rewritten.PutVersions[put.Key]);
+            return Assert.IsType<ZLinkStoreWriteResult.Conflict>(
+                await inner.WriteAsync(request, cancellationToken)
             );
         }
         var written = await inner.WriteAsync(request, cancellationToken);

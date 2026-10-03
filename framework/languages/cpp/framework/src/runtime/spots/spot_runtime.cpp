@@ -16,6 +16,7 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/execution/task_result.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/live_location_reader.hpp"
@@ -871,7 +872,8 @@ void stamp_handoff_actor_route (std::map<std::string, std::string> &metadata,
 std::optional<std::string> actor_type_from_authority (runtime::live_location_reader_t &store,
                                                       std::string_view actor_id)
 {
-    const auto read = store.read_authority (runtime::actor_authority_key (actor_id)).result ();
+    const auto read = runtime::infrastructure_result (
+      [&] { return store.read_authority (runtime::actor_authority_key (actor_id)); });
     if (!read)
         return std::nullopt;
     const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
@@ -908,7 +910,8 @@ result_t<std::string> actor_type_from_authority (runtime::live_location_reader_t
                                                "remote Actor Join authority fence is incomplete");
     }
     try {
-        const auto read = store.read_authority (runtime::actor_authority_key (actor_id)).result ();
+        const auto read = runtime::infrastructure_result (
+          [&] { return store.read_authority (runtime::actor_authority_key (actor_id)); });
         if (!read) {
             return result_t<std::string>::failure (
               framework_error_kind_t::unavailable,
@@ -2005,13 +2008,13 @@ encode_spot_route_parts (runtime::messaging::message_kind_t kind,
     return envelope.encode_raw_body_parts (header, std::move (payload));
 }
 
-std::optional<std::uint64_t>
-resolve_target_spot_generation (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
-                                const zlink::routing_id_t &target_node_rid,
-                                const spot_id_t &target_spot_id)
+task_t<std::optional<std::uint64_t>>
+resolve_target_spot_generation (std::shared_ptr<detail::spot_node_builder_state_t> state,
+                                zlink::routing_id_t target_node_rid,
+                                spot_id_t target_spot_id)
 {
     if (!state) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
     runtime::spot_address_resolver_t *resolver = nullptr;
     std::string mesh_name;
@@ -2031,18 +2034,18 @@ resolve_target_spot_generation (const std::shared_ptr<detail::spot_node_builder_
     if (local_spot) {
         const auto generation = local_spot->status ().lifecycle_generation ();
         if (generation != 0) {
-            return generation;
+            co_return generation;
         }
     }
     if (!resolver) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
     const auto address =
-      resolver->resolve_spot_address (std::move (mesh_name), target_spot_id).result ().value ();
+      co_await resolver->resolve_spot_address (std::move (mesh_name), target_spot_id);
     if (!address || address->node_rid != target_node_rid || address->spot_generation == 0) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
-    return address->spot_generation;
+    co_return address->spot_generation;
 }
 
 std::exception_ptr
@@ -2141,44 +2144,39 @@ request_spot_parts_async (service::spot_handle_t egress,
 }
 
 task_t<runtime::messaging::message_parts_t>
-request_spot_mesh_parts (const std::shared_ptr<detail::spot_context_state_t> &state,
+request_spot_mesh_parts (std::shared_ptr<detail::spot_context_state_t> state,
                          node_rid_t node_rid,
                          spot_id_t spot_id,
                          runtime::messaging::message_parts_t parts,
                          std::chrono::milliseconds timeout)
 {
     if (!state) {
-        return task_t<runtime::messaging::message_parts_t> (
-          result_t<runtime::messaging::message_parts_t>::failure (
-            framework_error_kind_t::protocol_error, "SPOT context is not configured"));
+        co_return result_t<runtime::messaging::message_parts_t>::failure (
+          framework_error_kind_t::protocol_error, "SPOT context is not configured");
     }
     auto native = state->native_spot.lock ();
     if (!native) {
-        return task_t<runtime::messaging::message_parts_t> (
-          result_t<runtime::messaging::message_parts_t>::failure (
-            framework_error_kind_t::not_found, "SPOT mesh route requires a running native Spot"));
+        co_return result_t<runtime::messaging::message_parts_t>::failure (
+          framework_error_kind_t::not_found, "SPOT mesh route requires a running native Spot");
     }
     try {
         const auto target_node_rid = zlink::routing_id_t::from (std::string (node_rid.value ()));
         const auto target_generation =
-          resolve_target_spot_generation (state->node, target_node_rid, spot_id);
+          co_await resolve_target_spot_generation (state->node, target_node_rid, spot_id);
         if (!target_generation) {
-            return task_t<runtime::messaging::message_parts_t> (
-              result_t<runtime::messaging::message_parts_t>::failure (
-                framework_error_kind_t::not_found,
-                "SPOT mesh request target generation is unavailable"));
+            co_return result_t<runtime::messaging::message_parts_t>::failure (
+              framework_error_kind_t::not_found,
+              "SPOT mesh request target generation is unavailable");
         }
-        return request_spot_parts_async (*native, target_node_rid, spot_id, *target_generation,
-                                         std::move (parts), timeout);
+        co_return co_await request_spot_parts_async (
+          *native, target_node_rid, spot_id, *target_generation, std::move (parts), timeout);
     }
     catch (const framework_exception_t &error) {
-        return task_t<runtime::messaging::message_parts_t> (
-          detail::result_access_t::failure<runtime::messaging::message_parts_t> (error));
+        co_return detail::result_access_t::failure<runtime::messaging::message_parts_t> (error);
     }
     catch (const std::exception &error) {
-        return task_t<runtime::messaging::message_parts_t> (
-          result_t<runtime::messaging::message_parts_t>::failure (
-            framework_error_kind_t::internal_failure, error.what ()));
+        co_return result_t<runtime::messaging::message_parts_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ());
     }
 }
 
@@ -2470,14 +2468,13 @@ void spot_context_state_t::close_now (service::spot_close_begin_t begin,
       owner->lane
         .run ([this, &owner, &done] {
             close_start_t result;
-            if (close_reservation != 0) {
-                // Idle cleanup sealed the activation first.
-                if (close_reservation_kind == close_reservation_kind_t::idle)
-                    return result;
-                merged_close_results.push_back (done);
+            if (merge_into_running_close_core (done)) {
                 result.path = close_path_t::merged;
                 return result;
             }
+            // Idle cleanup sealed the activation first.
+            if (close_reservation != 0)
+                return result;
             if (closed) {
                 result.path = close_path_t::failed;
                 return result;
@@ -2518,34 +2515,35 @@ void spot_context_state_t::close_now (service::spot_close_begin_t begin,
     if (start.path == close_path_t::merged)
         return;
 
-    // Every Close request merged into this one receives the same result.
-    auto settle = [self = shared_from_this (), owner, done] (result_t<bool> result) {
-        auto merged =
-          owner->lane.run ([&] { return std::exchange (self->merged_close_results, {}); }).get ();
+    // The Close ends its reservation in the same lane turn that takes the
+    // merged requests, so every merged request receives this result.
+    const auto token = start.token;
+    auto settle = [self = shared_from_this (), owner, done, token] (result_t<bool> result) {
+        auto merged = owner->lane
+                        .run ([&] {
+                            self->clear_close_reservation_core (token);
+                            return std::exchange (self->merged_close_results, {});
+                        })
+                        .get ();
         done (result);
         for (auto &waiter : merged)
             waiter (result);
-    };
-    const auto token = start.token;
-    auto abandon = [self = shared_from_this (), owner, token, settle] (result_t<bool> result) {
-        owner->lane.run ([&] { self->clear_close_reservation_core (token); }).get ();
-        settle (std::move (result));
     };
     service::after_close_step (
       run_close_step<service::spot_close_commit_t> (
         begin ? std::move (begin) : start.authority_begin, resume),
       resume,
-      [self = shared_from_this (), owner, token, settle, abandon,
+      [self = shared_from_this (), owner, token, settle,
        resume] (result_t<service::spot_close_commit_t> commit) mutable {
           if (!commit) {
-              abandon (result_t<bool>::failure (commit.error_kind (),
-                                                commit.error () ? commit.error ()->what ()
-                                                                : "Spot Close step 1 failed"));
+              settle (result_t<bool>::failure (commit.error_kind (),
+                                               commit.error () ? commit.error ()->what ()
+                                                               : "Spot Close step 1 failed"));
               return;
           }
           if (!commit.value ().release) {
               // Step 1 ended the Close and left the authority unchanged.
-              abandon (std::move (commit.value ().result));
+              settle (std::move (commit.value ().result));
               return;
           }
           self->run_local_close_steps (owner, token, std::move (commit.value ().release),
@@ -4197,8 +4195,8 @@ send_call_t spot_context_t::send_to_erased (node_rid_t node_rid,
               const auto target_node_rid =
                 zlink::routing_id_t::from (std::string (node_rid.value ()));
               const auto target_spot_id = spot_id;
-              const auto target_generation =
-                resolve_target_spot_generation (state->node, target_node_rid, target_spot_id);
+              const auto target_generation = co_await resolve_target_spot_generation (
+                state->node, target_node_rid, target_spot_id);
               if (!target_generation) {
                   throw framework_exception_t (framework_error_kind_t::not_found,
                                                "SPOT mesh send target generation is unavailable");
@@ -13301,27 +13299,45 @@ void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
     service::run_authority_close (std::move (begin), std::move (done), {});
 }
 
-bool spot_node_runtime_t::close_all_user_spots ()
+bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_point deadline_at)
 {
     std::vector<spot_id_t> user_spots;
+    std::vector<task_t<bool>> running_closes;
     _state->lane
       .run ([&] {
           user_spots.reserve (_state->spot_contexts_by_id.size ());
           for (const auto &[rid, context] : _state->spot_contexts_by_id) {
-              if (!context._state || context._state->closed
-                  || context._state->native_spot.expired ()) {
+              if (!context._state || context._state->is_entry_spot ())
+                  continue;
+              // A Close already running releases its authority before the
+              // owner cleanup (Host relocation §14). Shutdown waits for it.
+              auto running = std::make_shared<task_completion_source_t<bool>> ();
+              if (context._state->merge_into_running_close_core ([running] (result_t<bool> result) {
+                      running->complete (std::move (result));
+                  })) {
+                  running_closes.push_back (running->task ());
                   continue;
               }
-              if (context._state->is_entry_spot ()) {
+              if (context._state->closed || context._state->native_spot.expired ())
                   continue;
-              }
               user_spots.push_back (spot_id_t (rid));
           }
       })
       .get ();
+    const auto wait_for_close = [deadline_at] (const task_t<bool> &closing) {
+        const auto remaining = std::max (std::chrono::milliseconds::zero (),
+                                         std::chrono::ceil<std::chrono::milliseconds> (
+                                           deadline_at - std::chrono::steady_clock::now ()));
+        const auto result = closing.result_for (remaining);
+        return result && *result && result->value ();
+    };
+    for (const auto &closing : running_closes) {
+        if (!wait_for_close (closing))
+            return false;
+    }
     for (auto &spot_id : user_spots) {
         try {
-            if (!close_spot (std::move (spot_id)).result ().value ())
+            if (!wait_for_close (close_spot (std::move (spot_id))))
                 return false;
         }
         catch (...) {
@@ -13391,10 +13407,10 @@ std::optional<spot_route_t> spot_node_runtime_t::resolve_spot (spot_id_t spot_id
         }
     }
     if (plan.location_resolver) {
-        const auto address =
-          plan.location_resolver->resolve_spot_address (std::move (plan.mesh_name), spot_id)
-            .result ()
-            .value ();
+        const auto address = runtime::infrastructure_result ([&] {
+                                 return plan.location_resolver->resolve_spot_address (
+                                   std::move (plan.mesh_name), spot_id);
+                             }).value ();
         if (address) {
             return spot_route_t{node_rid_t::from_string (address->node_rid.to_string ()),
                                 spot_id_t (address->spot_id),
@@ -14074,7 +14090,7 @@ spot_node_runtime_t::send_spot_mesh_parts (const zlink::routing_id_t &target_nod
         }
         auto egress = node->entry_spot ();
         const auto target_generation =
-          resolve_target_spot_generation (_state, target_node_rid, target_spot_id);
+          co_await resolve_target_spot_generation (_state, target_node_rid, target_spot_id);
         if (!target_generation) {
             throw framework_exception_t (framework_error_kind_t::not_found,
                                          "SPOT mesh send target generation is unavailable");
@@ -14147,7 +14163,7 @@ spot_node_runtime_t::send_actor_leave_notification (const zlink::routing_id_t &t
     co_return co_await sender (target_node_rid, std::move (native_parts));
 }
 
-std::optional<std::uint64_t>
+task_t<std::optional<std::uint64_t>>
 spot_node_runtime_t::resolve_spot_generation (const zlink::routing_id_t &target_node_rid,
                                               const spot_id_t &target_spot_id) const
 {
@@ -14186,8 +14202,8 @@ result_t<std::uint64_t> spot_node_runtime_t::resolve_wire_actor_join_target (
         // store_location_resolvers_t may return a valid-but-stale cache
         // projection, which is suitable for routing but cannot authorize a
         // canonical actorJoin target.
-        const auto read =
-          store->read_authority (runtime::spot_authority_key (fence.spot_id)).result ();
+        const auto read = runtime::infrastructure_result (
+          [&] { return store->read_authority (runtime::spot_authority_key (fence.spot_id)); });
         if (!read) {
             return result_t<std::uint64_t>::failure (
               framework_error_kind_t::unavailable,

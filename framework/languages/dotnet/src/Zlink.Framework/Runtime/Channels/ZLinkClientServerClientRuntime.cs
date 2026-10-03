@@ -3,6 +3,7 @@ using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -708,11 +709,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private T RunState<T>(Func<T> work) => AwaitStateLane(_lane.RunAsync(work));
 
     private void RunState(Action work) => AwaitStateLane(_lane.RunAsync(work));
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private async ValueTask<ReadyWaitResult> WaitForReadyAsync(
         TimeSpan timeout,
@@ -1780,12 +1776,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private T RunState<T>(Func<T> work) => AwaitStateLane(_lane.RunAsync(work));
 
         private void RunState(Action work) => AwaitStateLane(_lane.RunAsync(work));
-
-        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-            operation.GetAwaiter().GetResult();
-
-        private static void AwaitStateLane(ValueTask operation) =>
-            operation.GetAwaiter().GetResult();
 
         private static string IdentityOf(RoutingId serverRid, ulong lifecycleGeneration) =>
             $"{serverRid.ToHex()}:{lifecycleGeneration}";

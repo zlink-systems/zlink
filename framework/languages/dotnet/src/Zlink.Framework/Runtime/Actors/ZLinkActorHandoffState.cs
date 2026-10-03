@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Actors;
 
@@ -2369,11 +2370,6 @@ internal sealed class ZLinkActorHandoffState(
         //  replaces.
         SetPendingShutdownToken(null);
     }
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 }
 
 internal readonly record struct ZLinkActorMessageFollowRoute(
@@ -2474,11 +2470,6 @@ internal sealed class ZLinkActorMessageFollowLease(TimeProvider timeProvider)
     private bool IsCommittedCore() =>
         _phase == ZLinkActorMessageFollowLeasePhase.Committed
         && timeProvider.GetElapsedTime(_committedAt) < _duration;
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 }
 
 internal enum ZLinkActorMessageFollowLeasePhase

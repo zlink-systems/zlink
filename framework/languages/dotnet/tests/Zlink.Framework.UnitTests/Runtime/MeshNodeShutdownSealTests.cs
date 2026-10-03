@@ -78,7 +78,14 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             var leftEndpoint = left.Status().LocalEndpoint;
             var rightEndpoint = right.Status().LocalEndpoint;
             Assert.NotEqual(leftEndpoint, rightEndpoint);
+            // Core keeps the pipe started by the smaller RID (left) and, when
+            // the other pipe was selected first, hands the RID over to it with
+            // a new route generation, which ends that admission (Core socket
+            // README routing ID duplicate policy, ROUTER §10.1; transport
+            // liveness §5). Left's Hello is queued once left selected its own
+            // pipe, so the reverse pipe is created after the kept one.
             left.ConnectPeer(rightEndpoint, rightRid);
+            await scheduler.Queued.WaitAsync(TimeSpan.FromSeconds(5));
             right.ConnectPeer(leftEndpoint, leftRid);
         }
         finally

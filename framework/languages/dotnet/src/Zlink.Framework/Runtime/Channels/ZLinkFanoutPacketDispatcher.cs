@@ -80,7 +80,11 @@ internal sealed class ZLinkFanoutPacketDispatcher
             )
             //  Delivering a fanout record to its handler changes nothing in the
             //  Location Store, so it is not object work (spec 21 §4).
-            : _runtime.TryEnterInboundOperation(countAsRequest: false, ownsObjectWork: false);
+            : (
+                await _runtime
+                    .TryAdmitInboundOperationAsync(countAsRequest: false, ownsObjectWork: false)
+                    .ConfigureAwait(false)
+            ).EnterInbound();
         if (!admission.Accepted)
             return;
         using (admission.Lease)

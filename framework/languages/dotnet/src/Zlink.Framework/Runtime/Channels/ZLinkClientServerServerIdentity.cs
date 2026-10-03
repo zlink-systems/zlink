@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -271,9 +272,6 @@ internal sealed class ZLinkClientServerServerIdentity(
         _nextProbeId = result == long.MaxValue ? 1 : result + 1;
         return result;
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 
     private static async ValueTask SendOwnedAsync(
         IRouterSocket router,

@@ -1,6 +1,7 @@
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Spots;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -275,9 +276,6 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
             );
         });
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 
     private static bool MatchesReadySpot(
         ZLinkAuthoritySnapshot snapshot,

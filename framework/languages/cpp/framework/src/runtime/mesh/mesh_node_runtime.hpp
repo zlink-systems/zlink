@@ -189,12 +189,11 @@ class mesh_node_runtime_t
                                          host::user_spot_closer_t closer = {});
     void configure_spot_route_fence_resolver (
       host::spot_route_fence_resolver_t resolver,
-      std::chrono::milliseconds route_cache_max_age,
       std::chrono::milliseconds owner_lease_fencing_margin = std::chrono::seconds (5),
       std::chrono::milliseconds session_relocation_seal_timeout =
         location_options_t{}.session_relocation_seal_timeout);
     void configure_actor_route_resolver (
-      std::function<std::optional<runtime::spot_address_t> (const actor_ref_t &)> resolver,
+      std::function<task_t<std::optional<runtime::spot_address_t>> (actor_ref_t)> resolver,
       std::function<void (const runtime::protocol::actor_route_fence_t &)> invalidator = {});
     void configure_actor_create_operations (host::actor_create_operation_target_t target);
     void configure_instance_spot_operations (
@@ -416,11 +415,10 @@ class mesh_node_runtime_t
     task_t<void> retire_application_actor_session (runtime::stateful::stream_binding_t binding,
                                                    zlink::routing_id_t session_rid,
                                                    std::chrono::milliseconds timeout);
-    std::optional<runtime::spot_address_t>
-    resolve_application_actor_route (const actor_ref_t &actor) const;
-    std::optional<runtime::spot_address_t>
-    refresh_application_actor_route (const actor_ref_t &actor,
-                                     const runtime::spot_address_t &stale_route) const;
+    task_t<std::optional<runtime::spot_address_t>>
+    resolve_application_actor_route (actor_ref_t actor) const;
+    task_t<std::optional<runtime::spot_address_t>>
+    refresh_application_actor_route (actor_ref_t actor, runtime::spot_address_t stale_route) const;
     task_t<std::optional<runtime::spot_address_t>>
     wait_for_application_actor_route_change (const actor_ref_t &actor,
                                              const runtime::spot_address_t &stale_route,
@@ -607,7 +605,7 @@ class mesh_node_runtime_t
                                       const std::vector<zlink::message_t> &parts,
                                       const actor_ref_t &actor,
                                       const std::shared_ptr<mesh_node_builder_state_t> &state);
-    std::optional<zlink::submit_result_t>
+    task_t<std::optional<zlink::submit_result_t>>
     classify_node_direct_target (const zlink::routing_id_t &target) const;
     std::shared_ptr<mesh_node_builder_state_t> _state;
     serializer_registry_t *_serializers = nullptr;
@@ -615,10 +613,9 @@ class mesh_node_runtime_t
     host::user_spot_materializer_t _user_spot_materializer;
     host::user_spot_closer_t _user_spot_closer;
     host::spot_route_fence_resolver_t _spot_route_fence_resolver;
-    std::function<std::optional<runtime::spot_address_t> (const actor_ref_t &)>
+    std::function<task_t<std::optional<runtime::spot_address_t>> (actor_ref_t)>
       _actor_route_resolver;
     std::function<void (const runtime::protocol::actor_route_fence_t &)> _actor_route_invalidator;
-    std::chrono::milliseconds _route_cache_max_age{15'000};
     std::chrono::milliseconds _owner_lease_fencing_margin{5'000};
     std::chrono::milliseconds _session_relocation_seal_timeout =
       location_options_t{}.session_relocation_seal_timeout;

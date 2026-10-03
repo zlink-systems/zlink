@@ -1,5 +1,6 @@
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Spots;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Host;
 

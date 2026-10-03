@@ -356,7 +356,14 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         ZLinkDrainResult result;
         try
         {
-            using var deadlineSource = new CancellationTokenSource(deadline);
+            var shutdownToken =
+                intent == ZLinkFrameworkLifecycleIntent.Shutdown
+                    ? ShutdownCancellationToken
+                    : CancellationToken.None;
+            using var deadlineSource = shutdownToken.CanBeCanceled
+                ? null
+                : new CancellationTokenSource(deadline);
+            var deadlineToken = shutdownToken.CanBeCanceled ? shutdownToken : deadlineSource!.Token;
             TaskCompletionSource? detached = null;
             Action? observedRelocationDetached = relocationDetached;
             if (intent == ZLinkFrameworkLifecycleIntent.Relocate)
@@ -380,7 +387,7 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
                     intent,
                     deadline,
                     observedRelocationDetached,
-                    deadlineSource.Token
+                    deadlineToken
                 )
                 .AsTask();
             if (detached is not null)

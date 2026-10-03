@@ -61,9 +61,11 @@ function Wait-Port {
 function Wait-LogCount {
     param([string[]]$Paths, [string]$Evidence, [int]$Expected)
     for ($attempt = 0; $attempt -lt $LogWaitAttempts; $attempt++) {
-        $count = @(
-            Select-String -Path $Paths -Pattern $Evidence -SimpleMatch -ErrorAction SilentlyContinue
-        ).Count
+        $existingPaths = @($Paths | Where-Object { Test-Path -LiteralPath $_ })
+        $count = 0
+        if ($existingPaths.Count -gt 0) {
+            $count = @(Select-String -LiteralPath $existingPaths -Pattern $Evidence -SimpleMatch).Count
+        }
         if ($count -eq $Expected) {
             return
         }

@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -133,7 +134,4 @@ internal sealed class ZLinkBoundSessionDispatchScope : IAsyncDisposable
                 "Bound-session deferred operation order changed while draining."
             );
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 }

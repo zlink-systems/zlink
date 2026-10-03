@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
@@ -84,11 +85,6 @@ internal sealed class ZLinkMessageFollowSuppressionRegistry
     internal void Expire(ZLinkMessageFollowFence fence) => AwaitStateLane(ExpireAsync(fence));
 
     internal void ExpireAll() => AwaitStateLane(ExpireAllAsync());
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 
     private enum MarkerState : byte
     {

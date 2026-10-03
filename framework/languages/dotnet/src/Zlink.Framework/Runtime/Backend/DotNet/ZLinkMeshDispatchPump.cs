@@ -6,6 +6,7 @@ using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Messaging;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet;
 
@@ -269,7 +270,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     pending.RemoveAt(index);
                 }
                 await _signal.WaitAsync(cancellationToken).ConfigureAwait(false);
-                DrainResidue(readyBatch, receiveBatch, pending, cancellationToken);
+                await DrainResidueAsync(readyBatch, receiveBatch, pending, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -317,7 +319,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         ObserveDispatchResult(result.Completion, pending);
     }
 
-    private void DrainResidue(
+    private async ValueTask DrainResidueAsync(
         MeshReadyBatch readyBatch,
         MeshReceiveBatch receiveBatch,
         List<Task> pending,
@@ -339,7 +341,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 // by default, which would park this pump thread inside one claim
                 // and starve every other owner. The signal semaphore provides the
                 // wakeups; the pump itself must never wait inside the native API.
-                residue = _node.DrainReady(domains, readyBatch, RecvFlags.DontWait);
+                residue = await _node
+                    .DrainReadyAsync(domains, readyBatch, RecvFlags.DontWait)
+                    .ConfigureAwait(false);
             }
             catch (ObjectDisposedException)
             {
@@ -353,7 +357,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             if (residue)
                 SignalReady(domains);
             for (var i = 0; i < readyBatch.Count; i++)
-                DrainClaim(readyBatch, i, receiveBatch, pending, cancellationToken);
+                await DrainClaimAsync(readyBatch, i, receiveBatch, pending, cancellationToken)
+                    .ConfigureAwait(false);
 
             // Even a claim that could not obtain admission must be released
             // before this worker sleeps: its permit wake may go to another worker.
@@ -365,7 +370,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         }
     }
 
-    private void DrainClaim(
+    private async ValueTask DrainClaimAsync(
         MeshReadyBatch readyBatch,
         int index,
         MeshReceiveBatch receiveBatch,
@@ -389,7 +394,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             && _applicationJobQueue is not null
         )
         {
-            var first = TryTakeApplicationAdmission(cancellationToken);
+            var first = await TryTakeApplicationAdmissionAsync(cancellationToken)
+                .ConfigureAwait(false);
             if (first is null)
                 return;
             var admissionBudget = Math.Min(
@@ -399,7 +405,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             admissions = new ZLinkApplicationJobQueueLease?[admissionBudget];
             admissions[0] = first;
             admissionCount =
-                1 + _applicationJobQueue.TryAcquireBatch(admissions, 1, admissionBudget - 1);
+                1
+                + await _applicationJobQueue
+                    .TryAcquireBatchAsync(admissions, 1, admissionBudget - 1)
+                    .ConfigureAwait(false);
         }
         var ownerSpotId = readyRecord.SpotId;
         if (
@@ -437,7 +446,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 admissionCount == 0 ? ZLinkReceiveBatchBudget.MaximumRecords : admissionCount;
             receiveBatch.MaximumBytes = ZLinkReceiveBatchBudget.MaximumBytes;
             receiveBatch.StartedAt = Stopwatch.GetTimestamp();
-            if (!claim.Receive(receiveBatch, RecvFlags.DontWait))
+            if (!await claim.ReceiveAsync(receiveBatch, RecvFlags.DontWait).ConfigureAwait(false))
                 return;
 
             var count = receiveBatch.Count;
@@ -545,7 +554,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     internal static bool RequiresApplicationAdmission(MeshRecordKind recordKind) =>
         recordKind is not MeshRecordKind.Completion and not MeshRecordKind.SendReady;
 
-    private ZLinkApplicationJobQueueLease? TryTakeApplicationAdmission(
+    private async ValueTask<ZLinkApplicationJobQueueLease?> TryTakeApplicationAdmissionAsync(
         CancellationToken cancellationToken
     )
     {
@@ -556,7 +565,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             return reserved;
         }
         var queue = _applicationJobQueue;
-        if (queue is not null && queue.TryAcquire(out var immediate))
+        if (
+            queue is not null
+            && await queue.TryAcquireAsync().ConfigureAwait(false) is { } immediate
+        )
             return immediate;
         if (
             queue is not null
@@ -982,11 +994,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         _disposed = true;
         return (_stop, _loop);
     }
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 
     // Per-spot decoded-record queues plus the registered dispatch-event handler.
     internal sealed class SpotDispatchState

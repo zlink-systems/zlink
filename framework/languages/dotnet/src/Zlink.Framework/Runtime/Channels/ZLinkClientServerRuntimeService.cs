@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Locations;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -409,7 +410,4 @@ internal sealed class ZLinkClientServerRuntimeService(
             ZLinkFrameworkRuntimeState.Error => ZLinkTopologyState.Failed,
             _ => runtimeStarted ? ZLinkTopologyState.Degraded : ZLinkTopologyState.Starting,
         };
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 }

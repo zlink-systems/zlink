@@ -15,6 +15,7 @@ thread_local std::shared_ptr<serial_turn_t> current_serial_turn_handle;
 thread_local std::optional<serial_resume_failure_t> current_serial_resume_failure;
 thread_local const void *current_application_job = nullptr;
 thread_local std::stop_token current_wait_owner_token;
+thread_local bool current_infrastructure_wait_flag = false;
 std::atomic<const ambient_context_hooks_t *> ambient_context_hooks{nullptr};
 std::atomic<const runtime_execution_hooks_t *> runtime_execution_hooks{nullptr};
 }
@@ -32,6 +33,15 @@ std::stop_token current_wait_owner ()
 std::stop_token exchange_wait_owner (std::stop_token token)
 {
     return std::exchange (current_wait_owner_token, std::move (token));
+}
+
+bool current_infrastructure_wait () noexcept
+{
+    return current_infrastructure_wait_flag;
+}
+bool exchange_infrastructure_wait (bool value) noexcept
+{
+    return std::exchange (current_infrastructure_wait_flag, value);
 }
 
 void ensure_blocking_submit_allowed ()

@@ -72,10 +72,12 @@ class location_runtime_t
     struct heartbeat_attempt_t
     {
         explicit heartbeat_attempt_t (location_runtime_t *runtime,
+                                      std::chrono::steady_clock::time_point started,
                                       std::chrono::steady_clock::time_point deadline,
                                       std::weak_ptr<heartbeat_owner_t> owner,
                                       std::stop_token cancellation = {}) :
             runtime (runtime),
+            started_at (started),
             deadline_at (deadline),
             heartbeat (std::move (owner)),
             cancellation (cancellation)
@@ -83,6 +85,7 @@ class location_runtime_t
         }
 
         location_runtime_t *runtime;
+        std::chrono::steady_clock::time_point started_at;
         std::chrono::steady_clock::time_point deadline_at;
         std::weak_ptr<heartbeat_owner_t> heartbeat;
         std::stop_token cancellation;
@@ -269,11 +272,12 @@ class location_runtime_t
       std::optional<std::chrono::steady_clock::time_point> requested_deadline_at = std::nullopt,
       std::stop_token cancellation = {})
     {
-        const auto deadline_at = requested_deadline_at.value_or (
-          std::chrono::steady_clock::now () + _options.owner_lease_renew_timeout);
+        const auto started_at = std::chrono::steady_clock::now ();
+        const auto deadline_at =
+          requested_deadline_at.value_or (started_at + _options.owner_lease_renew_timeout);
         auto heartbeat = std::make_shared<heartbeat_owner_t> ();
-        auto attempt =
-          std::make_shared<heartbeat_attempt_t> (this, deadline_at, heartbeat, cancellation);
+        auto attempt = std::make_shared<heartbeat_attempt_t> (this, started_at, deadline_at,
+                                                              heartbeat, cancellation);
         auto pending = heartbeat_renew_once_async (attempt);
         auto completed =
           detail::observe_task_result_for (pending, remaining_until (deadline_at), cancellation);
@@ -471,29 +475,15 @@ class location_runtime_t
         auto *runtime = attempt->runtime;
         runtime_metrics_t metrics (runtime->_monitoring);
         const auto metrics_enabled = metrics.enabled ();
-        const auto started_at = std::chrono::steady_clock::now ();
+        const auto started_at = attempt->started_at;
         std::optional<std::string> unexpected_failure;
         try {
-            const auto snapshot =
-              co_await lease_lane (attempt, [runtime, started_at, metrics_enabled] {
-                  const auto due_at =
-                    metrics_enabled && runtime->_last_renew_started_at
-                      ? std::optional{*runtime->_last_renew_started_at
-                                      + runtime->_options.owner_lease_renew_interval}
-                      : std::optional<std::chrono::steady_clock::time_point>{};
-                  if (metrics_enabled)
-                      runtime->_last_renew_started_at = started_at;
-                  return std::pair{runtime->_owner_token, due_at};
-              });
-            if (snapshot.second && started_at > *snapshot.second) {
-                metrics.histogram (
-                  "zlink.location.owner_lease.renew.lateness", "s",
-                  std::chrono::duration<double> (started_at - *snapshot.second).count ());
-            }
+            const auto owner_token =
+              co_await lease_lane (attempt, [runtime] { return runtime->_owner_token; });
             if (auto heartbeat = attempt->heartbeat.lock ();
                 heartbeat && heartbeat->stop.load (std::memory_order_acquire))
                 co_return outcome;
-            if (snapshot.first) {
+            if (owner_token) {
                 std::string failure = "owner lease renewal timed out";
                 std::optional<owner_lease_renew_result_t> result;
                 try {
@@ -503,7 +493,7 @@ class location_runtime_t
                         co_return outcome;
                     }
                     auto response = co_await await_heartbeat_store (
-                      runtime->_store->renew_owner_lease (*snapshot.first,
+                      runtime->_store->renew_owner_lease (*owner_token,
                                                           runtime->_options.owner_lease_ttl),
                       attempt);
                     if (response)
@@ -530,9 +520,8 @@ class location_runtime_t
                                       << " ttlMs=" << runtime->_options.owner_lease_ttl.count ()
                                       << '\n';
                         }
-                        co_await heartbeat_accept (attempt, *snapshot.first,
-                                                   renewed->lease_expires_at, renewed->store_now,
-                                                   started_at);
+                        co_await heartbeat_accept (attempt, *owner_token, renewed->lease_expires_at,
+                                                   renewed->store_now, started_at);
                         outcome.result = *renewed;
                         co_return outcome;
                     }
@@ -543,8 +532,8 @@ class location_runtime_t
                     });
                 } else {
                     auto confirmed = co_await heartbeat_confirm (attempt, failure);
-                    if (confirmed && confirmed->token.owner_id == snapshot.first->owner_id
-                        && confirmed->token.lease_generation == snapshot.first->lease_generation) {
+                    if (confirmed && confirmed->token.owner_id == owner_token->owner_id
+                        && confirmed->token.lease_generation == owner_token->lease_generation) {
                         co_await heartbeat_accept (attempt, confirmed->token,
                                                    confirmed->lease_expires_at,
                                                    confirmed->store_now, started_at);
@@ -732,19 +721,11 @@ class location_runtime_t
     void heartbeat_loop (std::shared_ptr<heartbeat_owner_t> heartbeat)
     {
         constexpr auto *wait_site = "location/heartbeat-input";
+        auto scheduled_at = std::chrono::steady_clock::now () + _options.owner_lease_renew_interval;
         while (!heartbeat->stop.load (std::memory_order_acquire)) {
             std::unique_lock lock (heartbeat->gate);
-            if (!heartbeat->current) {
-                runtime::infrastructure_wait_guard::condition_wait_for (
-                  heartbeat->wake, lock, _options.owner_lease_renew_interval,
-                  [&] { return heartbeat->stop.load (std::memory_order_acquire); }, wait_site,
-                  runtime::infrastructure_wait_guard::wait_relation_t::own_input);
-                if (heartbeat->stop.load (std::memory_order_acquire))
-                    break;
-            } else if (heartbeat->current->task && heartbeat->current->task->await_ready ()) {
-                const auto scheduled_at = heartbeat->current->deadline_at
-                                          - _options.owner_lease_renew_timeout
-                                          + _options.owner_lease_renew_interval;
+            if (!heartbeat->current
+                || (heartbeat->current->task && heartbeat->current->task->await_ready ())) {
                 runtime::infrastructure_wait_guard::condition_wait_for (
                   heartbeat->wake, lock, remaining_until (scheduled_at),
                   [&] { return heartbeat->stop.load (std::memory_order_acquire); }, wait_site,
@@ -779,11 +760,17 @@ class location_runtime_t
                   wait_site, runtime::infrastructure_wait_guard::wait_relation_t::own_input);
                 continue;
             }
+            const auto started_at = std::chrono::steady_clock::now ();
+            const auto lateness = started_at - scheduled_at;
+            scheduled_at = started_at + _options.owner_lease_renew_interval;
             auto attempt = std::make_shared<heartbeat_attempt_t> (
-              this, std::chrono::steady_clock::now () + _options.owner_lease_renew_timeout,
-              heartbeat);
+              this, started_at, started_at + _options.owner_lease_renew_timeout, heartbeat);
             heartbeat->current = attempt;
             lock.unlock ();
+            if (const runtime_metrics_t metrics (_monitoring);
+                metrics.enabled () && lateness > lateness.zero ())
+                metrics.histogram ("zlink.location.owner_lease.renew.lateness", "s",
+                                   std::chrono::duration<double> (lateness).count ());
             attempt->task.emplace (heartbeat_renew_once_async (attempt));
             detail::observe_task_terminal (*attempt->task,
                                            [weak_heartbeat = std::weak_ptr{heartbeat}] (
@@ -811,7 +798,6 @@ class location_runtime_t
     std::string _owner_id;
     std::atomic_bool _draining = false;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
-    std::optional<std::chrono::steady_clock::time_point> _last_renew_started_at;
     std::atomic_bool _started = false;
     std::thread _heartbeat;
     std::shared_ptr<heartbeat_owner_t> _heartbeat_state;

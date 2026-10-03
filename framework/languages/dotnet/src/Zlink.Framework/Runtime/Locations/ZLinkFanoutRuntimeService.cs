@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -240,11 +241,6 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
         _hostLifecycle.Changed -= OnHostStateChanged;
         AwaitStateLane(_lane.RunAsync(_observers.Clear));
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private static ZLinkChannelName Channel(string channelName) =>
         ZLinkChannelName.FromBoundary(channelName, nameof(channelName));

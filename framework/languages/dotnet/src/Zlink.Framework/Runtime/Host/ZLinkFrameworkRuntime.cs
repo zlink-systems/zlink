@@ -4,6 +4,7 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Host;
 
@@ -853,12 +854,18 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         }
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    // Blocking compatibility surface. A framework execution context uses
+    // AdmitOperationAsync and enters the admission in its own frame.
+    internal ZLinkRuntimeOperationLease EnterOperation(bool countAsRequest = false) =>
+        AwaitStateLane(AdmitOperationAsync(countAsRequest)).Enter();
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    internal ZLinkRuntimeOperationLease EnterOperation(bool countAsRequest = false)
+    /// <summary>
+    /// Decides operation admission on the runtime state lane. The caller enters the result in
+    /// its own frame: an async method cannot publish the ambient lease to its caller.
+    /// </summary>
+    internal ValueTask<ZLinkRuntimeOperationAdmission> AdmitOperationAsync(
+        bool countAsRequest = false
+    )
     {
         if (
             AmbientOperation.Value is { IsActive: true } current
@@ -866,20 +873,54 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         )
         {
             EnsureAmbientOperationCurrent(current);
-            if (!countAsRequest)
-                return ZLinkRuntimeOperationLease.None;
-            AwaitStateLane(_stateLane.RunAsync(() => _activeRequests++));
-            return new ZLinkRuntimeOperationLease(this, countsRequest: true);
+            return countAsRequest
+                ? AdmitNestedRequestAsync()
+                : ValueTask.FromResult(default(ZLinkRuntimeOperationAdmission));
         }
 
-        return EnterOperationUnnested(countAsRequest);
+        return AdmitUnnestedOperationAsync(countAsRequest);
     }
 
-    private ZLinkRuntimeOperationLease EnterOperationUnnested(bool countAsRequest)
+    private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitNestedRequestAsync()
     {
-        ZLinkFrameworkComponentState admitted;
-        admitted = AwaitStateLane(_stateLane.RunAsync(() => AdmitOperationOnLane(countAsRequest)));
-        return AttachOperation(admitted, countAsRequest);
+        await _stateLane.RunAsync(() => _activeRequests++).ConfigureAwait(false);
+        return new ZLinkRuntimeOperationAdmission(this, null, countsRequest: true);
+    }
+
+    private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitUnnestedOperationAsync(
+        bool countAsRequest
+    )
+    {
+        var admitted = await _stateLane
+            .RunAsync(() => AdmitOperationOnLane(countAsRequest))
+            .ConfigureAwait(false);
+        return new ZLinkRuntimeOperationAdmission(this, admitted, countAsRequest);
+    }
+
+    internal readonly struct ZLinkRuntimeOperationAdmission(
+        ZLinkFrameworkRuntime? runtime,
+        ZLinkFrameworkComponentState? state,
+        bool countsRequest,
+        bool refused = false
+    )
+    {
+        internal static readonly ZLinkRuntimeOperationAdmission Refused = new(
+            null,
+            null,
+            false,
+            refused: true
+        );
+
+        /// <summary>Attaches the admitted lease as the caller's ambient operation.</summary>
+        internal ZLinkRuntimeOperationLease Enter() =>
+            runtime is null ? ZLinkRuntimeOperationLease.None
+            : state is null ? new ZLinkRuntimeOperationLease(runtime, countsRequest)
+            : runtime.AttachOperation(state, countsRequest);
+
+        internal ZLinkInboundOperationAdmission EnterInbound() =>
+            refused
+                ? new ZLinkInboundOperationAdmission(false, ZLinkRuntimeOperationLease.None)
+                : new ZLinkInboundOperationAdmission(true, Enter());
     }
 
     /// <summary>
@@ -959,6 +1000,17 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     internal ZLinkInboundOperationAdmission TryEnterInboundOperation(
         bool countAsRequest,
         bool ownsObjectWork = true
+    ) =>
+        AwaitStateLane(TryAdmitInboundOperationAsync(countAsRequest, ownsObjectWork))
+            .EnterInbound();
+
+    /// <summary>
+    /// Decides inbound admission on the runtime state lane. The caller enters the result in its
+    /// own frame (<see cref="ZLinkRuntimeOperationAdmission.EnterInbound"/>).
+    /// </summary>
+    internal ValueTask<ZLinkRuntimeOperationAdmission> TryAdmitInboundOperationAsync(
+        bool countAsRequest,
+        bool ownsObjectWork = true
     )
     {
         if (
@@ -967,31 +1019,22 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         )
         {
             if (!IsAmbientOperationCurrent(current))
-            {
-                return new ZLinkInboundOperationAdmission(false, default!);
-            }
-            if (!countAsRequest)
-            {
-                return new ZLinkInboundOperationAdmission(true, ZLinkRuntimeOperationLease.None);
-            }
-            AwaitStateLane(_stateLane.RunAsync(() => _activeRequests++));
-            return new ZLinkInboundOperationAdmission(
-                true,
-                new ZLinkRuntimeOperationLease(this, countsRequest: true)
-            );
+                return ValueTask.FromResult(ZLinkRuntimeOperationAdmission.Refused);
+            return countAsRequest
+                ? AdmitNestedRequestAsync()
+                : ValueTask.FromResult(default(ZLinkRuntimeOperationAdmission));
         }
 
-        return TryEnterInboundOperationUnnested(countAsRequest, ownsObjectWork);
+        return AdmitUnnestedInboundOperationAsync(countAsRequest, ownsObjectWork);
     }
 
-    private ZLinkInboundOperationAdmission TryEnterInboundOperationUnnested(
+    private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitUnnestedInboundOperationAsync(
         bool countAsRequest,
         bool ownsObjectWork
     )
     {
-        ZLinkFrameworkComponentState admitted;
-        var admission = AwaitStateLane(
-            _stateLane.RunAsync(() =>
+        var admission = await _stateLane
+            .RunAsync(() =>
             {
                 if (_drainAdmission.IsSealed || (ownsObjectWork && !IsOwnerAdmissionOpen))
                 {
@@ -1018,30 +1061,24 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                     Neutral: false
                 );
             })
-        );
+            .ConfigureAwait(false);
 
         if (!admission.Accepted)
-        {
-            return new ZLinkInboundOperationAdmission(false, ZLinkRuntimeOperationLease.None);
-        }
+            return ZLinkRuntimeOperationAdmission.Refused;
         if (admission.Neutral)
-        {
-            return new ZLinkInboundOperationAdmission(true, ZLinkRuntimeOperationLease.None);
-        }
-        admitted = admission.Admitted!;
-
-        return new ZLinkInboundOperationAdmission(true, AttachOperation(admitted, countAsRequest));
+            return default;
+        return new ZLinkRuntimeOperationAdmission(this, admission.Admitted, countAsRequest);
     }
 
     internal async ValueTask ExecuteOperationAsync(Func<ValueTask> operation)
     {
-        using var lease = EnterOperation();
+        using var lease = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         await operation().ConfigureAwait(false);
     }
 
     internal async ValueTask<T> ExecuteOperationAsync<T>(Func<ValueTask<T>> operation)
     {
-        using var lease = EnterOperation();
+        using var lease = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         return await operation().ConfigureAwait(false);
     }
 
@@ -1546,32 +1583,39 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             );
     }
 
-    private void ExitOperation(bool countsOperation, bool countsRequest)
+    // Leaving an operation releases a count; no caller depends on its completion.
+    // The release joins the lane FIFO before Dispose returns, so every later
+    // admission, snapshot and drain turn observes it.
+    private void ExitOperation(bool countsOperation, bool countsRequest) =>
+        _stateLane.TryPost(() => ExitOperationOnLane(countsOperation, countsRequest));
+
+    private void ExitOperationOnLane(bool countsOperation, bool countsRequest)
     {
-        TaskCompletionSource? drained = null;
-        TaskCompletionSource? atZero = null;
-        AwaitStateLane(
-            _stateLane.RunAsync(() =>
-            {
-                if (countsRequest && --_activeRequests < 0)
-                    throw new InvalidOperationException(
-                        "Runtime request lease count became negative."
-                    );
-                if (countsOperation && --_activeOperations < 0)
-                    throw new InvalidOperationException(
-                        "Runtime operation lease count became negative."
-                    );
-                if (countsOperation)
-                    _operationEpoch++;
-                if (_activeOperations == 0)
-                {
-                    drained = _operationsDrained;
-                    _operationsDrained = null;
-                    atZero = _operationsAtZero;
-                    _operationsAtZero = null;
-                }
-            })
-        );
+        if (countsRequest && --_activeRequests < 0)
+        {
+            ErrorSink.ReportRuntimeTaskException(
+                "runtime-operation-lease",
+                new InvalidOperationException("Runtime request lease count became negative.")
+            );
+            return;
+        }
+        if (countsOperation && --_activeOperations < 0)
+        {
+            ErrorSink.ReportRuntimeTaskException(
+                "runtime-operation-lease",
+                new InvalidOperationException("Runtime operation lease count became negative.")
+            );
+            return;
+        }
+        if (countsOperation)
+            _operationEpoch++;
+        if (_activeOperations != 0)
+            return;
+        // Both signals run their continuations asynchronously (spec 06 §5).
+        var drained = _operationsDrained;
+        _operationsDrained = null;
+        var atZero = _operationsAtZero;
+        _operationsAtZero = null;
         drained?.TrySetResult();
         atZero?.TrySetResult();
     }

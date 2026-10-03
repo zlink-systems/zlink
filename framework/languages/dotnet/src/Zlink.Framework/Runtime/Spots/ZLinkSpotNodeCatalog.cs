@@ -6,6 +6,7 @@ using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Timers;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -2750,11 +2751,6 @@ internal sealed class ZLinkSpotNodeCatalog(
             _creationsDrained = null;
         }
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private static void ThrowIfSpotTypeMismatch(
         Type existingSpotType,

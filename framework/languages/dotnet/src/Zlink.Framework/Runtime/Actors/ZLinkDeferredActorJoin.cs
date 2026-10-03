@@ -5,6 +5,7 @@ using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Streams;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Actors;
 
@@ -92,11 +93,6 @@ internal sealed class ZLinkDeferredActorJoinHandlerScope : IDisposable
         foreach (var join in completion.Joins)
             join.Discard();
     }
-
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 
     private readonly record struct Completion(bool Completed, List<ZLinkDeferredActorJoin> Joins);
 }

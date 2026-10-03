@@ -254,7 +254,8 @@ export interface ZLinkSpotManagerOptions {
   readonly beginInstanceClosingAuthority?: (
     meshName: string,
     spotId: RoutingId,
-    onCommitted: () => void
+    onCommitted: () => void,
+    objectGeneration: bigint
   ) => Promise<
     import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority | undefined
   >;
@@ -1179,14 +1180,20 @@ export class DefaultZLinkSpotManager {
           `User Spot '${String(spotId)}' Close requires its authority owner.`
         );
       }
+      const domain = activation.domain;
       const beginAuthority =
         beginUserAuthority ??
-        (activation.domain.kind === 'instance' &&
+        (domain.kind === 'instance' &&
         reason === ZLinkSpotCloseReason.ExplicitClose &&
         this.options.beginInstanceClosingAuthority !== undefined
           ? (onCommitted) =>
-              this.options.beginInstanceClosingAuthority!(meshName, spotId, onCommitted)
-          : activation.domain.kind === 'instance' &&
+              this.options.beginInstanceClosingAuthority!(
+                meshName,
+                spotId,
+                onCommitted,
+                domain.objectGeneration
+              )
+          : domain.kind === 'instance' &&
               reason === ZLinkSpotCloseReason.IdleEvicted &&
               this.options.beginInstanceIdleClosingAuthority !== undefined
             ? (onCommitted) =>

@@ -2,6 +2,7 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -408,9 +409,6 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         await _lane.RunAsync(() => routes[key] = route).ConfigureAwait(false);
         return true;
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 
     // Closing 상태의 User 또는 Instance Spot은 기존 owner route를 유지한다.
     // owner가 원 message intent에 따라 Close 결과를 결정한다(08-routing resolver 계약).

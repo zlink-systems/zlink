@@ -7,6 +7,7 @@ using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Host;
 
@@ -3748,12 +3749,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             );
         }
 
-        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-            operation.GetAwaiter().GetResult();
-
-        private static void AwaitStateLane(ValueTask operation) =>
-            operation.GetAwaiter().GetResult();
-
         internal void ValidateRetry(
             ZLinkServiceWireCodec.RelocationPrepareRecord retry,
             RoutingId authenticatedSourceNodeRid
@@ -3904,9 +3899,6 @@ internal sealed class ZLinkRelocationAttemptLeaseState
     {
         get => AwaitStateLane(_lane.RunAsync(() => _closing && _users == 0));
     }
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
 }
 
 internal sealed partial class ZLinkFrameworkRuntime

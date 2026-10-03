@@ -126,8 +126,8 @@ class spot_node_builder_state_t
     std::function<task_t<bool> (spot_ref_t)> close_user_spot;
     instance_spot_idle_eviction_callback_t admit_instance_spot_idle_eviction;
     instance_spot_close_begin_callback_t begin_instance_spot_close;
-    std::function<result_t<runtime::protocol::instance_spot_activation_header_t> (
-      const runtime::protocol::instance_spot_activation_header_t &)>
+    std::function<task_t<result_t<runtime::protocol::instance_spot_activation_header_t>> (
+      runtime::protocol::instance_spot_activation_header_t)>
       select_instance_spot_target;
     user_spot_close_begin_callback_t begin_user_spot_close;
     std::shared_ptr<channel_runtime_state_t> channel_runtime;
@@ -1211,6 +1211,16 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     }
 
   public:
+    // A Close request made while a Close or teardown holds the reservation
+    // receives that Close's result. Runs on the node state lane.
+    bool merge_into_running_close_core (const service::spot_close_done_t &done)
+    {
+        if (close_reservation == 0 || close_reservation_kind == close_reservation_kind_t::idle)
+            return false;
+        merged_close_results.push_back (done);
+        return true;
+    }
+
     bool is_entry_spot () const noexcept { return lifecycle_domain.is_entry (); }
 
     bool is_instance_spot () const noexcept { return lifecycle_domain.is_instance (); }
@@ -1476,7 +1486,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             }
         }
         catch (...) {
-            owner->lane.run ([this, token] { clear_close_reservation_core (token); }).get ();
+            if (reason != spot_close_reason_t::explicit_close)
+                owner->lane.run ([this, token] { clear_close_reservation_core (token); }).get ();
             throw;
         }
 
@@ -1501,7 +1512,10 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                       }
                   }
               }
-              clear_close_reservation_core (token);
+              // Explicit Close keeps its reservation through the authority release.
+              // Its settlement clears the reservation and takes merged completions.
+              if (reason != spot_close_reason_t::explicit_close)
+                  clear_close_reservation_core (token);
           })
           .get ();
     }
@@ -1621,7 +1635,7 @@ class spot_node_runtime_t
     void close_user_spot_owner (const std::string &spot_id,
                                 service::spot_close_begin_t begin,
                                 service::spot_close_done_t done);
-    bool close_all_user_spots ();
+    bool close_all_user_spots (std::chrono::steady_clock::time_point deadline_at);
     node_rid_t node_rid () const;
     std::optional<std::string> spot_name_for (spot_id_t spot_id) const;
     std::optional<spot_route_t> resolve_spot (spot_id_t spot_id) const;
@@ -1701,7 +1715,7 @@ class spot_node_runtime_t
     task_t<zlink::submit_result_t>
     send_actor_leave_notification (const zlink::routing_id_t &target_node_rid,
                                    runtime::messaging::message_parts_t parts) const;
-    std::optional<std::uint64_t>
+    task_t<std::optional<std::uint64_t>>
     resolve_spot_generation (const zlink::routing_id_t &target_node_rid,
                              const spot_id_t &target_spot_id) const;
     // Canonical actorJoin(28) reaches this boundary without a stable type.

@@ -24,29 +24,29 @@ public sealed class MeshMailboxReadinessTests
                     NewRecord(new ZLinkApplicationJobQueueRecordOwner(null, admission))
                 )
             );
-            Assert.True(mailbox.TryClaim(true, true, out var available, out var admitted));
+            Assert.True(TryClaim(mailbox, true, out var available, out var admitted));
             Assert.Equal(1, available);
             Assert.True(admitted);
 
             Assert.True(mailbox.TryEnqueue(NewRecord()));
             using var batch = new MeshReceiveBatch();
-            Assert.True(mailbox.Drain(batch, 64));
+            Assert.True(Drain(mailbox, batch));
             Assert.Equal(1, batch.Count);
             Assert.Same(admission, batch.GetApplicationJobAdmission(0));
             batch.Reset();
-            Assert.False(mailbox.Drain(batch, 64));
+            Assert.False(Drain(mailbox, batch));
             Assert.Equal(1, mailbox.Count);
-            Assert.False(mailbox.TryClaim(false, true, out _, out _));
-            Assert.True(mailbox.Release());
+            Assert.False(TryClaim(mailbox, false, out _, out _));
+            Assert.True(Release(mailbox));
 
-            Assert.False(mailbox.TryClaim(true, true, out _, out _));
-            Assert.True(mailbox.TryClaim(false, true, out available, out admitted));
+            Assert.False(TryClaim(mailbox, true, out _, out _));
+            Assert.True(TryClaim(mailbox, false, out available, out admitted));
             Assert.Equal(1, available);
             Assert.False(admitted);
-            Assert.True(mailbox.Drain(batch, 64));
+            Assert.True(Drain(mailbox, batch));
             Assert.Equal(1, batch.Count);
             Assert.Null(batch.GetApplicationJobAdmission(0));
-            Assert.False(mailbox.Release());
+            Assert.False(Release(mailbox));
             Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
         }
         finally
@@ -64,23 +64,23 @@ public sealed class MeshMailboxReadinessTests
         {
             for (var index = 0; index < 65; index++)
                 Assert.True(mailbox.TryEnqueue(NewRecord()));
-            Assert.False(mailbox.TryClaim(true, true, out _, out _));
-            Assert.True(mailbox.TryClaim(false, true, out var available, out var admitted));
+            Assert.False(TryClaim(mailbox, true, out _, out _));
+            Assert.True(TryClaim(mailbox, false, out var available, out var admitted));
             Assert.Equal(65, available);
             Assert.False(admitted);
-            Assert.False(mailbox.TryClaim(false, true, out _, out _));
+            Assert.False(TryClaim(mailbox, false, out _, out _));
             using var batch = new MeshReceiveBatch();
-            Assert.True(mailbox.Drain(batch, 64));
+            Assert.True(Drain(mailbox, batch));
             Assert.Equal(64, batch.Count);
             Assert.Equal(1, queued);
-            Assert.False(mailbox.TryClaim(false, true, out _, out _));
-            Assert.True(mailbox.Release());
-            Assert.True(mailbox.TryClaim(false, true, out available, out _));
+            Assert.False(TryClaim(mailbox, false, out _, out _));
+            Assert.True(Release(mailbox));
+            Assert.True(TryClaim(mailbox, false, out available, out _));
             Assert.Equal(1, available);
             batch.Reset();
-            Assert.True(mailbox.Drain(batch, 64));
+            Assert.True(Drain(mailbox, batch));
             Assert.Equal(0, queued);
-            Assert.False(mailbox.Release());
+            Assert.False(Release(mailbox));
         }
         finally
         {
@@ -108,9 +108,9 @@ public sealed class MeshMailboxReadinessTests
                         consumerStarted.Set();
                         using var batch = new MeshReceiveBatch();
                         Assert.True(
-                            mailbox!.TryClaim(false, true, out var claimedCount, out var admitted)
+                            TryClaim(mailbox!, false, out var claimedCount, out var admitted)
                         );
-                        Assert.True(mailbox!.Drain(batch, 64));
+                        Assert.True(Drain(mailbox!, batch));
                     });
                 Assert.True(consumerStarted.Wait(TimeSpan.FromSeconds(3)));
                 transitions.Enqueue(Interlocked.Increment(ref count));
@@ -232,6 +232,34 @@ public sealed class MeshMailboxReadinessTests
             applicationPayloadBytes: 0,
             payloadOwner: payloadOwner
         );
+
+    private static bool TryClaim(
+        ZLinkMeshNodeOwnedMailbox mailbox,
+        bool requireApplicationAdmission,
+        out int available,
+        out bool admitted
+    )
+    {
+        var claim = mailbox
+            .TryClaimAsync(requireApplicationAdmission, claim: true)
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
+        available = claim.Count;
+        admitted = claim.Admitted;
+        return claim.Ready;
+    }
+
+    private static bool Drain(ZLinkMeshNodeOwnedMailbox mailbox, MeshReceiveBatch batch) =>
+        mailbox.DrainAsync(batch, 64).AsTask().GetAwaiter().GetResult();
+
+    // An idle mailbox lane runs the posted release before Release returns.
+    private static bool Release(ZLinkMeshNodeOwnedMailbox mailbox)
+    {
+        var recordsRemain = false;
+        mailbox.Release(() => recordsRemain = true);
+        return recordsRemain;
+    }
 
     private static int Drain(ZLinkManagedMeshNode node)
     {
