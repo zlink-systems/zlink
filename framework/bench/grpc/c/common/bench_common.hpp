@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -133,16 +134,13 @@ inline std::string env_string (const char *name, const char *fallback)
     return value && *value ? std::string (value) : std::string (fallback);
 }
 
-inline bool scenario_enabled (const std::string &enabled, const char *scenario)
+inline bool pattern_enabled (const std::string &enabled, const char *pattern)
 {
-    if (enabled == "all")
-        return true;
-
     size_t start = 0;
     while (start <= enabled.size ()) {
         const size_t comma = enabled.find (',', start);
         const size_t end = comma == std::string::npos ? enabled.size () : comma;
-        if (enabled.compare (start, end - start, scenario) == 0)
+        if (enabled.compare (start, end - start, pattern) == 0)
             return true;
         if (comma == std::string::npos)
             break;
@@ -276,11 +274,18 @@ inline double server_mem_mb (const resource_sample_t &start)
     return start.server_pid > 0 ? rss_mb_pid (start.server_pid) : 0.0;
 }
 
+// Values fixed by the specification (README §3). They are not inputs.
+static const uint64_t k_drain_bound_ms = 30000;
+static const int k_route_ready_ms = 30000;
+static const size_t k_latency_sample_limit = 200000;
+
+inline int duration_seconds () { return env_int ("DURATION_SECONDS", 5); }
+
 struct result_t
 {
-    std::string scenario;
+    std::string implementation;
+    std::string pattern;
     size_t size = 0;
-    std::string unit;
     uint64_t completed = 0;
     uint64_t errors = 0;
     double elapsed_s = 0.0;
@@ -293,51 +298,121 @@ struct result_t
     double server_mem_mb = 0.0;
     uint64_t submitted = 0;
     uint64_t blocked = 0;
-    uint64_t max_outstanding = 0;
+    uint64_t peak_in_flight = 0;
     double submit_wait_ms = 0.0;
+    // request-backpressure only: requests still unanswered when the bounded drain ended.
+    bool has_drain = false;
+    uint64_t abandoned = 0;
+    double drain_ms = 0.0;
+    bool drain_bound_hit = false;
 };
 
-inline void print_result (const result_t &r)
+// The one place that closes the measured active window (README §3, §5.2). Called the moment
+// the active window ends and before any drain: `completed` is what finished inside the window,
+// and elapsed time, CPU, memory and latency are read at the same instant. A drain that follows
+// records only `abandoned` and `drain_ms`, so its length never enters throughput or CPU%.
+// `latency` is null for a pattern without reply latency (send-saturation).
+inline void capture_active_close (result_t *r,
+                                  const std::chrono::steady_clock::time_point &start,
+                                  const resource_sample_t &resources,
+                                  uint64_t completed,
+                                  const latency_sampler_t *latency)
 {
+    r->completed = completed;
+    r->elapsed_s = std::chrono::duration<double> (std::chrono::steady_clock::now () - start).count ();
+    if (latency) {
+        r->mean_us = latency->mean_us ();
+        r->p95_us = latency->percentile (0.95);
+        r->p99_us = latency->percentile (0.99);
+    }
+    r->cpu_percent = cpu_percent (resources, r->elapsed_s);
+    r->mem_mb = rss_mb ();
+    r->server_cpu_percent = server_cpu_percent (resources, r->elapsed_s);
+    r->server_mem_mb = server_mem_mb (resources);
+}
+
+inline std::string json_escape (const std::string &value)
+{
+    std::string out;
+    for (const char c : value) {
+        if (c == '"' || c == '\\') {
+            out += '\\';
+            out += c;
+        } else if (static_cast<unsigned char> (c) < 0x20)
+            out += ' ';
+        else
+            out += c;
+    }
+    return out;
+}
+
+inline std::string json_number (double value)
+{
+    char number[64];
+    std::snprintf (number, sizeof (number), "%.6f", value);
+    return number;
+}
+
+// Writes <BENCH_RUN_DIR>/<implementation>-<pattern>-<size>/results.json
+// (`with-grpc-cell-v1`, README §11) through a temporary file and a rename.
+// `grpc_version` is empty for a client that does not link gRPC.
+inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
+{
+    const std::string run_dir = env_string ("BENCH_RUN_DIR", "");
+    if (run_dir.empty ()) {
+        std::fprintf (stderr, "BENCH_RUN_DIR is not set\n");
+        return false;
+    }
+    const std::string cell_dir =
+      run_dir + "/" + r.implementation + "-" + r.pattern + "-" + std::to_string (r.size);
+    std::filesystem::create_directories (cell_dir);
     const double ops_per_s = static_cast<double> (r.completed) / std::max (0.001, r.elapsed_s);
-    const double throughput = ops_per_s / 1000.0;
-    const double bandwidth = ops_per_s * static_cast<double> (r.size) / 1000000.0;
-    std::printf (
-      "| %-28s | %8zu | %14.3f %-6s | %10.3f MB/s | %12.3f | %11.3f | %11.3f |"
-      " %8.3f | %8.3f | %8.3f | %8.3f | %10llu | %10llu | %8llu | %8llu | %8llu | %12.3f |\n",
-      r.scenario.c_str (), r.size, throughput, r.unit.c_str (), bandwidth, r.mean_us / 1000.0,
-      r.p95_us / 1000.0, r.p99_us / 1000.0, r.cpu_percent, r.mem_mb,
-      r.server_cpu_percent, r.server_mem_mb, static_cast<unsigned long long> (r.submitted),
-      static_cast<unsigned long long> (r.completed), static_cast<unsigned long long> (r.errors),
-      static_cast<unsigned long long> (r.blocked),
-      static_cast<unsigned long long> (r.max_outstanding), r.submit_wait_ms);
-    std::printf (
-      "RESULT,current,%s,local,%zu,throughput,%.3f\n"
-      "RESULT,current,%s,local,%zu,bandwidth,%.3f\n"
-      "RESULT,current,%s,local,%zu,latency,%.3f\n"
-      "RESULT,current,%s,local,%zu,latency_p95,%.3f\n"
-      "RESULT,current,%s,local,%zu,latency_p99,%.3f\n"
-      "RESULT,current,%s,local,%zu,client_cpu_percent,%.3f\n"
-      "RESULT,current,%s,local,%zu,client_memory_mb,%.3f\n"
-      "RESULT,current,%s,local,%zu,server_cpu_percent,%.3f\n"
-      "RESULT,current,%s,local,%zu,server_memory_mb,%.3f\n"
-      "RESULT,current,%s,local,%zu,submitted,%.3f\n"
-      "RESULT,current,%s,local,%zu,completed,%.3f\n"
-      "RESULT,current,%s,local,%zu,errors,%.3f\n"
-      "RESULT,current,%s,local,%zu,blocked,%.3f\n"
-      "RESULT,current,%s,local,%zu,max_outstanding,%.3f\n"
-      "RESULT,current,%s,local,%zu,submit_wait_ms,%.3f\n",
-      r.scenario.c_str (), r.size, throughput, r.scenario.c_str (), r.size,
-      bandwidth, r.scenario.c_str (), r.size,
-      r.mean_us / 1000.0, r.scenario.c_str (), r.size, r.p95_us / 1000.0, r.scenario.c_str (),
-      r.size, r.p99_us / 1000.0, r.scenario.c_str (), r.size, r.cpu_percent,
-      r.scenario.c_str (), r.size, r.mem_mb, r.scenario.c_str (), r.size,
-      r.server_cpu_percent, r.scenario.c_str (), r.size, r.server_mem_mb,
-      r.scenario.c_str (), r.size, static_cast<double> (r.submitted), r.scenario.c_str (),
-      r.size, static_cast<double> (r.completed), r.scenario.c_str (), r.size,
-      static_cast<double> (r.errors), r.scenario.c_str (), r.size, static_cast<double> (r.blocked),
-      r.scenario.c_str (), r.size, static_cast<double> (r.max_outstanding), r.scenario.c_str (),
-      r.size, r.submit_wait_ms);
+    std::ostringstream out;
+    out << "{\n  \"schema\": \"with-grpc-cell-v1\",\n  \"metadata\": {\n"
+        << "    \"language\": \"c\",\n"
+        << "    \"coreVersion\": \"" << json_escape (env_string ("BENCH_CORE_VERSION", "")) << "\",\n"
+        << "    \"compiler\": \"" << json_escape (__VERSION__) << "\",\n"
+        << "    \"durationSeconds\": " << duration_seconds () << ",\n"
+        << "    \"warmup\": \"none\"";
+    if (!grpc_version.empty ())
+        out << ",\n    \"grpcVersion\": \"" << json_escape (grpc_version) << "\"";
+    out << "\n  },\n  \"cells\": [\n    {\n"
+        << "      \"implementation\": \"" << r.implementation << "\",\n"
+        << "      \"pattern\": \"" << r.pattern << "\",\n"
+        << "      \"payload_size\": " << r.size << ",\n"
+        << "      \"throughput_per_second\": " << json_number (ops_per_s) << ",\n"
+        << "      \"bandwidth_mb_s\": "
+        << json_number (ops_per_s * static_cast<double> (r.size) / 1000000.0) << ",\n"
+        << "      \"latency_mean_ms\": " << json_number (r.mean_us / 1000.0) << ",\n"
+        << "      \"latency_p95_ms\": " << json_number (r.p95_us / 1000.0) << ",\n"
+        << "      \"latency_p99_ms\": " << json_number (r.p99_us / 1000.0) << ",\n"
+        << "      \"client_cpu_percent\": " << json_number (r.cpu_percent) << ",\n"
+        << "      \"client_memory_mb\": " << json_number (r.mem_mb) << ",\n"
+        << "      \"server_cpu_percent\": " << json_number (r.server_cpu_percent) << ",\n"
+        << "      \"server_memory_mb\": " << json_number (r.server_mem_mb) << ",\n"
+        << "      \"peak_in_flight\": " << r.peak_in_flight << ",\n";
+    if (r.has_drain)
+        out << "      \"abandoned\": " << r.abandoned << ",\n"
+            << "      \"drain_ms\": " << json_number (r.drain_ms) << ",\n"
+            << "      \"drain_bound_hit\": " << (r.drain_bound_hit ? "true" : "false") << ",\n";
+    out << "      \"errors\": " << r.errors << ",\n"
+        << "      \"contaminated\": false,\n"
+        << "      \"extra\": {\"submitted\": " << r.submitted << ", \"completed\": " << r.completed
+        << ", \"blocked\": " << r.blocked
+        << ", \"submit_wait_ms\": " << json_number (r.submit_wait_ms) << "}\n    }\n  ]\n}\n";
+    const std::string path = cell_dir + "/results.json";
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream file (tmp, std::ios::binary | std::ios::trunc);
+        file << out.str ();
+        if (!file.good ())
+            return false;
+    }
+    std::filesystem::rename (tmp, path);
+    std::fprintf (stderr, "[bench] cell %s-%s-%zu done: %.1f ops/s errors=%llu\n",
+                  r.implementation.c_str (), r.pattern.c_str (), r.size, ops_per_s,
+                  static_cast<unsigned long long> (r.errors));
+    return true;
 }
 
 } // namespace zlink_c_bench

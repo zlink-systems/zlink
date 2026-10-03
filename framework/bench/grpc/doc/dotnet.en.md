@@ -18,36 +18,21 @@ All three use the same `BenchPayload` protobuf DTO and the 29-byte header in fro
 
 ## 2. How to run
 
+The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. Unless `SKIP_BUILD=1`, the runner builds `WithGrpcBench.sln` in Release with `dotnet/build.sh`. The binding
+is the published package; the framework is the repository source. Measurements always go through
+the perf ticket queue.
+
 ```bash
-# full matrix (3 implementations × 4 patterns × payload 1024 and 4096)
-./framework/bench/grpc/dotnet/run_local.sh
+# full matrix
+bash scripts/perf/perf-ticket.sh submit -p 1 -- bash framework/bench/grpc/dotnet/run_local.sh
 
 # one cell
-PAYLOAD_SIZES=1024 ./framework/bench/grpc/dotnet/run_local.sh \
-  --scenario request-window --implementation zlink-framework-dotnet
+IMPLEMENTATIONS=zlink-framework-dotnet PATTERNS=request-serial PAYLOAD_SIZES=1024 RUNS=1 \
+  bash framework/bench/grpc/dotnet/run_local.sh
 ```
 
-The runner builds `WithGrpcBench.sln` in Release (skipped with `SKIP_BUILD=1`). The binding is the
-published package; the framework is the repository source.
-
-| Input | Default | Behaviour |
-|---|---|---|
-| `PAYLOAD_SIZES` | `1024,4096` | payload list; other values fail preflight |
-| `DURATION_SECONDS` | `5` | active window |
-| `WARMUP` | `1000` | warmup calls before active |
-| `REQUEST_WINDOW` | `100` | total in-flight of `request-window`; other values fail preflight |
-| `SEND_CONCURRENCY` | `8` | stream count of `send-saturation`; other values fail preflight |
-| `TIMEOUT_SECONDS` | `300` | process and operation ceiling |
-| `COMMAND_SETTLE_MS` | `200` | minimum quiet period that counts as settled |
-| `DRAIN_BOUND_MS` | `30000` | settle ceiling |
-| `SKIP_BUILD` | `0` | `1` skips the solution build |
-| `OUTPUT` | `framework/bench/grpc/log/dotnet/with_grpc_dotnet_<stamp>` | run root |
-| `CONFIGURATION` | `Release` | build and `dotnet run` configuration |
-| `--scenario` | `all` | `all`, `request`, or one of the four pattern names |
-| `--implementation` | `all` | `all` or one of the three implementation names |
-
-Measurements always go through the perf ticket queue (`scripts/perf/perf-ticket.sh submit -p 1 --
-env SKIP_BUILD=1 bash framework/bench/grpc/dotnet/run_local.sh`).
+The warmup call count, the process and operation ceiling, the settle quiet period and the drain
+bound are fixed by the runner.
 
 ## 3. Process layout
 
@@ -57,16 +42,15 @@ env SKIP_BUILD=1 bash framework/bench/grpc/dotnet/run_local.sh`).
 | `zlink-dotnet` | `WithGrpcBench.Client`: only the raw ROUTER sockets the cell needs | 5205/5206 | `WithGrpcBench.ZLinkRawServer`: request echo ROUTER and command count ROUTER kept separate | request 5207, command 5208, stats 5209 |
 | `zlink-framework-dotnet` | `WithGrpcBench.Client`: `IZLinkRouteClient` | 5212/5213 | `WithGrpcBench.ZLinkServer`: typed request/send handlers | RouteMesh 5214, stats 5215 |
 
-A's trigger, stats and phase rules reuse the canonical perf runner's
-`ZLink.Framework.Perf.ServerSupport` (`BenchHttpApplication`) through a ProjectReference. The
-trigger client is the runner's `curl` and generates no load. The cell order is spec §10.4 as is, and
-every cell uses a fresh A/B process pair. The runner checks LISTEN sockets on 5200-5219 before the
-run and after each cell and stops, without moving ports, if one is in use.
+A's trigger, stats and phase rules are owned by the .NET bench Client's `BenchHttpApplication` and
+`BenchPhaseController`. The trigger client is the runner's `curl` and generates no load. The cell
+order is spec §10.4 as is, and every cell uses a fresh A/B process pair. The runner checks LISTEN
+sockets on 5200-5219 before the run and after each cell and stops, without moving ports, if one is
+in use.
 
 | Pattern | `streams.count` | `streams.inFlightPerStream` | .NET implementation |
 |---|---:|---:|---|
 | `request-serial` | 1 | 1 | one sequential Task loop |
-| `request-window` | 1 | 100 | 100 Tasks sharing one logical window |
 | `request-backpressure` | 1 | none | submit without an application in-flight ceiling, `Task.Yield` every 256 |
 | `send-saturation` | 8 | 1 | one Task with one gRPC stub or raw ROUTER per stream |
 
@@ -84,31 +68,22 @@ run and after each cell and stops, without moving ports, if one is in use.
 
 ## 5. Where results go
 
-```text
-framework/bench/grpc/log/dotnet/with_grpc_dotnet_<stamp>/
-├── with_grpc_dotnet_<stamp>.txt
-└── <implementation>-<pattern>-<payload>/
-    ├── results.json        # with-grpc-cell-v1: role, trigger, streams, target_stats
-    ├── report.txt          # RESULT lines
-    ├── source.log / target.log
-    └── target-stats.json
-```
-
-3-run aggregation:
+Results follow the §11 layout (`<OUTPUT_DIR>/run<N>/<implementation>-<pattern>-<payload>/results.json`).
+A cell also keeps the diagnostics `source.log`, `target.log` and `target-stats.json`.
+Only the aggregator produces tables and judgements. To measure every language and produce the
+reports in one go, use `run_all.sh` (§11). To aggregate one language, pass it together with the C
+results:
 
 ```bash
-python3 framework/bench/grpc/tools/bench_aggregate.py --lang dotnet --judgement-pattern request-window \
-  --runs-glob 'framework/bench/grpc/log/dotnet/<run-1>/*' \
-  --runs-glob 'framework/bench/grpc/log/dotnet/<run-2>/*' \
-  --runs-glob 'framework/bench/grpc/log/dotnet/<run-3>/*' \
-  --runs-glob 'framework/bench/grpc/log/c/<c-run>*' \
-  --format full
+python3 framework/bench/grpc/tools/bench_aggregate.py --lang dotnet \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/c/run*' \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/dotnet/run*' --format full
 ```
 
 ## 6. Known limits
 
-- No `unsupported` cell among the four patterns and three implementations.
-- The raw comparison allows ROUTER↔ROUTER only (`RAW_SOCKET=router`).
+- No `unsupported` cell among the three patterns and three implementations.
+- The raw comparison allows ROUTER↔ROUTER only.
 - Framework A's RouteMesh listener uses loopback port 0; B's comparison endpoint is fixed at 5214.
 - The framework `request-backpressure` cell surfaces admission rejections as request errors
   (decision records FB-042 and FB-047); it is recorded as an error cell and excluded from the

@@ -1,3 +1,4 @@
 <Project>
     <Import Project="../../../languages/dotnet/Directory.Packages.props"/>
+    <Import Project="../../../languages/dotnet/props/ZLink.FrameworkReference.props"/>
 </Project>

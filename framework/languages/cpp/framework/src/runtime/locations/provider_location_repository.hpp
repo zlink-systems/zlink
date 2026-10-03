@@ -295,6 +295,9 @@ class provider_location_repository_t final : public location_repository_t
             if (snapshot.store_version != expected_store_version)
                 co_return co_await authority_conflict (std::move (current));
 
+            const auto *retarget = std::get_if<authority_retarget_t> (&mutation);
+            const auto qualification_owner = retarget ? retarget->target.owner : snapshot.owner;
+            store_write_request_t write_request;
             if (std::holds_alternative<authority_delete_t> (mutation)) {
                 if (snapshot.allocation.state != placement_allocation_state_t::active)
                     co_return co_await authority_conflict (std::move (current));
@@ -311,7 +314,6 @@ class provider_location_repository_t final : public location_repository_t
                   authority_key_codec_detail::decode_authority_key (key.value);
                 if (!decoded_key)
                     co_return co_await authority_conflict (std::move (current));
-                store_write_request_t write_request;
                 write_request.conditions = {
                   version_condition (row_key, found->value.version),
                   owner_condition (snapshot.owner),
@@ -320,28 +322,14 @@ class provider_location_repository_t final : public location_repository_t
                                            store_put_t{capacity.key,
                                                        encode_capacity_record (capacity.record),
                                                        std::nullopt}};
-                auto written = co_await write_async (std::move (write_request));
-                if (const auto *applied = std::get_if<store_write_applied_t> (&written))
-                    co_return authority_compare_exchange_result_t{
-                      authority_deleted_t{snapshot.store_version, applied->store_now}};
-                if (co_await conflict_qualification_unchanged (row_key, found->value.version,
-                                                               snapshot.owner, std::nullopt))
-                    continue;
-                co_return co_await authority_conflict (co_await _store->read (row_key));
-            }
-
-            if (const auto *restore = std::get_if<authority_restore_t> (&mutation)) {
+            } else if (const auto *restore = std::get_if<authority_restore_t> (&mutation)) {
                 if (!same_owner (snapshot.owner, restore->expected_owner))
                     co_return co_await authority_conflict (std::move (current));
                 snapshot.payload = restore->payload;
-                store_write_request_t written_request{
+                write_request = {
                   {version_condition (row_key, found->value.version)},
                   {store_put_t{row_key, encode_authority (snapshot), std::nullopt}}};
-                auto written = co_await write_async (std::move (written_request));
-                co_return co_await authority_write_result (row_key, snapshot, std::move (written));
-            }
-
-            if (auto *retarget = std::get_if<authority_retarget_t> (&mutation)) {
+            } else if (retarget) {
                 if (snapshot.allocation.state != placement_allocation_state_t::active)
                     co_return co_await authority_conflict (std::move (current));
                 auto target_descriptor = co_await read_target_descriptor_async (retarget->target);
@@ -382,8 +370,7 @@ class provider_location_repository_t final : public location_repository_t
                 snapshot.authority_owner_generation = next_owner_generation;
                 snapshot.owner = retarget->target.owner;
                 snapshot.allocation.target = retarget->target;
-                snapshot.payload = std::move (retarget->payload);
-                store_write_request_t write_request;
+                snapshot.payload = retarget->payload;
                 write_request.conditions = {
                   version_condition (row_key, found->value.version),
                   condition_for (authority_owner_counter_key, owner_generations),
@@ -407,53 +394,54 @@ class provider_location_repository_t final : public location_repository_t
                           target_capacity->key, encode_capacity_record (target_capacity->record),
                           std::nullopt});
                 }
-                auto written = co_await write_async (std::move (write_request));
-                bool retry = false;
-                if (!std::holds_alternative<store_write_applied_t> (written))
-                    retry = co_await conflict_qualification_unchanged (
-                      row_key, found->value.version, retarget->target.owner, std::nullopt);
-                if (retry) {
-                    retarget->payload = std::move (snapshot.payload);
-                    continue;
-                }
-                co_return co_await authority_write_result (row_key, snapshot, std::move (written));
-            }
-
-            if (snapshot.allocation.state != placement_allocation_state_t::active)
-                co_return co_await authority_conflict (std::move (current));
-            auto live_owner = co_await read_live_owner_async (snapshot.owner);
-            if (!live_owner)
-                co_return co_await authority_conflict (std::move (current));
-            store_write_request_t write_request;
-            write_request.conditions = {version_condition (row_key, found->value.version),
-                                        owner_condition (snapshot.owner)};
-            if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
-                auto object_generations = co_await _store->read (object_counter_key);
-                auto owner_generations = co_await _store->read (authority_owner_counter_key);
-                const auto object_generation = counter_next_value (object_generations);
-                const auto owner_generation = counter_next_value (owner_generations);
-                if (object_generation >= max_generation || owner_generation >= max_generation)
-                    co_return authority_compare_exchange_result_t{
-                      authority_generation_exhausted_t{}};
-                snapshot.object_generation = object_generation;
-                snapshot.authority_owner_generation = owner_generation;
-                snapshot.payload = std::move (reincarnate->payload);
-                write_request.conditions.push_back (
-                  condition_for (object_counter_key, object_generations));
-                write_request.conditions.push_back (
-                  condition_for (authority_owner_counter_key, owner_generations));
-                write_request.mutations = {
-                  store_put_t{object_counter_key, to_bytes (std::to_string (object_generation + 1)),
-                              std::nullopt},
-                  store_put_t{authority_owner_counter_key,
-                              to_bytes (std::to_string (owner_generation + 1)), std::nullopt}};
             } else {
-                snapshot.payload = std::move (std::get<authority_put_t> (mutation).payload);
+                if (snapshot.allocation.state != placement_allocation_state_t::active)
+                    co_return co_await authority_conflict (std::move (current));
+                auto live_owner = co_await read_live_owner_async (snapshot.owner);
+                if (!live_owner)
+                    co_return co_await authority_conflict (std::move (current));
+                write_request.conditions = {version_condition (row_key, found->value.version),
+                                            owner_condition (snapshot.owner)};
+                if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
+                    auto object_generations = co_await _store->read (object_counter_key);
+                    auto owner_generations = co_await _store->read (authority_owner_counter_key);
+                    const auto object_generation = counter_next_value (object_generations);
+                    const auto owner_generation = counter_next_value (owner_generations);
+                    if (object_generation >= max_generation || owner_generation >= max_generation)
+                        co_return authority_compare_exchange_result_t{
+                          authority_generation_exhausted_t{}};
+                    snapshot.object_generation = object_generation;
+                    snapshot.authority_owner_generation = owner_generation;
+                    snapshot.payload = reincarnate->payload;
+                    write_request.conditions.push_back (
+                      condition_for (object_counter_key, object_generations));
+                    write_request.conditions.push_back (
+                      condition_for (authority_owner_counter_key, owner_generations));
+                    write_request.mutations = {
+                      store_put_t{object_counter_key, to_bytes (std::to_string (object_generation + 1)),
+                                  std::nullopt},
+                      store_put_t{authority_owner_counter_key,
+                                  to_bytes (std::to_string (owner_generation + 1)), std::nullopt}};
+                } else {
+                    snapshot.payload = std::get<authority_put_t> (mutation).payload;
+                }
+                write_request.mutations.push_back (
+                  store_put_t{row_key, encode_authority (snapshot), std::nullopt});
             }
-            write_request.mutations.push_back (
-              store_put_t{row_key, encode_authority (snapshot), std::nullopt});
             auto written = co_await write_async (std::move (write_request));
-            co_return co_await authority_write_result (row_key, snapshot, std::move (written));
+            const auto *applied = std::get_if<store_write_applied_t> (&written);
+            if (!applied) {
+                if (co_await conflict_qualification_unchanged (
+                      row_key, found->value.version, qualification_owner, std::nullopt))
+                    continue;
+                co_return co_await authority_conflict (co_await _store->read (row_key));
+            }
+            if (std::holds_alternative<authority_delete_t> (mutation))
+                co_return authority_compare_exchange_result_t{
+                  authority_deleted_t{snapshot.store_version, applied->store_now}};
+            snapshot.store_now = applied->store_now;
+            snapshot.store_version = version_of (*applied, row_key);
+            co_return authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}};
         }
     }
 
@@ -2993,8 +2981,8 @@ class provider_location_repository_t final : public location_repository_t
     // field (checklist C-4d): the CAS token is reparented onto the
     // provider's own opaque per-key version (store_found_t.value.version /
     // store_write_applied_t.put_versions), threaded in via decode_authority's
-    // `provider_version` parameter and authority_write_result's post-write
-    // lookup below, instead of a counter this store used to maintain inside
+    // `provider_version` parameter and compare_exchange_authority's post-write
+    // lookup, instead of a counter this store used to maintain inside
     // the record body.
     static std::vector<std::byte> encode_authority (const authority_snapshot_t &value)
     {
@@ -3086,17 +3074,6 @@ class provider_location_repository_t final : public location_repository_t
             if (entry.key.value == key.value)
                 return entry.version.value;
         return {};
-    }
-
-    task_t<authority_compare_exchange_result_t> authority_write_result (
-      const store_key_t &row_key, authority_snapshot_t snapshot, store_write_result_t written)
-    {
-        if (const auto *applied = std::get_if<store_write_applied_t> (&written)) {
-            snapshot.store_now = applied->store_now;
-            snapshot.store_version = version_of (*applied, row_key);
-            co_return authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}};
-        }
-        co_return co_await authority_conflict (co_await _store->read (row_key));
     }
 
     static json_t encode (const capacity_usage_t &value)

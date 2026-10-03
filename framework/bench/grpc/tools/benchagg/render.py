@@ -280,7 +280,7 @@ def render_doc_table(
 
 
 def render_incomplete(cells: list[Cell]) -> str:
-    """Server-driven fragments excluded because their A/B cell is incomplete."""
+    """Server-driven fragments excluded because they carry no target_stats."""
     if not cells:
         return "None. Every server-driven source has target stats."
     lines = ["| Run | Cell | Reason |", "|---|---|---|"]
@@ -325,13 +325,18 @@ def render_judgement_table(judgements: list[Judgement]) -> str:
     return "\n".join(lines)
 
 
-def render_contaminated(cells: list[Cell]) -> str:
-    """FB-008: cells excluded from every table and every judgement."""
+def render_excluded(cells: list[Cell]) -> str:
+    """FB-008: contaminated and drain-bound cells excluded from all output."""
     if not cells:
-        return "None. Every cell drained within the bound."
+        return "None. No cell was contaminated or hit the drain bound."
     lines = ["| Run | Cell | Reason |", "|---|---|---|"]
     for cell in sorted(cells, key=lambda c: (c.run, str(c.key))):
-        lines.append(f"| {cell.run} | `{cell.key}` | {cell.contamination_reason or 'unstated'} |")
+        reasons = []
+        if cell.contaminated:
+            reasons.append(cell.contamination_reason or "contaminated")
+        if cell.drain_bound_hit:
+            reasons.append("drain bound hit")
+        lines.append(f"| {cell.run} | `{cell.key}` | {'; '.join(reasons)} |")
     return "\n".join(lines)
 
 

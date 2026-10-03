@@ -2,63 +2,19 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "${HERE}/../../../.." && pwd)"
+# shellcheck source=../runner_common.sh
+source "${HERE}/../runner_common.sh"
+bench_init java "grpc-java,zlink-java,zlink-framework-java" \
+  "request-serial,request-backpressure,send-saturation" "1024,4096"
 cd "${HERE}"
-# shellcheck source=runner_common.sh
-source "${HERE}/runner_common.sh"
 
 select_java_home
 export PATH="${JAVA_HOME}/bin:${PATH}"
 
-RUNS="${RUNS:-3}"
-RUN_DEALER="${RUN_DEALER:-0}"
-DURATION="${DURATION:-5}"
-WARMUP_SECONDS="${WARMUP_SECONDS:-20}"
-PAYLOADS="${PAYLOADS:-1024,4096}"
-SCENARIO="${SCENARIO:-all}"
-IMPLEMENTATION="${IMPLEMENTATION:-all}"
-STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
-OUTROOT="${OUTROOT:-${HERE}/../log/java/with_grpc_java_${STAMP}}"
-SKIP_BUILD="${SKIP_BUILD:-0}"
-WINDOW=100
-SEND_CONCURRENCY=8
-TIMEOUT_SECONDS=300
-COMMAND_SETTLE_MS=200
-DRAIN_BOUND_MS=30000
-REQUEST_TIMEOUT_MS=30000
-ROUTE_READY_MS=30000
-LATENCY_SAMPLE_LIMIT=200000
-
-[[ "${RUNS}" =~ ^[1-9][0-9]*$ ]] || { echo "RUNS must be a positive integer" >&2; exit 2; }
-[[ "${RUN_DEALER}" == 0 ]] || { echo "RUN_DEALER is unsupported; ROUTER is required" >&2; exit 2; }
-[[ "${DURATION}" =~ ^[1-9][0-9]*$ ]] || { echo "DURATION must be a positive integer" >&2; exit 2; }
-[[ "${WARMUP_SECONDS}" =~ ^[1-9][0-9]*$ ]] || { echo "WARMUP_SECONDS must be positive" >&2; exit 2; }
-
-IFS=',' read -r -a payloads <<<"${PAYLOADS}"
-for payload in "${payloads[@]}"; do
-  [[ "${payload}" == 1024 || "${payload}" == 4096 ]] || {
-    echo "PAYLOADS entries must be 1024 or 4096" >&2; exit 2;
-  }
-done
-case "${SCENARIO}" in
-  all) patterns=(request-serial request-backpressure send-saturation) ;;
-  request) patterns=(request-serial request-backpressure) ;;
-  request-serial|request-backpressure|send-saturation) patterns=("${SCENARIO}") ;;
-  send|command) patterns=(send-saturation) ;;
-  *) echo "unknown SCENARIO: ${SCENARIO}" >&2; exit 2 ;;
-esac
-case "${IMPLEMENTATION}" in
-  all) implementations=(grpc-java zlink-java zlink-framework-java) ;;
-  grpc-java|zlink-java|zlink-framework-java) implementations=("${IMPLEMENTATION}") ;;
-  *) echo "unknown IMPLEMENTATION: ${IMPLEMENTATION}" >&2; exit 2 ;;
-esac
+WARMUP_SECONDS=20
 
 if [[ "${SKIP_BUILD}" != 1 ]]; then
-  load_average="$(cut -d' ' -f1 /proc/loadavg)"
-  awk -v value="${load_average}" 'BEGIN { exit !(value < 10.0) }' || {
-    echo "load average must be below 10 before build (current ${load_average})" >&2; exit 1;
-  }
-  "${HERE}/gradlew" --no-daemon --max-workers=1 assemble installDist
+  "${HERE}/build.sh"
 fi
 
 GRPC_BIN="${HERE}/grpc-server/build/install/bench-grpc-server/bin/bench-grpc-server"
@@ -70,15 +26,13 @@ for binary in "${GRPC_BIN}" "${RAW_BIN}" "${FW_BIN}" "${SOURCE_BIN}"; do
 done
 
 check_ports_free 5240 5259
-mkdir -p "${OUTROOT}"
-overall_report="${OUTROOT}/with_grpc_java_${STAMP}.txt"
-: >"${overall_report}"
+mkdir -p "${OUTPUT_DIR}"
 a_pid=""
 b_pid=""
 trap cleanup_cell EXIT
 
 for run in $(seq 1 "${RUNS}"); do
-  run_id="${STAMP}-run${run}"
+  run_id="${RUN_STAMP}-run${run}"
   for impl in "${implementations[@]}"; do
     case "${impl}" in
       grpc-java)
@@ -111,8 +65,9 @@ for run in $(seq 1 "${RUNS}"); do
     for pattern in "${patterns[@]}"; do
       for payload in "${payloads[@]}"; do
         cell_id="${impl}-${pattern}-${payload}"
-        cell_dir="${OUTROOT}/${cell_id}-run${run}"
+        cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"
         mkdir -p "${cell_dir}"
+        bench_measurement_load_gate
         target_log="${cell_dir}/target.log"
         source_log="${cell_dir}/source.log"
         target_stats_file="${cell_dir}/target-stats.json"
@@ -140,21 +95,9 @@ for run in $(seq 1 "${RUNS}"); do
         a_pid=$!
         wait_for_stats "${source_stats_url}" 1
 
-        trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" \
-          "${payload}" warmup "$((WARMUP_SECONDS * 1000))"
-        wait_for_idle "${source_stats_url}"
-        trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" \
-          "${payload}" active "$((DURATION * 1000))"
-        wait_for_idle "${source_stats_url}"
-
-        result_file="${cell_dir}/results.json"
-        [[ -s "${result_file}" ]] || { echo "missing source result: ${result_file}" >&2; exit 1; }
-        settle_and_capture "${source_stats_url}" "${target_stats_url}" "${target_stats_file}" || {
-          echo "cell settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id}" >&2; exit 1;
-        }
-        merge_target_stats "${result_file}" "${target_stats_file}" "${SETTLE_MS}" "${SETTLE_BOUND_HIT}"
-        if [[ "${pattern}" == request-* ]]; then verify_request_counts "${result_file}"; fi
-        emit_final_results "${result_file}" | tee -a "${overall_report}"
+        bench_run_cell "${trigger_url}" "${source_stats_url}" "${target_stats_url}" \
+          "${run_id}" "${cell_id}" "${impl}" "${pattern}" "${payload}" \
+          "$((WARMUP_SECONDS * 1000))" "${cell_dir}/results.json" "${target_stats_file}"
 
         cleanup_cell
         wait_for_ports_free 5240 5259
@@ -163,4 +106,4 @@ for run in $(seq 1 "${RUNS}"); do
   done
 done
 
-echo "[bench] results=${OUTROOT}" >&2
+echo "[bench] results=${OUTPUT_DIR}" >&2

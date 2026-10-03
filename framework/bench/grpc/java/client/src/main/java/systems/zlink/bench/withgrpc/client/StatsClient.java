@@ -54,9 +54,8 @@ public final class StatsClient {
 
     /**
      * spec section 3 / FB-008 settle: no fixed sleep. Poll the server's received count
-     * until it stops moving, bounded. On bound expiry the caller marks the next cell
-     * that uses this same server contaminated and excludes it, rather than measuring a
-     * cell that is standing behind the previous cell's backlog.
+     * until it stops moving, bounded. A bound expiry excludes this cell; the next cell
+     * starts with a new server pair.
      */
     public DrainOutcome waitForServerDrain(String statsUrl, long quietMs, long boundMs)
         throws Exception {

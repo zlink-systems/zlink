@@ -3,6 +3,7 @@
 package systems.zlink.bench.withgrpc.client;
 
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -10,6 +11,8 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
+import systems.zlink.contracts.core.Zlink;
+import systems.zlink.framework.channels.ZLinkRouteClient;
 
 /** Writes one source-A cell in the aggregator's with-grpc-cell-v1 form. */
 public final class BenchResultWriter {
@@ -71,10 +74,12 @@ public final class BenchResultWriter {
         metadata.put("javaVersion", System.getProperty("java.version"));
         metadata.put("javaVendor", System.getProperty("java.vendor"));
         metadata.put("javaVmName", System.getProperty("java.vm.name"));
-        metadata.put("grpcJavaVersion", "1.72.0");
-        metadata.put("protobufJavaVersion", "4.30.2");
-        metadata.put("zlinkBindingVersion", "0.17.6");
-        metadata.put("frameworkVersion", "0.10.0");
+        metadata.put("grpcJavaVersion", artifactVersion(io.grpc.Grpc.class, "grpc-api"));
+        metadata.put("protobufJavaVersion",
+            artifactVersion(com.google.protobuf.Message.class, "protobuf-java"));
+        metadata.put("zlinkBindingVersion", artifactVersion(Zlink.class, "zlink"));
+        metadata.put("frameworkVersion", artifactVersion(ZLinkRouteClient.class,
+            "zlink-framework-core"));
         metadata.put("logicalCores", ClientResources.LOGICAL_CORES);
         metadata.put("clientSaturationMetric", ClientResources.CLIENT_SATURATION_METRIC);
         metadata.put("requestWindow", options.requestWindow);
@@ -144,6 +149,21 @@ public final class BenchResultWriter {
             return process.waitFor() == 0 ? output : "unknown";
         } catch (Exception error) {
             return "unknown";
+        }
+    }
+
+    private static String artifactVersion(Class<?> type, String artifact) throws IOException {
+        try {
+            Path location = Path.of(type.getProtectionDomain().getCodeSource()
+                .getLocation().toURI());
+            String name = location.getFileName().toString();
+            String prefix = artifact + "-";
+            if (name.startsWith(prefix) && name.endsWith(".jar")) {
+                return name.substring(prefix.length(), name.length() - ".jar".length());
+            }
+            throw new IOException("cannot read " + artifact + " version from " + location);
+        } catch (URISyntaxException error) {
+            throw new IOException("cannot read " + artifact + " artifact location", error);
         }
     }
 }

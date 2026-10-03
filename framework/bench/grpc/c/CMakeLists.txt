@@ -105,30 +105,3 @@ target_link_directories(bench_c_with_grpc_grpc_client PRIVATE
     ${WG_GRPCPP_LIBRARY_DIRS} ${WG_PROTOBUF_LIBRARY_DIRS})
 target_compile_features(bench_c_with_grpc_grpc_client PRIVATE cxx_std_17)
 target_compile_options(bench_c_with_grpc_grpc_client PRIVATE ${WG_CXX_FLAGS})
-
-set(WG_LIBZMQ_ROOT "${BENCH_REPO_ROOT}/bindings/c/bench/with_zmq/libzmq/libzmq_dist/linux-x64")
-set(WG_LIBZMQ_INCLUDE_DIR "${WG_LIBZMQ_ROOT}/include")
-set(WG_LIBZMQ_LIBRARY "${WG_LIBZMQ_ROOT}/lib/libzmq.so")
-if(EXISTS "${WG_LIBZMQ_INCLUDE_DIR}/zmq.h" AND EXISTS "${WG_LIBZMQ_LIBRARY}")
-    add_executable(bench_c_with_grpc_zmq_server zmq/bench_zmq_server.cpp)
-    target_include_directories(bench_c_with_grpc_zmq_server PRIVATE
-        common ${WG_LIBZMQ_INCLUDE_DIR})
-    target_link_libraries(bench_c_with_grpc_zmq_server PRIVATE
-        ${WG_LIBZMQ_LIBRARY} Threads::Threads)
-    target_compile_features(bench_c_with_grpc_zmq_server PRIVATE cxx_std_17)
-    target_compile_options(bench_c_with_grpc_zmq_server PRIVATE ${WG_CXX_FLAGS})
-    set_target_properties(bench_c_with_grpc_zmq_server PROPERTIES
-        BUILD_RPATH "${WG_LIBZMQ_ROOT}/lib")
-
-    add_executable(bench_c_with_grpc_zmq_client zmq/bench_zmq_client.cpp)
-    target_include_directories(bench_c_with_grpc_zmq_client PRIVATE
-        common ${WG_LIBZMQ_INCLUDE_DIR})
-    target_link_libraries(bench_c_with_grpc_zmq_client PRIVATE
-        ${WG_LIBZMQ_LIBRARY} Threads::Threads)
-    target_compile_features(bench_c_with_grpc_zmq_client PRIVATE cxx_std_17)
-    target_compile_options(bench_c_with_grpc_zmq_client PRIVATE ${WG_CXX_FLAGS})
-    set_target_properties(bench_c_with_grpc_zmq_client PROPERTIES
-        BUILD_RPATH "${WG_LIBZMQ_ROOT}/lib")
-else()
-    message(STATUS "Skipping with_grpc ZeroMQ send/send serial bench: libzmq dist not found")
-endif()

@@ -1,0 +1,28 @@
+{
+  "schema": "with-grpc-cell-v1",
+  "cells": [
+    {
+      "implementation": "grpc-c",
+      "pattern": "request-window",
+      "payload_size": 4096,
+      "throughput_per_second": 63263.0,
+      "bandwidth_mb_s": 259.123,
+      "latency_mean_ms": 1.561,
+      "latency_p95_ms": 1.761,
+      "latency_p99_ms": 1.913,
+      "client_cpu_percent": 8.958,
+      "client_memory_mb": 58.684,
+      "server_cpu_percent": 27.024,
+      "server_memory_mb": 94.691,
+      "peak_in_flight": 100,
+      "extra": {
+        "submitted": 189856.0,
+        "completed": 189856.0,
+        "errors": 0.0,
+        "blocked": 0.0,
+        "max_outstanding": 100.0,
+        "submit_wait_ms": 887.505
+      }
+    }
+  ]
+}

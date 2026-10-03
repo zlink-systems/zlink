@@ -13,15 +13,15 @@ import systems.zlink.bench.withgrpc.client.BenchOptions
 import systems.zlink.bench.withgrpc.client.BenchResultWriter
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication
 
-/** One Kotlin source-A process for one request-window@1024 auxiliary cell. */
+/** One Kotlin source-A process for one request-backpressure@1024 auxiliary cell. */
 fun main(args: Array<String>) {
     val options = BenchOptions(args)
     require(options.implementation == "grpc-kotlin" ||
         options.implementation == "zlink-framework-kotlin") {
         "Kotlin auxiliary implementation must be grpc-kotlin or zlink-framework-kotlin"
     }
-    require(options.scenario == "request-window" && options.payloadSizes.single() == 1024) {
-        "Kotlin auxiliary cells are fixed to request-window@1024"
+    require(options.scenario == "request-backpressure" && options.payloadSizes.single() == 1024) {
+        "Kotlin auxiliary cells are fixed to request-backpressure@1024"
     }
 
     val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -39,9 +39,9 @@ fun main(args: Array<String>) {
         } else {
             val result = drivers.runActive(trigger, checkNotNull(operation[0]))
             val streamImplementation = if (options.implementation == "grpc-kotlin") {
-                "one platform submit thread; 100 coroutines share one logical-stream window; grpc-kotlin coroutine stub"
+                "one platform submit thread; uncapped coroutine set; grpc-kotlin coroutine stub"
             } else {
-                "one platform submit thread; 100 coroutines share one logical-stream window; zlink-framework-kotlin suspend awaitReply"
+                "one platform submit thread; uncapped coroutine set; zlink-framework-kotlin suspend awaitReply"
             }
             val metadata = linkedMapOf<String, Any>(
                 "kotlinVersion" to KotlinVersion.CURRENT.toString(),

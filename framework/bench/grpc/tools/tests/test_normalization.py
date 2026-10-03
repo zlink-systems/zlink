@@ -1,8 +1,7 @@
 """Behaviour the Phase 0 material cannot exercise.
 
-``gated2`` has no contaminated cell, no client-saturated cell and no report with
-an unreadable unit, so those paths are driven from synthetic reports here. They
-are the paths that decide whether a later language can publish a number Phase 0's
+``gated2`` has no contaminated cell and no client-saturated cell, so those paths
+are driven from synthetic cells here. They are the paths that decide whether a later language can publish a number Phase 0's
 rules would have rejected, so they are tested even though nothing has hit them.
 """
 
@@ -20,114 +19,7 @@ sys.path.insert(0, _TOOLS)
 
 from benchagg.analysis import build_rows, judge_pair, spread_percent  # noqa: E402
 from benchagg.model import Cell, CellKey, RunSet  # noqa: E402
-from benchagg.readers import (  # noqa: E402
-    ReportError,
-    apply_client_ceiling,
-    cells_from_report,
-    detect_throughput_scale,
-    diagnostics_from_results_json,
-    parse_contaminated,
-    parse_diagnostics,
-    parse_options,
-    parse_result_lines,
-    read_run,
-    split_scenario,
-)
-
-
-def result_lines(scenario, size, throughput, bandwidth, **metrics):
-    rows = {"throughput": throughput, "bandwidth": bandwidth}
-    rows.update(metrics)
-    return "".join(
-        f"RESULT,current,{scenario},local,{size},{metric},{value:.3f}\n"
-        for metric, value in rows.items()
-    )
-
-
-class ScenarioTest(unittest.TestCase):
-    def test_splits_language_out_of_the_scenario_name(self):
-        self.assertEqual(
-            split_scenario("zlink-framework-dotnet-request-window"),
-            ("zlink-framework-dotnet", "request-window"),
-        )
-        self.assertEqual(split_scenario("grpc-c-send-saturation"), ("grpc-c", "send-saturation"))
-
-    def test_rejects_patterns_the_spec_does_not_define(self):
-        """The C bench emits two extra patterns; a loose suffix rule would fold
-        ``request-saturation`` into a table that spec 2 does not have."""
-        self.assertIsNone(split_scenario("grpc-c-request-saturation"))
-        self.assertIsNone(split_scenario("zlink-c-send-blocking"))
-        self.assertIsNone(split_scenario("request-window"))
-
-
-class UnitTest(unittest.TestCase):
-    def test_reads_kops_from_a_c_shaped_report(self):
-        text = result_lines("zlink-c-request-window", 1024, 454.606, 465.517)
-        scale, name = detect_throughput_scale(parse_result_lines(text))
-        self.assertEqual((scale, name), (1000.0, "KOPS"))
-
-    def test_reads_per_second_from_a_dotnet_shaped_report(self):
-        text = result_lines("zlink-dotnet-request-window", 1024, 35994.0, 36.858)
-        scale, name = detect_throughput_scale(parse_result_lines(text))
-        self.assertEqual((scale, name), (1.0, "per-second"))
-
-    def test_normalizes_both_shapes_to_the_same_number(self):
-        c_cells, _ = cells_from_report(
-            result_lines("zlink-c-request-window", 1024, 100.0, 102.4), "c"
-        )
-        net_cells, _ = cells_from_report(
-            result_lines("zlink-node-request-window", 1024, 100000.0, 102.4), "node"
-        )
-        self.assertAlmostEqual(
-            c_cells[0].throughput_per_second, net_cells[0].throughput_per_second, places=3
-        )
-
-    def test_refuses_a_report_whose_unit_it_cannot_establish(self):
-        """Neither guessing nor defaulting: an unreadable unit stops the report."""
-        text = result_lines("zlink-c-request-window", 1024, 100.0, 5.0)
-        with self.assertRaises(ReportError):
-            detect_throughput_scale(parse_result_lines(text))
-
-    def test_refuses_a_report_that_mixes_units(self):
-        text = result_lines("zlink-c-request-window", 1024, 100.0, 102.4) + result_lines(
-            "grpc-c-request-window", 1024, 100000.0, 102.4
-        )
-        with self.assertRaises(ReportError):
-            detect_throughput_scale(parse_result_lines(text))
-
-
-class DiagnosticsTest(unittest.TestCase):
-    STDOUT = """[bench] request payload=1024 mode=window window=100
-[bench] window zlink-node-request-window: peak_in_flight=42 of 100 abandoned=3
-[bench] send payload=1024 concurrency=8
-[bench] drain zlink-node-send-saturation: 900 ms bound_hit=False
-[bench] boundary zlink-node-send-saturation: server_received_at_close=500 post_drain=900 drain_ms=900
-[bench] request payload=4096 mode=window window=100
-[bench] window zlink-node-request-window: peak_in_flight=77 of 100 abandoned=0
-[bench] send payload=4096 concurrency=8
-[bench] drain zlink-node-send-saturation: 31000 ms bound_hit=True
-"""
-
-    def test_attributes_a_line_to_the_payload_section_that_precedes_it(self):
-        """The lines carry no payload of their own; the section marker supplies it."""
-        found = parse_diagnostics(self.STDOUT)
-        self.assertEqual(found[("zlink-node-request-window", 1024)]["peak_in_flight"], 42)
-        self.assertEqual(found[("zlink-node-request-window", 1024)]["abandoned"], 3)
-        self.assertEqual(found[("zlink-node-request-window", 4096)]["peak_in_flight"], 77)
-        self.assertEqual(found[("zlink-node-send-saturation", 1024)]["drain_ms"], 900.0)
-        self.assertFalse(found[("zlink-node-send-saturation", 1024)]["drain_bound_hit"])
-        self.assertTrue(found[("zlink-node-send-saturation", 4096)]["drain_bound_hit"])
-
-    def test_reads_the_contaminated_section(self):
-        text = (
-            "## Drain (FB-008)\n- a: drained in 5 ms\n\n"
-            "## Contaminated (excluded from tables and judgement)\n"
-            "- zlink-node-request-window@4096: previous cell did not drain in 30000 ms\n"
-        )
-        self.assertEqual(
-            parse_contaminated(text),
-            {"zlink-node-request-window@4096": "previous cell did not drain in 30000 ms"},
-        )
+from benchagg.readers import ReportError, read_run  # noqa: E402
 
 
 def cell(impl, pattern, size, run, throughput, **kwargs):
@@ -441,173 +333,6 @@ class ExclusionTest(unittest.TestCase):
         self.assertAlmostEqual(row.in_flight_depth, 8.0, places=6)
 
 
-class DeclaredCeilingTest(unittest.TestCase):
-    def test_reads_the_declaration_out_of_the_options_header(self):
-        text = (
-            "  payload_sizes: 1024,4096\n"
-            "  client_parallelism_ceiling: 1\n"
-            "  logical_cores: 20\n"
-            "  report_txt: /tmp/a:b/report.txt\n"
-            "| a table row | that must be ignored |\n"
-            + result_lines("zlink-node-request-window", 1024, 100.0, 0.1024)
-        )
-        options = parse_options(text)
-        self.assertEqual(options["client_parallelism_ceiling"], 1.0)
-        self.assertEqual(options["logical_cores"], 20.0)
-        self.assertEqual(options["payload_sizes"], "1024,4096")
-        self.assertEqual(options["report_txt"], "/tmp/a:b/report.txt")
-
-    def test_derives_cores_from_a_machine_wide_percentage(self):
-        cells, _ = cells_from_report(
-            result_lines(
-                "zlink-node-request-window", 1024, 100.0, 0.1024, client_cpu_percent=4.9
-            ),
-            "r1",
-        )
-        apply_client_ceiling(cells, ceiling=1.0, logical_cores=20.0)
-        self.assertAlmostEqual(cells[0].client_cores, 0.98, places=6)
-        self.assertTrue(cells[0].saturation_evaluated)
-        self.assertTrue(cells[0].client_saturated)
-
-    def test_leaves_cores_unknown_when_the_core_count_is_not_declared(self):
-        cells, _ = cells_from_report(
-            result_lines(
-                "zlink-node-request-window", 1024, 100.0, 0.1024, client_cpu_percent=4.9
-            ),
-            "r1",
-        )
-        apply_client_ceiling(cells, ceiling=1.0, logical_cores=None)
-        self.assertIsNone(cells[0].client_cores)
-        self.assertFalse(cells[0].saturation_evaluated)
-
-    def test_structured_cores_are_not_overwritten_by_derivation(self):
-        cells, _ = cells_from_report(
-            result_lines(
-                "zlink-node-request-window", 1024, 100.0, 0.1024, client_cpu_percent=4.9
-            ),
-            "r1",
-        )
-        cells[0].client_cores = 0.5
-        apply_client_ceiling(cells, ceiling=1.0, logical_cores=20.0)
-        self.assertEqual(cells[0].client_cores, 0.5)
-
-
-class StructuredDiagnosticsTest(unittest.TestCase):
-    """FB-021: values that decide publication travel as data, not as prose."""
-
-    PAYLOAD = {
-        "metadata": {"diagnosticsSchema": "with-grpc-cell-v1"},
-        "results": [
-            {
-                "scenario": "zlink-node-request-window",
-                "payloadSize": 1024,
-                "peakInFlight": 100,
-                "requestWindow": 100,
-                "abandoned": 0,
-                "clientCores": 0.98,
-                "clientParallelismCeiling": 1,
-            },
-            {
-                "scenario": "zlink-node-send-saturation",
-                "payloadSize": 1024,
-                "drainMs": 16674,
-                "drainBoundHit": False,
-                "serverReceivedAtClose": 228385,
-                "contaminated": True,
-                "contaminationReason": "previous cell did not drain",
-            },
-        ],
-    }
-
-    def test_reads_diagnostics_from_a_declaring_results_json(self):
-        found = diagnostics_from_results_json(self.PAYLOAD)
-        window = found[("zlink-node-request-window", 1024)]
-        self.assertEqual(window["peak_in_flight"], 100)
-        self.assertEqual(window["client_cores"], 0.98)
-        self.assertEqual(window["client_parallelism_ceiling"], 1)
-        send = found[("zlink-node-send-saturation", 1024)]
-        self.assertEqual(send["drain_ms"], 16674)
-        self.assertTrue(send["contaminated"])
-
-    def test_ignores_a_results_json_that_declares_no_schema(self):
-        """Older .NET output. It falls through to the prose reader instead."""
-        legacy = {"metadata": {}, "results": self.PAYLOAD["results"]}
-        self.assertEqual(diagnostics_from_results_json(legacy), {})
-
-    def _write_run(self, run_dir, results_payload, declare_ceiling):
-        import json as _json
-
-        report = ""
-        if declare_ceiling:
-            report += "  client_parallelism_ceiling: 1\n"
-        report += result_lines("zlink-node-request-window", 1024, 100.0, 0.1024)
-        with open(os.path.join(run_dir, "report.txt"), "w") as handle:
-            handle.write(report)
-        with open(os.path.join(run_dir, "stdout.txt"), "w") as handle:
-            handle.write(
-                "[bench] request payload=1024 mode=window window=100\n"
-                "[bench] window zlink-node-request-window: peak_in_flight=7 of 100 abandoned=93\n"
-            )
-        with open(os.path.join(run_dir, "results.json"), "w") as handle:
-            _json.dump(results_payload, handle)
-
-    def test_results_json_is_preferred_over_the_printed_lines(self):
-        """The prose says depth 7; the structured record says 100. Data wins."""
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as run_dir:
-            self._write_run(run_dir, self.PAYLOAD, declare_ceiling=True)
-            cells, notes = read_run(run_dir)
-
-        self.assertEqual(cells[0].peak_in_flight, 100)
-        self.assertEqual(cells[0].abandoned, 0)
-        self.assertEqual(cells[0].client_cores, 0.98)
-        self.assertTrue(any("results.json" in note for note in notes))
-
-    def test_prose_is_used_when_results_json_does_not_declare(self):
-        """Older output. The fallback is still there and still works."""
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as run_dir:
-            self._write_run(run_dir, {"metadata": {}, "results": []}, declare_ceiling=False)
-            cells, notes = read_run(run_dir)
-
-        self.assertEqual(cells[0].peak_in_flight, 7)
-        self.assertEqual(cells[0].abandoned, 93)
-        self.assertTrue(any("legacy" in note for note in notes))
-
-
-    def test_a_contaminated_cell_with_no_metrics_is_still_reported(self):
-        """FB-008: a contaminated cell was never measured, so it has no row.
-
-        It must still appear as excluded rather than disappear from the run.
-        """
-        import json as _json
-        import tempfile
-
-        payload = {
-            "metadata": {
-                "diagnosticsSchema": "with-grpc-cell-v1",
-                "contaminatedCells": [
-                    "zlink-node-request-serial@4096: previous cell did not drain"
-                ],
-            },
-            "results": [],
-        }
-        with tempfile.TemporaryDirectory() as run_dir:
-            self._write_run(run_dir, payload, declare_ceiling=True)
-            cells, _ = read_run(run_dir)
-
-        excluded = [c for c in cells if c.contaminated]
-        self.assertEqual(len(excluded), 1)
-        self.assertEqual(str(excluded[0].key), "zlink-node-request-serial@4096")
-        self.assertIn("did not drain", excluded[0].contamination_reason)
-        self.assertIsNone(excluded[0].throughput_per_second)
-
-
-if __name__ == "__main__":
-    unittest.main()
-
 
 class JvmThreadCoresInstrumentTest(unittest.TestCase):
     """FB-023 extended: java declares a third instrument.
@@ -685,10 +410,60 @@ class JvmThreadCoresInstrumentTest(unittest.TestCase):
             ],
         }
         with tempfile.TemporaryDirectory() as directory:
-            run = pathlib.Path(directory) / "java-router-1"
-            run.mkdir()
-            (run / "cells.json").write_text(json.dumps(payload), encoding="utf-8")
-            cells, _notes = read_run(run)
+            cell_dir = pathlib.Path(directory) / "run1" / "zlink-java-request-window-1024"
+            cell_dir.mkdir(parents=True)
+            (cell_dir / "results.json").write_text(json.dumps(payload), encoding="utf-8")
+            cells, _notes = read_run(cell_dir.parent)
         self.assertEqual(len(cells), 1)
         self.assertEqual(cells[0].jvm_thread_cores, 0.42)
         self.assertEqual(cells[0].saturation_value, 0.42)
+
+
+class RunLayoutTest(unittest.TestCase):
+    """The only input is <run>/<cell>/results.json (README section 11)."""
+
+    def _run(self, directory, files):
+        run = pathlib.Path(directory) / "run1"
+        for relative, text in files.items():
+            path = run / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        return run
+
+    def test_a_contaminated_cell_with_no_metrics_is_still_reported(self):
+        """FB-008: a contaminated cell was never measured but must stay visible."""
+        payload = {
+            "schema": "with-grpc-cell-v1",
+            "cells": [
+                {
+                    "implementation": "zlink-node",
+                    "pattern": "request-serial",
+                    "payload_size": 4096,
+                    "contaminated": True,
+                    "contamination_reason": "previous cell did not drain",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            run = self._run(directory, {"zlink-node-request-serial-4096/results.json": json.dumps(payload)})
+            cells, _ = read_run(str(run))
+        self.assertEqual(len(cells), 1)
+        self.assertTrue(cells[0].contaminated)
+        self.assertIsNone(cells[0].throughput_per_second)
+
+    def test_a_run_with_only_report_text_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = self._run(directory, {"report.txt": "RESULT,current,zlink-c-request-serial,local,1024,throughput,1\n",
+                                        "zlink-c-request-serial-1024/report.txt": "x"})
+            with self.assertRaisesRegex(ReportError, "no results.json"):
+                read_run(str(run))
+
+    def test_a_results_json_that_is_not_a_cell_document_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = self._run(directory, {"cell-a/results.json": json.dumps({"metadata": {}, "results": []})})
+            with self.assertRaisesRegex(ReportError, "unsupported cell schema"):
+                read_run(str(run))
+
+
+if __name__ == "__main__":
+    unittest.main()

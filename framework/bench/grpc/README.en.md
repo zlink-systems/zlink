@@ -178,6 +178,7 @@ one-way send. Under this condition the difference was N times.
   with no reply can't be observed correctly.
 - TLS, compression, service mesh, gateway, and broker are not used.
 - Languages aren't measured at the same time. Only one language is measured at a time.
+- Before each cell, wait until the one-minute load average is below 2.0, up to 600 seconds.
 
 The two ZLink rows differ in how many endpoints they use. The raw binding row separates its
 request echo endpoint from its command endpoint and so uses two, while the framework row uses one
@@ -193,9 +194,10 @@ configuration must be revisited.
 The settle between cells follows this contract. After a cell completes, do not wait a fixed time.
 Poll the server's received count until it stops advancing, with an upper bound on that wait. If the
 count has not stopped advancing within the bound, record that fact and the observed drain time in
-the results, and mark the next cell that uses the same server as contaminated, excluding it from the
-tables and from every judgement. A contaminated cell is not measured and published. The observed
-drain time is recorded per cell in the results. This bound is not a formality; it is load-bearing.
+the results, and set `drain_bound_hit` on that cell so aggregation excludes it. If warmup settle
+reaches the bound, mark only that cell as contaminated and exclude it from aggregation. Each cell
+starts a new process pair, so later cells are unaffected by residual state from the previous one.
+The observed drain time is recorded per cell in the results. This bound is not a formality; it is load-bearing.
 A bound set too small loses cells even on a healthy run, so it must be large enough that a healthy
 run never reaches it. The reference value is 30 seconds.
 
@@ -480,7 +482,7 @@ production performance or superiority across every payload is made.
 | `node` | `@grpc/grpc-js` | `framework/languages/node/packages/framework` | `bindings/node` | `packages/framework-codec-protobuf` |
 | `java` | grpc-java | `zlink-framework-core` | `bindings/java` | `zlink-framework-codec-protobuf` |
 | `kotlin` | grpc-kotlin coroutine stub | `zlink-framework-kotlin` | `bindings/kotlin` | Uses the same codec as Java |
-| `cpp` | system `libgrpc++` and `grpc_cpp_plugin` | `framework/languages/cpp/framework` | `bindings/cpp` | `zlink::framework_codec_protobuf` |
+| `cpp` | `grpc++` and `grpc_cpp_plugin` from the Framework vcpkg manifest's `bench` feature | `framework/languages/cpp/framework` | `bindings/cpp` | `zlink::framework_codec_protobuf` |
 
 A's HTTP trigger listener uses each language's standard HTTP server (ASP.NET Core minimal API, Node
 `http`, the JDK `HttpServer`, C++ framework HTTP hosting). The listener sits outside the measured
@@ -491,8 +493,8 @@ uses a suspend interface on the ZLink side, so the gRPC side uses the grpc-kotli
 stub as well. Only when the coroutine stub can't be used is the grpc-java blocking stub used, and
 that reason is recorded in the result.
 
-C++ uses the `libgrpc++` installed on the system. gRPC isn't built through vcpkg. This machine's
-version is 1.51.1, and since it's an old version it must be recorded in the result.
+C++ gets gRPC and protobuf from the Framework vcpkg manifest's `bench` feature. The gRPC and
+protobuf versions used are recorded in the cell metadata.
 
 ### 8.1.1 Per-message Payload Work
 
@@ -617,11 +619,11 @@ in the result as in §8.2.
 4. `phase=warmup` trigger → wait until A finishes warmup and reports `phase=idle` on stats.
 5. `phase=active` trigger → A closes the measured window after `durationMs`.
 6. Settle: poll B's (and A's) stats until the received and completed counts stop growing (30-second
-   limit, the contamination rule of §3 unchanged).
-7. A writes the cell's raw JSON under `log/<lang>/<stamp>/` and emits the `RESULT` lines. The runner
-   merges B's stats into the same JSON as `target_stats`.
-8. Stop A and B. The next cell starts with a fresh process pair (a process is never reused across
-   cells, so a previous cell's residual state can't enter the next one).
+   limit; an active cell that reaches it is marked `drain_bound_hit` and excluded from aggregation).
+7. A writes the cell's raw JSON into the cell directory of §11. Implementations with a text report
+   also record `RESULT` lines. The runner merges B's stats into the same JSON as `target_stats`.
+8. Stop A and B. The next cell starts with a fresh process pair, so it is unaffected by residual
+   state from the previous cell.
 
 The gRPC implementation's A has the same trigger listener and runs as many unary stubs toward B as
 there are streams. The gRPC server configuration stays at the language default and is recorded
@@ -633,3 +635,53 @@ Kotlin shares the binding, server, and codec with Java, so it's excluded from th
 Instead, two supplementary cells that show the cost of the Kotlin call layer — `grpc-kotlin`
 (coroutine stub) and `zlink-framework-kotlin` (suspend calls) at `request-backpressure @1024` — are placed
 next to the Java rows. Only A is Kotlin; B is the Java binary on the Java band of §9, as is.
+
+## 11. Runner Inputs and Result Layout
+
+There are six runners: `c/run_local.sh`, `cpp/run_local.sh`, `dotnet/run_local.sh`,
+`java/run_local.sh`, `java/run_local_kotlin.sh`, and `node/run_local.sh`. Every runner takes only the
+environment variables below, with no CLI options and no positional arguments. If input names or
+defaults differ between languages, the same measurement runs under different conditions, and the
+difference doesn't show in the result table.
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `OUTPUT_DIR` | `framework/bench/grpc/log/<RUN_STAMP>/<lang>` | Result root. A relative path is resolved against the directory the runner was started from |
+| `RUN_STAMP` | Start time (`YYYYmmdd_HHMMSS`) | Name of the default `OUTPUT_DIR` |
+| `PAYLOAD_SIZES` | `1024,4096` | Payload sizes of §2 |
+| `DURATION_SECONDS` | `5` | Active window of each cell (§3) |
+| `PATTERNS` | `request-serial,request-backpressure,send-saturation` | Patterns of §2 |
+| `IMPLEMENTATIONS` | Every implementation of the language (§1.1, §1.2) | Implementations to measure |
+| `RUNS` | `3` | Number of runs. The G5 reproducibility check needs three runs |
+| `SKIP_BUILD` | `0` | `0` builds with the language's `<lang>/build.sh` before measuring; `1` uses the artifacts already built |
+
+- `<lang>` is one of `c`, `cpp`, `dotnet`, `java`, `kotlin`, and `node`.
+- The Kotlin runner measures only the supplementary cells of §10.5. For this runner the defaults of
+  `PATTERNS` and `PAYLOAD_SIZES` are `request-backpressure` and `1024`, and other values are rejected.
+- If a value is outside these ranges, the runner rejects it before the measurement starts.
+
+Values outside the table aren't inputs. Warmup (§8.2), send concurrency 8 and the 30-second drain
+limit (§3), and ports (§9) are set by the runner and recorded in the `metadata` of the cell JSON.
+
+Results are written in this layout.
+
+```text
+<OUTPUT_DIR>/
+  run<N>/                                  N = 1..RUNS
+    <implementation>-<pattern>-<payload>/
+      results.json                         cell raw JSON
+      source.log, target.log, ...          diagnostics
+```
+
+All six runners, including the C reference bench, write `results.json` in the `with-grpc-cell-v1`
+format. A runner writes only the raw cells and makes no table or summary file. Tables, ratios, and
+verdicts are made by the shared aggregator (`tools/bench_aggregate.py`, §7.4), which reads only these
+files.
+
+To measure every language at once, use `run_all.sh`. It runs the runners of `BENCH_LANGS` (default
+`c cpp dotnet java kotlin node`) in turn, writing to `framework/bench/grpc/log/<RUN_STAMP>/<lang>/`.
+Its inputs are `BENCH_LANGS` and `RUN_STAMP`, `DURATION_SECONDS`, `RUNS`, and `SKIP_BUILD` from the
+table above; patterns, payloads, and implementations use each runner's defaults (the full matrix).
+After the measurement, for each language except C it runs the aggregator together with the C
+results, leaving `<lang>/report.md` and `<lang>/aggregate.json`. The Kotlin cells go into the Java
+report, as §10.5 describes.
