@@ -1238,6 +1238,8 @@ export class DefaultZLinkSpotManager {
     if (seal === undefined) return false;
     if (seal !== true) {
       await this.activationLifecycle.sealForClose(operation.activation, seal);
+    } else {
+      await operation.activation.executionBarrier.waitForStartedTurns(signal);
     }
     const closingFailure = await this.activationLifecycle.cleanupClosedActivation(
       operation.activation,
