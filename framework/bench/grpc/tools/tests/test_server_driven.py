@@ -50,8 +50,9 @@ class ServerDrivenCellTest(unittest.TestCase):
         self.assertEqual(raw.target_errors, 0)
         self.assertEqual(raw.drain_ms, 20.0)
         send = next(cell for cell in cells if cell.key.pattern == "send-saturation")
-        self.assertEqual(send.throughput_per_second, 50000.0)
-        self.assertEqual(send.bandwidth_mb_s, 51.2)
+        self.assertEqual(send.server_received_at_close, 240000)
+        self.assertEqual(send.throughput_per_second, 48000.0)
+        self.assertEqual(send.bandwidth_mb_s, 49.152)
         self.assertTrue(any("5 file(s)" in note for note in notes))
 
     def test_three_complete_runs_make_the_median_and_g5(self):
@@ -121,7 +122,7 @@ class ServerDrivenRenderTest(unittest.TestCase):
         self.assertIn("Target Mem", table)
         self.assertNotIn("Client CPU", table)
         self.assertIn("5.32 KOPS", table)
-        self.assertIn("50.00 KMSG/s", table)
+        self.assertIn("48.40 KMSG/s", table)
 
     def test_current_grid_has_three_patterns_and_omits_archived_window_rows(self):
         self.assertEqual(
@@ -137,7 +138,7 @@ class ServerDrivenRenderTest(unittest.TestCase):
         )
         self.assertNotIn("request-window", output)
         self.assertIn(
-            "RESULT,current,zlink-dotnet-send-saturation,local,1024,throughput,50000.000",
+            "RESULT,current,zlink-dotnet-send-saturation,local,1024,throughput,48400.000",
             output,
         )
 
@@ -156,7 +157,7 @@ class ServerDrivenRenderTest(unittest.TestCase):
         table = render_doc_table(self.rows, (1024,), "dotnet")
         self.assertTrue(table.startswith("| Language | Pattern | Payload |"))
         self.assertNotIn("request-window", table)
-        self.assertIn("| dotnet | send-saturation | 1024B | `zlink-dotnet` | 50.000 | KMSG/s |", table)
+        self.assertIn("| dotnet | send-saturation | 1024B | `zlink-dotnet` | 48.400 | KMSG/s |", table)
         self.assertNotIn("`zlink-c`", table)
 
 

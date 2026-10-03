@@ -179,18 +179,25 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
 def _complete_from_target_stats(source: Cell) -> None:
     """Finish a server-driven source cell from its own ``target_stats``.
 
-    A cell without ``target_stats`` stays ``incomplete``. On ``send-saturation``
-    the throughput is what the target received, not what the source submitted.
+    A cell without ``target_stats`` stays ``incomplete``. ``target_stats`` is the
+    post-settle snapshot. Request rows retain its settled target count; send
+    throughput uses the source cell's active-phase boundary count.
     """
     if not source.target_stats:
         source.status = "incomplete"
         source.incomplete_reason = "embedded target_stats is missing"
         return
 
-    source.server_received_at_close = int(source.target_stats["received"])
     source.target_errors = int(source.target_stats["errors"])
     source.drain_ms = float(source.target_stats["drainMs"])
-    if source.key.pattern == "send-saturation":
+    if source.key.pattern != "send-saturation":
+        source.server_received_at_close = int(source.target_stats["received"])
+    else:
+        if source.server_received_at_close is None:
+            raise ReportError(
+                f"runId={source.run_id} cellId={source.cell_id}: "
+                "server_received_at_close is required for send-saturation"
+            )
         duration_ms = float(source.trigger["durationMs"])
         if duration_ms <= 0:
             raise ReportError(

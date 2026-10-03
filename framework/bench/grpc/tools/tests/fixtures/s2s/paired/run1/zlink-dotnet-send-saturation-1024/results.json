@@ -29,6 +29,7 @@
       "client_parallelism_ceiling": 8.0,
       "server_cpu_percent": 6.0,
       "server_memory_mb": 85.0,
+      "server_received_at_close": 240000,
       "target_stats": {
         "received": 250000,
         "errors": 0,
