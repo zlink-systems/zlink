@@ -264,10 +264,20 @@ execution unit kept alive from accepting one STREAM connection until it closes �
 callback starts — no separate rule exists per context. Cancellation, source close, and
 shutdown clean up waiters and handed-off permits exactly once.
 
-- **Same-host relay, fanout, serial-owner, and relocation paths must not wait for a new
-  permit from the same authority while holding a gate, execution authority, or
-  resource needed to return a permit.** A sustained wait/capacity cycle is not grounds
-  for a bypass — it is a protocol or runtime bug.
+- **Framework-internal work must not wait for a new permit from the same authority while
+  holding a gate, execution authority, or resource needed to return a permit.**
+  Framework-internal work is the same-host relay, fanout, serial-owner, and relocation
+  paths and a request's deadline and terminal handling. A sustained wait/capacity cycle in
+  this scope is not grounds for a bypass — it is a protocol or runtime bug. A request's
+  deadline handling does not wait for an application gate or a permit.
+- **An application handler that keeps its gate while awaiting a request sent to another
+  target is not subject to the prohibition above**
+  ([Handler turn §4](02-handler-turn-and-execution-gate.en.md#4-waiting-and-returning-within-the-same-turn)).
+  If every permit is in use and that target's ingress cannot progress, the request ends
+  with `DeadlineExceeded` at
+  [its own deadline](01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget),
+  and the handler terminal returns the gate. This is the normal result of saturation, not
+  a runtime bug.
 
 ## 4. Reading Multiple Items from the Socket (Implementation)
 

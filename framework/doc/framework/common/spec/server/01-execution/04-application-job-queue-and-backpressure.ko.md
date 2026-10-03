@@ -233,10 +233,18 @@ malformed record의 permit은 내부 처리 직후 반환한다. 이 반환 시�
 순간과 같은 지점이다 — 문맥마다 별도 규칙을 두지 않는다. Cancellation,
 source close와 shutdown은 waiter와 handoff permit을 정확히 한 번 정리한다.
 
-- **Same-host relay, fanout, serial owner와 relocation 경로는 permit 반환에 필요한 gate·
-  execution authority·resource를 쥔 채 같은 authority의 새 permit acquire를 기다려서는 안
-  된다.** 지속되는 wait/capacity cycle은 우회를 정당화하는 근거가 아니라 protocol 또는
-  runtime bug다.
+- **Framework 내부 작업은 permit 반환에 필요한 gate·execution authority·resource를 쥔 채
+  같은 authority의 새 permit acquire를 기다려서는 안 된다.** Framework 내부 작업은
+  same-host relay, fanout, serial owner, relocation 경로와 request의 deadline·terminal
+  처리다. 이 범위에서 지속되는 wait/capacity cycle은 우회를 정당화하는 근거가 아니라
+  protocol 또는 runtime bug다. Request의 deadline 처리는 application gate와 permit 획득을
+  기다리지 않는다.
+- **Application handler가 gate를 유지한 채 다른 대상에 보낸 request를 기다리는 것은 위
+  금지의 대상이 아니다**([Handler turn §4](02-handler-turn-and-execution-gate.ko.md#4-같은-turn에서의-대기와-반납)).
+  Permit이 모두 쓰여 그 target의 ingress가 진행하지 못하면 request는
+  [자기 deadline](01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)에
+  `DeadlineExceeded`로 끝나고, handler terminal이 gate를 반환한다. 이 결과는 포화의 정상
+  결과이며 runtime bug가 아니다.
 
 ## 4. 소켓에서 여러 건 읽기 (구현)
 
