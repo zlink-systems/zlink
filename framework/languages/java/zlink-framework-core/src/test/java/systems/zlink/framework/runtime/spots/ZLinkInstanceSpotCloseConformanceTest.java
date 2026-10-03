@@ -1149,9 +1149,11 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         private long originalGeneration;
         private long lastGeneration;
         final AtomicInteger missingPlacementAttempts = new AtomicInteger();
+
         /** One authority read answered with an earlier record, as a caller's racing read. */
-        final java.util.concurrent.atomic.AtomicReference<ZLinkStoreReadResult>
-                staleAuthorityRead = new java.util.concurrent.atomic.AtomicReference<>();
+        final java.util.concurrent.atomic.AtomicReference<ZLinkStoreReadResult> staleAuthorityRead =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
         private volatile ZLinkStoreKey authorityKey;
 
         ObservedStore(String spotId, Observation observation) {

@@ -115,10 +115,11 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         //  Inside the Close turn every message not yet run is already behind the Close
         //  (Spot messaging §7 step 1); outside a turn the accepted turns drain first.
         if (dispatchQueue.isCurrent()) return runLifecycleExecution(operation);
-        return awaitQuiescence().thenCompose(
-                ignored ->
-                        dispatchQueue.enqueuePreviouslyAccepted(
-                                () -> host.runWithOutbound(outbound, operation)));
+        return awaitQuiescence()
+                .thenCompose(
+                        ignored ->
+                                dispatchQueue.enqueuePreviouslyAccepted(
+                                        () -> host.runWithOutbound(outbound, operation)));
     }
 
     void sealTimerAdmission() {
