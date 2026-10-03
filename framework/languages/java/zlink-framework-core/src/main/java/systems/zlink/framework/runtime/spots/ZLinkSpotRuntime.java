@@ -632,7 +632,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     var existing =
                                                             instanceSpotActivations.get(
                                                                     message.route().targetSpotId());
+                                                    // An older object generation is a closing
+                                                    // incarnation that keeps its lane until its
+                                                    // release ends; a route of a later generation
+                                                    // belongs to the next incarnation.
                                                     return existing == null
+                                                                    || message.route()
+                                                                                    .objectGeneration()
+                                                                            > existing.context
+                                                                                    .objectGeneration()
                                                             ? null
                                                             : existing.admitExisting(
                                                                     message, received);
