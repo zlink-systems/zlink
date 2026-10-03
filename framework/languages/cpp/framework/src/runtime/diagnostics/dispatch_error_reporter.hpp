@@ -238,9 +238,12 @@ inline dispatch_error_reason_t
 dispatch_reason_from_error (const framework_exception_t *error) noexcept
 {
     if (error != nullptr
-        && detail::failure_code (*error)
-             == static_cast<std::uint32_t> (
-               runtime::protocol::framework_error_code::routeNotConnected)) {
+        && (detail::failure_code (*error)
+              == static_cast<std::uint32_t> (
+                runtime::protocol::framework_error_code::routeNotConnected)
+            || detail::failure_code (*error)
+                 == static_cast<std::uint32_t> (
+                   runtime::protocol::framework_error_code::spotMoving))) {
         return dispatch_error_reason_t::stale_target;
     }
     if (error != nullptr
