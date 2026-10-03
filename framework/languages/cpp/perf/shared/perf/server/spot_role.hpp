@@ -90,7 +90,12 @@ inline spot_objects_t create_spots (role_t &role, const std::atomic<bool> &stopp
 inline json find_spots (role_t &role, const std::atomic<bool> &stopping)
 {
     const auto &config = role.config;
-    wait_for_public (role, stopping, [&] { return role.mesh.load () != nullptr && role.mesh.load ()->snapshot (*config.mesh_name).is_ready; }, "the RouteMesh");
+    wait_for_public (role, stopping, [&] {
+        if (role.mesh.load () == nullptr)
+            return false;
+        const auto mesh = role.mesh.load ()->snapshot (*config.mesh_name);
+        return mesh.is_ready && mesh.ready_peer_count > 0;
+    }, "the RouteMesh to have a ready Object Server peer");
     auto &manager = role.service<fw::spot_manager_t> ();
     json found = json::array ();
     for (const auto &spot_id : config.spot_ids) {

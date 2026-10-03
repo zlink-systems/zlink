@@ -46,7 +46,7 @@ public sealed class S2sChannelToSpotSendSendEchoScenario(IZLinkSpotClient spots,
         timeout.CancelAfter(config.workload.setupTimeoutMs);
         try
         {
-            while (!meshRuntime.GetStatus(config.meshName!).IsReady) await Task.Delay(10, timeout.Token);
+            while (meshRuntime.GetStatus(config.meshName!) is not { IsReady: true, ReadyPeerCount: > 0 }) await Task.Delay(10, timeout.Token);
             List<object> found = [];
             foreach (var spotId in config.spotIds)
             {

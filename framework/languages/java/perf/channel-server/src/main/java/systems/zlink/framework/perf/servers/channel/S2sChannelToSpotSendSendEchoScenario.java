@@ -72,7 +72,10 @@ public final class S2sChannelToSpotSendSendEchoScenario {
 
     public CompletionStage<Void> prepare() {
         int timeoutMs = config.workload().setupTimeoutMs();
-        return Polling.until(() -> meshRuntime.snapshot(config.meshName()).isReady(), 10, timeoutMs)
+        return Polling.until(() -> {
+            var mesh = meshRuntime.snapshot(config.meshName());
+            return mesh.isReady() && mesh.readyPeerCount() > 0; // a ready Object Server peer, not only a ready local node
+        }, 10, timeoutMs)
                 .thenCompose(ignored -> SpotSetup.findAll(manager, config))
                 .thenCompose(found -> {
                     sequences = new AtomicLongArray(config.workload().logicalStreams());
