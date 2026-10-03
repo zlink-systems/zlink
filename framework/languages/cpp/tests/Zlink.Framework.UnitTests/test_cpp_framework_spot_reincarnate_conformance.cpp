@@ -260,12 +260,20 @@ class observed_store_t final : public zf::location_store_t
             auto observed =
               std::make_shared<zf::task_completion_source_t<zf::authority_read_result_t>> ();
             auto observed_task = observed->task ();
-            if (!zf::detail::submit_blocking_call ([inner = _inner, observed] {
+            // Concurrent writes observe the authority in turn, so a read taken
+            // before a later write never replaces that write's evidence.
+            if (!zf::detail::submit_blocking_call ([inner = _inner, evidence = _evidence,
+                                                    observation = _observation, observed,
+                                                    clears_terminal_journal] {
                     try {
+                        std::lock_guard observing (*observation);
                         zf::runtime::provider_location_repository_t repository (*inner);
-                        observed->complete (
+                        auto read =
                           repository.read_authority (zf::runtime::spot_authority_key (spot_id))
-                            .result ());
+                            .result ();
+                        if (read)
+                            record_observation (*evidence, read.value (), clears_terminal_journal);
+                        observed->complete (std::move (read));
                     }
                     catch (const zf::framework_exception_t &error) {
                         observed->complete (
@@ -286,27 +294,7 @@ class observed_store_t final : public zf::location_store_t
                   zf::framework_error_kind_t::shutting_down,
                   "Store observation executor is stopping"));
             }
-            const auto read = co_await observed_task;
-            const auto *snapshot = std::get_if<zf::authority_snapshot_t> (&read);
-            std::lock_guard lock (_evidence->mutex);
-            if (clears_terminal_journal)
-                _evidence->order.push_back ("activationJournalCleared");
-            const auto &previous = _evidence->last_authority;
-            if (snapshot && (!previous || previous->store_version != snapshot->store_version)) {
-                if (previous && previous->object_generation != snapshot->object_generation)
-                    _evidence->order.push_back ("authorityReincarnated");
-                _evidence->committed.push_back (*snapshot);
-                _evidence->last_authority = *snapshot;
-            } else if (!snapshot && previous) {
-                const auto reincarnated =
-                  std::find (_evidence->order.begin (), _evidence->order.end (),
-                             "authorityReincarnated")
-                  != _evidence->order.end ();
-                _evidence->order.push_back (reincarnated ? "newGenerationDeleted"
-                                                         : "authorityReleased");
-                _evidence->deleted_generations.push_back (previous->object_generation);
-                _evidence->last_authority.reset ();
-            }
+            (void) co_await observed_task;
         }
         co_return result;
     }
@@ -321,8 +309,33 @@ class observed_store_t final : public zf::location_store_t
     }
 
   private:
+    static void record_observation (evidence_t &evidence,
+                                    const zf::authority_read_result_t &read,
+                                    bool clears_terminal_journal)
+    {
+        const auto *snapshot = std::get_if<zf::authority_snapshot_t> (&read);
+        std::lock_guard lock (evidence.mutex);
+        if (clears_terminal_journal)
+            evidence.order.push_back ("activationJournalCleared");
+        const auto &previous = evidence.last_authority;
+        if (snapshot && (!previous || previous->store_version != snapshot->store_version)) {
+            if (previous && previous->object_generation != snapshot->object_generation)
+                evidence.order.push_back ("authorityReincarnated");
+            evidence.committed.push_back (*snapshot);
+            evidence.last_authority = *snapshot;
+        } else if (!snapshot && previous) {
+            const auto reincarnated =
+              std::find (evidence.order.begin (), evidence.order.end (), "authorityReincarnated")
+              != evidence.order.end ();
+            evidence.order.push_back (reincarnated ? "newGenerationDeleted" : "authorityReleased");
+            evidence.deleted_generations.push_back (previous->object_generation);
+            evidence.last_authority.reset ();
+        }
+    }
+
     std::shared_ptr<evidence_t> _evidence;
     std::shared_ptr<zf::runtime::in_memory_location_store_t> _inner;
+    std::shared_ptr<std::mutex> _observation = std::make_shared<std::mutex> ();
 };
 
 class reincarnating_spot_t final : public zf::instance_spot_t
