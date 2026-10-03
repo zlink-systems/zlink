@@ -915,8 +915,8 @@ final class ZLinkJavaRawMeshNode
         for (long staleIntentId : staleIntentIds) {
             if (!peerIntentIsClosed(staleIntentId)) {
                 requestPeerIntentClose(staleIntentId);
-                throw new IllegalStateException(
-                        "previous peer connection has not completed liveness close");
+                throw new systems.zlink.framework.runtime.internal.backend
+                        .ZLinkPeerIntentClosePendingException();
             }
         }
         // requestPeerIntentClose already terminated the shared endpoint. Do

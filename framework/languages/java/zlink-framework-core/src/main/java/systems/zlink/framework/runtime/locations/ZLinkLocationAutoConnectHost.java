@@ -11,6 +11,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendConnectableS
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkPeerIntentClosePendingException;
 import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntimeConfiguration;
 import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeerResolver;
@@ -416,7 +417,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 : identity;
     }
 
-    private static final class MeshNodeExecutor implements ZLinkAutoConnectExecutor {
+    static final class MeshNodeExecutor implements ZLinkAutoConnectExecutor {
         private final ZLinkInternalMeshNode node;
         private final Set<String> manualEndpoints;
         private final Map<String, RoutingId> manualExpectedRids;
@@ -456,14 +457,21 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             if (manual && !ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
                 return true;
             }
-            long intent =
-                    ZLinkAutoConnectPlanner.hasRid(target.nodeRid())
-                            ? node.replacePeerConnection(
-                                    target.endpoint(),
-                                    target.nodeRid(),
-                                    target.lifecycleGeneration(),
-                                    admissionSecurityIdentity(target))
-                            : node.connectPeer(target.endpoint());
+            long intent;
+            try {
+                intent =
+                        ZLinkAutoConnectPlanner.hasRid(target.nodeRid())
+                                ? node.replacePeerConnection(
+                                        target.endpoint(),
+                                        target.nodeRid(),
+                                        target.lifecycleGeneration(),
+                                        admissionSecurityIdentity(target))
+                                : node.connectPeer(target.endpoint());
+            } catch (ZLinkPeerIntentClosePendingException pending) {
+                //  The previous intent's close is still in progress; the next reconcile
+                //  submits this connection again.
+                return false;
+            }
             connectionIntents.put(target.endpoint(), new ConnectionIntent(target.key(), intent));
             return true;
         }
@@ -476,11 +484,15 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             }
             if (manualEndpoints.contains(target.endpoint())) {
                 RoutingId fallbackRid = manualExpectedRids.get(target.endpoint());
-                node.replacePeerConnection(
-                        target.endpoint(),
-                        fallbackRid,
-                        0,
-                        fallbackRid == null ? null : fallbackRid.toString());
+                try {
+                    node.replacePeerConnection(
+                            target.endpoint(),
+                            fallbackRid,
+                            0,
+                            fallbackRid == null ? null : fallbackRid.toString());
+                } catch (ZLinkPeerIntentClosePendingException pending) {
+                    return false;
+                }
             } else {
                 node.removePeerConnection(current.intentId());
             }
