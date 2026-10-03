@@ -359,11 +359,12 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
             session = protocol::actor_message_header_t::bound_session_source_t{
               *application.source_session_routing_id, application.source_binding_generation,
               application.source_session_sequence};
-        sent = application.reply_route_id.has_value ()
-                 ? co_await _transport->request_to_actor (
-                     target_routing_id, application.source_actor, target, *application.application,
-                     window, std::move (complete), application.operation, session)
-                 : co_await _transport->send_to_actor (target_routing_id, application.source_actor,
+        if (application.reply_route_id.has_value ())
+            sent = co_await _transport->request_to_actor (
+              target_routing_id, application.source_actor, target, *application.application, window,
+              std::move (complete), application.operation, session);
+        else
+            sent = co_await _transport->send_to_actor (target_routing_id, application.source_actor,
                                                        target, *application.application, session,
                                                        application.operation);
     } else {
@@ -373,13 +374,14 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
         target.target_node_generation = target_generation;
         ++target.authority_owner_generation;
         target.owner_lease_generation = target_lease_generation;
-        sent = application.reply_route_id.has_value ()
-                 ? co_await _transport->request_to_spot (
-                     target_routing_id, application.source_spot_id.value_or (""), target,
-                     *application.application, window, std::move (complete), application.operation)
-                 : co_await _transport->send_to_spot (
-                     target_routing_id, application.source_spot_id.value_or (""), target,
-                     *application.application, application.operation);
+        if (application.reply_route_id.has_value ())
+            sent = co_await _transport->request_to_spot (
+              target_routing_id, application.source_spot_id.value_or (""), target,
+              *application.application, window, std::move (complete), application.operation);
+        else
+            sent = co_await _transport->send_to_spot (
+              target_routing_id, application.source_spot_id.value_or (""), target,
+              *application.application, application.operation);
     }
     co_return sent;
 }

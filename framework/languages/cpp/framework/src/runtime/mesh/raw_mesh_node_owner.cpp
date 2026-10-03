@@ -652,7 +652,9 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint)
               _outbound_endpoints.insert (endpoint);
               return true;
           }
-          catch (...) {
+          catch (const zlink::binding_error_t &rejection) {
+              // Mesh node: a rejection fails only this attempt and keeps no intent.
+              trace_mesh ("connect rejected endpoint=" + endpoint + " error=" + rejection.what ());
               return false;
           }
       })
@@ -705,7 +707,9 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
                                                 expected_descriptor);
               return true;
           }
-          catch (...) {
+          catch (const zlink::binding_error_t &rejection) {
+              // Mesh node: a rejection fails only this attempt and keeps no intent.
+              trace_mesh ("connect rejected endpoint=" + endpoint + " error=" + rejection.what ());
               return false;
           }
       })

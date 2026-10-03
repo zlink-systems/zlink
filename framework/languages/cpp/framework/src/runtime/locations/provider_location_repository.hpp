@@ -579,8 +579,9 @@ class provider_location_repository_t final : public location_repository_t
           found ? found->value.store_now : std::get<store_missing_t> (current).store_now;
         // The unchanged opaque version also preserves the reservation identity
         // checked before the operation constructs its conditional write.
-        co_return unchanged && (!operation_deadline || store_now < *operation_deadline)
-          && (co_await owner_is_live_async (owner));
+        if (!unchanged || (operation_deadline && store_now >= *operation_deadline))
+            co_return false;
+        co_return co_await owner_is_live_async (owner);
     }
 
     enum class stale_authority_reclaim_result_t
@@ -624,10 +625,11 @@ class provider_location_repository_t final : public location_repository_t
               request.key, authority_key, *found, current);
             if (reclaim == stale_authority_reclaim_result_t::reclaimed
                 || reclaim == stale_authority_reclaim_result_t::conflict) {
-                *retry_reclaim = reclaim == stale_authority_reclaim_result_t::reclaimed
-                                 || (co_await conflict_qualification_unchanged (
-                                   authority_key, found->value.version, creation_target.owner,
-                                   request.operation_deadline));
+                *retry_reclaim = reclaim == stale_authority_reclaim_result_t::reclaimed;
+                if (!*retry_reclaim)
+                    *retry_reclaim = co_await conflict_qualification_unchanged (
+                      authority_key, found->value.version, creation_target.owner,
+                      request.operation_deadline);
                 auto observed = co_await read_authority_value_async (object_key (request.key));
                 co_return object_reserve_result_t{object_reserve_conflict_t{std::move (observed)}};
             }
@@ -651,9 +653,12 @@ class provider_location_repository_t final : public location_repository_t
                 target = std::move (refreshed);
             }
         }
-        if (!target
-            || !target_accepts (target->descriptor, request.key.kind, request.intent.stable_type)
-            || !(co_await owner_is_live_async (creation_target.owner)))
+        bool target_available =
+          target
+          && target_accepts (target->descriptor, request.key.kind, request.intent.stable_type);
+        if (target_available)
+            target_available = co_await owner_is_live_async (creation_target.owner);
+        if (!target_available)
             co_return object_reserve_result_t{object_reserve_conflict_t{
               authority_missing_t{std::get<store_missing_t> (authority).store_now}}};
         auto capacity = co_await read_capacity_async (creation_target);

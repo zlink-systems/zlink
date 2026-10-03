@@ -1025,7 +1025,10 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_ch
     std::vector<bool> remove;
     remove.reserve (stale.size ());
     for (const auto &[_, replacement] : stale) {
-        remove.push_back (!replacement || co_await replacement->ready_task ());
+        bool remove_stale = !replacement;
+        if (replacement)
+            remove_stale = co_await replacement->ready_task ();
+        remove.push_back (remove_stale);
     }
     if (!stale.empty ()) {
         co_await _lane.run_task ([&] {

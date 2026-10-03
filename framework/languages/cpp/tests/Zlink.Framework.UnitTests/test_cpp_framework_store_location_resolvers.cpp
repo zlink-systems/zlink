@@ -2478,6 +2478,52 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsMeshNodeDescript
     EXPECT_EQ (2u, summaries.items.front ().ready_count);
 }
 
+// Location runtime §7.4: a descriptor whose owner lease is gone still counts,
+// as stopped, even though its stored state says serving.
+TEST (ZLinkFrameworkStoreLocationResolvers, ServiceSummaryCountsReleasedOwnerAsStopped)
+{
+    in_memory_location_repository_t store;
+    const auto live_owner = claim_test_owner (store, "owner-live");
+    const auto released_owner = claim_test_owner (store, "owner-released");
+    for (const auto &[rid, owner] :
+         std::vector<std::pair<std::string, zlink::framework::location_owner_token_t>>{
+           {"node-live", live_owner}, {"node-released", released_owner}}) {
+        ASSERT_EQ (location_write_status_t::stored,
+                   store
+                     .update_mesh_node (
+                       zlink::framework::mesh_node_descriptor_t{
+                         .mesh_name = "mesh-a",
+                         .rid = zlink::routing_id_t::from (rid),
+                         .lifecycle_generation = 1,
+                         .descriptor_revision = 1,
+                         .endpoint = "tcp://127.0.0.1:7001",
+                         .application_version = 1,
+                         .object_role = zlink::framework::object_role_t::server,
+                         .capacity = {.actors = {.limit = 128}, .spots = {.limit = 128}},
+                         .activation_concurrency = {.limit = 128},
+                         .state = zlink::framework::framework_runtime_state_t::serving,
+                         .security_identity = "test",
+                         .owner_id = owner.owner_id,
+                         .lease_generation = owner.lease_generation},
+                       location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status);
+    }
+    (void) store.release_owner_lease (released_owner).result ();
+    location_options_t options;
+    location_runtime_t runtime (store, options, "owner-query");
+    store_location_runtime_query_t query (store, runtime, options);
+
+    const auto summaries =
+      query.list_service_summaries ({.mesh_name = "mesh-a"}).result ().value ();
+    ASSERT_EQ (1u, summaries.items.size ());
+    EXPECT_EQ (2u, summaries.items.front ().total_count);
+    EXPECT_EQ (1u, summaries.items.front ().ready_count);
+    EXPECT_EQ (1u, summaries.items.front ().stopped_count);
+    EXPECT_EQ (0u, summaries.items.front ().error_count);
+}
+
 TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsExactAndPagedObjects)
 {
     using namespace zlink::framework;
