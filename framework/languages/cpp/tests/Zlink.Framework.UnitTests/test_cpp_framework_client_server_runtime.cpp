@@ -468,6 +468,68 @@ void verify_server_receive_turn_reads_queued_records ()
     assert (server_receive_turn_records (64, 64, 8) == 8);
 }
 
+void verify_client_server_closed_reply_finishes_without_server_lane ()
+{
+    protocol::client_server_server_admission_t descriptor{
+      "closed-reply", bytes ("closed-reply-server"), 1, 1, 100,
+      zlink::framework::runtime::mesh::service_node_state_t::serving, "default",
+      16 * 1024 * 1024, "tcp://127.0.0.1:0"};
+    client_server::raw_client_server_server_t server ({{descriptor}});
+    server.start ();
+
+    zlink::context_t context;
+    zlink::dealer_socket_t source (context);
+    source.set_routing_id (zlink::routing_id_t::from ("closed-reply-client"));
+    source.options ().linger (0ms);
+    zlink::framework::test::completion_poller_driver_t completions (source);
+    source.connect (server.endpoint ());
+
+    const auto pump = [&] (client_server::client_server_pump_result_t expected) {
+        const auto deadline = std::chrono::steady_clock::now () + 5s;
+        auto result = client_server::client_server_pump_result_t::no_data;
+        while (result != expected && std::chrono::steady_clock::now () < deadline) {
+            const auto now = std::chrono::steady_clock::now ();
+            (void) server.drain_monitor_events (now);
+            result = server.pump_one (now).result ().value ();
+            if (result == client_server::client_server_pump_result_t::no_data)
+                std::this_thread::sleep_for (1ms);
+        }
+        assert (result == expected);
+    };
+    const auto hello = protocol::encode_client_server_client_admission (
+      protocol::command::hello, {"closed-reply", "default", 16 * 1024 * 1024});
+    auto admission = await_metadata_wire_reply (
+      source.request ().message (zlink::message_t::from (hello)).timeout (5s).async ().reply);
+    pump (client_server::client_server_pump_result_t::infrastructure);
+    assert (admission.result ());
+
+    const std::string header =
+      R"({"formatMarker":242,"kind":1,"channelName":"closed-reply","messageName":"closed.request","correlationId":"closed-reply-test","contentType":"application/json"})";
+    auto pending = source.request ()
+                     .message (zlink::message_t::from (header))
+                     .message (zlink::message_t::from ("{}"))
+                     .timeout (5s)
+                     .async ();
+    pump (client_server::client_server_pump_result_t::application);
+    using zlink::framework::runtime::mesh::service_mailbox_domain_t;
+    const auto claim =
+      server.mailbox ().try_claim (service_mailbox_domain_t::application, 1, 1024 * 1024);
+    assert (claim && claim->records.size () == 1);
+    const auto request = claim->records.front ();
+    server.close ();
+
+    const protocol::application_payload_t payload{"closed.reply", "application/json", bytes ("{}")};
+    const zlink::framework::framework_exception_t error (
+      zlink::framework::framework_error_kind_t::protocol_error, "closed reply");
+    auto result = server.reply (request, payload);
+    assert (result.await_ready ());
+    assert (!result.result ().value ());
+    auto failure = server.reply (request, error);
+    assert (failure.await_ready ());
+    assert (!failure.result ().value ());
+    assert (server.mailbox ().release (*claim));
+}
+
 void verify_client_server_metadata_snapshot ()
 {
     metadata_send_handler_t::completed.store (false);
@@ -1260,6 +1322,7 @@ int main ()
     verify_unready_peer_projection_reason ();
     verify_fanout_first_observation_is_complete ();
     verify_invalid_metadata_is_a_protocol_error ();
+    verify_client_server_closed_reply_finishes_without_server_lane ();
     verify_client_server_metadata_snapshot ();
     verify_client_server_send_does_not_wait_on_infrastructure_worker ();
     verify_server_receive_turn_reads_queued_records ();

@@ -190,11 +190,11 @@ void raw_client_server_server_t::start ()
 {
     return _lane
       .run_checked ([this] {
-          if (_port) {
-              return;
-          }
           if (_closed) {
               throw std::logic_error ("ClientServer server cannot restart after close");
+          }
+          if (_port) {
+              return;
           }
           auto router = std::make_unique<zlink::router_socket_t> (*_context);
           router->options ().handover (true);
@@ -246,7 +246,9 @@ void raw_client_server_server_t::close ()
                        .run_checked ([this] {
                            _receive_flow_registration.close ();
                            _mailbox.close ();
-                           return std::tuple{std::move (_port), std::move (_monitor_poller),
+                           // _port stays published: off-lane readers (reply, receive) read it, and
+                           // the port itself rejects work once closed.
+                           return std::tuple{_port, std::move (_monitor_poller),
                                              std::move (_monitor), std::move (_router)};
                        })
                        .get ();
@@ -259,7 +261,7 @@ void raw_client_server_server_t::close ()
     }
     _lane
       .run_checked ([this, &resources, &failure] {
-          std::tie (_port, _monitor_poller, _monitor, _router) = std::move (resources);
+          std::tie (std::ignore, _monitor_poller, _monitor, _router) = std::move (resources);
           _closed = !failure;
       })
       .get ();
@@ -634,7 +636,7 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
     if (!request_header) {
         throw std::invalid_argument ("ClientServer reply requires a decodable request envelope");
     }
-    const auto port = co_await _lane.run_task ([this] { return _port; });
+    const auto port = _port;
     if (!port)
         co_return false;
     zlink::framework::detail::channel_reply_writer_t writer;
@@ -680,7 +682,7 @@ task_t<bool> raw_client_server_server_t::reply (
         decoded_context = &owned_header;
     }
     const auto &decoded_header = **decoded_context;
-    const auto port = co_await _lane.run_task ([this] { return _port; });
+    const auto port = _port;
     if (!port)
         co_return false;
     zlink::framework::detail::channel_reply_writer_t writer;
