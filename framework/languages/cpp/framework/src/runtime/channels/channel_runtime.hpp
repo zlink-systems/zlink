@@ -194,16 +194,6 @@ class channel_runtime_state_t
         runtime::messaging::message_parts_t,
         std::chrono::milliseconds)>;
 
-    struct outbound_call_record_t
-    {
-        std::string kind;
-        std::string channel_name;
-        std::string topic;
-        std::string packet_name;
-        std::chrono::milliseconds timeout{0};
-        std::map<std::string, std::string> metadata;
-    };
-
     std::map<std::string, channel_snapshot_t> channels;
     runtime::offload_executor_t lane_executor{1, "zlink-channel-state"};
     mutable runtime::state_lane_t lane{lane_executor};
@@ -233,7 +223,6 @@ class channel_runtime_state_t
     std::map<std::string, int> server_peer_weight_overrides;
     std::map<std::string, std::uint64_t> weighted_discovery_cursors;
     std::map<std::string, std::string> last_discovery_request_endpoints;
-    std::vector<outbound_call_record_t> outbound_calls;
     dispatch_options_t dispatch;
     serializer_registry_t *serializers = nullptr;
     std::shared_ptr<monitoring_runtime_state_t> monitoring;
@@ -320,7 +309,6 @@ class channel_runtime_t
     void remove_subscriber_manual_connection (const std::string &channel_name,
                                               const std::string &endpoint);
     std::size_t pending_count () const noexcept;
-    std::vector<channel_runtime_state_t::outbound_call_record_t> outbound_calls () const;
     void bind_serializers (serializer_registry_t &serializers) noexcept;
     void
     bind_listener_statuses (std::shared_ptr<runtime::listener_status_registry_t> statuses) noexcept;

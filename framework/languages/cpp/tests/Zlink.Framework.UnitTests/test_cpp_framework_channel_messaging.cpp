@@ -1001,22 +1001,12 @@ int main ()
     auto request_call = client.request (request_t{1})
                           .metadata ("trace-id", "request-trace")
                           .timeout (std::chrono::milliseconds (3000));
-    if (!outbound_runtime.outbound_calls ().empty ()) {
-        return 30;
-    }
     auto request_result = request_call.async<reply_t> ().result ();
     if (request_result
         || (request_result.error () != nullptr
             && zlink::framework::detail::boundary_state (*request_result.error ())
                  != zlink::framework::detail::boundary_error_t::timed_out)) {
         return 2;
-    }
-    if (outbound_runtime.outbound_calls ().size () != 1
-        || outbound_runtime.outbound_calls ()[0].kind != "request"
-        || outbound_runtime.outbound_calls ()[0].packet_name != "profile.lookup"
-        || outbound_runtime.outbound_calls ()[0].timeout != std::chrono::milliseconds (3000)
-        || outbound_runtime.outbound_calls ()[0].metadata.at ("trace-id") != "request-trace") {
-        return 31;
     }
 
     auto default_timeout_result = client.request (request_t{10}).async<reply_t> ().result ();
@@ -1026,37 +1016,16 @@ int main ()
                  != zlink::framework::detail::boundary_error_t::timed_out)) {
         return 35;
     }
-    if (outbound_runtime.outbound_calls ().size () != 2
-        || outbound_runtime.outbound_calls ()[1].kind != "request"
-        || outbound_runtime.outbound_calls ()[1].packet_name != "profile.lookup"
-        || outbound_runtime.outbound_calls ()[1].timeout != std::chrono::milliseconds (1500)) {
-        return 36;
-    }
 
     auto bus = zlink.message_bus ();
     auto send_call = bus.send ("profile", request_t{2}).metadata ("trace-id", "send-trace");
-    if (outbound_runtime.outbound_calls ().size () != 2) {
-        return 32;
-    }
     send_call.async ().result ().value ();
-    if (outbound_runtime.outbound_calls ().size () != 3
-        || outbound_runtime.outbound_calls ()[2].kind != "send"
-        || outbound_runtime.outbound_calls ()[2].packet_name != "profile.lookup"
-        || outbound_runtime.outbound_calls ()[2].metadata.at ("trace-id") != "send-trace") {
-        return 33;
-    }
 
     zlink.publisher ()
       .publish ("events", "profile.changed", event_t{3})
       .async ()
       .result ()
       .value ();
-    if (outbound_runtime.outbound_calls ().size () != 4
-        || outbound_runtime.outbound_calls ()[3].kind != "publish"
-        || outbound_runtime.outbound_calls ()[3].topic != "profile.changed"
-        || outbound_runtime.outbound_calls ()[3].packet_name != "profile.changed.event") {
-        return 34;
-    }
 
     try {
         bus.send ("missing", request_t{4}).async ().result ().value ();

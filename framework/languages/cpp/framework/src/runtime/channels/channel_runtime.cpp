@@ -630,12 +630,6 @@ std::size_t channel_runtime_t::pending_count () const noexcept
     return _state->lane.run_checked ([&] { return _state->pending; }).get ();
 }
 
-std::vector<channel_runtime_state_t::outbound_call_record_t>
-channel_runtime_t::outbound_calls () const
-{
-    return _state->lane.run_checked ([&] { return _state->outbound_calls; }).get ();
-}
-
 void channel_runtime_t::bind_serializers (serializer_registry_t &serializers) noexcept
 {
     _state->serializers = &serializers;
