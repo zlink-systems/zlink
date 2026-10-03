@@ -4535,8 +4535,10 @@ test('ZLinkSpotManager close rechecks actor occupancy after earlier serial work'
   await blockingTurn;
   await actorJoin;
 
-  assert.equal(await closing, false);
-  assert.deepEqual(await manager.find('test.mesh', created.spotId), { spotId: created.spotId });
+  // Spot messaging §7 step 1: the earlier application turn had not started when Close
+  // began, so it stays behind Close and Close observes no member Actor.
+  assert.equal(await closing, true);
+  assert.equal(await manager.find('test.mesh', created.spotId), null);
 });
 
 test('spot timer rejects invalid options', async () => {
