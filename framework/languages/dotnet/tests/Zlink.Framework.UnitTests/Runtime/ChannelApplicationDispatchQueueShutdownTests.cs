@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Channels;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -28,6 +29,38 @@ public sealed class ChannelApplicationDispatchQueueShutdownTests
         await queue.DisposeAsync();
 
         Assert.Equal(1, Volatile.Read(ref finished));
+    }
+
+    [Fact]
+    public async Task Queue_built_in_a_state_lane_turn_dispatches_off_that_lane()
+    {
+        // A fanout subscriber registers its dispatch queue inside a state-lane turn. A handler
+        // dispatched by that queue must be able to call runtime surfaces that enter the same
+        // lane (06-state-ownership-and-lanes §6 type 2).
+        var lane = new ZLinkStateLane();
+        var onLane = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var queue = await lane.RunAsync(() =>
+            new ZLinkChannelApplicationDispatchQueue<int>(
+                "lane-test",
+                new AuditRuntimeFailureReporter(),
+                CancellationToken.None,
+                CancellationToken.None,
+                (_, _) =>
+                {
+                    onLane.SetResult(lane.IsOnLane);
+                    return ValueTask.CompletedTask;
+                },
+                _ => { }
+            )
+        );
+
+        await queue.PostAsync(1, CancellationToken.None);
+
+        Assert.False(await onLane.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        await queue.DisposeAsync();
+        await lane.DisposeAsync();
     }
 
     [Fact]

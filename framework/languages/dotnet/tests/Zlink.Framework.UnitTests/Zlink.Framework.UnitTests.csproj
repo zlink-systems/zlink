@@ -97,6 +97,7 @@
         <Compile Include="Runtime/BackendMonitorWrapperTests.cs"/>
         <Compile Include="Runtime/CoverageCriticalRuntimeTests.cs"/>
         <Compile Include="Runtime/ChannelOutboundTerminalTests.cs"/>
+        <Compile Include="Runtime/ChannelApplicationDispatchQueueShutdownTests.cs"/>
         <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
         <Compile Include="Runtime/ControllableTimeProvider.cs"/>
         <Compile Include="Runtime/CapacityMonitoringProjectionTests.cs"/>
