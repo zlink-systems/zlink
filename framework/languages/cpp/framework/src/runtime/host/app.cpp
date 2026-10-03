@@ -3143,7 +3143,9 @@ relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &
             std::vector<mesh_node_descriptor_t> descriptors;
             location_page_request_t page;
             do {
-                auto listed = store.list_mesh_nodes (node->mesh_name (), page).result ().value ();
+                auto listed = runtime::infrastructure_result ([&] {
+                                  return store.list_mesh_nodes (node->mesh_name (), page);
+                              }).value ();
                 descriptors.insert (descriptors.end (),
                                     std::make_move_iterator (listed.items.begin ()),
                                     std::make_move_iterator (listed.items.end ()));
@@ -3157,7 +3159,9 @@ relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &
                          && descriptor.lifecycle_generation == status.lifecycle_generation ();
               });
             if (source == descriptors.end ()
-                || !live.owner_admission_lifetime (source->owner_id).result ().value ()) {
+                || !runtime::infrastructure_result ([&] {
+                        return live.owner_admission_lifetime (source->owner_id);
+                    }).value ()) {
                 return {relocation_reason_t::store_unavailable, 0};
             }
             if (source_application_version
@@ -3181,7 +3185,9 @@ relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &
               [&] (const mesh_node_descriptor_t &candidate) {
                   return !local_rids.contains (candidate.rid.to_hex ())
                          && candidate.lifecycle_generation != 0
-                         && live.owner_admission_lifetime (candidate.owner_id).result ().value ()
+                         && runtime::infrastructure_result ([&] {
+                                return live.owner_admission_lifetime (candidate.owner_id);
+                            }).value ()
                          && supports_relocation_source (*source, candidate,
                                                         target_application_version)
                          && node->has_admitted_peer (candidate.rid, candidate.lifecycle_generation);

@@ -215,8 +215,9 @@ read_actor_creation_request (const std::shared_ptr<location_repository_t> &store
 {
     if (!store)
         return std::nullopt;
-    const auto read =
-      store->read_authority (actor_authority_key (request.actor_id)).result ().value ();
+    const auto read = infrastructure_result ([&] {
+                          return store->read_authority (actor_authority_key (request.actor_id));
+                      }).value ();
     const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
     if (!snapshot || snapshot->allocation.object_kind != placement_object_kind_t::actor
         || snapshot->allocation.state != placement_allocation_state_t::reserved
@@ -1109,7 +1110,8 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (const act
     std::optional<authority_snapshot_t> removed_snapshot;
     if (_location_store) {
         const auto key = actor_authority_key (actor.actor_id ().value ());
-        const auto current = _location_store->read_authority (key).result ();
+        const auto current =
+          infrastructure_result ([&] { return _location_store->read_authority (key); });
         if (!current) {
             return detail::propagate_failure<void> (current, "Actor destroy authority read failed");
         }
@@ -1121,10 +1123,10 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (const act
               && snapshot->object_generation == actor.object_generation ()
               && snapshot->allocation.target.node_rid.value () == actor.node_rid ().value ();
             if (exact && snapshot->allocation.state == placement_allocation_state_t::active) {
-                const auto removed = _location_store
-                                       ->compare_exchange_authority (key, snapshot->store_version,
-                                                                     authority_delete_t{})
-                                       .result ();
+                const auto removed = infrastructure_result ([&] {
+                    return _location_store->compare_exchange_authority (
+                      key, snapshot->store_version, authority_delete_t{});
+                });
                 if (!removed) {
                     return detail::propagate_failure<void> (
                       removed, "Actor destroy authority delete failed");
@@ -1337,9 +1339,10 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
     }
     const auto selected_mesh = mesh_name.value_or (source->mesh_name ());
     std::vector<mesh_node_descriptor_t> candidates;
-    auto listed = _services->get_required<store_location_resolvers_t> ()
-                    .list_live_mesh_nodes (selected_mesh)
-                    .result ();
+    auto listed = infrastructure_result ([&] {
+        return _services->get_required<store_location_resolvers_t> ().list_live_mesh_nodes (
+          selected_mesh);
+    });
     if (!listed.has_value ())
         return task_t<spot_create_result_t> (detail::propagate_failure<spot_create_result_t> (
           listed, "User Spot target lookup failed"));
@@ -1417,7 +1420,9 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
                                   node_rid_t::from_string (target.rid.to_string ()),
                                   target.lifecycle_generation,
                                   {target.owner_id, target.lease_generation}};
-        reserved = _location_store->reserve (reserve_request).result ().value ();
+        reserved = infrastructure_result ([&] {
+                       return _location_store->reserve (reserve_request);
+                   }).value ();
         const auto *conflict = std::get_if<object_reserve_conflict_t> (&reserved);
         const bool target_unavailable =
           conflict && std::holds_alternative<authority_missing_t> (conflict->current);
@@ -2017,8 +2022,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             registration->spot_state->actor_route_admission =
               [&actor_resolver] (const protocol::actor_route_fence_t &route) {
                   try {
-                      const auto resolved =
-                        actor_resolver.resolve_actor_address (route.actor_id).result ();
+                      const auto resolved = infrastructure_result (
+                        [&] { return actor_resolver.resolve_actor_address (route.actor_id); });
                       if (!resolved || !resolved.value ())
                           return false;
                       const auto &address = *resolved.value ();
@@ -2747,8 +2752,9 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
             location_page_request_t page;
             bool found = false;
             do {
-                auto listed =
-                  _location_store->list_mesh_nodes (current.mesh_name, page).result ().value ();
+                auto listed = infrastructure_result ([&] {
+                                  return _location_store->list_mesh_nodes (current.mesh_name, page);
+                              }).value ();
                 const auto stored = std::find_if (
                   listed.items.begin (), listed.items.end (),
                   [&] (const mesh_node_descriptor_t &candidate) {
@@ -2788,10 +2794,10 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
             current.owner_id = owner->owner_id;
             current.lease_generation = owner->lease_generation;
             ++current.descriptor_revision;
-            const auto written =
-              _location_store->update_mesh_node (current, location_write_intent_t::renew)
-                .result ()
-                .value ();
+            const auto written = infrastructure_result ([&] {
+                                     return _location_store->update_mesh_node (
+                                       current, location_write_intent_t::renew);
+                                 }).value ();
             if (written.status != location_write_status_t::stored) {
                 return false;
             }
@@ -2832,11 +2838,11 @@ bool mesh_node_host_service_t::republish_after_store_recovery ()
         if (!first_publication)
             ++descriptor.descriptor_revision;
         const auto written =
-          _location_store
-            ->update_mesh_node (descriptor, first_publication ? location_write_intent_t::new_claim
-                                                              : location_write_intent_t::renew)
-            .result ()
-            .value ();
+          infrastructure_result ([&] {
+              return _location_store->update_mesh_node (
+                descriptor, first_publication ? location_write_intent_t::new_claim
+                                              : location_write_intent_t::renew);
+          }).value ();
         if (written.status != location_write_status_t::stored)
             return false;
         _published_mesh_descriptors[index] = std::move (descriptor);
@@ -2873,8 +2879,9 @@ void mesh_node_host_service_t::stop () noexcept
     if (_location_store && owner) {
         for (const auto &key : _published_mesh_nodes) {
             try {
-                const auto removed =
-                  _location_store->remove_mesh_node (key, *owner).result ().value ();
+                const auto removed = infrastructure_result ([&] {
+                                         return _location_store->remove_mesh_node (key, *owner);
+                                     }).value ();
                 const char *trace = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
                 if (trace != nullptr && *trace != '\0' && std::string_view (trace) != "0")
                     std::cerr << "zlink-cpp-host-stop mesh-descriptor-remove mesh=" << key.mesh_name
