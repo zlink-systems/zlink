@@ -2,6 +2,7 @@ using Systems.Zlink;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Messaging;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Service;
 
@@ -727,12 +728,18 @@ internal sealed class MeshReceiveBatch : IDisposable
 
 internal sealed class MeshClaim : IDisposable
 {
-    internal Func<MeshReceiveBatch, RecvFlags, bool>? Receiver { get; init; }
+    internal Func<MeshReceiveBatch, RecvFlags, ValueTask<bool>>? Receiver { get; init; }
     internal Action? Releaser { get; init; }
     private int _disposed;
 
+    public ValueTask<bool> ReceiveAsync(MeshReceiveBatch batch, RecvFlags flags = RecvFlags.None) =>
+        Volatile.Read(ref _disposed) == 0 && Receiver is { } receiver
+            ? receiver(batch, flags)
+            : ValueTask.FromResult(false);
+
+    // Blocking compatibility surface for callers outside a framework execution context.
     public bool Receive(MeshReceiveBatch batch, RecvFlags flags = RecvFlags.None) =>
-        Volatile.Read(ref _disposed) == 0 && (Receiver?.Invoke(batch, flags) ?? false);
+        AwaitStateLane(ReceiveAsync(batch, flags));
 
     public void Dispose()
     {
@@ -933,7 +940,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     IMeshNodeMonitor OpenMonitor(MeshMonitorEventMask events = MeshMonitorEventMask.All);
     void SetReadyHandler(Func<MeshReadyDomains, MeshReadyDomains> handler);
     void SetCompletionHandler(Func<MeshReceiveRecord, IReadOnlyList<Message>, bool> handler) { }
-    bool DrainReady(
+    ValueTask<bool> DrainReadyAsync(
         MeshReadyDomains domains,
         MeshReadyBatch batch,
         RecvFlags flags = RecvFlags.None

@@ -176,6 +176,43 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     }
 
     /// <summary>
+    /// Queues <paramref name="work"/> without waiting for it (spec 06 §5 <c>tryPost</c>). Returns
+    /// false when the lane is closed.
+    /// </summary>
+    /// <remarks>
+    /// The work joins the same FIFO as <see cref="RunAsync{T}"/>, so any later turn observes it.
+    /// Nobody awaits it, so the work reports its own failures; an escaped exception is published
+    /// as an unobserved task fault. A post from a turn of this lane waits for nothing and runs
+    /// after that turn.
+    /// </remarks>
+    internal bool TryPost(Action work)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        if (Volatile.Read(ref _closed) != 0)
+            return false;
+        _mailbox.Enqueue(() =>
+        {
+            try
+            {
+                work();
+            }
+            catch (Exception failure)
+            {
+                // A posted turn has no awaiting caller. Its failure becomes an
+                // unobserved task fault (the channel of any fire-and-forget
+                // task) instead of stopping the turns queued behind it.
+                _ = Task.FromException(failure);
+            }
+            return ValueTask.CompletedTask;
+        });
+        // A current owner, including a turn that posts to its own lane, drains
+        // this item before it releases the lane.
+        if (TryClaimDrain())
+            _ = DrainAsync();
+        return true;
+    }
+
+    /// <summary>
     /// Throws when the caller is already executing on this lane. Call this from any component
     /// method that will post to the lane, so a reentrant path fails at its source with a name
     /// attached instead of deadlocking somewhere later.

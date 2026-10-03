@@ -254,14 +254,25 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     internal bool TryAcquire(out ZLinkApplicationJobQueueLease? lease)
     {
-        var acquired = AwaitStateLane(_lane.RunAsync(() => ReserveAvailableOnLane(1)));
-        if (acquired.PressureChanged)
-            _receiveFlowController.ApplyPending();
-        lease = acquired.Count == 0 ? null : new ZLinkApplicationJobQueueLease(this);
+        lease = AwaitStateLane(TryAcquireAsync());
         return lease is not null;
     }
 
+    internal async ValueTask<ZLinkApplicationJobQueueLease?> TryAcquireAsync()
+    {
+        var acquired = await _lane.RunAsync(() => ReserveAvailableOnLane(1)).ConfigureAwait(false);
+        if (acquired.PressureChanged)
+            _receiveFlowController.ApplyPending();
+        return acquired.Count == 0 ? null : new ZLinkApplicationJobQueueLease(this);
+    }
+
     internal int TryAcquireBatch(
+        ZLinkApplicationJobQueueLease?[] destination,
+        int offset,
+        int maximum
+    ) => AwaitStateLane(TryAcquireBatchAsync(destination, offset, maximum));
+
+    internal async ValueTask<int> TryAcquireBatchAsync(
         ZLinkApplicationJobQueueLease?[] destination,
         int offset,
         int maximum
@@ -271,7 +282,9 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegative(maximum);
         if (offset > destination.Length - maximum)
             throw new ArgumentOutOfRangeException(nameof(maximum));
-        var acquired = AwaitStateLane(_lane.RunAsync(() => ReserveAvailableOnLane(maximum)));
+        var acquired = await _lane
+            .RunAsync(() => ReserveAvailableOnLane(maximum))
+            .ConfigureAwait(false);
         for (var index = 0; index < acquired.Count; index++)
             destination[offset + index] = new ZLinkApplicationJobQueueLease(this);
         if (acquired.PressureChanged)
@@ -360,21 +373,27 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             _cumulativePauseStartedTimestamp = _timeProvider.GetTimestamp();
     }
 
+    // Marking and releasing only move a permit between counters; the caller
+    // consumes no result. Each joins the lane FIFO before it returns, so every
+    // later acquisition and status turn observes it, and the lease state CAS
+    // decides between a mark and a release of the same lease.
     internal void MarkQueued(ZLinkApplicationJobQueueLease lease) =>
-        AwaitStateLane(_lane.RunAsync(() => MarkQueuedOnLane(lease)));
+        _lane.TryPost(() => MarkQueuedOnLane(lease));
 
     internal void MarkQueuedBatch(IReadOnlyList<ZLinkApplicationJobQueueLease?> leases, int count)
     {
         if (count == 0)
             return;
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                for (var index = 0; index < count; index++)
-                    if (leases[index] is { } lease)
-                        MarkQueuedOnLane(lease);
-            })
-        );
+        var marked = new ZLinkApplicationJobQueueLease[count];
+        var markedCount = 0;
+        for (var index = 0; index < count; index++)
+            if (leases[index] is { } lease)
+                marked[markedCount++] = lease;
+        _lane.TryPost(() =>
+        {
+            for (var index = 0; index < markedCount; index++)
+                MarkQueuedOnLane(marked[index]);
+        });
     }
 
     private void MarkQueuedOnLane(ZLinkApplicationJobQueueLease lease)
@@ -385,13 +404,14 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         _queuedApplicationJobs = checked(_queuedApplicationJobs + 1);
     }
 
-    internal void Release(ZLinkApplicationJobQueueLease lease)
-    {
-        var released = AwaitStateLane(_lane.RunAsync(() => ReleaseOnLane(lease)));
-        CompleteRelease(released);
-    }
+    internal void Release(ZLinkApplicationJobQueueLease lease) => _ = ReleaseAsync(lease);
 
-    internal async ValueTask ReleaseForHandlerStartAsync(ZLinkApplicationJobQueueLease lease)
+    internal ValueTask ReleaseForHandlerStartAsync(ZLinkApplicationJobQueueLease lease) =>
+        new(ReleaseAsync(lease));
+
+    // The waiter wake and the receive-flow update run after the lane turn,
+    // outside it (spec 06 §5).
+    private async Task ReleaseAsync(ZLinkApplicationJobQueueLease lease)
     {
         var released = await _lane.RunAsync(() => ReleaseOnLane(lease)).ConfigureAwait(false);
         CompleteRelease(released);
@@ -399,20 +419,29 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     internal void ReleaseBatch(IReadOnlyList<ZLinkApplicationJobQueueLease?> leases)
     {
-        var released = AwaitStateLane(
-            _lane.RunAsync(() =>
+        List<ZLinkApplicationJobQueueLease>? owned = null;
+        for (var index = 0; index < leases.Count; index++)
+            if (leases[index] is { } lease)
+                (owned ??= []).Add(lease);
+        if (owned is not null)
+            _ = ReleaseBatchAsync(owned);
+    }
+
+    private async Task ReleaseBatchAsync(List<ZLinkApplicationJobQueueLease> leases)
+    {
+        var released = await _lane
+            .RunAsync(() =>
             {
                 List<ReleaseResult>? results = null;
-                for (var index = 0; index < leases.Count; index++)
-                    if (leases[index] is { } lease)
-                    {
-                        var result = ReleaseOnLane(lease);
-                        if (result.AdmittedWaiter is not null || result.PressureChanged)
-                            (results ??= []).Add(result);
-                    }
+                foreach (var lease in leases)
+                {
+                    var result = ReleaseOnLane(lease);
+                    if (result.AdmittedWaiter is not null || result.PressureChanged)
+                        (results ??= []).Add(result);
+                }
                 return results;
             })
-        );
+            .ConfigureAwait(false);
         if (released is not null)
             foreach (var result in released)
                 CompleteRelease(result);
