@@ -48,7 +48,7 @@ class s2s_send_send_spot_t final : public perf_spot_base_t<s2s_send_send_spot_t>
                 co_return drive_reply_t{false, std::nullopt};
             request.sent_ticks = dec (started);
             // §13: register immediately before the first public send.
-            const auto entry = _role.correlations->register_request (request);
+            const auto entry = _role.correlations->register_request (request, started);
             try {
                 co_await _route.send_to_channel (*config.channel_name, request).async ();
                 _role.correlations->first_send_ended (entry, nullptr);
@@ -174,7 +174,7 @@ class s2s_spot_to_channel_send_send_echo_scenario_t
                 continue;
             }
             const auto [result, completed] = co_await _role.correlations->complete (entry);
-            if (measurement.complete_operation (parse_i64 (entry->request.sent_ticks), result, completed) && driver_finished)
+            if (measurement.complete_operation (entry->started_ticks, result, completed) && driver_finished)
                 _role.metrics.record ("driverLatencyMs", driver_started, *driver_finished);
         }
     }

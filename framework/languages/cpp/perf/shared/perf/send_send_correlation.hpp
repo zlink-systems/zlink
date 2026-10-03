@@ -11,6 +11,7 @@
 #include <perf/scenario_metrics.hpp>
 
 #include <deque>
+#include <memory>
 
 namespace perf
 {
@@ -21,12 +22,14 @@ class send_send_correlation_t
 
     struct entry_t
     {
-        entry_t (echo_request_t request_, std::int64_t expires) :
-            request (std::move (request_)), expires_at_ticks (expires)
+        entry_t (echo_request_t request_, std::int64_t started, std::int64_t expires) :
+            request (std::make_shared<const echo_request_t> (std::move (request_))), started_ticks (started),
+            expires_at_ticks (expires)
         {
         }
-        echo_request_t request;
-        std::int64_t expires_at_ticks;
+        std::shared_ptr<const echo_request_t> request;
+        const std::int64_t started_ticks;
+        const std::int64_t expires_at_ticks;
         zlink::framework::task_completion_source_t<int> result;
         std::atomic<int> state{pending};
         std::int64_t closed_ticks = 0;
@@ -45,6 +48,7 @@ class send_send_correlation_t
                     why = std::make_exception_ptr (validation_error_t (
                       "CorrelationExpired", "No return send arrived before the correlation deadline."));
                 }
+                request.reset ();
                 error = std::move (why);
                 state = to;
             }
@@ -78,10 +82,11 @@ class send_send_correlation_t
     send_send_correlation_t (const send_send_correlation_t &) = delete;
     send_send_correlation_t &operator= (const send_send_correlation_t &) = delete;
 
-    entry_ptr_t register_request (const echo_request_t &request)
+    entry_ptr_t register_request (const echo_request_t &request, std::int64_t started_ticks)
     {
         auto entry = std::make_shared<entry_t> (
-          request, now_ticks () + static_cast<std::int64_t> (_measurement.config ().workload.correlation_expiry_ms) * 1'000'000);
+          request, started_ticks,
+          now_ticks () + static_cast<std::int64_t> (_measurement.config ().workload.correlation_expiry_ms) * 1'000'000);
         {
             std::lock_guard lock (_gate);
             if (!_entries.emplace (request.correlation_id, entry).second)
@@ -129,17 +134,25 @@ class send_send_correlation_t
             return;
         }
         std::exception_ptr invalid;
-        try {
-            payload_pattern_t::validate_identity (entry->request, reply);
-            _measurement.pattern ().validate (reply.payload);
+        std::shared_ptr<const echo_request_t> request;
+        {
+            std::lock_guard lock (entry->gate);
+            request = entry->request;
         }
-        catch (const validation_error_t &) {
-            invalid = std::current_exception ();
+        if (request) {
+            try {
+                payload_pattern_t::validate_identity (*request, reply);
+                _measurement.pattern ().validate (reply.payload);
+            }
+            catch (const validation_error_t &) {
+                invalid = std::current_exception ();
+            }
         }
         const auto now = now_ticks ();
         expire_if_due (entry, now);
-        if (!close (entry, invalid ? failed : succeeded, invalid))
-            _metrics.count (entry->state.load () == succeeded ? "messages.duplicateReply" : "messages.lateReply");
+        if (close (entry, invalid ? failed : succeeded, invalid))
+            return;
+        _metrics.count (entry->state.load () == succeeded ? "messages.duplicateReply" : "messages.lateReply");
     }
 
     // The final result after the correlation closes: the first result of the correlation, or its expiry (closed by

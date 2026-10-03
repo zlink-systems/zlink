@@ -58,6 +58,10 @@ class KotlinPerfSessionActorRelayHandler(
         val actor = dispatch.actor() ?: binding ?: setup.bind(session, payload)
         binding = actor
         actor.kotlin().relay(dispatch, payload).await()
+        if (measurement.phase() == "setup") {
+            // The Session role has no typed reply of its own: its setup probe is the admitted relay.
+            measurement.setupEvidence(listOf(Evidence.of("relayAdmission", "ZLinkSessionActor.relay", true)))
+        }
     }
 }
 

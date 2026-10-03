@@ -59,7 +59,7 @@ internal class KotlinS2sChannelToSpotSendSendEchoScenario(
     }
 
     fun prepare(): CompletionStage<Void> = completionStage {
-        Polling.until({ mesh.snapshot(config.meshName()).isReady() }, 10, config.workload().setupTimeoutMs().toLong()).await()
+        Polling.until({ mesh.snapshot(config.meshName()).let { it.isReady() && it.readyPeerCount() > 0 } }, 10, config.workload().setupTimeoutMs().toLong()).await()
         val found = SpotSetup.findAll(manager, config).await()
         sequences = AtomicLongArray(config.workload().logicalStreams())
         streamTargets = planStreamTargets(config.spotIds(), config.workload().logicalStreams())

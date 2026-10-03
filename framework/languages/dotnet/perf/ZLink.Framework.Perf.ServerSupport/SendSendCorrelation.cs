@@ -15,7 +15,7 @@ public sealed class SendSendCorrelation
     public sealed class Entry(PerfEchoRequest request, long startedTicks, long expiresAtTicks)
     {
         public long StartedTicks { get; } = startedTicks;
-        internal readonly PerfEchoRequest Request = request;
+        internal PerfEchoRequest? Request = request;
         internal readonly long ExpiresAtTicks = expiresAtTicks;
         internal readonly TaskCompletionSource<(Exception? Error, long CompletedTicks)> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int State;
@@ -58,13 +58,17 @@ public sealed class SendSendCorrelation
     public void Reply(PerfEchoReply reply)
     {
         if (!entries.TryGetValue(reply.correlationId, out var entry)) { metrics.Count("messages.unknownCorrelation"); return; }
+        var request = Volatile.Read(ref entry.Request);   // null once the correlation has a result
         Exception? invalid = null;
-        try
+        if (request is not null)
         {
-            PayloadPattern.ValidateIdentity(entry.Request, reply);
-            measurement.Pattern.Validate(reply.payload);
+            try
+            {
+                PayloadPattern.ValidateIdentity(request, reply);
+                measurement.Pattern.Validate(reply.payload);
+            }
+            catch (PerfValidationException error) { invalid = error; }
         }
-        catch (PerfValidationException error) { invalid = error; }
         var now = PerfClock.Now;
         ExpireIfDue(entry, now);
         if (!Close(entry, invalid is null ? Succeeded : Failed, invalid, now) || Volatile.Read(ref entry.State) == Expired)
@@ -78,6 +82,7 @@ public sealed class SendSendCorrelation
             if (entry.State != Pending) return false;
             if (IsDue(entry, now)) { state = Expired; error = ExpiredError(); }
             entry.State = state;
+            Interlocked.Exchange(ref entry.Request, null);
             if (state == Expired) metrics.Count("messages.expired");
             entry.Result.TrySetResult((error, now));
             return true;

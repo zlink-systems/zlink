@@ -32,7 +32,7 @@ class s2s_channel_to_spot_send_send_echo_scenario_t
         for (std::size_t target = 0; target < config.spot_ids.size (); ++target) {
             auto request = measurement.request (static_cast<int> (target), _sequences.next (static_cast<int> (target)), true);
             request.return_channel = config.channel_name;
-            const auto entry = correlations.register_request (request);
+            const auto entry = correlations.register_request (request, parse_i64 (request.sent_ticks));
             route.send_to_spot (config.spot_ids[target], request).async ().result ().value ();
             const auto [error, completed] = correlations.complete (entry).result ().value ();
             (void) completed;
@@ -67,7 +67,7 @@ class s2s_channel_to_spot_send_send_echo_scenario_t
             if (!measurement.begin_operation (started, "send"))
                 break;
             request.sent_ticks = dec (started);
-            const auto entry = correlations.register_request (request); // §13: registered right before the first public send
+            const auto entry = correlations.register_request (request, started); // §13: registered right before the first public send
             try {
                 co_await route.send_to_spot (spot_id, request).async ();
                 correlations.first_send_ended (entry, nullptr);

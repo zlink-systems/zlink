@@ -15,10 +15,12 @@ enum State { Pending, Succeeded, Failed, Expired }
 export class CorrelationEntry {
   state = State.Pending;
   closedTicks = 0n;
+  request: PerfEchoRequest | undefined;
   readonly result: Promise<Error | undefined>;
   private resolveResult!: (error: Error | undefined) => void;
 
-  constructor(readonly request: PerfEchoRequest, readonly startedTicks: bigint, readonly expiresAtTicks: bigint) {
+  constructor(request: PerfEchoRequest, readonly startedTicks: bigint, readonly expiresAtTicks: bigint) {
+    this.request = request;
     this.result = new Promise((resolve) => { this.resolveResult = resolve; });
   }
 
@@ -26,6 +28,7 @@ export class CorrelationEntry {
     if (this.state !== State.Pending) return false;
     this.state = state;
     this.closedTicks = closedTicks;
+    this.request = undefined;
     this.resolveResult(error);
     return true;
   }
@@ -65,13 +68,16 @@ export class SendSendCorrelation {
   reply(reply: PerfEchoReply): void {
     const entry = this.entries.get(reply.correlationId);
     if (!entry) { this.metrics.count('messages.unknownCorrelation'); return; }
+    const request = entry.request;
     let invalid: Error | undefined;
-    try {
-      PayloadPattern.validateIdentity(entry.request, reply);
-      this.measurement.pattern.validate(reply.payload);
-    } catch (error) {
-      if (!(error instanceof PerfValidationException)) throw error;
-      invalid = error;
+    if (request !== undefined) {
+      try {
+        PayloadPattern.validateIdentity(request, reply);
+        this.measurement.pattern.validate(reply.payload);
+      } catch (error) {
+        if (!(error instanceof PerfValidationException)) throw error;
+        invalid = error;
+      }
     }
     const now = PerfClock.now();
     this.expireIfDue(entry, now);

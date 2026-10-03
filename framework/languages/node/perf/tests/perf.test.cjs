@@ -324,6 +324,29 @@ test('send/send reply after its fixed deadline is expired even before first-send
   measurement.dispose();
 });
 
+test('send/send releases the request after close and classifies later replies from the closed state', () => {
+  const measurement = openMeasurement(config({ workload: { ...config().workload, correlationExpiryMs: 1000 } }));
+  const metrics = new ScenarioMetrics(measurement);
+  const correlations = new SendSendCorrelation(measurement, metrics);
+
+  const succeededRequest = measurement.request(0, 1);
+  const succeeded = correlations.register(succeededRequest, measurement.startTicks);
+  correlations.reply(PayloadPattern.reply(succeededRequest, PerfClock.now()));
+  assert.equal(succeeded.request, undefined);
+  correlations.reply(PayloadPattern.reply(succeededRequest, PerfClock.now()));
+
+  const failedRequest = measurement.request(0, 2);
+  const failed = correlations.register(failedRequest, measurement.startTicks);
+  correlations.firstSendEnded(failed, new Error('first send failed'));
+  assert.equal(failed.request, undefined);
+  correlations.reply(PayloadPattern.reply(failedRequest, PerfClock.now()));
+
+  const snapshot = measurement.snapshot(null);
+  assert.equal(snapshot.metrics['messages.duplicateReply'], '1');
+  assert.equal(snapshot.metrics['messages.lateReply'], '1');
+  measurement.dispose();
+});
+
 test('sequence writer reports EEXIST and preserves the previous original', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-node-perf-sequences-'));
   try {

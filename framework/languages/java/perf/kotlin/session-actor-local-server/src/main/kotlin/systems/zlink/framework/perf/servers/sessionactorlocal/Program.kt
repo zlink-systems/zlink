@@ -3,6 +3,7 @@ package systems.zlink.framework.perf.servers.sessionactorlocal
 import systems.zlink.framework.perf.ObjectsReadiness
 import systems.zlink.framework.perf.ServerApplication
 import systems.zlink.framework.perf.servers.session.KotlinPerfSessionActorRelayHandler
+import systems.zlink.framework.perf.servers.session.KotlinSessionActorSetup
 import systems.zlink.framework.perf.kotlin.PerfKotlinActorMarker
 import systems.zlink.framework.perf.kotlin.addPerfKotlinActors
 import systems.zlink.framework.kotlin.addHandlersFromPackageOf
@@ -25,5 +26,6 @@ fun main(args: Array<String>) {
             .registerSession(KotlinPerfSessionActorRelayHandler::class.java)
     }
     app.bean(ObjectsReadiness::class.java) { ObjectsReadiness(true, "") }
+        .bean(KotlinSessionActorSetup::class.java)
     app.start()
 }

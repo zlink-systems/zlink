@@ -33,7 +33,7 @@ class actor_no_bind_send_send_echo_scenario_t
         for_each_concurrently (*config.workload.logical_streams, *config.workload.connect_concurrency, [&] (int stream) {
             auto request = measurement.request (stream, _sequences.next (stream), true);
             request.return_channel = config.channel_name;
-            const auto entry = correlations.register_request (request);
+            const auto entry = correlations.register_request (request, parse_i64 (request.sent_ticks));
             actors.send (fw::actor_id_t (config.actor_ids[static_cast<std::size_t> (stream)]), request).async ().result ().value ();
             const auto [error, completed] = correlations.complete (entry).result ().value ();
             (void) completed;
@@ -69,7 +69,7 @@ class actor_no_bind_send_send_echo_scenario_t
             if (!measurement.begin_operation (started, "send"))
                 break;
             request.sent_ticks = dec (started);
-            const auto entry = correlations.register_request (request); // §13: registered right before the first public send
+            const auto entry = correlations.register_request (request, started); // §13: registered right before the first public send
             try {
                 co_await actors.send (actor_id, request).async ();
                 _role.metrics.record ("sourceAdmissionMs", started, now_ticks ());

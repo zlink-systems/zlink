@@ -245,6 +245,22 @@ void test_subscriber_entry_time_survives_snapshot ()
     std::filesystem::remove_all (directory);
 }
 
+void test_correlation_releases_request_after_close ()
+{
+    auto cfg = config ();
+    cfg.workload.correlation_expiry_ms = 100;
+    measurement_t measurement (cfg, true);
+    scenario_metrics_t metrics (measurement);
+    send_send_correlation_t correlations (measurement, metrics);
+    const auto request = measurement.request (0, 1, true);
+    const auto entry = correlations.register_request (request, parse_i64 (request.sent_ticks));
+    correlations.reply (payload_pattern_t::reply (request, now_ticks ()));
+    const auto [error, completed] = correlations.complete (entry).result ().value ();
+    (void) completed;
+    require (!error, "valid reply must close correlation successfully");
+    require (!entry->request, "closed correlation must release the request DTO");
+}
+
 void test_correlation_owner_completes_once ()
 {
     auto cfg = config ();
@@ -262,13 +278,14 @@ void test_correlation_owner_completes_once ()
     std::int64_t started = 0;
     require (measurement.begin_operation (started, "send"), "correlation did not start");
     auto request = measurement.request (0, 1);
-    auto entry = correlations.register_request (request);
+    auto entry = correlations.register_request (request, started);
     correlations.reply (payload_pattern_t::reply (request, now_ticks ()));
     require (measured_snapshot (measurement).at ("metrics").at ("messages.completed") == "0",
              "correlation does not own operation accounting");
     correlations.first_send_ended (entry, nullptr);
     const auto [error, completed] = correlations.complete (entry).result ().value ();
     require (!error && completed == entry->closed_ticks, "first valid reply must close with its own time");
+    require (entry->started_ticks == started, "correlation must retain the operation start time");
     require (measurement.complete_operation (started, error, completed), "owner must count the first success");
     correlations.reply (payload_pattern_t::reply (request, now_ticks ()));
     require (measured_snapshot (measurement).at ("metrics").at ("messages.completed") == "1",
@@ -278,7 +295,7 @@ void test_correlation_owner_completes_once ()
     std::int64_t raced_started = 0;
     require (measurement.begin_operation (raced_started, "send"), "raced correlation did not start");
     auto raced = measurement.request (0, 3);
-    auto raced_entry = correlations.register_request (raced);
+    auto raced_entry = correlations.register_request (raced, raced_started);
     const auto raced_reply = payload_pattern_t::reply (raced, now_ticks ());
     std::thread first_reply ([&] { correlations.reply (raced_reply); });
     std::thread second_reply ([&] { correlations.reply (raced_reply); });
@@ -295,7 +312,7 @@ void test_correlation_owner_completes_once ()
     std::int64_t late_started = 0;
     require (measurement.begin_operation (late_started, "send"), "second correlation did not start");
     auto late = measurement.request (0, 2);
-    auto late_entry = correlations.register_request (late);
+    auto late_entry = correlations.register_request (late, late_started);
     std::this_thread::sleep_for (std::chrono::milliseconds (110));
     correlations.reply (payload_pattern_t::reply (late, now_ticks ()));
     const auto [late_error, late_completed] = correlations.complete (late_entry).result ().value ();
@@ -374,6 +391,7 @@ int main ()
         test_removed_unique_delivery_metric ();
         test_return_spot_address ();
         test_subscriber_entry_time_survives_snapshot ();
+        test_correlation_releases_request_after_close ();
         test_correlation_owner_completes_once ();
         test_readiness_uses_probe_evidence_not_setup_evidence ();
         test_sequence_original_collision ();
