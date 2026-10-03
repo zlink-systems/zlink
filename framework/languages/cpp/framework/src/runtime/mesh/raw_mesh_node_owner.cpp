@@ -645,11 +645,18 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint)
           if (!_router || endpoint.empty ()) {
               return false;
           }
-          std::lock_guard socket_lock (_socket_mutex);
-          trace_mesh ("connect endpoint=" + endpoint);
-          _router->connect (endpoint);
-          _outbound_endpoints.insert (endpoint);
-          return true;
+          try {
+              std::lock_guard socket_lock (_socket_mutex);
+              trace_mesh ("connect endpoint=" + endpoint);
+              _router->connect (endpoint);
+              _outbound_endpoints.insert (endpoint);
+              return true;
+          }
+          catch (const zlink::binding_error_t &rejection) {
+              // Mesh node: a rejection fails only this attempt and keeps no intent.
+              trace_mesh ("connect rejected endpoint=" + endpoint + " error=" + rejection.what ());
+              return false;
+          }
       })
       .get ();
 }
@@ -670,7 +677,7 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
           };
           const auto endpoint_retargeted =
             std::any_of (_expected_peers.begin (), _expected_peers.end (), is_stale_same_endpoint);
-          {
+          try {
               std::lock_guard socket_lock (_socket_mutex);
               trace_mesh ("connect endpoint=" + endpoint
                           + " expected=" + owner_key (expected_descriptor.node_routing_id));
@@ -699,6 +706,11 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
               _expected_peers.insert_or_assign (expected_descriptor.node_routing_id,
                                                 expected_descriptor);
               return true;
+          }
+          catch (const zlink::binding_error_t &rejection) {
+              // Mesh node: a rejection fails only this attempt and keeps no intent.
+              trace_mesh ("connect rejected endpoint=" + endpoint + " error=" + rejection.what ());
+              return false;
           }
       })
       .get ();
