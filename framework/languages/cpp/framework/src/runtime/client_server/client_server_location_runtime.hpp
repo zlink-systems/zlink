@@ -34,6 +34,17 @@ namespace zlink::framework::runtime::client_server
 mesh::service_node_state_t client_server_service_state (framework_runtime_state_t state);
 framework_runtime_state_t client_server_framework_state (mesh::service_node_state_t state);
 
+/* One server receive turn reads the queued records until no data, backpressure, the receive
+ * batch budget, or the Application Job Queue supply stops it, as the client turn does. Each
+ * record takes its own permit: the first is `application_permit`, the rest are reserved only
+ * while the queue has room. */
+task_t<void>
+pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
+                       mesh::service_liveness_registry_t::clock_t::time_point now,
+                       std::shared_ptr<application_job_queue_t> application_jobs,
+                       std::shared_ptr<application_job_queue_t::permit_t> application_permit,
+                       receive_batch_budget_t budget = {});
+
 class client_server_location_runtime_t final : public client_server_runtime_t
 {
   public:

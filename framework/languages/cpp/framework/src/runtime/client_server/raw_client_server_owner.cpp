@@ -379,12 +379,11 @@ task_t<std::size_t> raw_client_server_server_t::drain_monitor_events_task (
 
 task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
   mesh::service_liveness_registry_t::clock_t::time_point now,
-  std::shared_ptr<application_job_queue_t::permit_t> application_permit)
+  std::shared_ptr<application_job_queue_t::permit_t> application_permit,
+  receive_batch_budget_t *budget)
 {
-    const auto port = co_await _lane.run_task ([this] {
-        _last_pump_bytes = 0;
-        return _port;
-    });
+    auto [port, channel_name] = co_await _lane.run_task (
+      [this] { return std::pair{_port, _options.descriptor.channel_name}; });
     if (!port) {
         co_return client_server_pump_result_t::no_data;
     }
@@ -393,19 +392,20 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
     if (!received) {
         co_return client_server_pump_result_t::no_data;
     }
-    co_await _lane.run_task ([this, &received] {
+    if (budget != nullptr) {
+        std::size_t bytes = 0;
         for (const auto &part : received->parts)
-            _last_pump_bytes += part.size ();
-        return true;
-    });
+            bytes += part.size ();
+        budget->account (bytes);
+    }
     if (received->parts.empty ()) {
         co_return client_server_pump_result_t::protocol_error;
     }
     try {
         if (!is_service_control_frame (received->parts.front ())) {
             //  Application record: [JSON channel-envelope header, payload].
-            co_return co_await enqueue_application_record (std::move (*received),
-                                                           std::move (application_permit));
+            co_return co_await enqueue_application_record (
+              std::move (*received), std::move (channel_name), std::move (application_permit));
         }
         const auto header = protocol::decode_header (received->parts.front ());
         if (header.kind == protocol::command::hello) {
@@ -504,31 +504,29 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
 
 task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_application_record (
   detail::backend::raw_received_t received,
+  std::string channel_name,
   std::shared_ptr<application_job_queue_t::permit_t> application_permit)
 {
     if (received.parts.size () != 2) {
         co_return client_server_pump_result_t::protocol_error;
     }
-    const auto state = co_await _lane.run_task ([this, &received] {
-        return std::pair{_connections.find (received.source_routing_id) != _connections.end (),
-                         _options.descriptor.channel_name};
-    });
-    if (!state.first)
-        co_return client_server_pump_result_t::protocol_error;
     std::optional<messaging::envelope_header_t> rejection_context;
     const auto header = messaging::envelope_codec_t{}.decode_header (
       zlink::message_t::from (received.parts.front ()), false, &rejection_context);
     if (!header) {
-        if (received.reply_token) {
+        const bool admitted = co_await _lane.run_task ([this, &received] {
+            return _connections.find (received.source_routing_id) != _connections.end ();
+        });
+        if (admitted && received.reply_token) {
             mesh::service_mailbox_record_t rejected{
-              state.second, mesh::service_mailbox_domain_t::application, std::move (received.parts),
+              channel_name, mesh::service_mailbox_domain_t::application, std::move (received.parts),
               std::move (received.source_routing_id), received.reply_token};
             (void) co_await reply (rejected, *header.error (), &rejection_context);
         }
         co_return client_server_pump_result_t::protocol_error;
     }
     const auto &envelope = header.value ();
-    if (envelope.channel_name != state.second)
+    if (envelope.channel_name != channel_name)
         co_return client_server_pump_result_t::protocol_error;
     if (envelope.kind == messaging::message_kind_t::request) {
         if (!received.reply_token) {
@@ -561,7 +559,11 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                                               permit->release_for_handler_entry ();
                                               permit.reset ();
                                           }};
+    //  One owner turn admits the record: the connection check and the mailbox
+    //  enqueue read the same connection state.
     co_return co_await _lane.run_task ([this, &record] {
+        if (_connections.find (record.source_routing_id) == _connections.end ())
+            return client_server_pump_result_t::protocol_error;
         return _mailbox.try_enqueue (std::move (record))
                  ? client_server_pump_result_t::application
                  : client_server_pump_result_t::backpressured;
