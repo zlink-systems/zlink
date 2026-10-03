@@ -3153,6 +3153,7 @@ void spot_context_state_t::complete_relocation_ready (spot_relocation_ready_outc
             if (!relocation_ready_deferred)
                 return std::make_pair (std::move (current_instance), std::move (current_callback));
             relocation_ready_deferred = false;
+            relocation_ready_turn.reset ();
             current_instance = spot_instance;
             current_callback = lifecycle.on_relocation_ready_completed;
             return std::make_pair (std::move (current_instance), std::move (current_callback));
