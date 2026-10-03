@@ -573,6 +573,27 @@ final class InstanceSpotRuntimeIntegrationTest {
                                                         .READY);
     }
 
+    /** Waits until the target's route scan has dropped the Closing Instance authority. */
+    private static void awaitClosingRouteDropped(Object spots, String spotId) throws Exception {
+        var meshes = spots.getClass().getDeclaredField("routeMeshNodesByName");
+        meshes.setAccessible(true);
+        var mesh =
+                (systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode)
+                        ((java.util.Map<?, ?>) meshes.get(spots)).get("game");
+        Object spotNode = mesh.spotNode();
+        var authorities = spotNode.getClass().getDeclaredField("instanceAuthorities");
+        authorities.setAccessible(true);
+        var registered = (java.util.Map<?, ?>) authorities.get(spotNode);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (registered.containsKey(spotId)) {
+            if (System.nanoTime() > deadline) {
+                throw new java.util.concurrent.TimeoutException(
+                        "route scan kept the Closing Instance authority");
+            }
+            Thread.sleep(2);
+        }
+    }
+
     /** Waits until the Instance Spot owner queue holds an accepted message behind Close. */
     private static void awaitPendingMessage(Object spots, String spotId) throws Exception {
         var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
@@ -717,6 +738,13 @@ final class InstanceSpotRuntimeIntegrationTest {
                             .beginDrain()
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
+                }
+                if (expectedKind == null) {
+                    // The target's background route scan drops the Closing authority before the
+                    // probe arrives, so the probe's admission cannot rely on that scan.
+                    var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
+                    spotsField.setAccessible(true);
+                    awaitClosingRouteDropped(spotsField.get(target), spotId);
                 }
                 SourceEntrySpot.probeStart.complete(null);
                 if (expectedKind == null) {
