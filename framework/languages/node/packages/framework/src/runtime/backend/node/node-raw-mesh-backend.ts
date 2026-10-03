@@ -2389,6 +2389,9 @@ function decodeStatefulRecord(
     ...(stateful.onTerminalCompletion === undefined
       ? {}
       : { onTerminalCompletion: stateful.onTerminalCompletion }),
+    ...(stateful.onHandlerTurnStarted === undefined
+      ? {}
+      : { onHandlerTurnStarted: stateful.onHandlerTurnStarted }),
     reply(parts) {
       if (stateful.reply === undefined) return SubmitResult.InvalidState;
       return stateful.reply(RequestResult.Ok, 0, encodeMultipart(parts))

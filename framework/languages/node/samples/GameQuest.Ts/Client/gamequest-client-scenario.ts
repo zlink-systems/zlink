@@ -13,11 +13,7 @@ import {
 } from '../Shared/Contracts/messages';
 import type { BrowserHttpClient } from './browser-client-runtime';
 import { SampleNames } from '../Shared/Configuration/sample-names';
-import {
-  ZlinkStreamErrorCode,
-  ZlinkStreamException,
-  zlinkStreamAssert
-} from '@zlink-systems/stream-connector';
+import { zlinkStreamAssert } from '@zlink-systems/stream-connector';
 import type { ZlinkStreamConnector } from '@zlink-systems/stream-connector';
 import type {
   CompleteMissionRes,
@@ -475,10 +471,6 @@ class GameQuestClientScenario {
       .request(killMonsterReq('player-alice', 'wolf', 'desert', 'owner-ready-intent'), Object)
       .packetName(PacketNames.killMonsterReq)
       .submit<KillMonsterRes>(signal);
-    zlinkStreamAssert.ensure(
-      lifecycleCompletionPath !== undefined,
-      'Runner lifecycle completion path is required.'
-    );
     console.log('gamequest-owner awaiting-termination player=player-alice');
     const ownerTermination = await fetch(lifecycleCompletionPath, { signal });
     zlinkStreamAssert.ensure(ownerTermination.ok, 'Runner owner termination stage failed.');

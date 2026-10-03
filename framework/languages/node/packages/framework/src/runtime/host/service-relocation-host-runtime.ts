@@ -4672,11 +4672,22 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         hidden.participant.objectKind === 'user_spot' &&
         registration.options?.relocationCoordinationMode ===
           ZLinkSpotRelocationCoordinationMode.ApplicationSignaled;
+      // createHidden could only predict the owner generation; the native Spot
+      // takes the committed authority, as the Actor branch does above.
+      const node = this.options.meshNode(this.meshName);
+      node?.restoreSpotAuthority?.(
+        String(hidden.activation.spotId),
+        // createHidden stages an activation only for a Spot participant.
+        hidden.participant.objectKind as 'user_spot' | 'instance_spot',
+        hidden.participant.stableType,
+        authority.objectGeneration,
+        authority.authorityOwnerGeneration
+      );
       await this.requireSpotManager().publishRelocationSpot(
         hidden.activation,
         applicationSignaled ? () => hidden.activation!.notifyRelocatedBoundary() : undefined
       );
-      this.options.meshNode(this.meshName)?.rememberSpotRoute?.({
+      node?.rememberSpotRoute?.({
         spot: {
           spotId: String(hidden.activation.spotId),
           generation: authority.objectGeneration

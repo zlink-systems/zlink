@@ -6275,7 +6275,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     );
     const staleCompletion = await drainOne(backend, ReadyDomain.Infrastructure);
     assert.deepEqual(staleCompletion.operationId, staleOperation);
-    assert.equal(staleCompletion.terminalResult, RequestResult.NotFound);
+    assert.equal(staleCompletion.terminalResult, RequestResult.Conflict);
     assert.equal(staleCompletion.failureErrno, 21);
   } finally {
     await authorityRoutes.stop();
@@ -6577,7 +6577,7 @@ test('Missing Instance placement capacity fails without polling or retaining a c
   assert.equal(selectionAttempts, 1);
 });
 
-test('Missing Instance request preserves target-not-found terminal results', async () => {
+test('Missing Instance request classifies an actorLocationStale terminal as Unavailable', async () => {
   let requests = 0;
   const node = {
     instanceSpotPlacementTypes() {
@@ -6622,7 +6622,7 @@ test('Missing Instance request preserves target-not-found terminal results', asy
         async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
           operation();
           return {
-            terminalResult: RequestResult.NotFound,
+            terminalResult: RequestResult.Conflict,
             failureErrno: 21,
             operationKind: 39,
             kindData: null,
@@ -6643,7 +6643,7 @@ test('Missing Instance request preserves target-not-found terminal results', asy
         timeoutMs: 200
       }),
     (error: unknown) =>
-      error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.NotFound
+      error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.Unavailable
   );
   assert.equal(requests, 1);
 });

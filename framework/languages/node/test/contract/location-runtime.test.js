@@ -1664,18 +1664,19 @@ test('location lifecycle durably closes an exact Ready Instance before deleting 
   assert.equal(mutations[0].expectedVersion, 'authority-v1');
   assert.equal(mutations[0].mutation.generationTransition, 'preserve');
 
+  // Spot messaging §7 step 3: the Close operation releases the authority through the
+  // exact Closing fence it committed; a later release of the same Spot is a no-op.
   await firstClosing.release();
-  assert.equal(internal.decodeServiceInstanceAuthorityPayload(current.payload).state, 'closing');
-  assert.equal(mutations.length, 1);
+  assert.equal(mutations[1].expectedVersion, 'authority-v2');
+  assert.deepEqual(mutations[1].mutation, { kind: 'delete' });
+  assert.equal(current.kind, 'missing');
+  assert.deepEqual(invalidated, ['room-1']);
   assert.equal(await lifecycle.beginInstanceSpotClosing('play', 'room-1', () => {
     commits++;
   }), undefined);
   assert.equal(commits, 1);
   await lifecycle.releaseSpot('play', 'room-1');
-  assert.equal(mutations[1].expectedVersion, 'authority-v2');
-  assert.deepEqual(mutations[1].mutation, { kind: 'delete' });
-  assert.equal(current.kind, 'missing');
-  assert.deepEqual(invalidated, ['room-1']);
+  assert.equal(mutations.length, 2);
 });
 
 test('location lifecycle ignores an old Instance generation release after authority replacement', async () => {

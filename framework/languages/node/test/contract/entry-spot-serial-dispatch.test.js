@@ -438,19 +438,20 @@ test('routed local self-send queues behind the current turn while self-request f
   }
   const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'same-spot');
   const spot = {};
+  const activation = {
+    spotId: 'same-spot',
+    spot,
+    serial,
+    handlers: {
+      snapshot: () => [{
+        kind: 'packet',
+        packetName: 'SelfPacket',
+        handlerType: SelfPacketHandler
+      }]
+    }
+  };
   const dispatch = new ZLinkRoutedSpotPacketDispatch({
-    resolveActivation: () => ({
-      spotId: 'same-spot',
-      spot,
-      serial,
-      handlers: {
-        snapshot: () => [{
-          kind: 'packet',
-          packetName: 'SelfPacket',
-          handlerType: SelfPacketHandler
-        }]
-      }
-    })
+    resolveActivation: () => activation
   });
   let earlier;
   await serial.execute(async () => {
@@ -508,19 +509,20 @@ test('routed local one-way carries its shared job permit through the owner seria
     }
   }
   const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'capacity-target');
+  const activation = {
+    spotId: 'capacity-target',
+    spot: {},
+    serial,
+    handlers: {
+      snapshot: () => [{
+        kind: 'packet',
+        packetName: 'SlowPacket',
+        handlerType: SlowHandler
+      }]
+    }
+  };
   const dispatch = new ZLinkRoutedSpotPacketDispatch({
-    resolveActivation: () => ({
-      spotId: 'capacity-target',
-      spot: {},
-      serial,
-      handlers: {
-        snapshot: () => [{
-          kind: 'packet',
-          packetName: 'SlowPacket',
-          handlerType: SlowHandler
-        }]
-      }
-    })
+    resolveActivation: () => activation
   });
   const running = serial.execute(async () => {
     currentStarted();

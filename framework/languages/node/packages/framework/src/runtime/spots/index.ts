@@ -1238,6 +1238,8 @@ export class DefaultZLinkSpotManager {
     if (seal === undefined) return false;
     if (seal !== true) {
       await this.activationLifecycle.sealForClose(operation.activation, seal);
+    } else {
+      await operation.activation.executionBarrier.waitForStartedTurns(signal);
     }
     const closingFailure = await this.activationLifecycle.cleanupClosedActivation(
       operation.activation,
@@ -1245,12 +1247,13 @@ export class DefaultZLinkSpotManager {
       deadline
     );
     this.activations.finishClose(meshName, spotId);
-    let hasIntent = false;
+    const intentRecords: unknown[] = [];
     operation.activation.serial.visitPendingApplication((record) => {
       const context = record.context as
         import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
-      hasIntent ||= context?.replay !== undefined;
+      if (context?.replay !== undefined) intentRecords.push(record);
     });
+    const hasIntent = intentRecords.length > 0;
     const hostState = this.options.statefulExecution?.hostState();
     const intentFailure = !hasIntent
       ? undefined
@@ -1287,6 +1290,8 @@ export class DefaultZLinkSpotManager {
             operation.activation
           );
         });
+        // The new incarnation shares this serial owner and admits membership work again.
+        operation.activation.serial.setLifecycleAdmissionClosed(false);
       } catch (error) {
         const initialized = this.activations.resolve(meshName, spotId);
         if (initialized !== undefined && initialized !== operation.activation) {
@@ -1334,9 +1339,9 @@ export class DefaultZLinkSpotManager {
     operation: ZLinkTargetSpotCloseOperation,
     signal?: AbortSignal
   ): Promise<import('../execution').ZLinkExecutionBarrierSeal | true | undefined> {
-    if (operation.reason !== ZLinkSpotCloseReason.ExplicitClose) {
-      await this.options.instanceSpotApplicationQuiescenceProvider?.(meshName, spotId, signal);
-    }
+    // Spot messaging §4 step 12 with §7 step 1: a Close of any reason begins its
+    // Closing CAS only after the first terminal record of an activated message.
+    await this.options.instanceSpotApplicationQuiescenceProvider?.(meshName, spotId, signal);
     if (!operation.activation.canClose(operation.reason)) return undefined;
     if (operation.activation.executionBarrier.isSealed) {
       throw createInternalFrameworkException(
@@ -1348,10 +1353,12 @@ export class DefaultZLinkSpotManager {
     let seal: import('../execution').ZLinkExecutionBarrierSeal | true | undefined;
     const authorityPromise = Promise.resolve().then(() =>
       operation.beginAuthority(() => {
-        seal =
-          operation.reason === ZLinkSpotCloseReason.ExplicitClose
-            ? true
-            : operation.activation.sealExecution('close');
+        if (operation.reason === ZLinkSpotCloseReason.ExplicitClose) {
+          operation.activation.serial.setLifecycleAdmissionClosed(true);
+          seal = true;
+        } else {
+          seal = operation.activation.sealExecution('close');
+        }
       })
     );
     operation.authorityDecision = authorityPromise.then(
@@ -1761,10 +1768,18 @@ export class DefaultZLinkSpotManager {
           contentType: envelope.header.contentType,
           awaitFirstHandlerTurn: record.kind === ReceiveKind.InstanceSpotActivation,
           activationRecord: record,
-          onOneWayError: this.options.dispatchErrors?.captureEnabled()
-            ? (error: unknown) =>
-                this.reportInstanceDispatchFailure(meshName, spotId, record, envelope, false, error)
-            : undefined,
+          onOneWayError:
+            this.options.dispatchErrors?.captureEnabled() === true
+              ? (error: unknown) =>
+                  this.reportInstanceDispatchFailure(
+                    meshName,
+                    spotId,
+                    record,
+                    envelope,
+                    false,
+                    error
+                  )
+              : undefined,
           workOptions: zlinkSerialWorkOptions(
             envelope.payload.byteLength,
             record.applicationMetadata?.byteLength ??
@@ -1864,8 +1879,9 @@ export class DefaultZLinkSpotManager {
     request: boolean,
     error: unknown
   ): void {
-    if (!this.options.dispatchErrors?.captureEnabled()) return;
-    this.options.dispatchErrors?.report({
+    const reporter = this.options.dispatchErrors;
+    if (reporter?.captureEnabled() !== true) return;
+    reporter.report({
       surface: ZLinkDispatchErrorSurface.InstanceSpot,
       messageKind: request ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
       packetName: envelope.packetName,

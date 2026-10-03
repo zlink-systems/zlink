@@ -183,6 +183,7 @@ export interface ServiceStatefulMailboxData {
   readonly deadlineUnixMs?: bigint;
   readonly activationRecord?: Extract<ServiceStatefulWireRecord, { readonly kind: 'instanceSpot' }>;
   readonly onTerminalCompletion?: () => void | Promise<void>;
+  readonly onHandlerTurnStarted?: () => void;
   /** Decoded only by the canonical command-28 generator path. */
   readonly canonicalApplicationPayload?: ServiceApplicationPayload;
   readonly reply?: (
@@ -393,7 +394,6 @@ export class ServiceStatefulRuntime {
   private readonly subscriptions = new Map<string, Set<string>>();
   private readonly instanceIntents = new Map<string, ServiceInstanceIntent>();
   private readonly admittedInstanceOperations = new Map<string, bigint>();
-  private readonly pendingInstanceTerminals = new Map<string, number>();
   private readonly pendingInstanceAuthorityTerminals = new Map<string, number>();
   private readonly instanceApplicationWaiters = new Map<string, Set<() => void>>();
   private readonly canonicalActorJoinHandoffs = new Map<bigint, string>();
@@ -898,6 +898,7 @@ export class ServiceStatefulRuntime {
       ...(envelope.replyRouteId === undefined ? {} : { replyRouteId: envelope.replyRouteId })
     };
     const applicationJobOwner = await this.raw.reserveLocalIngress();
+    const terminal = this.activationTerminalCompletion(target, route);
     try {
       const admitted = this.enqueueActivatedInstanceSpot(
         {
@@ -923,11 +924,11 @@ export class ServiceStatefulRuntime {
         Buffer.from(envelope.applicationPayloadFrame),
         spot,
         undefined,
-        this.activationTerminalCompletion(target, route),
+        terminal.onTerminalCompletion,
         envelope.metadataFrame === undefined
           ? undefined
           : validateServiceMetadataFrame(envelope.metadataFrame),
-        true,
+        terminal.onHandlerTurnStarted,
         this.instanceApplicationTarget(record, route.objectGeneration)
       );
       if (admitted !== 'application') {
@@ -1022,12 +1023,10 @@ export class ServiceStatefulRuntime {
     return released;
   }
 
+  /** Resolves once every first terminal record of an activated Instance message is durable. */
   waitForInstanceApplicationQuiescence(spotId: string, signal?: AbortSignal): Promise<void> {
     const key = String(spotId);
-    if (
-      (this.pendingInstanceTerminals.get(key) ?? 0) === 0 &&
-      (this.pendingInstanceAuthorityTerminals.get(key) ?? 0) === 0
-    ) {
+    if ((this.pendingInstanceAuthorityTerminals.get(key) ?? 0) === 0) {
       return Promise.resolve();
     }
     if (signal?.aborted === true) {
@@ -2011,7 +2010,6 @@ export class ServiceStatefulRuntime {
     this.retiredSessionDeliveries.clear();
     this.appliedReplacementNotices.clear();
     this.instanceIntents.clear();
-    this.pendingInstanceTerminals.clear();
     this.pendingInstanceAuthorityTerminals.clear();
     for (const waiters of this.instanceApplicationWaiters.values()) {
       for (const waiter of waiters) waiter();
@@ -2428,7 +2426,7 @@ export class ServiceStatefulRuntime {
     localReply?: NonNullable<ServiceStatefulMailboxData['reply']>,
     onTerminalCompletion?: NonNullable<ServiceStatefulMailboxData['onTerminalCompletion']>,
     metadataFrame?: Buffer,
-    activationTerminal = false,
+    onHandlerTurnStarted?: () => void,
     applicationTargetOverride?: ServiceInstanceApplicationTarget
   ): RawServicePumpResult {
     let operationKey: string | undefined;
@@ -2458,10 +2456,6 @@ export class ServiceStatefulRuntime {
       onTerminalCompletion === undefined
         ? undefined
         : async () => {
-            // The application turn has returned before authority cleanup starts.
-            // Mark it quiescent first so a close requested by that turn can finish
-            // its local cleanup and release the exact authority fence below.
-            this.completeInstanceApplicationOperation(applicationTarget.targetSpotId);
             try {
               await onTerminalCompletion();
             } finally {
@@ -2480,6 +2474,7 @@ export class ServiceStatefulRuntime {
       ...(record.activation === 'missing' ? { deadlineUnixMs: record.deadlineUnixMs } : {}),
       ...(metadataFrame === undefined ? {} : { applicationMetadata: metadataFrame }),
       ...(terminalCompletion === undefined ? {} : { onTerminalCompletion: terminalCompletion }),
+      ...(onHandlerTurnStarted === undefined ? {} : { onHandlerTurnStarted }),
       ...(record.operationKind === 'request'
         ? {
             reply:
@@ -2496,10 +2491,6 @@ export class ServiceStatefulRuntime {
       this.admittedInstanceOperations.set(operationKey, record.deadlineUnixMs);
     }
     if (onTerminalCompletion !== undefined && result === 'application') {
-      this.beginInstanceApplicationOperation(applicationTarget.targetSpotId);
-      if (activationTerminal) {
-        this.beginInstanceAuthorityOperation(applicationTarget.targetSpotId);
-      }
       this.instanceApplicationLifecycle?.beginTerminal(applicationTarget);
     }
     return result;
@@ -2523,15 +2514,16 @@ export class ServiceStatefulRuntime {
         metadataFrame
       );
       if (this.closed) return;
+      const terminal = this.activationTerminalCompletion(record.target, activation.route);
       const admitted = this.enqueueActivatedInstanceSpot(
         ingress,
         record,
         payloadFrame,
         activation.spot,
         localReply,
-        this.activationTerminalCompletion(record.target, activation.route),
+        terminal.onTerminalCompletion,
         metadataFrame,
-        true,
+        terminal.onHandlerTurnStarted,
         this.instanceApplicationTarget(record, activation.route.objectGeneration)
       );
       if (admitted !== 'application') {
@@ -2605,7 +2597,7 @@ export class ServiceStatefulRuntime {
         undefined,
         this.instanceApplicationTerminalCompletion(this.instanceApplicationTarget(refreshedRecord)),
         metadataFrame,
-        false,
+        undefined,
         this.instanceApplicationTarget(refreshedRecord)
       );
       if (admitted !== 'application') {
@@ -2618,23 +2610,39 @@ export class ServiceStatefulRuntime {
     }
   }
 
+  /**
+   * Spot messaging §4 step 12 with §7 step 1: a Close waits for the first terminal
+   * record only of a message whose handler turn started before it; a message queued
+   * behind that Close is not counted, so it cannot hold the Close it follows.
+   */
   private activationTerminalCompletion(
     target: ServiceInstanceActivationTarget,
     route: ServiceInstanceRouteFence
-  ): () => Promise<void> {
+  ): {
+    readonly onTerminalCompletion: () => Promise<void>;
+    readonly onHandlerTurnStarted: () => void;
+  } {
     let completion: Promise<void> | undefined;
+    let started = false;
     const applicationTarget: ServiceInstanceApplicationTarget = {
       targetSpotId: target.targetSpotId,
       stableType: target.stableType,
       objectGeneration: route.objectGeneration
     };
-    return () =>
+    const onHandlerTurnStarted = (): void => {
+      if (started || completion !== undefined) return;
+      started = true;
+      this.beginInstanceAuthorityOperation(target.targetSpotId);
+    };
+    const onTerminalCompletion = (): Promise<void> =>
       (completion ??= (async () => {
-        let authorityCompletionSignaled = false;
+        let authorityCompletionSignaled = !started;
         try {
           const released = await this.asyncInstanceAuthority?.complete(target, route);
-          this.completeInstanceAuthorityOperation(target.targetSpotId);
-          authorityCompletionSignaled = true;
+          if (!authorityCompletionSignaled) {
+            this.completeInstanceAuthorityOperation(target.targetSpotId);
+            authorityCompletionSignaled = true;
+          }
           if (released !== undefined) {
             const authorityReleased =
               (await this.instanceApplicationLifecycle?.completeTerminal(applicationTarget)) ??
@@ -2651,6 +2659,7 @@ export class ServiceStatefulRuntime {
           }
         }
       })());
+    return { onTerminalCompletion, onHandlerTurnStarted };
   }
 
   private instanceApplicationTerminalCompletion(
@@ -2695,28 +2704,12 @@ export class ServiceStatefulRuntime {
     };
   }
 
-  private beginInstanceApplicationOperation(spotId: string): void {
-    const key = String(spotId);
-    this.pendingInstanceTerminals.set(key, (this.pendingInstanceTerminals.get(key) ?? 0) + 1);
-  }
-
   private beginInstanceAuthorityOperation(spotId: string): void {
     const key = String(spotId);
     this.pendingInstanceAuthorityTerminals.set(
       key,
       (this.pendingInstanceAuthorityTerminals.get(key) ?? 0) + 1
     );
-  }
-
-  private completeInstanceApplicationOperation(spotId: string): void {
-    const key = String(spotId);
-    const pending = this.pendingInstanceTerminals.get(key);
-    if (pending === undefined || pending <= 1) {
-      this.pendingInstanceTerminals.delete(key);
-      this.completeInstanceApplicationWaitersIfQuiescent(key);
-      return;
-    }
-    this.pendingInstanceTerminals.set(key, pending - 1);
   }
 
   private completeInstanceAuthorityOperation(spotId: string): void {
@@ -2731,11 +2724,7 @@ export class ServiceStatefulRuntime {
   }
 
   private completeInstanceApplicationWaitersIfQuiescent(key: string): void {
-    if (
-      (this.pendingInstanceTerminals.get(key) ?? 0) !== 0 ||
-      (this.pendingInstanceAuthorityTerminals.get(key) ?? 0) !== 0
-    )
-      return;
+    if ((this.pendingInstanceAuthorityTerminals.get(key) ?? 0) !== 0) return;
     const waiters = this.instanceApplicationWaiters.get(key);
     if (waiters === undefined) return;
     this.instanceApplicationWaiters.delete(key);
