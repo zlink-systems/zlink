@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -19,15 +20,20 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 final class ZLinkJavaSubmissionTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
@@ -189,12 +195,140 @@ final class ZLinkJavaSubmissionTest {
             binding.result = SubmitResult.BACKPRESSURED;
             var reply = binding.request(adapter, List.of(part)).toCompletableFuture();
             assertFalse(reply.isDone());
+            assertEquals(1, binding.resultReads);
+            assertEquals(1, binding.admissionReads);
+            assertEquals(1, binding.replyReads);
+            assertFalse(binding.replies.getFirst().isDone());
             binding.admission.complete(null);
             assertFalse(reply.isDone(), "admission is not a request terminal");
+            assertEquals(1, binding.replyReads);
             var failure = new IllegalStateException("binding reply failed");
             binding.replies.getFirst().completeExceptionally(failure);
             assertSame(failure, assertThrows(CompletionException.class, reply::join).getCause());
             assertEquals(1, binding.submissions);
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(Adapter.class)
+    void cancellingPendingRequestCancelsBindingWaiterWithoutResubmission(Adapter adapter) {
+        try (var binding = new BindingProbe(); Message part = Message.from("request")) {
+            binding.result = SubmitResult.BACKPRESSURED;
+            var completion = requestForCancellation(binding, adapter, List.of(part));
+            assertTrue(completion.cancel(false));
+            assertTrue(binding.replies.getFirst().isCancelled());
+            assertEquals(1, binding.submissions);
+            binding.admission.complete(null);
+            assertTrue(completion.isCancelled());
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(Adapter.class)
+    void bindingReplyWinningBeforeCancellationKeepsItsResult(Adapter adapter) {
+        try (var binding = new BindingProbe(); Message part = Message.from("request")) {
+            var completion = binding.request(adapter, List.of(part)).toCompletableFuture();
+            binding.replies.getFirst().complete(List.of(Message.from("reply")));
+            assertArrayEquals("reply".getBytes(java.nio.charset.StandardCharsets.UTF_8), completion.join());
+            assertFalse(completion.cancel(false));
+            assertEquals(1, binding.submissions);
+        }
+    }
+
+    private static CompletableFuture<?> requestForCancellation(
+            BindingProbe binding, Adapter adapter, List<Message> parts) {
+        return adapter == Adapter.SERVICE
+                ? binding.request(adapter, parts).toCompletableFuture()
+                : ZLinkJavaSocketSupport.submitRequest(binding.requestOperation(), parts, TIMEOUT)
+                        .toCompletableFuture();
+    }
+
+    @ParameterizedTest
+    @EnumSource(Adapter.class)
+    void lateBindingReplyAfterCallerCancellationClosesItsPayload(Adapter adapter) {
+        try (var binding = new BindingProbe(); Message part = Message.from("request")) {
+            binding.result = SubmitResult.BACKPRESSURED;
+            binding.ignoreReplyCancellation = true;
+            var completion = requestForCancellation(binding, adapter, List.of(part));
+            assertTrue(completion.cancel(false));
+            binding.admission.complete(null);
+            try (Message late = Message.from("late")) {
+                assertTrue(binding.replies.getFirst().complete(List.of(late)));
+                assertTrue(late.empty());
+            }
+            assertTrue(completion.isCancelled());
+        }
+    }
+
+    @Test
+    void cancelledServiceRequestDiscardsALateDecodedReply() {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("request");
+                Message decoded = Message.from("decoded")) {
+            CountDownLatch decoderEntered = new CountDownLatch(1);
+            CountDownLatch releaseDecoder = new CountDownLatch(1);
+            var completion =
+                    binding.port
+                            .requestMessages(
+                                    binding.router,
+                                    TARGET,
+                                    List.of(part),
+                                    TIMEOUT,
+                                    ignored -> {
+                                        decoderEntered.countDown();
+                                        try {
+                                            assertTrue(releaseDecoder.await(5, TimeUnit.SECONDS));
+                                        } catch (InterruptedException failure) {
+                                            Thread.currentThread().interrupt();
+                                            throw new AssertionError(failure);
+                                        }
+                                        return new ZLinkBackendReceived(
+                                                ZLinkBackendRequestResult.OK,
+                                                Optional.empty(),
+                                                Optional.empty(),
+                                                Optional.empty(),
+                                                List.of(decoded));
+                                    },
+                                    ZLinkBackendReceived::close)
+                            .toCompletableFuture();
+            var delivery =
+                    CompletableFuture.runAsync(
+                            () ->
+                                    assertTrue(
+                                            binding.replies
+                                                    .getFirst()
+                                                    .complete(List.of(Message.from("wire")))));
+            try {
+                assertTrue(decoderEntered.await(5, TimeUnit.SECONDS));
+                assertTrue(completion.cancel(false));
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(failure);
+            } finally {
+                releaseDecoder.countDown();
+            }
+            delivery.join();
+            assertTrue(decoded.empty());
+            assertTrue(completion.isCancelled());
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(Adapter.class)
+    void requestWithoutCapacityWaitTokenFailsUnavailableWithoutQueuing(Adapter adapter) {
+        try (var binding = new BindingProbe(); Message part = Message.from("request")) {
+            binding.requestFailure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
+            var reply = binding.request(adapter, List.of(part)).toCompletableFuture();
+            var failure =
+                    assertInstanceOf(
+                            ZLinkFrameworkException.class,
+                            assertThrows(CompletionException.class, reply::join).getCause());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failure.kind());
+            assertSame(binding.requestFailure, failure.getCause());
+            assertEquals(1, binding.submissions);
+            assertEquals(0, binding.resultReads);
+            assertEquals(0, binding.admissionReads);
+            assertEquals(0, binding.replyReads);
         }
     }
 
@@ -239,8 +373,10 @@ final class ZLinkJavaSubmissionTest {
         private List<byte[]> frames;
         private SubmitResult result = SubmitResult.OK;
         private RuntimeException requestFailure;
+        private boolean ignoreReplyCancellation;
         private int resultReads;
         private int admissionReads;
+        private int replyReads;
         private int submissions;
         private final ZLinkJavaRawServicePort port;
         private final RouterSocket router;
@@ -282,7 +418,12 @@ final class ZLinkJavaSubmissionTest {
         CompletionStage<byte[]> request(Adapter adapter, List<Message> messages) {
             if (adapter == Adapter.SERVICE) {
                 return port.requestMessages(
-                        router, TARGET, messages, TIMEOUT, reply -> reply.getFirst().toByteArray());
+                        router,
+                        TARGET,
+                        messages,
+                        TIMEOUT,
+                        reply -> reply.getFirst().toByteArray(),
+                        ignored -> {});
             }
             return ZLinkJavaSocketSupport.submitRequest(requestOperation(), messages, TIMEOUT)
                     .thenApply(
@@ -348,11 +489,19 @@ final class ZLinkJavaSubmissionTest {
                             if (requestFailure != null) {
                                 throw requestFailure;
                             }
-                            var reply = new CompletableFuture<List<Message>>();
+                            var reply =
+                                    new CompletableFuture<List<Message>>() {
+                                        @Override
+                                        public boolean cancel(boolean mayInterruptIfRunning) {
+                                            return !ignoreReplyCancellation
+                                                    && super.cancel(mayInterruptIfRunning);
+                                        }
+                                    };
                             replies.add(reply);
                             return new RequestSubmission() {
                                 @Override
                                 public SubmitResult result() {
+                                    resultReads++;
                                     return result;
                                 }
 
@@ -363,6 +512,7 @@ final class ZLinkJavaSubmissionTest {
 
                                 @Override
                                 public CompletionStage<List<Message>> reply() {
+                                    replyReads++;
                                     return reply;
                                 }
                             };

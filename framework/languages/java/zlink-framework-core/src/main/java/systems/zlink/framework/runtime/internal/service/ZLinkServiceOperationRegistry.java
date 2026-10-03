@@ -112,6 +112,12 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         if (synchronousFailure != null) {
             completions.post(synchronousFailure);
         } else if (submitted != null) {
+            CompletionStage<T> accepted = submitted;
+            operation.completion().whenComplete(
+                    (ignored, failure) -> {
+                        if (operation.completion().isCancelled())
+                            accepted.toCompletableFuture().cancel(false);
+                    });
             submitted.whenComplete(
                     (value, failure) -> {
                         if (failure != null) {

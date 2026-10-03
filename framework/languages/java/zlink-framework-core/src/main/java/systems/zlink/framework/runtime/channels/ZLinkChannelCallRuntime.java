@@ -31,6 +31,14 @@ import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 final class ZLinkChannelCallRuntime {
+    static void forwardRequestCancellation(
+            CompletableFuture<?> caller, CompletionStage<?> operation) {
+        caller.whenComplete(
+                (ignored, failure) -> {
+                    if (caller.isCancelled()) operation.toCompletableFuture().cancel(false);
+                });
+    }
+
     @FunctionalInterface
     interface SpotSend {
         CompletionStage<Void> send(
@@ -206,17 +214,19 @@ final class ZLinkChannelCallRuntime {
         return current;
     }
 
-    static <T> CompletionStage<T> preserveCurrentFlow(CompletionStage<T> request) {
+    static CompletionStage<ZLinkBackendReceived> preserveCurrentFlow(
+            CompletionStage<ZLinkBackendReceived> request) {
         ZLinkFlowContext.State captured = ZLinkFlowContext.current();
         if (captured == null) {
             return request;
         }
-        CompletableFuture<T> contextual = new CompletableFuture<>();
+        CompletableFuture<ZLinkBackendReceived> contextual = new CompletableFuture<>();
+        forwardRequestCancellation(contextual, request);
         request.whenComplete(
                 (reply, failure) -> {
                     try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(captured)) {
                         if (failure == null) {
-                            contextual.complete(reply);
+                            if (!contextual.complete(reply) && reply != null) reply.close();
                         } else {
                             contextual.completeExceptionally(unwrap(failure));
                         }

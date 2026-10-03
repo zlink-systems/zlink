@@ -222,7 +222,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                     targetId,
                                     List.of(successful),
                                     Duration.ofSeconds(2),
-                                    parts -> parts.getFirst().readByte(0))
+                                    parts -> parts.getFirst().readByte(0),
+                                    ignored -> {})
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
             try (var inbound = port.receiveNow(target).orElseThrow()) {
@@ -243,7 +244,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                     targetId,
                                     List.of(timedOut),
                                     Duration.ofMillis(25),
-                                    parts -> parts.getFirst().readByte(0))
+                                    parts -> parts.getFirst().readByte(0),
+                                    ignored -> {})
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
             try (var ignored = port.receiveNow(target).orElseThrow()) {
@@ -260,7 +262,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                     RoutingId.from("native-request-missing"),
                                     List.of(routeRejected),
                                     Duration.ofSeconds(2),
-                                    parts -> parts.getFirst().readByte(0))
+                                    parts -> parts.getFirst().readByte(0),
+                                    ignored -> {})
                             .toCompletableFuture();
             var rejected =
                     assertThrows(
