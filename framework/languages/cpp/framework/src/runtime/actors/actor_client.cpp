@@ -5,6 +5,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/actors/actor_manager_access.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
+#include "runtime/execution/task_result.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
@@ -438,7 +439,7 @@ class actor_client_impl_t final : public actor_client_t
 
     task_t<void> send_to_ref (actor_ref_t actor, std::string packet_name, message_t message)
     {
-        auto resolved = resolve_explicit_actor (actor);
+        auto resolved = co_await resolve_explicit_actor (actor);
         if (!resolved) {
             throw *resolved.error ();
         }
@@ -454,7 +455,7 @@ class actor_client_impl_t final : public actor_client_t
                                       message_t message,
                                       std::chrono::milliseconds timeout)
     {
-        auto resolved = resolve_explicit_actor (actor);
+        auto resolved = co_await resolve_explicit_actor (actor);
         if (!resolved) {
             co_return detail::propagate_failure<message_t> (resolved,
                                                             "explicit Actor route is unavailable");
@@ -479,7 +480,7 @@ class actor_client_impl_t final : public actor_client_t
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "actor send requires a running MeshNode");
         auto actor =
-          resolve_actor (std::string (actor_id.value ()), stale_policy_t::route_not_found);
+          co_await resolve_actor (std::string (actor_id.value ()), stale_policy_t::route_not_found);
         if (!actor) {
             const auto failed =
               detail::propagate_failure<void> (actor, "actor route was not found");
@@ -510,8 +511,8 @@ class actor_client_impl_t final : public actor_client_t
         const auto release_turn = detail::actor_request_releases_current_turn ();
         if (!release_turn && detail::current_serial_turn_allows_yield ()
             && !runtime::current_actor_execution.spot_id.empty ()) {
-            const auto target =
-              resolve_actor (std::string (actor_id.value ()), stale_policy_t::route_not_found);
+            const auto target = co_await resolve_actor (std::string (actor_id.value ()),
+                                                        stale_policy_t::route_not_found);
             if (target
                 && actor_request_requires_current_spot_gate (target.value ().spot_id,
                                                              release_turn)) {
@@ -563,7 +564,7 @@ class actor_client_impl_t final : public actor_client_t
                         == detail::failure_origin_t::actor_transfer_in_progress;
         };
         while (true) {
-            auto actor = resolve_actor (actor_id_value, policy);
+            auto actor = co_await resolve_actor (actor_id_value, policy);
             if (actor) {
                 const auto now = std::chrono::steady_clock::now ();
                 if (now >= deadline) {
@@ -587,7 +588,7 @@ class actor_client_impl_t final : public actor_client_t
                             || last.error_kind () == framework_error_kind_t::not_found)) {
                         invalidate_cached_route_on_stale (actor.value (), last.error_kind ());
                         const auto current =
-                          resolve_actor (actor_id_value, stale_policy_t::route_not_found);
+                          co_await resolve_actor (actor_id_value, stale_policy_t::route_not_found);
                         if (!current
                             && current.error_kind () == framework_error_kind_t::not_found) {
                             co_return detail::propagate_failure<message_t> (
@@ -642,27 +643,27 @@ class actor_client_impl_t final : public actor_client_t
         location_owner_token_t owner;
     };
 
-    result_t<resolved_actor_t> resolve_actor (const std::string &actor_id, stale_policy_t policy)
+    task_t<result_t<resolved_actor_t>> resolve_actor (std::string actor_id, stale_policy_t policy)
     {
         const auto runtime = first_mesh_node ();
         if (!runtime) {
-            return result_t<resolved_actor_t>::failure (framework_error_kind_t::unavailable,
-                                                        "actor lookup requires a running MeshNode");
+            co_return result_t<resolved_actor_t>::failure (
+              framework_error_kind_t::unavailable, "actor lookup requires a running MeshNode");
         }
         if (_location_options.route_cache_max_age > std::chrono::milliseconds::zero ()) {
             std::lock_guard lock (_route_cache_gate);
             const auto cached = _route_cache.find (actor_id);
             if (cached != _route_cache.end ()) {
                 if (std::chrono::steady_clock::now () < cached->second.expires_at) {
-                    return result_t<resolved_actor_t>::success (cached->second.actor);
+                    co_return result_t<resolved_actor_t>::success (cached->second.actor);
                 }
                 _route_cache.erase (cached);
             }
         }
-        auto read = _store->read_authority (actor_authority_key (actor_id)).result ();
+        auto read = co_await await_result (_store->read_authority (actor_authority_key (actor_id)));
         if (!read) {
-            return detail::propagate_failure<resolved_actor_t> (read,
-                                                                "actor authority lookup failed");
+            co_return detail::propagate_failure<resolved_actor_t> (read,
+                                                                   "actor authority lookup failed");
         }
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
         const auto projection = snapshot
@@ -672,14 +673,14 @@ class actor_client_impl_t final : public actor_client_t
         if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
             || snapshot->allocation.object_kind != placement_object_kind_t::actor || !projection
             || projection->actor.actor_id ().value () != actor_id) {
-            return result_t<resolved_actor_t>::failure (
+            co_return result_t<resolved_actor_t>::failure (
               policy == stale_policy_t::route_not_found ? framework_error_kind_t::not_found
                                                         : framework_error_kind_t::unavailable,
               policy == stale_policy_t::route_not_found ? "actor route was not found"
                                                         : "actor location became stale");
         }
         if (projection->spot_id.empty ()) {
-            return result_t<resolved_actor_t>::failure (
+            co_return result_t<resolved_actor_t>::failure (
               policy == stale_policy_t::route_not_found ? framework_error_kind_t::not_found
                                                         : framework_error_kind_t::unavailable,
               policy == stale_policy_t::route_not_found ? "actor SPOT route was not found"
@@ -694,8 +695,7 @@ class actor_client_impl_t final : public actor_client_t
                            snapshot->authority_owner_generation,
                            static_cast<std::uint64_t> (snapshot->owner.lease_generation),
                            snapshot->owner};
-        const auto lease_lifetime =
-          _store->owner_admission_lifetime (snapshot->owner).result ().value ();
+        const auto lease_lifetime = co_await _store->owner_admission_lifetime (snapshot->owner);
         if (_location_options.route_cache_max_age > std::chrono::milliseconds::zero ()
             && lease_lifetime) {
             const auto lifetime =
@@ -708,21 +708,21 @@ class actor_client_impl_t final : public actor_client_t
                   actor_id, cached_actor_t{resolved, std::chrono::steady_clock::now () + lifetime});
             }
         }
-        return result_t<resolved_actor_t>::success (std::move (resolved));
+        co_return result_t<resolved_actor_t>::success (std::move (resolved));
     }
 
-    result_t<resolved_actor_t> resolve_explicit_actor (const actor_ref_t &actor)
+    task_t<result_t<resolved_actor_t>> resolve_explicit_actor (actor_ref_t actor)
     {
         if (!first_mesh_node ()) {
-            return result_t<resolved_actor_t>::failure (
+            co_return result_t<resolved_actor_t>::failure (
               framework_error_kind_t::unavailable,
               "explicit Actor route requires a running MeshNode");
         }
-        auto read =
-          _store->read_authority (actor_authority_key (actor.actor_id ().value ())).result ();
+        auto read = co_await await_result (
+          _store->read_authority (actor_authority_key (actor.actor_id ().value ())));
         if (!read) {
-            return detail::propagate_failure<resolved_actor_t> (read,
-                                                                "Actor authority lookup failed");
+            co_return detail::propagate_failure<resolved_actor_t> (read,
+                                                                   "Actor authority lookup failed");
         }
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
         const auto projection = snapshot
@@ -733,13 +733,13 @@ class actor_client_impl_t final : public actor_client_t
             || snapshot->allocation.object_kind != placement_object_kind_t::actor || !projection
             || projection->actor.actor_id () != actor.actor_id ()
             || projection->actor.node_rid ().value () != actor.node_rid ().value ()) {
-            return result_t<resolved_actor_t>::failure (
+            co_return result_t<resolved_actor_t>::failure (
               framework_error_kind_t::unavailable,
               "explicit Actor route no longer identifies the current incarnation");
         }
         const auto mesh_name = actor.mesh_name ().empty () ? snapshot->allocation.target.mesh_name
                                                            : std::string (actor.mesh_name ());
-        return result_t<resolved_actor_t>::success (resolved_actor_t{
+        co_return result_t<resolved_actor_t>::success (resolved_actor_t{
           projection->actor, projection->actor, actor.node_rid (), projection->spot_id, mesh_name,
           snapshot->authority_owner_generation,
           static_cast<std::uint64_t> (snapshot->owner.lease_generation), snapshot->owner});
@@ -755,7 +755,8 @@ class actor_client_impl_t final : public actor_client_t
          * an active or moving authority keeps the normal route/backlog path,
          * while an actually missing authority is exposed as NotFound before
          * transport admission. */
-        if (cached_route_target_deleted (actor.framework_ref.actor_id ().value ())) {
+        if (co_await cached_route_target_deleted (
+              std::string (actor.framework_ref.actor_id ().value ()))) {
             invalidate_cached_route_on_stale (actor, framework_error_kind_t::not_found);
             co_return result_t<void>::failure (framework_error_kind_t::not_found,
                                                "actor route was not found");
@@ -775,22 +776,22 @@ class actor_client_impl_t final : public actor_client_t
         co_return result_t<void>::success ();
     }
 
-    bool cached_route_target_deleted (std::string_view actor_id)
+    task_t<bool> cached_route_target_deleted (std::string actor_id)
     {
         {
             std::lock_guard lock (_route_cache_gate);
-            if (!_route_cache.contains (std::string (actor_id)))
-                return false;
+            if (!_route_cache.contains (actor_id))
+                co_return false;
         }
         try {
             const auto read =
-              _store->read_authority (actor_authority_key (std::string (actor_id))).result ();
+              co_await await_result (_store->read_authority (actor_authority_key (actor_id)));
             if (!read)
-                return false;
-            return std::get_if<authority_snapshot_t> (&read.value ()) == nullptr;
+                co_return false;
+            co_return std::get_if<authority_snapshot_t> (&read.value ()) == nullptr;
         }
         catch (...) {
-            return false;
+            co_return false;
         }
     }
 
