@@ -6,6 +6,7 @@
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <zlink/framework.hpp>
@@ -68,6 +69,7 @@ struct observation_t
     std::atomic_bool cross_join_delay{false};
     std::string handler_mode;
     std::string watched_spot;
+    std::shared_ptr<zf::detail::spot_context_state_t> room_state;
 
     void record (std::string event)
     {
@@ -214,7 +216,10 @@ struct close_room_timer_handler_t
 class close_room_spot_t final : public zf::spot_t<member_actor_t>
 {
   public:
-    explicit close_room_spot_t (zf::spot_context_t context) : _context (std::move (context)) {}
+    explicit close_room_spot_t (zf::spot_context_t context) : _context (std::move (context))
+    {
+        current ().room_state = zf::detail::spot_context_access_t::state (_context);
+    }
     zf::spot_context_t &context () noexcept override { return _context; }
     const zf::spot_context_t &context () const noexcept override { return _context; }
     void configure () override
@@ -365,6 +370,8 @@ class close_fault_store_t final : public zf::location_store_t
     std::atomic_bool fail_authority_release_once{false};
     // The next Closing commit stays pending until release_held_commit.
     std::atomic_bool hold_closing_commit_once{false};
+    std::atomic_bool hold_authority_release_once{false};
+    std::atomic_bool owner_lease_released{false};
     std::promise<void> commit_held;
 
     // Completes the held Closing commit: applied, or an owner fence conflict.
@@ -398,13 +405,18 @@ class close_fault_store_t final : public zf::location_store_t
     {
         bool watched_put = false;
         bool watched_delete = false;
+        bool owner_delete = false;
         for (const auto &mutation : request.mutations) {
             if (const auto *put = std::get_if<zf::store_put_t> (&mutation))
                 watched_put = watched_put || is_watched (put->key);
-            if (const auto *erase = std::get_if<zf::store_delete_t> (&mutation))
+            if (const auto *erase = std::get_if<zf::store_delete_t> (&mutation)) {
                 watched_delete = watched_delete || is_watched (erase->key);
+                owner_delete =
+                  owner_delete || erase->key.value.starts_with (std::string ("owner-lease\0", 12));
+            }
         }
-        if (watched_put && hold_closing_commit_once.exchange (false)) {
+        if ((watched_put && hold_closing_commit_once.exchange (false))
+            || (watched_delete && hold_authority_release_once.exchange (false))) {
             zf::task_completion_source_t<zf::store_write_result_t> completion;
             auto held = completion.task ();
             {
@@ -420,6 +432,8 @@ class close_fault_store_t final : public zf::location_store_t
             co_return zf::store_write_result_t{zf::store_write_conflict_t{}};
         }
         auto result = co_await _inner->write (std::move (request));
+        if (owner_delete && std::holds_alternative<zf::store_write_applied_t> (result))
+            owner_lease_released.store (true);
         if (watched_delete && std::holds_alternative<zf::store_write_applied_t> (result))
             current ().record ("authorityReleased");
         co_return result;
@@ -501,6 +515,26 @@ class scenario_client_t final : public zf::hosted_service_t
 
     zf::task_t<void> start (zf::service_provider_t &services) override
     {
+        if (_scenario.at ("act") == "shutdownDuringClose") {
+            // Let host startup finish before requesting its terminal result.
+            _worker = std::thread ([this, services] () mutable {
+                (void) wait_until ([&] { return _app->is_ready (); });
+                execute (services);
+            });
+        } else {
+            execute (services);
+        }
+        co_return;
+    }
+
+    void join ()
+    {
+        if (_worker.joinable ())
+            _worker.join ();
+    }
+
+    void execute (zf::service_provider_t &services)
+    {
         try {
             run (services);
         }
@@ -525,7 +559,6 @@ class scenario_client_t final : public zf::hosted_service_t
         }
         if (!stopping)
             _app->stop ();
-        co_return;
     }
 
     void stop () noexcept override {}
@@ -535,6 +568,7 @@ class scenario_client_t final : public zf::hosted_service_t
     bool stopping = false;
 
   private:
+    std::thread _worker;
     std::string authority_state (zf::service_provider_t &services, const std::string &spot_id)
     {
         auto &locations = services.get_required<zf::location_repository_t> ();
@@ -661,6 +695,58 @@ class scenario_client_t final : public zf::hosted_service_t
         std::optional<zf::spot_ref_t> ref;
         if (authority != "Missing")
             ref = create_room (services, spot_id);
+        if (act == "shutdownDuringClose") {
+            // Hold the fenced release after local teardown has marked the Spot closed.
+            // Shutdown must retain the authority until this existing Close settles.
+            const bool expires = given.value ("deadlineExpires", false);
+            if (expires)
+                store.hold_closing_commit_once.store (true);
+            else
+                store.hold_authority_release_once.store (true);
+            auto held = store.commit_held.get_future ();
+            // Exercise the node's explicit Close directly: manager request accounting
+            // would make the earlier host completion barrier mask this ordering bug.
+            auto runtime =
+              zf::detail::spot_node_runtime_t::from (_app->advanced ().zlink (), mesh_name);
+            auto closing = runtime->close_spot (zf::spot_id_t (spot_id));
+            if (held.wait_for (3s) != std::future_status::ready) {
+                store.release_held_commit (false);
+                throw std::runtime_error ("Close did not reach authority release");
+            }
+            auto shutdown = _app->shutdown (expires ? 100ms : 3s);
+            stopping = true;
+            if (!expires) {
+                const auto state = current ().room_state;
+                auto owner = state->lane_owner.lock ();
+                if (!owner)
+                    owner = state->node;
+                if (!wait_until ([&] {
+                        return store.owner_lease_released.load ()
+                               || owner->lane
+                                    .run ([&] { return !state->merged_close_results.empty (); })
+                                    .get ();
+                    })) {
+                    store.release_held_commit (false);
+                    throw std::runtime_error ("shutdown did not reach the Close barrier");
+                }
+            }
+            auto terminal = shutdown.result_for (expires ? 2s : 0ms);
+            actual["completedBeforeRelease"] = terminal.has_value ();
+            actual["authorityBeforeRelease"] = authority_state (services, spot_id);
+            actual["ownerDeletedBeforeRelease"] = store.owner_lease_released.load ();
+            store.release_held_commit (false);
+            const auto close_result = closing.result ();
+            actual["closeSucceeded"] = close_result && close_result.value ();
+            if (!terminal)
+                terminal = shutdown.result_for (3s);
+            if (!terminal)
+                throw std::runtime_error ("shutdown exceeded its bounded teardown");
+            const auto result = terminal->value ();
+            actual["deadlineExceeded"] =
+              result.reason == zf::termination_reason_t::deadline_exceeded;
+            actual["stopped"] = result.outcome == zf::termination_outcome_t::stopped;
+            return;
+        }
         if (authority == "Closing") {
             // A Close whose authority release fails leaves Closing committed.
             store.fail_authority_release_once.store (true);
@@ -1010,6 +1096,7 @@ nlohmann::json run_scenario (const nlohmann::json &scenario, std::string &failur
     auto *runner = client.get ();
     app.add_hosted_service (std::move (client));
     (void) app.run (0, nullptr);
+    runner->join ();
 
     failure = runner->failure;
     auto actual = runner->actual;
@@ -1045,6 +1132,30 @@ void run_and_check (const nlohmann::json &scenario)
         }
         EXPECT_EQ (value, actual.at (key)) << key << ": " << actual.dump ();
     }
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, ShutdownJoinsExplicitCloseBeforeOwnerCleanup)
+{
+    run_and_check (nlohmann::json{{"name", "shutdown-joins-close"},
+                                  {"given", {{"authority", "Ready"}}},
+                                  {"act", "shutdownDuringClose"},
+                                  {"expect",
+                                   {{"completedBeforeRelease", false},
+                                    {"authorityBeforeRelease", "Closing"},
+                                    {"ownerDeletedBeforeRelease", false},
+                                    {"closeSucceeded", true},
+                                    {"deadlineExceeded", false},
+                                    {"stopped", true}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, ShutdownCloseJoinUsesDrainDeadline)
+{
+    run_and_check (nlohmann::json{
+      {"name", "shutdown-close-deadline"},
+      {"given", {{"authority", "Ready"}, {"deadlineExpires", true}}},
+      {"act", "shutdownDuringClose"},
+      {"expect",
+       {{"completedBeforeRelease", true}, {"deadlineExceeded", true}, {"stopped", false}}}});
 }
 
 TEST (ZLinkFrameworkSpotCloseConformance, RunsEveryFixtureScenario)
