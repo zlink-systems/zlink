@@ -656,6 +656,68 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
     test.require (rejected, "FrameworkManaged must reject relocation_ready().defer()");
 }
 
+/* Spot model §5.1: only the turn that registered RelocationReady().Defer()
+ * rejects later Framework operations. A lifecycle callback queued before the
+ * boundary, such as OnLeaveActor submitted by a timer cleanup, runs in its own
+ * turn and may start operations. */
+void test_relocation_ready_defer_rejects_only_its_own_turn (test_context_t &test)
+{
+    namespace detail = zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    using zlink::framework::framework_error_kind_t;
+    using zlink::framework::framework_exception_t;
+    using zlink::framework::spot_relocation_coordination_mode_t;
+    using zlink::framework::spot_relocation_ready_outcome_t;
+    using zlink::framework::user_spot_execution_mode_t;
+
+    auto state = std::make_shared<detail::spot_context_state_t> ();
+    state->execution_mode = user_spot_execution_mode_t::spot_wide;
+    state->relocation_coordination_mode = spot_relocation_coordination_mode_t::application_signaled;
+    // A prepared boundary keeps the deferral pending while the queued turn runs.
+    state->relocation_boundary_active = true;
+    state->serial_executor =
+      std::make_shared<runtime::offload_executor_t> (2, "relocation-ready-own-turn");
+    state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *state->serial_executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    state->node = std::make_shared<detail::spot_node_builder_state_t> ("relocation-own-turn-node");
+    state->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+    state->spot_instance = std::make_shared<int> (1);
+    auto context = detail::spot_context_access_t::create (state);
+
+    const auto operation_allowed = [&state] {
+        try {
+            state->ensure_relocation_turn_open ();
+            return true;
+        }
+        catch (const framework_exception_t &error) {
+            if (error.kind () != framework_error_kind_t::not_configured)
+                throw;
+            return false;
+        }
+    };
+    std::promise<bool> queued_turn_allowed;
+    auto queued_result = queued_turn_allowed.get_future ();
+    bool deferring_turn_rejected = false;
+    const auto deferred = run_serial_turn (state, "defer-in-timer-turn", [&] {
+        state->serial_queue->post (
+          "queued-leave-callback", [&] { queued_turn_allowed.set_value (operation_allowed ()); },
+          runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
+        context.relocation_ready ().defer ();
+        deferring_turn_rejected = !operation_allowed ();
+    });
+    const bool queued_ran =
+      queued_result.wait_for (std::chrono::seconds (1)) == std::future_status::ready;
+    const bool queued_allowed = queued_ran && queued_result.get ();
+    state->complete_relocation_ready (spot_relocation_ready_outcome_t::continued);
+    state->serial_queue->drain ();
+    if (!queued_allowed)
+        std::cerr << "relocation defer rejected another turn: queued_ran=" << queued_ran << '\n';
+    test.require (deferred && deferring_turn_rejected && queued_allowed,
+                  "relocation readiness defer must reject operations only in its own turn");
+}
+
 void test_relocation_ready_defer_holds_queued_timer_turn (test_context_t &test)
 {
     namespace detail = zlink::framework::detail;
@@ -6373,6 +6435,7 @@ int main ()
     test_spot_lifecycle_domain_rejects_invalid_kind_combinations (test);
     test_generation_barrier_quiesces_yield_spot_and_timer (test);
     test_relocation_ready_completion_runs_once_on_spot_turn (test);
+    test_relocation_ready_defer_rejects_only_its_own_turn (test);
     test_relocation_ready_defer_holds_queued_timer_turn (test);
     test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test);
     test_remote_actor_leave_commits_before_source_callback (test);

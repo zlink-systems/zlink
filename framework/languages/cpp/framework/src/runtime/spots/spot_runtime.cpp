@@ -2855,7 +2855,9 @@ void spot_context_state_t::run_serial_task_async (
                 activation_callback ();
             callback_context_scope_t callback_scope (this);
             auto observed = std::make_shared<task_t<void>> (work ());
-            detail::observe_task_completion (*observed, [observed,
+            // The work object owns the Spot and Actor the callback references
+            // until the callback terminal.
+            detail::observe_task_completion (*observed, [observed, work = std::move (work),
                                                          completion = std::move (completion)] (
                                                           const result_t<void> &value) mutable {
                 completion (value ? result_t<void>::success ()
@@ -2957,8 +2959,8 @@ void spot_context_state_t::run_serial_task_async (
               callback_context_scope_t callback_scope (owner.get ());
               auto observed = std::make_shared<task_t<void>> (work ());
               detail::observe_task_completion (
-                *observed,
-                [owner, observed, settle, turn, complete] (const result_t<void> &value) mutable {
+                *observed, [owner, observed, work = std::move (work), settle, turn,
+                            complete] (const result_t<void> &value) mutable {
                     const auto final_result =
                       value
                         ? result_t<void>::success ()
@@ -3114,6 +3116,7 @@ void spot_context_state_t::defer_relocation_ready ()
     const auto complete_without_relocation = state_sync ([this, barrier = reserved.value ()] {
         relocation_ready_deferred = true;
         relocation_ready_barrier = barrier;
+        relocation_ready_turn = detail::capture_current_serial_turn ();
         return !relocation_boundary_active;
     });
     if (complete_without_relocation)
@@ -3125,8 +3128,8 @@ void spot_context_state_t::ensure_relocation_turn_open () const
     const auto current_turn = detail::capture_current_serial_turn ();
     if (!owns_current_serial_turn () || !current_turn || current_turn->is_after_active_phase ())
         return;
-    const auto deferred = state_sync ([this] { return relocation_ready_deferred; });
-    if (deferred) {
+    const auto deferring_turn = state_sync ([this] { return relocation_ready_turn.lock (); });
+    if (deferring_turn == current_turn) {
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "Framework operations are not allowed after relocation "
                                      "readiness is deferred in the current Spot turn");
@@ -3150,6 +3153,7 @@ void spot_context_state_t::complete_relocation_ready (spot_relocation_ready_outc
             if (!relocation_ready_deferred)
                 return std::make_pair (std::move (current_instance), std::move (current_callback));
             relocation_ready_deferred = false;
+            relocation_ready_turn.reset ();
             current_instance = spot_instance;
             current_callback = lifecycle.on_relocation_ready_completed;
             return std::make_pair (std::move (current_instance), std::move (current_callback));

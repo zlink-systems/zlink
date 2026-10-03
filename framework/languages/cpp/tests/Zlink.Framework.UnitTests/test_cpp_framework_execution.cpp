@@ -2885,6 +2885,56 @@ bool verify_released_spot_turn_does_not_inline_lifecycle_task ()
            && lifecycle_succeeded.load (std::memory_order_acquire);
 }
 
+zlink::framework::task_t<void> await_lifecycle_terminal (
+  std::shared_ptr<zlink::framework::task_completion_source_t<void>> terminal)
+{
+    co_await terminal->task ();
+}
+
+/* A lifecycle callback such as OnLeaveActor receives raw Spot and Actor
+ * references. The work object that owns them must live until the callback
+ * terminal, not only until its first suspension. */
+bool verify_spot_serial_task_async_retains_work_until_terminal ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    auto executor = std::make_shared<runtime::offload_executor_t> (1, "spot-serial-retain");
+    auto owner = std::make_shared<spot_context_state_t> ();
+    owner->serial_executor = executor;
+    owner->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    auto terminal = std::make_shared<task_completion_source_t<void>> ();
+    auto actor_instance = std::make_shared<int> (7);
+    const std::weak_ptr<int> weak_actor = actor_instance;
+    std::promise<void> entered;
+    std::promise<result_t<void>> settled;
+    owner->run_serial_task_async (
+      "retained-spot-lifecycle-leave",
+      [actor_instance = std::move (actor_instance), terminal, &entered] {
+          entered.set_value ();
+          return await_lifecycle_terminal (terminal);
+      },
+      [&settled] (result_t<void> value) { settled.set_value (std::move (value)); });
+    if (entered.get_future ().wait_for (std::chrono::seconds (5)) != std::future_status::ready)
+        return false;
+    auto settled_result = settled.get_future ();
+    const bool retained_while_suspended = !weak_actor.expired ();
+    terminal->complete (result_t<void>::success ());
+    if (settled_result.wait_for (std::chrono::seconds (5)) != std::future_status::ready)
+        return false;
+    const bool succeeded = static_cast<bool> (settled_result.get ());
+    owner->serial_queue->drain ();
+    const bool released_after_terminal = weak_actor.expired ();
+    if (!retained_while_suspended || !succeeded || !released_after_terminal)
+        std::cerr << "lifecycle work lifetime: retained=" << retained_while_suspended
+                  << " succeeded=" << succeeded << " released=" << released_after_terminal << '\n';
+    return retained_while_suspended && succeeded && released_after_terminal;
+}
+
 bool verify_spot_serial_task_async_shutdown_settlement ()
 {
     using namespace zlink::framework;
@@ -7592,6 +7642,9 @@ int main (int argc, char **argv)
     }
     if (!verify_spot_serial_task_async_shutdown_settlement ()) {
         return 93;
+    }
+    if (!verify_spot_serial_task_async_retains_work_until_terminal ()) {
+        return 96;
     }
     if (!verify_common_dispatch_limits ()) {
         return 55;

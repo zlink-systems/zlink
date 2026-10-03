@@ -1102,6 +1102,9 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     bool relocation_boundary_active = false;
     bool relocation_ready_deferred = false;
     std::shared_ptr<deferred_barrier_t> relocation_ready_barrier;
+    // The serial turn that registered the deferral; only that turn rejects
+    // later Framework operations (Spot model §5.1).
+    std::weak_ptr<serial_turn_t> relocation_ready_turn;
     std::vector<spot_packet_descriptor_t> packets;
     std::vector<spot_handler_descriptor_t> handlers;
     std::vector<spot_handler_registry_t::invoker_t> handler_invokers;
