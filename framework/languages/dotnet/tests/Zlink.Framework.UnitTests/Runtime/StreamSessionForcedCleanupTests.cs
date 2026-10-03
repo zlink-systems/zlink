@@ -96,19 +96,6 @@ public sealed class StreamSessionForcedCleanupTests
         await lifetime.WaitConnectedAsync(edge);
         Assert.Empty(lifetime.Events(snapshot));
         Assert.Equal(1, node.SessionCount);
-        var receiveProcessed = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        socket.BeforeRecvPacket = () =>
-        {
-            if (socket.DequeuedPacketCount != 0)
-                receiveProcessed.TrySetResult();
-            return true;
-        };
-        EmitJson(socket, snapshot, new SessionOrderingMessage());
-        await receiveProcessed.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Empty(lifetime.Events(snapshot));
-        Assert.Equal(1, node.SessionCount);
         monitor.Emit(
             new ZLinkBackendSocketMonitorEvent(
                 ZLinkSocketNativeEventType.ConnectionReady,
@@ -120,6 +107,12 @@ public sealed class StreamSessionForcedCleanupTests
             )
         );
         await lifetime.WaitConnectedAsync(snapshot);
+        EmitJson(socket, snapshot, new SessionOrderingMessage());
+        await lifetime.WaitDispatchCompletedAsync(snapshot);
+        Assert.Equal(
+            new[] { "connected", "dispatch-start", "dispatch-end" },
+            lifetime.Events(snapshot)
+        );
         Assert.Equal(2, node.SessionCount);
     }
 
