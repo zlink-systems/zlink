@@ -254,6 +254,7 @@ and the enqueue does not go into the old owner's queue is a white-box
 invariant confirmed only by the fact that the above commit procedure is a single atomic
 span.
 
+<a id="permit-return-and-holding"></a>
 ### Permit Return and No Resource Holding While Waiting (Implementation)
 
 An application permit is released at the actual first instruction of its own
@@ -270,14 +271,15 @@ shutdown clean up waiters and handed-off permits exactly once.
   paths and a request's deadline and terminal handling. A sustained wait/capacity cycle in
   this scope is not grounds for a bypass — it is a protocol or runtime bug. A request's
   deadline handling does not wait for an application gate or a permit.
-- **An application handler that keeps its gate while awaiting a request sent to another
-  target is not subject to the prohibition above**
-  ([Handler turn §4](02-handler-turn-and-execution-gate.en.md#4-waiting-and-returning-within-the-same-turn)).
-  If every permit is in use and that target's ingress cannot progress, the request ends
-  with `DeadlineExceeded` at
-  [its own deadline](01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget),
-  and the handler terminal returns the gate. This is the normal result of saturation, not
-  a runtime bug.
+- **An application handler that keeps its gate while awaiting a request that
+  [Handler turn §6](02-handler-turn-and-execution-gate.en.md#6-the-trap-in-acquiring-processing-authority-implementation)
+  allows is not subject to the prohibition above.** While saturation delays the target
+  ingress, the request's result follows the completion race of
+  [Submit and completion §9](01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget).
+  A request that ends because its deadline settles first is a normal result of saturation.
+  The gate lifetime is defined by
+  [Handler turn §2](02-handler-turn-and-execution-gate.en.md#execution-gate), which does not
+  guarantee target admission, handler completion, or relief of saturation.
 
 ## 4. Reading Multiple Items from the Socket (Implementation)
 
@@ -420,8 +422,8 @@ The binding operation's submission count and HWM waiting owner are defined by
   finished has no result to return to the caller, so it is recorded only as an observation —
   a local target skipped after publish started, a one-way dropped during a move, or a target
   that could not take a finished send.
-- **While waiting, that work does not hold execution authority.** Holding it would block
-  another request to the same Spot for as long as it waits.
+- **Whether Framework-internal work holds execution authority while waiting for send space
+  follows [§3 Permit Return and No Resource Holding While Waiting](#permit-return-and-holding).**
 
 StreamNode's client-to-server complete-message
 [`MaxMessageSize`](../00-foundation/02-glossary.en.md#max-message-size) is an independent
@@ -491,7 +493,7 @@ names — confirms the following. Each item leads to one contract test.
 
 **Backpressure and Core HWM**
 
-- Work waiting for send space does not hold execution authority.
+- Framework-internal work waiting for send space follows [§3 Permit Return and No Resource Holding While Waiting](#permit-return-and-holding).
 - When the wait for send space runs out of time, send, publish, one-way and request all end
   with `DeadlineExceeded`, and no call receives a different error for lack of room.
 - However much is put into a per-execution-object FIFO, no record is rejected.

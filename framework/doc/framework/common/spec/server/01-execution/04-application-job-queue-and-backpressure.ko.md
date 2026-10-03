@@ -224,6 +224,7 @@ node에 있는지, 자리가 있는지, 이동으로 봉인되지 않았는지.
 들어가지 않는다는 것은 위 commit 절차가 하나의 원자적 구간이라는 사실로만 확인되는 white-box
 불변 조건이다.
 
+<a id="permit-return-and-holding"></a>
 ### Permit 반환과 대기 중 자원 점유 금지 (구현)
 
 Application permit은 자신의 target callback 실제 첫 instruction에서 반환하고, control·
@@ -239,12 +240,13 @@ source close와 shutdown은 waiter와 handoff permit을 정확히 한 번 정리
   처리다. 이 범위에서 지속되는 wait/capacity cycle은 우회를 정당화하는 근거가 아니라
   protocol 또는 runtime bug다. Request의 deadline 처리는 application gate와 permit 획득을
   기다리지 않는다.
-- **Application handler가 gate를 유지한 채 다른 대상에 보낸 request를 기다리는 것은 위
-  금지의 대상이 아니다**([Handler turn §4](02-handler-turn-and-execution-gate.ko.md#4-같은-turn에서의-대기와-반납)).
-  Permit이 모두 쓰여 그 target의 ingress가 진행하지 못하면 request는
-  [자기 deadline](01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)에
-  `DeadlineExceeded`로 끝나고, handler terminal이 gate를 반환한다. 이 결과는 포화의 정상
-  결과이며 runtime bug가 아니다.
+- **[Handler turn §6](02-handler-turn-and-execution-gate.ko.md#6-처리-권한-획득의-함정-구현)이
+  허용하는 request를 application handler가 gate를 유지한 채 기다리는 것은 위 금지의 대상이
+  아니다.** 포화로 target ingress가 지연되는 동안 그 request의 결과는
+  [Submit과 완료 §9](01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)의
+  완료 경쟁을 따른다. Deadline이 먼저 확정되어 request가 끝나는 것은 정상적인 포화 결과다.
+  Gate 수명은 [Handler turn §2](02-handler-turn-and-execution-gate.ko.md#execution-gate)가
+  정하며, target admission·handler 종료·포화 해소를 보장하지 않는다.
 
 ## 4. 소켓에서 여러 건 읽기 (구현)
 
@@ -369,8 +371,8 @@ Binding operation의 제출 횟수와 HWM 대기 소유는
 - **이 규칙은 결과가 아직 정해지지 않은 구간에만 사용한다.** 이미 끝난 호출 뒤에 생긴 실패는
   호출자에게 돌려줄 결과가 없으므로 관측으로만 남긴다. publish가 시작된 뒤 local target을
   건너뛴 경우, 이동 중 one-way를 버린 경우, 끝난 send의 target이 받지 못한 경우가 그렇다.
-- **기다리는 동안 그 작업은 실행 권한을 쥐고 있지 않는다.** 쥔 채로 기다리면 같은 Spot의
-  다른 요청이 그 시간만큼 막히기 때문이다.
+- **Framework 내부 작업이 송신 공간을 기다리는 동안 실행 권한을 쥐는지는
+  [§3 Permit 반환과 대기 중 자원 점유 금지](#permit-return-and-holding)를 따른다.**
 
 StreamNode의 client→server complete-message
 [`MaxMessageSize`](../00-foundation/02-glossary.ko.md#max-message-size)는 이 capacity와 독립된
@@ -435,7 +437,7 @@ pressure 상태 조회, socket receive-flow 절대 상태, [Runtime metric](../0
 
 **Backpressure와 Core HWM**
 
-- 송신 공간을 기다리는 작업이 실행 권한을 쥐고 있지 않다.
+- Framework 내부 작업의 송신 공간 대기가 [§3 Permit 반환과 대기 중 자원 점유 금지](#permit-return-and-holding)를 지킨다.
 - 송신 공간을 기다리다 시간이 다 되면 send·publish·one-way·request가 모두
   `DeadlineExceeded`로 끝나고, 자리가 없다는 이유로 다른 오류를 받는 호출이 없다.
 - 실행 객체별 FIFO에 얼마를 넣어도 record를 거절하지 않는다.
