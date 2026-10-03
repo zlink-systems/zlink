@@ -7,6 +7,7 @@ import {
   ZLinkSpotSerialTurn
 } from '../execution';
 import type { SpotId } from '../../contracts';
+import type { ZLinkFrameworkException } from '../../contracts/Errors/ZLinkFrameworkException';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -78,6 +79,24 @@ export class ZLinkSpotSerialTurnExecutor {
   }
 
   /**
+   * Spot messaging §7 step 3: after Close ends this queue's admission, an Instance
+   * intent message is refused before admission as a released owner fence, and any
+   * other message finds no incarnation. Undefined while admission is open.
+   */
+  applicationAdmissionRefusal(instanceIntent: boolean): ZLinkFrameworkException | undefined {
+    if (!this.scheduler.admissionClosed) return undefined;
+    return instanceIntent
+      ? createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.SpotMoving,
+          'The Spot incarnation released its authority before admitting this Instance intent message.'
+        )
+      : createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+          'The Spot incarnation is closed.'
+        );
+  }
+
+  /**
    * Spot messaging §7: once Close commits Closing, membership work can no longer
    * enter this incarnation while Instance intent messages still queue behind Close.
    */
@@ -145,6 +164,8 @@ export class ZLinkSpotSerialTurnExecutor {
     try {
       const entry = this.executionBarrier?.enter();
       barrierClaim = entry instanceof Promise ? await entry : entry;
+      const refusal = this.applicationAdmissionRefusal(replay !== undefined);
+      if (refusal !== undefined) throw refusal;
       if (barrierClaim !== undefined && replay !== undefined) {
         Object.assign(barrierClaim, { replay: bindApplicationJobPermit(replay) });
       }
@@ -236,6 +257,8 @@ export class ZLinkSpotSerialTurnExecutor {
     try {
       const entry = this.executionBarrier?.enter();
       barrierClaim = entry instanceof Promise ? await entry : entry;
+      const refusal = this.applicationAdmissionRefusal(replay !== undefined);
+      if (refusal !== undefined) throw refusal;
       if (barrierClaim !== undefined && replay !== undefined) {
         Object.assign(barrierClaim, { replay: bindApplicationJobPermit(replay) });
       }

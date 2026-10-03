@@ -281,6 +281,81 @@ for (const { state, sealed } of [
   });
 }
 
+test('Instance intent request after the release decision is refused before admission with the owner fence', async () => {
+  const expectation = branchExpectation('intent-after-release-decision-refused-before-admission');
+  const { internalFrameworkErrorKindFromWireFailureCode } = require('../../packages/framework/dist/runtime/framework-errors-internal');
+  const fixture = await authorityFixture();
+  const ready = await commitFixture(fixture);
+  const entered = deferred();
+  const finish = deferred();
+  const releaseRequested = deferred();
+  const releaseHold = deferred();
+  const arrived = deferred();
+  const events = [];
+  let initializations = 0;
+  let handlerCalls = 0;
+  class Room {
+    async onInitialize() { initializations++; }
+    async onClosing() { entered.resolve(); await finish.promise; }
+  }
+  class Ping { handle() { handlerCalls++; return { generation: 'old' }; } }
+  const claims = new ZLinkSpotLocationClaims({}, fixture.store);
+  claims.trackInstanceAuthority({ meshName: 'mesh', spotId: 'close-room', stableType: 'room',
+    nodeRid: 'node', nodeGeneration: 1n, objectGeneration: ready.objectGeneration,
+    authorityOwnerGeneration: ready.authorityOwnerGeneration, ownerId: 'owner',
+    ownerLeaseGeneration: 1n, storeVersion: ready.storeVersion.value });
+  const manager = new framework.DefaultZLinkSpotManager({ detachedTaskRunner, spotFactories: [],
+    instanceSpotFactories: new Map([['mesh', new Map([['room', Room]])]]),
+    spotPacketHandlers: [{ spotType: Room, handlerType: Ping, packetName: 'Ping' }],
+    instanceSpotApplicationTargetProvider: () => ({ stableType: 'room', objectGeneration: ready.objectGeneration }),
+    admission: { claim() { arrived.resolve(); return { close() {} }; } },
+    beginInstanceClosingAuthority: async (...args) => {
+      const authority = await claims.beginInstanceClosing(...args);
+      return { release: async () => {
+        // Close step 3 has decided release; the Store holds its Delete.
+        releaseRequested.resolve();
+        await releaseHold.promise;
+        await authority.release();
+        events.push('authorityReleased');
+      }, reincarnate() { assert.fail('Close with no waiting Instance intent must release'); } };
+    }
+  });
+  await manager.materializeInstance('mesh', 'room', 'close-room', ready.objectGeneration);
+  const closing = manager.close('mesh', 'close-room');
+  await entered.promise;
+  finish.resolve();
+  await releaseRequested.promise;
+  const parts = protocol.encodeChannelEnvelopeParts(1, 'instance', 'Ping', {}).map((part) => zlink.Message.from(part));
+  const replies = [];
+  const failures = [];
+  const record = { kind: framework.ReceiveKind.InstanceSpotActivation,
+    operationKind: framework.OperationKind.InstanceSpotRequest, parts,
+    reply(replyParts) { replies.push(replyParts.map((part) => zlink.Message.from(part))); return zlink.SubmitResult.Ok; },
+    replyFailure(terminalResult, failureCode) { failures.push({ terminalResult, failureCode }); return zlink.SubmitResult.Ok; },
+    activationRecord: { kind: 'instanceSpot', activation: 'ready', instanceIntent: true,
+      route: { targetSpotId: 'close-room', targetNodeRid: 'node', targetNodeGeneration: 1n,
+        objectGeneration: ready.objectGeneration, ownerId: 'owner',
+        authorityOwnerGeneration: ready.authorityOwnerGeneration, leaseGeneration: 1n,
+        storeVersion: ready.storeVersion.value },
+      sourceNodeRid: 'source', sourceNodeGeneration: 1n, operationKind: 'request',
+      operation: { high: 1n, low: 1n }, replyRouteId: 1n } };
+  const dispatch = manager.dispatchMeshInstance('mesh', { spotId: 'close-room' }, record);
+  // The late message is either refused at once or waits in the owner queue.
+  await Promise.race([dispatch, arrived.promise]);
+  releaseHold.resolve();
+  assert.equal(await closing, true);
+  await dispatch;
+  assert.deepEqual(events, expectation.order);
+  assert.equal((await fixture.store.readAuthority(fixture.key)).kind === 'missing' ? 'Missing' : 'other', expectation.authority);
+  assert.equal(handlerCalls, expectation.oldHandlerCalls + expectation.newHandlerCalls);
+  assert.equal(initializations - 1, expectation.factoryCalls);
+  assert.equal(replies.length + failures.length, expectation.messageTerminalCount);
+  assert.equal(replies.length, 0, 'the late Instance intent message must not be admitted');
+  assert.equal(internalFrameworkErrorKindFromWireFailureCode(failures[0].failureCode), expectation.messageFailureCode);
+  assert.equal(expectation.messageTerminal, 'Unavailable');
+  for (const part of [...parts, ...replies.flat()]) part.close();
+});
+
 for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, readyIntent } of [
   { initializationFails: false, queuedBeforeClose: false },
   { initializationFails: true, queuedBeforeClose: false },

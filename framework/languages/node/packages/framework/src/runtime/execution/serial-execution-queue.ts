@@ -190,6 +190,10 @@ export class ZLinkSerialExecutionQueue {
     this.closed = true;
   }
 
+  get admissionClosed(): boolean {
+    return this.closed;
+  }
+
   private admit<T>(
     operation: () => Promise<T> | T,
     options: ZLinkSerialWorkOptions,
