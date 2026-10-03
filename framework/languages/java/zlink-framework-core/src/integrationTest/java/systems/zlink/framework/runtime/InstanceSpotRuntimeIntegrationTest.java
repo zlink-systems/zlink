@@ -670,6 +670,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         EchoInstanceSpot.closingEntered = new CompletableFuture<>();
         EchoInstanceSpot.closingRelease = new CompletableFuture<>();
         SourceEntrySpot.reset();
+        SourceEntrySpot.closeStart = new CompletableFuture<>();
         SourceEntrySpot.probeStart = new CompletableFuture<>();
         SourceEntrySpot.probeFailure = new CompletableFuture<>();
         SourceEntrySpot.afterCloseStart = new CompletableFuture<>();
@@ -715,6 +716,17 @@ final class InstanceSpotRuntimeIntegrationTest {
                         "closing-verdict-source-" + suffix,
                         "closing-verdict-target-" + suffix);
                 SourceEntrySpot.start.complete(null);
+                SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
+                // Establish the scan-owned Ready projection before testing its Closing removal.
+                var routesField =
+                        ZLinkFrameworkRuntime.class.getDeclaredField("authorityRouteRuntime");
+                routesField.setAccessible(true);
+                ((systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime)
+                                routesField.get(target))
+                        .reconcile()
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+                SourceEntrySpot.closeStart.complete(null);
                 EchoInstanceSpot.closingEntered.get(5, TimeUnit.SECONDS);
                 if (drain) {
                     var field = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
@@ -748,6 +760,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     assertEquals(expectedKind, ((ZLinkFrameworkException) failure).kind());
                 }
             } finally {
+                SourceEntrySpot.closeStart.complete(null);
                 EchoInstanceSpot.closingRelease.complete(null);
                 SourceEntrySpot.afterCloseStart.complete(null);
             }
