@@ -72,8 +72,8 @@ int main ()
         const auto foreign = detail::result_access_t::failure<void> (
           std::make_exception_ptr (std::runtime_error ("foreign")));
         require (!foreign.error () && !foreign.has_value (), "foreign exception classification");
-        const auto derived = detail::result_access_t::failure<int> (
-          std::make_exception_ptr (derived_error_t ()));
+        const auto derived =
+          detail::result_access_t::failure<int> (std::make_exception_ptr (derived_error_t ()));
         require (std::string (derived.error ()->what ()) == "derived", "derived base message");
         try {
             derived.value ();
