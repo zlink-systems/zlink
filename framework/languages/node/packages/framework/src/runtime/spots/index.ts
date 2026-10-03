@@ -1335,9 +1335,9 @@ export class DefaultZLinkSpotManager {
     operation: ZLinkTargetSpotCloseOperation,
     signal?: AbortSignal
   ): Promise<import('../execution').ZLinkExecutionBarrierSeal | true | undefined> {
-    if (operation.reason !== ZLinkSpotCloseReason.ExplicitClose) {
-      await this.options.instanceSpotApplicationQuiescenceProvider?.(meshName, spotId, signal);
-    }
+    // Spot messaging §4 step 12 with §7 step 1: a Close of any reason begins its
+    // Closing CAS only after the first terminal record of an activated message.
+    await this.options.instanceSpotApplicationQuiescenceProvider?.(meshName, spotId, signal);
     if (!operation.activation.canClose(operation.reason)) return undefined;
     if (operation.activation.executionBarrier.isSealed) {
       throw createInternalFrameworkException(

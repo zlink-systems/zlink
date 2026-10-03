@@ -393,7 +393,6 @@ export class ServiceStatefulRuntime {
   private readonly subscriptions = new Map<string, Set<string>>();
   private readonly instanceIntents = new Map<string, ServiceInstanceIntent>();
   private readonly admittedInstanceOperations = new Map<string, bigint>();
-  private readonly pendingInstanceTerminals = new Map<string, number>();
   private readonly pendingInstanceAuthorityTerminals = new Map<string, number>();
   private readonly instanceApplicationWaiters = new Map<string, Set<() => void>>();
   private readonly canonicalActorJoinHandoffs = new Map<bigint, string>();
@@ -1022,12 +1021,10 @@ export class ServiceStatefulRuntime {
     return released;
   }
 
+  /** Resolves once every first terminal record of an activated Instance message is durable. */
   waitForInstanceApplicationQuiescence(spotId: string, signal?: AbortSignal): Promise<void> {
     const key = String(spotId);
-    if (
-      (this.pendingInstanceTerminals.get(key) ?? 0) === 0 &&
-      (this.pendingInstanceAuthorityTerminals.get(key) ?? 0) === 0
-    ) {
+    if ((this.pendingInstanceAuthorityTerminals.get(key) ?? 0) === 0) {
       return Promise.resolve();
     }
     if (signal?.aborted === true) {
@@ -2011,7 +2008,6 @@ export class ServiceStatefulRuntime {
     this.retiredSessionDeliveries.clear();
     this.appliedReplacementNotices.clear();
     this.instanceIntents.clear();
-    this.pendingInstanceTerminals.clear();
     this.pendingInstanceAuthorityTerminals.clear();
     for (const waiters of this.instanceApplicationWaiters.values()) {
       for (const waiter of waiters) waiter();
@@ -2458,10 +2454,6 @@ export class ServiceStatefulRuntime {
       onTerminalCompletion === undefined
         ? undefined
         : async () => {
-            // The application turn has returned before authority cleanup starts.
-            // Mark it quiescent first so a close requested by that turn can finish
-            // its local cleanup and release the exact authority fence below.
-            this.completeInstanceApplicationOperation(applicationTarget.targetSpotId);
             try {
               await onTerminalCompletion();
             } finally {
@@ -2496,7 +2488,6 @@ export class ServiceStatefulRuntime {
       this.admittedInstanceOperations.set(operationKey, record.deadlineUnixMs);
     }
     if (onTerminalCompletion !== undefined && result === 'application') {
-      this.beginInstanceApplicationOperation(applicationTarget.targetSpotId);
       if (activationTerminal) {
         this.beginInstanceAuthorityOperation(applicationTarget.targetSpotId);
       }
@@ -2695,28 +2686,12 @@ export class ServiceStatefulRuntime {
     };
   }
 
-  private beginInstanceApplicationOperation(spotId: string): void {
-    const key = String(spotId);
-    this.pendingInstanceTerminals.set(key, (this.pendingInstanceTerminals.get(key) ?? 0) + 1);
-  }
-
   private beginInstanceAuthorityOperation(spotId: string): void {
     const key = String(spotId);
     this.pendingInstanceAuthorityTerminals.set(
       key,
       (this.pendingInstanceAuthorityTerminals.get(key) ?? 0) + 1
     );
-  }
-
-  private completeInstanceApplicationOperation(spotId: string): void {
-    const key = String(spotId);
-    const pending = this.pendingInstanceTerminals.get(key);
-    if (pending === undefined || pending <= 1) {
-      this.pendingInstanceTerminals.delete(key);
-      this.completeInstanceApplicationWaitersIfQuiescent(key);
-      return;
-    }
-    this.pendingInstanceTerminals.set(key, pending - 1);
   }
 
   private completeInstanceAuthorityOperation(spotId: string): void {
@@ -2731,11 +2706,7 @@ export class ServiceStatefulRuntime {
   }
 
   private completeInstanceApplicationWaitersIfQuiescent(key: string): void {
-    if (
-      (this.pendingInstanceTerminals.get(key) ?? 0) !== 0 ||
-      (this.pendingInstanceAuthorityTerminals.get(key) ?? 0) !== 0
-    )
-      return;
+    if ((this.pendingInstanceAuthorityTerminals.get(key) ?? 0) !== 0) return;
     const waiters = this.instanceApplicationWaiters.get(key);
     if (waiters === undefined) return;
     this.instanceApplicationWaiters.delete(key);
