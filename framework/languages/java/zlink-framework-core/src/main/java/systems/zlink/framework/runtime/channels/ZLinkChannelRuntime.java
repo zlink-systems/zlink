@@ -67,6 +67,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
@@ -1477,16 +1478,17 @@ public final class ZLinkChannelRuntime
 
     @Override
     public void close() {
-        closeAsyncInternal(null).toCompletableFuture().join();
+        try {
+            closeCore(null);
+        } catch (InterruptedException | TimeoutException | ExecutionException failure) {
+            throw new CompletionException(failure);
+        }
     }
 
     /** Completes the channel teardown using the host's absolute shutdown deadline. */
     public CompletionStage<Void> closeAsync(Instant deadline) {
         Objects.requireNonNull(deadline, "deadline");
-        return closeAsyncInternal(deadline);
-    }
 
-    private CompletionStage<Void> closeAsyncInternal(Instant deadline) {
         CompletableFuture<Void> completion = new CompletableFuture<>();
         Thread.ofVirtual()
                 .name("zlink-java-channel-close")
