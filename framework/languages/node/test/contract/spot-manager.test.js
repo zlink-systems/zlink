@@ -1009,6 +1009,95 @@ test('ZLinkSpotManager releases Instance authority when no newer application is 
   assert.deepEqual(genericReleases, []);
 });
 
+test('Host Instance Close without Reincarnate releases the closed generation through the Instance authority owner', async () => {
+  // The host's Instance authority release also forgets the node's Ready
+  // projection. A Closing-fence release that skips it leaves the closed
+  // generation Ready on the node, and a request on a cached Ready route then
+  // rematerializes that same generation instead of being refused.
+  const ownerReleases = [];
+  const fenceOnlyReleases = [];
+  const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+  const node = new ServiceStatefulRuntime({
+    topology: { peer: () => undefined },
+    observePeerConnectionIntentRemoved: () => () => {},
+    setServiceIngress() {},
+    sendService: () => true
+  }, 'node-a', 3n);
+  class ClosedInstanceSpot {}
+  const spotId = zlink.RoutingId.from('host-instance-close');
+  const route = {
+    targetNodeRid: 'node-a', targetNodeGeneration: 3n,
+    targetSpotId: String(spotId), objectGeneration: 7n,
+    ownerId: 'node-a', authorityOwnerGeneration: 4n,
+    leaseGeneration: 1n, storeVersion: 'store-v7'
+  };
+  node.activateInstanceSpot(String(spotId), 'closed', 7n, 4n);
+  node.registerInstanceIntent('closed', route);
+  const factory = new ZLinkSpotRuntimeOptionsFactory({
+    registration: framework.createFrameworkRegistration(),
+    channelTransport: {},
+    routeTransport: {},
+    addressTransport: {},
+    spotPublisherTransport: {},
+    meshRouters: { spotRouterChannelIdByMesh: () => new Map() },
+    runtimeEventPublisher: {},
+    spotNodeRuntime: () => undefined,
+    actorManager: () => undefined,
+    locationLifecycle: () => undefined,
+    releaseInstanceAuthority: async (meshName, candidateSpotId, objectGeneration) => {
+      ownerReleases.push([meshName, candidateSpotId, objectGeneration]);
+      node.completeClosedInstance(candidateSpotId, objectGeneration);
+    },
+    beginInstanceIdleClosingAuthority: async () => undefined,
+    beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
+      onCommitted();
+      return {
+        release: async () => {
+          fenceOnlyReleases.push(String(_spotId));
+        },
+        reincarnate: async () => {
+          throw new Error('Close without a pending intent must not reincarnate.');
+        }
+      };
+    },
+    createLocationSpotRouteResolver: () => undefined,
+    boundSessionRelay: { boundSessions: {} },
+    actorHandoff: {},
+    dispatchErrorReporter: () => ({}),
+    runtimeOrPreStartErrorSink: {},
+    detachedTaskRunner,
+    metrics: {},
+    admission: {}
+  });
+  const runtimeOptions = factory.create({});
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner: detachedTaskRunner,
+    spotFactories: [],
+    instanceSpotFactories: new Map([[
+      'test.mesh',
+      new Map([['closed', ClosedInstanceSpot]])
+    ]]),
+    instanceSpotApplicationTargetProvider: (_meshName, candidateSpotId) =>
+      node.instanceSpotApplicationTarget(String(candidateSpotId)),
+    beginInstanceClosingAuthority: runtimeOptions.beginInstanceClosingAuthority
+  });
+
+  await manager.materializeInstance('test.mesh', 'closed', spotId, 7n);
+  assert.equal(await manager.close('test.mesh', spotId), true);
+  assert.equal(node.instanceSpotApplicationTarget(String(spotId)), undefined);
+  assert.equal(node.registry.spot(String(spotId)), undefined);
+  assert.deepEqual(ownerReleases, [['test.mesh', String(spotId), 7n]]);
+  assert.deepEqual(fenceOnlyReleases, []);
+
+  // The old Ready route can no longer provide an application target. Closing
+  // that incarnation again must leave a subsequently published one available.
+  node.activateInstanceSpot(String(spotId), 'closed', 8n, 4n);
+  node.registerInstanceIntent('closed', { ...route, objectGeneration: 8n, storeVersion: 'store-v8' });
+  await runtimeOptions.releaseInstanceAuthority('test.mesh', spotId, 7n);
+  assert.equal(node.instanceSpotApplicationTarget(String(spotId)).objectGeneration, 8n);
+  node.close();
+});
+
 test('Instance context close returns after activation completion', async () => {
   const releaseQuiescence = createDeferred();
   const events = [];
