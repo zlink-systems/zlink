@@ -2230,13 +2230,15 @@ class provider_location_repository_t final : public location_repository_t
         return store_value_condition_t{std::move (key), std::move (expected)};
     }
 
+    // Value conditions compare these bytes with the lease other languages
+    // wrote, so the field order is the golden's (store-record-v1.json).
     static std::vector<std::byte> owner_lease_bytes (const location_owner_token_t &owner)
     {
-        return to_bytes (
-          json_t{{location_record_fields::recordVersion, 1},
-                 {location_record_fields::ownerId, owner.owner_id},
-                 {location_record_fields::leaseGeneration, std::to_string (owner.lease_generation)}}
-            .dump ());
+        const nlohmann::ordered_json record{
+          {location_record_fields::recordVersion, 1},
+          {location_record_fields::ownerId, owner.owner_id},
+          {location_record_fields::leaseGeneration, std::to_string (owner.lease_generation)}};
+        return to_bytes (record.dump ());
     }
 
     static store_condition_t owner_condition (const location_owner_token_t &owner)
