@@ -1531,7 +1531,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             {
                 if (_disposed)
                     return false;
-                _disposed = true;
                 return true;
             })
         );
@@ -1554,6 +1553,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             await _node.ForceStopAsync(cancellationToken).ConfigureAwait(false);
         else
             await _node.DisposeAsync().ConfigureAwait(false);
+        AwaitStateLane(_lane.RunAsync(() => _disposed = true));
     }
 
     internal sealed class ActorMessageFollowIngressAdapter(ZLinkMeshDispatchPump pump)

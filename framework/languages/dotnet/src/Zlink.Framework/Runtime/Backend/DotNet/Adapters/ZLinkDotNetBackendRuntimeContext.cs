@@ -142,11 +142,12 @@ internal sealed class ZLinkDotNetBackendRuntimeContext : IZLinkBackendRuntimeCon
         );
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            return ValueTask.CompletedTask;
-        return _context.DisposeAsync();
+        if (Volatile.Read(ref _disposed) != 0)
+            return;
+        await _context.DisposeAsync().ConfigureAwait(false);
+        Volatile.Write(ref _disposed, 1);
     }
 
     private void ThrowIfDisposed()

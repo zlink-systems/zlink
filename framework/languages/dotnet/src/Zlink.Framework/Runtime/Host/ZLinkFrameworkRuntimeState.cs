@@ -191,6 +191,8 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         {
             // The gate only elects the single disposal task; the lane snapshot is awaited
             // inside that task, outside the gate.
+            if (_disposeTask?.IsFaulted == true)
+                _disposeTask = null;
             return new ValueTask(_disposeTask ??= DisposeCoreAsync(forceStopToken));
         }
     }
@@ -269,15 +271,16 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
         await CaptureAsync(TimerScheduler.DisposeAsync).ConfigureAwait(false);
         Capture(_pressureMetricRegistration.Dispose);
-        Capture(ErrorSink.Dispose);
-        Capture(ForceStopTokenSource.Dispose);
-        Capture(StopTokenSource.Dispose);
-        await CaptureAsync(() => DisposeSafelyAsync(Context.DisposeAsync)).ConfigureAwait(false);
+        if (failures.Count == 0)
+            await CaptureAsync(Context.DisposeAsync).ConfigureAwait(false);
 
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
         if (failures.Count > 1)
             throw new AggregateException(failures);
+        ErrorSink.Dispose();
+        ForceStopTokenSource.Dispose();
+        StopTokenSource.Dispose();
         return;
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)
@@ -288,6 +291,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             }
             catch (Exception exception)
             {
+                ErrorSink.ReportRuntimeTaskException(nameof(DisposeCoreAsync), exception);
                 failures.Add(exception);
             }
         }
@@ -300,6 +304,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             }
             catch (Exception exception)
             {
+                ErrorSink.ReportRuntimeTaskException(nameof(DisposeCoreAsync), exception);
                 failures.Add(exception);
             }
         }
@@ -316,7 +321,6 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         }
         catch (OperationCanceledException) { }
         catch (ObjectDisposedException) { }
-        catch (ZlinkCloseException) { }
     }
 
     private sealed record RuntimeResources(
@@ -338,7 +342,6 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             await dispose().ConfigureAwait(false);
         }
         catch (ObjectDisposedException) { }
-        catch (ZlinkCloseException) { }
     }
 
     private static ValueTask DisposeSpotNodeAsync(

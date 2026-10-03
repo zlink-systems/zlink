@@ -130,6 +130,11 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     internal ValueTask DisposeAsync(CancellationToken deadline)
     {
         var task = Volatile.Read(ref _disposeTask);
+        if (task?.IsFaulted == true)
+        {
+            Interlocked.CompareExchange(ref _disposeTask, null, task);
+            task = Volatile.Read(ref _disposeTask);
+        }
         if (task is not null)
             return new ValueTask(task);
 
@@ -225,13 +230,13 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         if (socketDisposed)
             foreach (var session in sessions)
                 session.ConfirmNodeTransportDisposed();
-        Capture(_stopSource.Dispose);
-        if (_ownsApplicationJobQueue)
-            Capture(_applicationJobQueue.Dispose);
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
         if (failures.Count > 1)
             throw new AggregateException(failures);
+        _stopSource.Dispose();
+        if (_ownsApplicationJobQueue)
+            _applicationJobQueue.Dispose();
         return;
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)

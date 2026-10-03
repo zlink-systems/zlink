@@ -169,18 +169,18 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
     {
         if (_disposed)
             return;
-        _disposed = true;
         _receivePoller?.Dispose();
         _socket.Dispose();
+        _disposed = true;
     }
 
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;
-        _disposed = true;
         _receivePoller?.Dispose();
         await _socket.DisposeAsync().ConfigureAwait(false);
+        _disposed = true;
     }
 
     private void EnsureStarted()

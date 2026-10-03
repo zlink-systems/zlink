@@ -803,7 +803,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     {
         return new ValueTask(
             AwaitStateLane(
-                _lane.RunAsync(() => _disposeTask ??= StartDisposeCore(CancellationToken.None))
+                _lane.RunAsync(() =>
+                {
+                    if (_disposeTask?.IsFaulted == true)
+                        _disposeTask = null;
+                    return _disposeTask ??= StartDisposeCore(CancellationToken.None);
+                })
             )
         );
     }
@@ -812,7 +817,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     {
         return new ValueTask(
             AwaitStateLane(
-                _lane.RunAsync(() => _disposeTask ??= StartDisposeCore(cancellationToken))
+                _lane.RunAsync(() =>
+                {
+                    if (_disposeTask?.IsFaulted == true)
+                        _disposeTask = null;
+                    return _disposeTask ??= StartDisposeCore(cancellationToken);
+                })
             )
         );
     }
@@ -849,11 +859,11 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     : Node.DisposeAsync
             )
             .ConfigureAwait(false);
-        Capture(() => AwaitStateLane(_lane.RunAsync(DisposeStopSourceOnLane)));
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
         if (failures.Count > 1)
             throw new AggregateException(failures);
+        AwaitStateLane(_lane.RunAsync(DisposeStopSourceOnLane));
         return;
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)
