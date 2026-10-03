@@ -91,6 +91,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                         RuntimeTestSupport.startFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             SourceEntrySpot.request.set(new Request("echo-" + suffix));
+            awaitPeersReady(
+                    source, target, "instance-source-" + suffix, "instance-target-" + suffix);
             SourceEntrySpot.start.complete(null);
             assertTrue(EchoInstanceSpot.closeCompleted.get(5, TimeUnit.SECONDS));
             SourceEntrySpot.afterCloseStart.complete(null);
@@ -150,6 +152,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             try {
                 SourceEntrySpot.request.set(new Request(spotId));
+                awaitPeersReady(
+                        source,
+                        target,
+                        "close-order-source-" + suffix,
+                        "close-order-target-" + suffix);
                 SourceEntrySpot.start.complete(null);
                 store.deleteApplied.get(5, TimeUnit.SECONDS);
 
@@ -336,6 +343,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                         RuntimeTestSupport.startFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             SourceEntrySpot.request.set(new Request(spotId));
+            awaitPeersReady(
+                    source,
+                    target,
+                    "release-failure-source-" + suffix,
+                    "release-failure-target-" + suffix);
             SourceEntrySpot.start.complete(null);
             try {
                 if (failureStage.equals("creating") || failureStage.equals("missing")) {
@@ -529,6 +541,38 @@ final class InstanceSpotRuntimeIntegrationTest {
         assertEquals(expected, ((ZLinkFrameworkException) failure).kind());
     }
 
+    /**
+     * Waits until each RouteMesh node sees the other as a ready peer. The RouteMesh send path does
+     * not wait for a peer (00-foundation/06-framework-api.ko.md channel selection result), so the
+     * scenario starts only after both connections are ready.
+     */
+    private static void awaitPeersReady(
+            ZLinkFrameworkRuntime source,
+            ZLinkFrameworkRuntime target,
+            String sourceRid,
+            String targetRid)
+            throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!peerReady(source, targetRid) || !peerReady(target, sourceRid)) {
+            if (System.nanoTime() > deadline) {
+                throw new java.util.concurrent.TimeoutException(
+                        "RouteMesh peers never became ready");
+            }
+            Thread.sleep(2);
+        }
+    }
+
+    private static boolean peerReady(ZLinkFrameworkRuntime runtime, String peerRid) {
+        RoutingId rid = RoutingId.from(peerRid);
+        return runtime.routeMeshRuntime().snapshot("game").peers().stream()
+                .anyMatch(
+                        peer ->
+                                peer.nodeRid().equals(rid)
+                                        && peer.state()
+                                                == systems.zlink.framework.monitoring.ZLinkPeerState
+                                                        .READY);
+    }
+
     /** Waits until the Instance Spot owner queue holds an accepted message behind Close. */
     private static void awaitPendingMessage(Object spots, String spotId) throws Exception {
         var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
@@ -659,6 +703,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             try {
                 SourceEntrySpot.request.set(new Request(spotId));
+                awaitPeersReady(
+                        source,
+                        target,
+                        "closing-verdict-source-" + suffix,
+                        "closing-verdict-target-" + suffix);
                 SourceEntrySpot.start.complete(null);
                 EchoInstanceSpot.closingEntered.get(5, TimeUnit.SECONDS);
                 if (drain) {
@@ -671,6 +720,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                 }
                 SourceEntrySpot.probeStart.complete(null);
                 if (expectedKind == null) {
+                    // OnClosing stays held until the probe waits in the owner queue, so step 3
+                    // sees the pending Instance intent message and creates the next incarnation.
+                    var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
+                    spotsField.setAccessible(true);
+                    awaitPendingMessage(spotsField.get(target), spotId);
                     EchoInstanceSpot.closingRelease.complete(null);
                     assertEquals(
                             "echo:during-close",
@@ -749,6 +803,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                         RuntimeTestSupport.startFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             IdleSourceEntrySpot.request.set(new Request(spotId));
+            awaitPeersReady(
+                    source,
+                    target,
+                    "instance-idle-source-" + suffix,
+                    "instance-idle-target-" + suffix);
             IdleSourceEntrySpot.start.complete(null);
             String reply = IdleSourceEntrySpot.reply.get(10, TimeUnit.SECONDS);
 
