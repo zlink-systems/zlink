@@ -1288,6 +1288,8 @@ export class DefaultZLinkSpotManager {
             operation.activation
           );
         });
+        // The new incarnation shares this serial owner and admits membership work again.
+        operation.activation.serial.setLifecycleAdmissionClosed(false);
       } catch (error) {
         const initialized = this.activations.resolve(meshName, spotId);
         if (initialized !== undefined && initialized !== operation.activation) {
@@ -1349,10 +1351,12 @@ export class DefaultZLinkSpotManager {
     let seal: import('../execution').ZLinkExecutionBarrierSeal | true | undefined;
     const authorityPromise = Promise.resolve().then(() =>
       operation.beginAuthority(() => {
-        seal =
-          operation.reason === ZLinkSpotCloseReason.ExplicitClose
-            ? true
-            : operation.activation.sealExecution('close');
+        if (operation.reason === ZLinkSpotCloseReason.ExplicitClose) {
+          operation.activation.serial.setLifecycleAdmissionClosed(true);
+          seal = true;
+        } else {
+          seal = operation.activation.sealExecution('close');
+        }
       })
     );
     operation.authorityDecision = authorityPromise.then(
