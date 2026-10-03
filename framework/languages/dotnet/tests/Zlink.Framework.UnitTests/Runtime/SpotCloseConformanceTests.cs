@@ -745,12 +745,89 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         }
     }
 
+    // Close step 3 decides release with no Instance intent message waiting
+    // while the Store holds its Delete. An Instance intent message arriving at
+    // the owner in that window is refused before admission with the owner
+    // fence code, so its caller re-reads authority instead of waiting for an
+    // incarnation this Close never creates.
+    private static async Task<CloseBranchObservation> RunIntentAfterReleaseDecisionAsync()
+    {
+        var order = new ConcurrentQueue<string>();
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"close-instance-{Guid.NewGuid():N}";
+        var initial = await host.RequestInstanceAsync(spotId);
+        host.State.HoldOnClosing = true;
+        host.State.HandlerMode = "closeAndReturn";
+        await host.RequestInstanceAsync(spotId);
+        await host.State.OnClosingEntered.Task.WaitAsync(Wait);
+        host.State.HandlerMode = null;
+        var current = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await host
+                    .Runtime.Registration.Locations.ResolveStore()!
+                    .ReadAuthorityAsync(ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId))
+            )
+            .Snapshot;
+        var activation = await host
+            .Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName)
+            .Catalog.TryGetInstanceActivationAsync(
+                spotId,
+                SpotCloseHost.InstanceType,
+                current.ObjectGeneration
+            );
+        Assert.NotNull(activation);
+        host.Store.ObserveAuthorityReleaseFor = spotId;
+        host.Store.OnAuthorityReleased = () => order.Enqueue("authorityReleased");
+        host.Store.HoldAuthorityDeleteFor = spotId;
+        var initializedBefore = host.State.InitializedGenerations.Count;
+        host.State.ReleaseOnClosing.TrySetResult();
+        // Step 3 has decided release: its Delete waits in the Store.
+        await host.Store.AuthorityDeleteHeld.Task.WaitAsync(Wait);
+        var late = QueueRetainedIntent(host, activation, current, spotId, "late");
+        var deadline = DateTime.UtcNow + Wait;
+        while (!late.IsCompleted && !activation.HasPendingCreationIntent)
+        {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException("The late Instance intent message was not decided.");
+            await Task.Delay(2);
+        }
+        host.Store.ReleaseAuthorityDelete.TrySetResult();
+        Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => late.WaitAsync(Wait));
+        return new CloseBranchObservation(
+            await host.AuthorityAsync(spotId),
+            order.ToArray(),
+            host.State.PendingHandlerGenerations.Count(generation =>
+                generation == initial.Generation
+            ),
+            host.State.PendingHandlerGenerations.Count(generation =>
+                generation != initial.Generation
+            ),
+            host.State.InitializedGenerations.Count - initializedBefore,
+            failure.Kind.ToString(),
+            1,
+            host.Store.MissingPlacementCalls,
+            false,
+            false,
+            false,
+            false,
+            false,
+            failure.FrameworkFailureCode == (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving
+                ? "spotMoving"
+                : failure.FrameworkFailureCode.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture
+                )
+        );
+    }
+
     private static async Task<CloseBranchObservation> RunCloseBranchAsync(
         string name,
         string hostMode = "Serving",
         string relocationSeal = "before"
     )
     {
+        if (name == "intent-after-release-decision-refused-before-admission")
+            return await RunIntentAfterReleaseDecisionAsync();
         var flowPath = Path.Combine(
             Path.GetTempPath(),
             "zlink-close-dotnet",
@@ -957,7 +1034,8 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         bool OwnerGenerationChanged,
         bool OwnerPreserved,
         bool LeasePreserved,
-        bool CapacityPreserved
+        bool CapacityPreserved,
+        string? FailureCode = null
     );
 
     [Fact]
@@ -1719,6 +1797,9 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                 case "messageTerminalCount":
                     Assert.Equal(field.Value.GetInt32(), observed.TerminalCount);
                     break;
+                case "messageFailureCode":
+                    Assert.Equal(field.Value.GetString(), observed.FailureCode);
+                    break;
                 case "objectGeneration":
                     Assert.Equal("storeIssuedDifferent", field.Value.GetString());
                     Assert.True(observed.ObjectGenerationChanged);
@@ -2281,6 +2362,13 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
     // Holds the cold-activation replay cursor write (spot messaging §4 step 12)
     // for one Spot until the test releases it.
     internal string? HoldReplayCursorFor { get; set; }
+
+    // Holds the authority Delete of one Spot until the test releases it.
+    internal string? HoldAuthorityDeleteFor { get; set; }
+    internal TaskCompletionSource AuthorityDeleteHeld { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal TaskCompletionSource ReleaseAuthorityDelete { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource ReplayCursorHeld { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource ReleaseReplayCursor { get; } =
@@ -2310,6 +2398,18 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
         {
             ReplayCursorHeld.TrySetResult();
             await ReleaseReplayCursor.Task.WaitAsync(cancellationToken);
+        }
+        if (
+            HoldAuthorityDeleteFor is { } deletedSpot
+            && request.Mutations.Any(mutation =>
+                mutation is ZLinkStoreMutation.Delete delete
+                && delete.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                && delete.Key.Value.EndsWith("\0" + deletedSpot, StringComparison.Ordinal)
+            )
+        )
+        {
+            AuthorityDeleteHeld.TrySetResult();
+            await ReleaseAuthorityDelete.Task.WaitAsync(cancellationToken);
         }
         if (
             ObserveMissingPlacementFor is { } observedSpot

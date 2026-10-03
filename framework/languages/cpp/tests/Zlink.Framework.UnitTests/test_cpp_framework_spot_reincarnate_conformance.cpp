@@ -50,7 +50,8 @@ enum class branch_t
     relocating,
     cold_activation_close,
     asynchronous_initialization,
-    asynchronous_initialization_failure
+    asynchronous_initialization_failure,
+    late_intent
 };
 
 bool initializer_is_held (branch_t branch)
@@ -146,6 +147,9 @@ struct evidence_t
     zf::task_completion_source_t<void> closing_release;
     std::promise<void> journal_clear_entered;
     zf::task_completion_source_t<void> journal_clear_release;
+    // late_intent: the Store holds the release Delete that Close step 3 decided.
+    std::promise<void> release_delete_entered;
+    zf::task_completion_source_t<void> release_delete_release;
     std::promise<void> initializer_entered;
     zf::task_completion_source_t<void> initializer_release;
     std::uint64_t initializing_generation = 0;
@@ -254,6 +258,19 @@ class observed_store_t final : public zf::location_store_t
         if (clears_terminal_journal) {
             _evidence->journal_clear_entered.set_value ();
             co_await _evidence->journal_clear_release.task ();
+        }
+        bool holds_release = false;
+        if (_evidence->branch == branch_t::late_intent) {
+            std::lock_guard lock (_evidence->mutex);
+            if (_evidence->closing_calls > 0)
+                for (const auto &mutation : request.mutations)
+                    if (const auto *deleted = std::get_if<zf::store_delete_t> (&mutation);
+                        deleted && deleted->key.value == _evidence->authority_provider_key)
+                        holds_release = true;
+        }
+        if (holds_release) {
+            _evidence->release_delete_entered.set_value ();
+            co_await _evidence->release_delete_release.task ();
         }
         auto result = co_await _inner->write (std::move (request));
         if (std::holds_alternative<zf::store_write_applied_t> (result)) {
@@ -653,10 +670,81 @@ class exercise_t final : public zf::hosted_service_t
         }
     }
 
+    // Close step 3 decides release with no Instance intent message waiting while the
+    // Store holds its Delete; an Instance intent request arriving in that window
+    // must be refused before admission with the owner fence code.
+    void run_late_intent (zf::service_provider_t &services)
+    {
+        auto route = _app->advanced ().zlink ().route_client (
+          services.get_required<zf::serializer_registry_t> ());
+        const auto warmed = route.request_to_spot (zf::spot_id_t (spot_id), warm_request_t{})
+                              .instance_spot (stable_type)
+                              .timeout (request_timeout)
+                              .async<reply_t> ()
+                              .result ();
+        if (!warmed)
+            throw std::runtime_error ("initial public Instance activation failed");
+        original_reply = warmed.value ();
+        auto &locations = services.get_required<zf::location_repository_t> ();
+        const auto initial =
+          locations.read_authority (zf::runtime::spot_authority_key (spot_id)).result ().value ();
+        original_authority = std::get<zf::authority_snapshot_t> (initial);
+        auto closing = _evidence->closing_entered.get_future ();
+        auto release_entered = _evidence->release_delete_entered.get_future ();
+        std::future<void> intent_arrived;
+        {
+            std::lock_guard lock (_evidence->mutex);
+            _evidence->order.clear ();
+            intent_arrived = _evidence->intent_arrived->get_future ();
+        }
+        try {
+            const auto accepted = route.request_to_spot (zf::spot_id_t (spot_id), close_request_t{})
+                                    .timeout (request_timeout)
+                                    .async<reply_t> ()
+                                    .result ();
+            if (!accepted)
+                throw std::runtime_error ("application Close trigger failed");
+            require_ready (closing, "public OnClosing did not start");
+            _evidence->closing_release.complete (zf::result_t<void>::success ());
+            require_ready (release_entered, "Close step 3 did not decide release");
+            auto intent = std::async (std::launch::async, [&] {
+                auto result = route.request_to_spot (zf::spot_id_t (spot_id), intent_request_t{})
+                                .instance_spot (stable_type)
+                                .timeout (request_timeout)
+                                .async<reply_t> ()
+                                .result ();
+                std::lock_guard lock (_evidence->mutex);
+                ++_evidence->terminals[intent_request_t::packet_name];
+                return result;
+            });
+            // The late message is either refused at once or waits in the owner FIFO.
+            const auto deadline = std::chrono::steady_clock::now () + request_timeout;
+            while (intent.wait_for (2ms) != std::future_status::ready
+                   && intent_arrived.wait_for (0ms) != std::future_status::ready)
+                if (std::chrono::steady_clock::now () > deadline)
+                    throw std::runtime_error ("late Instance intent request was not decided");
+            _evidence->release_delete_release.complete (zf::result_t<void>::success ());
+            intent_result.emplace (intent.get ());
+            close_result.emplace (_evidence->close_completion->result ());
+            const auto final = _store->inspect_authority ().result ().value ();
+            if (const auto *snapshot = std::get_if<zf::authority_snapshot_t> (&final))
+                final_authority = *snapshot;
+        }
+        catch (...) {
+            _evidence->closing_release.complete (zf::result_t<void>::success ());
+            _evidence->release_delete_release.complete (zf::result_t<void>::success ());
+            throw;
+        }
+    }
+
     void run (zf::service_provider_t &services)
     {
         if (_evidence->branch == branch_t::cold_activation_close) {
             run_cold_close (services);
+            return;
+        }
+        if (_evidence->branch == branch_t::late_intent) {
+            run_late_intent (services);
             return;
         }
         auto route = _app->advanced ().zlink ().route_client (
@@ -1367,6 +1455,54 @@ TEST (ZLinkFrameworkSpotReincarnateConformance, PendingInitializerFailureDeletes
 {
     check_pending_initializer_two_requests (branch_t::asynchronous_initialization_failure);
 }
+TEST (ZLinkFrameworkSpotReincarnateConformance, IntentAfterReleaseDecisionIsRefusedBeforeAdmission)
+{
+    const auto &branch = branch_fixture ("intent-after-release-decision-refused-before-admission");
+    const auto &given = branch.at ("given");
+    const auto &expect = branch.at ("expect");
+    ASSERT_EQ ("Serving", given.at ("host"));
+    ASSERT_FALSE (given.at ("pendingIntent").get<bool> ());
+    ASSERT_EQ ("afterReleaseDecision", given.at ("lateIntent"));
+    auto evidence = std::make_shared<evidence_t> (branch_t::late_intent);
+    auto store = std::make_shared<observed_store_t> (evidence);
+    auto relocations = std::make_shared<zf::runtime::in_memory_relocation_store_t> ();
+    auto app = zf::app_t::create ();
+    configure_app (app, evidence, store, relocations);
+    auto runner = std::make_unique<exercise_t> (app, evidence, store);
+    auto *exercise = runner.get ();
+    app.add_hosted_service (std::move (runner));
+    (void) app.run (0, nullptr);
+    ASSERT_TRUE (exercise->failure.empty ()) << exercise->failure;
+    ASSERT_TRUE (exercise->close_result);
+    ASSERT_TRUE (*exercise->close_result);
+    EXPECT_TRUE (exercise->close_result->value ());
+    ASSERT_TRUE (exercise->intent_result);
+    ASSERT_FALSE (*exercise->intent_result) << "the late Instance intent message was admitted";
+    ASSERT_NE (nullptr, exercise->intent_result->error ());
+    EXPECT_EQ ("Unavailable", expect.at ("messageTerminal"));
+    EXPECT_EQ (zf::framework_error_kind_t::unavailable, exercise->intent_result->error_kind ());
+    EXPECT_EQ ("spotMoving", expect.at ("messageFailureCode"));
+    EXPECT_EQ (static_cast<std::uint32_t> (zf::runtime::protocol::framework_error_code::spotMoving),
+               zf::detail::failure_code (*exercise->intent_result->error ()));
+    EXPECT_FALSE (exercise->final_authority);
+    EXPECT_EQ ("Missing", expect.at ("authority"));
+    std::lock_guard lock (evidence->mutex);
+    EXPECT_EQ (1, evidence->closing_calls);
+    EXPECT_EQ (expect.at ("messageTerminalCount").get<int> (),
+               evidence->terminals[intent_request_t::packet_name]);
+    EXPECT_EQ (expect.at ("oldHandlerCalls").get<int> ()
+                 + expect.at ("newHandlerCalls").get<int> (),
+               static_cast<int> (evidence->business_generations.size ()));
+    EXPECT_EQ (expect.at ("factoryCalls").get<int> (),
+               evidence->factory_calls - evidence->factory_calls_at_close);
+    std::vector<std::string> seen;
+    for (const auto &event : evidence->order)
+        if (std::find (expect.at ("order").begin (), expect.at ("order").end (), event)
+            != expect.at ("order").end ())
+            seen.push_back (event);
+    EXPECT_EQ (expect.at ("order").get<std::vector<std::string>> (), seen);
+}
+
 TEST (ZLinkFrameworkSpotReincarnateConformance, ColdActivationCloseWaitsForJournalTerminalClear)
 {
     auto evidence = std::make_shared<evidence_t> (branch_t::cold_activation_close);
