@@ -89,7 +89,7 @@ function resolverFor(resolveActor, now) {
       routeStore: { resolveRoute: unused }
     },
     leaseTracker: {
-      isOwnerLive: async () => true,
+      isOwnerTokenLive: async () => true,
       remainingOwnerTokenLeaseMs: async () => 60_000
     },
     spotMeshNames: ['play'],
