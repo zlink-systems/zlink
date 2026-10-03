@@ -4,6 +4,7 @@
 #include <runtime/locations/location_repository.hpp>
 
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/execution/task_result.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_key_codec.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
@@ -96,32 +97,28 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
             std::vector<mesh_node_descriptor_t> descriptors;
             location_page_request_t page;
             do {
-                auto current_result = _store->list_mesh_nodes (mesh_name, page).result ();
+                auto current_result =
+                  co_await await_result (_store->list_mesh_nodes (mesh_name, page));
                 if (!current_result.has_value ()) {
-                    return task_t<std::vector<mesh_node_descriptor_t>> (
-                      detail::propagate_failure<std::vector<mesh_node_descriptor_t>> (
-                        current_result, "live MeshNode lookup failed"));
+                    co_return detail::propagate_failure<std::vector<mesh_node_descriptor_t>> (
+                      current_result, "live MeshNode lookup failed");
                 }
                 auto current = std::move (current_result).value ();
                 for (auto &descriptor : current.items) {
                     if (descriptor.state == framework_runtime_state_t::stopped
                         || descriptor.state == framework_runtime_state_t::error)
                         continue;
-                    if (_store
-                          ->owner_admission_lifetime (location_owner_token_t{
-                            descriptor.owner_id, descriptor.lease_generation})
-                          .result ()
-                          .value ())
+                    location_owner_token_t owner{descriptor.owner_id, descriptor.lease_generation};
+                    if (co_await _store->owner_admission_lifetime (std::move (owner)))
                         descriptors.push_back (std::move (descriptor));
                 }
                 page.continuation_token = current.continuation_token;
             } while (page.continuation_token);
-            return completed (std::move (descriptors));
+            co_return std::move (descriptors);
         }
         catch (const std::invalid_argument &error) {
-            return task_t<std::vector<mesh_node_descriptor_t>> (
-              result_t<std::vector<mesh_node_descriptor_t>>::failure (
-                framework_error_kind_t::internal_failure, error.what ()));
+            co_return result_t<std::vector<mesh_node_descriptor_t>>::failure (
+              framework_error_kind_t::internal_failure, error.what ());
         }
     }
 
@@ -270,18 +267,13 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                                 location_role_t role,
                                 std::optional<zlink::routing_id_t> node_rid = std::nullopt) override
     {
-        try {
-            auto descriptors = list_live_mesh_nodes (std::move (mesh_name)).result ().value ();
-            if (role != location_role_t::router && role != location_role_t::spot)
-                return completed (false);
-            return completed (
-              std::any_of (descriptors.begin (), descriptors.end (), [&] (const auto &descriptor) {
-                  return !node_rid || descriptor.rid.to_hex () == node_rid->to_hex ();
-              }));
-        }
-        catch (...) {
-            return completed (false);
-        }
+        auto descriptors = co_await await_result (list_live_mesh_nodes (std::move (mesh_name)));
+        if (!descriptors || (role != location_role_t::router && role != location_role_t::spot))
+            co_return false;
+        co_return std::any_of (
+          descriptors.value ().begin (), descriptors.value ().end (), [&] (const auto &descriptor) {
+              return !node_rid || descriptor.rid.to_hex () == node_rid->to_hex ();
+          });
     }
 
   private:
@@ -445,11 +437,6 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         return read_text ();
     }
 
-    template <typename T> static task_t<T> completed (T value)
-    {
-        return task_t<T> (result_t<T>::success (std::move (value)));
-    }
-
     static std::string router_channel_for (const location_options_t &options,
                                            const std::string &mesh_name)
     {
@@ -518,7 +505,7 @@ class store_location_runtime_query_t final : public location_runtime_query_t
     task_t<location_page_t<location_topology_entry_t>>
     list_topology (location_topology_filter_t filter, location_page_request_t page = {}) override
     {
-        auto rows = _store->list_mesh_nodes (filter.mesh_name.value_or (""), {}).result ().value ();
+        auto rows = co_await _store->list_mesh_nodes (filter.mesh_name.value_or (""), {});
         std::vector<location_topology_entry_t> entries;
         entries.reserve (rows.items.size ());
         for (const auto &row : rows.items) {
@@ -533,7 +520,7 @@ class store_location_runtime_query_t final : public location_runtime_query_t
             if (matches (entry, filter))
                 entries.push_back (std::move (entry));
         }
-        return completed (page_in_memory (std::move (entries), page));
+        co_return page_in_memory (std::move (entries), page);
     }
 
     task_t<location_page_t<location_service_summary_t>>
@@ -544,23 +531,20 @@ class store_location_runtime_query_t final : public location_runtime_query_t
         std::map<std::string, location_service_summary_t> grouped;
         location_page_request_t descriptor_page;
         do {
-            auto listed =
-              _store->list_stored_mesh_nodes (filter.mesh_name.value_or (""), descriptor_page)
-                .result ();
+            auto listed = co_await await_result (
+              _store->list_stored_mesh_nodes (filter.mesh_name.value_or (""), descriptor_page));
             if (!listed.has_value ())
-                return task_t<summary_page_t> (detail::propagate_failure<summary_page_t> (
-                  listed, "Location Store MeshNode lookup failed"));
+                co_return detail::propagate_failure<summary_page_t> (
+                  listed, "Location Store MeshNode lookup failed");
             auto descriptors = std::move (listed).value ();
             for (const auto &descriptor : descriptors.items) {
                 /* Location runtime §7.4: the owner lease alone classifies a
                  * descriptor, and a lease lookup failure fails the query. */
-                auto live = _store
-                              ->owner_available (location_owner_token_t{
-                                descriptor.owner_id, descriptor.lease_generation})
-                              .result ();
+                location_owner_token_t owner{descriptor.owner_id, descriptor.lease_generation};
+                auto live = co_await await_result (_store->owner_available (std::move (owner)));
                 if (!live.has_value ())
-                    return task_t<summary_page_t> (detail::propagate_failure<summary_page_t> (
-                      live, "Location Store owner lease lookup failed"));
+                    co_return detail::propagate_failure<summary_page_t> (
+                      live, "Location Store owner lease lookup failed");
                 auto &summary = grouped[descriptor.mesh_name];
                 summary.mesh_name = descriptor.mesh_name;
                 ++summary.total_count;
@@ -577,7 +561,7 @@ class store_location_runtime_query_t final : public location_runtime_query_t
         for (auto &[_, summary] : grouped) {
             result.push_back (std::move (summary));
         }
-        return completed (page_in_memory (std::move (result), page));
+        co_return page_in_memory (std::move (result), page);
     }
 
     task_t<std::optional<location_object_entry_t>>
@@ -599,12 +583,20 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                            location_page_request_t page = {}) override
     {
         validate_page (page);
-        const auto authority_kind = filter.object_kind == location_object_kind_t::actor ? 'a' : 's';
         if (filter.object_kind != location_object_kind_t::actor
             && filter.object_kind != location_object_kind_t::user_spot
             && filter.object_kind != location_object_kind_t::instance_spot) {
             throw std::invalid_argument ("location object kind is invalid");
         }
+        return scan_object_locations (std::move (filter), std::move (page));
+    }
+
+  private:
+    // Argument errors above throw at the call; the Store scan runs as a coroutine.
+    task_t<location_page_t<location_object_entry_t>>
+    scan_object_locations (location_object_filter_t filter, location_page_request_t page)
+    {
+        const auto authority_kind = filter.object_kind == location_object_kind_t::actor ? 'a' : 's';
         std::optional<authority_scan_cursor_t> cursor;
         if (page.continuation_token)
             cursor.emplace (*page.continuation_token);
@@ -612,26 +604,24 @@ class store_location_runtime_query_t final : public location_runtime_query_t
         output.items.reserve (static_cast<std::size_t> (page.page_size));
         do {
             const auto remaining = static_cast<std::size_t> (page.page_size) - output.items.size ();
-            auto read = _store
-                          ->list_authorities (std::string (authority_key_codec_detail::prefix)
-                                                + authority_kind + ":",
-                                              std::move (cursor), remaining)
-                          .result ();
+            auto read = co_await await_result (_store->list_authorities (
+              std::string (authority_key_codec_detail::prefix) + authority_kind + ":",
+              std::move (cursor), remaining));
             if (!read.has_value ())
-                return unavailable<location_page_t<location_object_entry_t>> (
+                co_return co_await unavailable<location_page_t<location_object_entry_t>> (
                   "Location Store object scan failed");
             const auto *stored_page = std::get_if<authority_page_t> (&read.value ());
             if (stored_page == nullptr)
-                return unavailable<location_page_t<location_object_entry_t>> (
+                co_return co_await unavailable<location_page_t<location_object_entry_t>> (
                   "Location Store object scan cursor expired");
             for (const auto &item : stored_page->items) {
                 const auto decoded =
                   authority_key_codec_detail::decode_authority_key (item.key.value);
                 if (!decoded || decoded->kind != authority_kind || !matches (item.snapshot, filter))
                     continue;
-                auto projected = project_object (decoded->object_id, item.snapshot);
+                auto projected = co_await project_object (decoded->object_id, item.snapshot);
                 if (!projected.has_value ())
-                    return unavailable<location_page_t<location_object_entry_t>> (
+                    co_return co_await unavailable<location_page_t<location_object_entry_t>> (
                       "Location Store owner lease lookup failed");
                 output.items.push_back (std::move (projected.value ()));
             }
@@ -641,12 +631,11 @@ class store_location_runtime_query_t final : public location_runtime_query_t
         if (cursor)
             output.continuation_token = std::string (cursor->encoded ());
         if (encoded_size_upper_bound (output) > 4u * 1024u * 1024u)
-            return unavailable<location_page_t<location_object_entry_t>> (
+            co_return co_await unavailable<location_page_t<location_object_entry_t>> (
               "Location Store encoded object page exceeds 4 MiB");
-        return completed (std::move (output));
+        co_return std::move (output);
     }
 
-  private:
     template <typename T> static task_t<T> completed (T value)
     {
         return task_t<T> (result_t<T>::success (std::move (value)));
@@ -661,36 +650,36 @@ class store_location_runtime_query_t final : public location_runtime_query_t
     task_t<std::optional<location_object_entry_t>> find_object (authority_key_t key,
                                                                 std::string global_id)
     {
-        auto read = _store->read_authority (std::move (key)).result ();
+        auto read = co_await await_result (_store->read_authority (std::move (key)));
         if (!read.has_value ())
-            return unavailable<std::optional<location_object_entry_t>> (
+            co_return co_await unavailable<std::optional<location_object_entry_t>> (
               "Location Store object lookup failed");
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
         if (snapshot == nullptr)
-            return completed (std::optional<location_object_entry_t>{});
-        auto projected = project_object (std::move (global_id), *snapshot);
+            co_return std::optional<location_object_entry_t>{};
+        auto projected = co_await project_object (std::move (global_id), *snapshot);
         if (!projected.has_value ())
-            return unavailable<std::optional<location_object_entry_t>> (
+            co_return co_await unavailable<std::optional<location_object_entry_t>> (
               "Location Store owner lease lookup failed");
-        return completed (std::optional<location_object_entry_t>{std::move (projected.value ())});
+        co_return std::optional<location_object_entry_t>{std::move (projected.value ())};
     }
 
-    std::optional<location_object_entry_t> project_object (std::string global_id,
-                                                           const authority_snapshot_t &snapshot)
+    task_t<std::optional<location_object_entry_t>> project_object (std::string global_id,
+                                                                   authority_snapshot_t snapshot)
     {
         if (snapshot.allocation.state == placement_allocation_state_t::reserved) {
-            return location_object_entry_t{.global_id = std::move (global_id),
-                                           .object_generation = snapshot.object_generation,
-                                           .mesh_name = snapshot.allocation.target.mesh_name,
-                                           .node_rid = zlink::routing_id_t::from (std::string (
-                                             snapshot.allocation.target.node_rid.value ())),
-                                           .state = location_object_state_t::creating,
-                                           .stable_type = snapshot.allocation.stable_type};
+            co_return location_object_entry_t{.global_id = std::move (global_id),
+                                              .object_generation = snapshot.object_generation,
+                                              .mesh_name = snapshot.allocation.target.mesh_name,
+                                              .node_rid = zlink::routing_id_t::from (std::string (
+                                                snapshot.allocation.target.node_rid.value ())),
+                                              .state = location_object_state_t::creating,
+                                              .stable_type = snapshot.allocation.stable_type};
         }
-        auto owner = _store->owner_available (snapshot.owner).result ();
+        auto owner = co_await await_result (_store->owner_available (snapshot.owner));
         if (!owner.has_value ())
-            return std::nullopt;
-        return location_object_entry_t{
+            co_return std::nullopt;
+        co_return location_object_entry_t{
           .global_id = std::move (global_id),
           .object_generation = snapshot.object_generation,
           .mesh_name = snapshot.allocation.target.mesh_name,
