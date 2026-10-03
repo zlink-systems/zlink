@@ -2855,7 +2855,9 @@ void spot_context_state_t::run_serial_task_async (
                 activation_callback ();
             callback_context_scope_t callback_scope (this);
             auto observed = std::make_shared<task_t<void>> (work ());
-            detail::observe_task_completion (*observed, [observed,
+            // The work object owns the Spot and Actor the callback references
+            // until the callback terminal.
+            detail::observe_task_completion (*observed, [observed, work = std::move (work),
                                                          completion = std::move (completion)] (
                                                           const result_t<void> &value) mutable {
                 completion (value ? result_t<void>::success ()
@@ -2957,8 +2959,8 @@ void spot_context_state_t::run_serial_task_async (
               callback_context_scope_t callback_scope (owner.get ());
               auto observed = std::make_shared<task_t<void>> (work ());
               detail::observe_task_completion (
-                *observed,
-                [owner, observed, settle, turn, complete] (const result_t<void> &value) mutable {
+                *observed, [owner, observed, work = std::move (work), settle, turn,
+                            complete] (const result_t<void> &value) mutable {
                     const auto final_result =
                       value
                         ? result_t<void>::success ()

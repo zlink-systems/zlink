@@ -304,11 +304,17 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
         _turn (capture_current_serial_turn ()),
         _ambient (capture_ambient_context ())
     {
-        if (_turn && _turn->released ())
+        // After a Yield released the turn, the Spot queue places the
+        // continuation: its resume record, or its closed-queue failure path,
+        // delivers the result (handler turn and execution gate §3·§4). A
+        // second runtime hop would resume the handler outside that turn.
+        const bool turn_released = _turn && _turn->released ();
+        if (turn_released)
             _turn.reset ();
         if (_turn)
             _ambient.wait_owner = _turn->wait_cancellation ();
-        _scheduler = capture_runtime_native_continuation_scheduler ();
+        if (!turn_released)
+            _scheduler = capture_runtime_native_continuation_scheduler ();
         if (explicit_scheduler) {
             _scheduler = [explicit_scheduler = std::move (explicit_scheduler),
                           runtime = std::move (_scheduler)] (std::function<void ()> work) {

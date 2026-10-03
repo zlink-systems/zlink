@@ -18,6 +18,7 @@
 #include <string>
 #include <deque>
 #include <functional>
+#include <iostream>
 #include <future>
 #include <mutex>
 #include <optional>
@@ -944,6 +945,92 @@ bool verify_cancellation_contract ()
            && failure.error_kind () == framework_error_kind_t::invalid_operation;
 }
 
+struct yield_resume_probe_t
+{
+    std::atomic_bool running{false};
+    std::atomic_bool overlapped{false};
+    std::atomic_bool ran_after_await{false};
+    std::atomic_int failure_kind{-1};
+    std::promise<void> done;
+};
+
+zlink::framework::task_t<void>
+yielding_lifecycle_handler (zlink::framework::request_call_t<int> call,
+                            zlink::framework::runtime::serial_execution_queue_t &queue,
+                            yield_resume_probe_t &probe)
+{
+    using namespace zlink::framework;
+    try {
+        (void) co_await call.yield ();
+    }
+    catch (const framework_exception_t &error) {
+        probe.failure_kind.store (static_cast<int> (error.kind ()));
+        probe.done.set_value ();
+        co_return;
+    }
+    probe.ran_after_await.store (true);
+    probe.running.store (true);
+    (void) queue.try_post ("yield-probe-application",
+                           [&probe] { probe.overlapped.store (probe.running.load ()); });
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+    probe.running.store (false);
+    probe.done.set_value ();
+}
+
+/* Handler turn and execution gate §3·§4: a Yield continuation resumes in a new
+ * turn of the same Spot queue, and a Spot that closes during the wait ends the
+ * handler with a failure instead of resuming it. */
+bool verify_yield_continuation_owned_by_spot_queue (bool close_before_reply)
+{
+    using namespace zlink::framework;
+    namespace runtime = zlink::framework::runtime;
+    runtime::offload_executor_t executor (2);
+    runtime::serial_execution_queue_t queue (executor, runtime::serial_execution_queue_options_t{},
+                                             runtime::serial_execution_queue_t::error_handler_t{},
+                                             runtime::serial_lane_policy_t::spot_wide ());
+    task_completion_source_t<int> reply;
+    std::promise<void> submitted;
+    yield_resume_probe_t probe;
+    std::optional<task_t<void>> handler;
+    request_call_t<int> call ("test.yield.leave",
+                              [&] (const std::string &, std::chrono::milliseconds,
+                                   const request_call_t<int>::metadata_map_t &) {
+                                  submitted.set_value ();
+                                  return reply.task ();
+                              });
+    queue.post_async (
+      "yielding-leave",
+      [&] (auto complete) {
+          handler.emplace (yielding_lifecycle_handler (call, queue, probe));
+          complete ([] {});
+      },
+      runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
+    if (submitted.get_future ().wait_for (std::chrono::seconds (5)) != std::future_status::ready)
+        return false;
+    if (close_before_reply)
+        queue.close ();
+    reply.complete (result_t<int>::success (1));
+    if (probe.done.get_future ().wait_for (std::chrono::seconds (5)) != std::future_status::ready)
+        return false;
+    queue.drain ();
+    if (close_before_reply) {
+        if (probe.ran_after_await.load ()
+            || probe.failure_kind.load ()
+                 != static_cast<int> (framework_error_kind_t::shutting_down))
+            std::cerr << "closed Spot resumed its yielded handler after_await="
+                      << probe.ran_after_await.load () << " kind=" << probe.failure_kind.load ()
+                      << '\n';
+        return !probe.ran_after_await.load ()
+               && probe.failure_kind.load ()
+                    == static_cast<int> (framework_error_kind_t::shutting_down);
+    }
+    if (!probe.ran_after_await.load () || probe.overlapped.load ())
+        std::cerr << "yield continuation left its Spot turn after_await="
+                  << probe.ran_after_await.load () << " overlapped=" << probe.overlapped.load ()
+                  << '\n';
+    return probe.ran_after_await.load () && !probe.overlapped.load ();
+}
+
 } // namespace
 
 int main (int argc, char **argv)
@@ -1288,5 +1375,14 @@ int main (int argc, char **argv)
         || !verify_cancelled_registration_lease () || !verify_stopped_registration_state_lifetime ()
         || !verify_ownerless_wait_after_context_stop ())
         return 30;
+
+    zlink::framework::runtime::configure_handler_coroutine_executor (2);
+    const bool yield_kept_turn = verify_yield_continuation_owned_by_spot_queue (false);
+    const bool closed_yield_failed = verify_yield_continuation_owned_by_spot_queue (true);
+    zlink::framework::runtime::shutdown_handler_coroutine_executor ();
+    if (!yield_kept_turn)
+        return 31;
+    if (!closed_yield_failed)
+        return 32;
     return 0;
 }
