@@ -111,20 +111,11 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
      * accepted work, so it runs even after the owner admission deadline (Location runtime §5).
      */
     CompletionStage<Void> runClosing(Supplier<CompletionStage<Void>> operation) {
-        return runClosing(dispatchQueue.isCurrent(), operation);
-    }
-
-    boolean isCurrentDispatchTurn() {
-        return dispatchQueue.isCurrent();
-    }
-
-    CompletionStage<Void> runClosing(
-            boolean initiatedInsideTurn, Supplier<CompletionStage<Void>> operation) {
         sealTimerAdmission();
+        //  Inside the Close turn every message not yet run is already behind the Close
+        //  (Spot messaging §7 step 1); outside a turn the accepted turns drain first.
         if (dispatchQueue.isCurrent()) return runLifecycleExecution(operation);
-        CompletionStage<Void> acceptedTurns =
-                initiatedInsideTurn ? infrastructureQueue.awaitQuiescence() : awaitQuiescence();
-        return acceptedTurns.thenCompose(
+        return awaitQuiescence().thenCompose(
                 ignored ->
                         dispatchQueue.enqueuePreviouslyAccepted(
                                 () -> host.runWithOutbound(outbound, operation)));
