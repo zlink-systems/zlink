@@ -319,6 +319,10 @@ TEST (CppFrameworkSampleParity, BingoRoomClosesAfterItsLastActorLeaves)
       << "Bingo room must close only after both player and observer occupancy are empty";
     EXPECT_NE (room.find ("_context->close ()"), std::string::npos)
       << "Bingo room must request spot closure after its last actor leaves";
+    // Close is a lifecycle item queued behind the running OnLeaveActor
+    // (handler turn and execution gate §7), as in the .NET and Node samples.
+    EXPECT_EQ (room.find ("co_await _context->close ()"), std::string::npos)
+      << "Bingo OnLeaveActor must request Close without awaiting its own lifecycle successor";
 }
 
 TEST (CppFrameworkSampleParity, BingoFinalCleanupGuardsRelocationAfterClose)
