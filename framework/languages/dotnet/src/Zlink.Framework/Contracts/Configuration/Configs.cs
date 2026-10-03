@@ -22,11 +22,11 @@ public interface IZLinkSocketConfig
 
     TimeSpan? HandshakeInterval { get; set; }
 
-    bool IPv6 { get; set; }
+    bool? IPv6 { get; set; }
 
-    bool TcpNoDelay { get; set; }
+    bool? TcpNoDelay { get; set; }
 
-    bool Immediate { get; set; }
+    bool? Immediate { get; set; }
 
     /// <summary>
     ///     Advertised peer weight (0..10000) used by connected peers for outbound
@@ -59,11 +59,11 @@ public interface IZLinkStreamSocketConfig
 
     TimeSpan? HandshakeInterval { get; set; }
 
-    bool IPv6 { get; set; }
+    bool? IPv6 { get; set; }
 
-    bool TcpNoDelay { get; set; }
+    bool? TcpNoDelay { get; set; }
 
-    bool Immediate { get; set; }
+    bool? Immediate { get; set; }
 }
 
 public interface IZLinkRouteConfig

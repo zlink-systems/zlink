@@ -27,9 +27,12 @@ internal static class ZLinkBackendSocketOptionsMapper
             options.ConnectTimeout = config.ConnectTimeout;
         if (config.HandshakeInterval is not null)
             options.HandshakeInterval = config.HandshakeInterval;
-        options.IPv6 = config.IPv6;
-        options.TcpNoDelay = config.TcpNoDelay;
-        options.Immediate = config.Immediate;
+        if (config.IPv6 is { } ipv6)
+            options.IPv6 = ipv6;
+        if (config.TcpNoDelay is { } tcpNoDelay)
+            options.TcpNoDelay = tcpNoDelay;
+        if (config.Immediate is { } immediate)
+            options.Immediate = immediate;
     }
 
     internal static TimeSpan? ResolveSendTimeout(
