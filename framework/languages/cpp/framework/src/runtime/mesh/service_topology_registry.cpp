@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/service_topology_registry.hpp"
-#include "runtime/dispatch/blocking_task.hpp"
 #include "runtime/client_server/weighted_selector.hpp"
 #include <opentelemetry/metrics/provider.h>
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
@@ -217,32 +216,27 @@ service_topology_registry_t::publish_local_snapshot (service_node_descriptor_t d
     return std::move (publication.first);
 }
 
-task_t<std::pair<service_node_descriptor_t, std::vector<admitted_peer_t>>>
+std::pair<service_node_descriptor_t, std::vector<admitted_peer_t>>
 service_topology_registry_t::publish_draining_snapshot ()
 {
-    using publication_t = std::pair<service_node_descriptor_t, std::vector<admitted_peer_t>>;
-    return runtime::run_blocking_step<publication_t> ([this] () -> task_t<publication_t> {
-        auto publication =
-          _lane
-            .run ([this] {
-                auto descriptor = _local;
-                std::function<void ()> changed;
-                if (descriptor.state != service_node_state_t::draining) {
-                    if (descriptor.descriptor_revision
-                        == std::numeric_limits<std::uint64_t>::max ())
-                        throw std::overflow_error ("service descriptor revision is exhausted");
-                    descriptor.state = service_node_state_t::draining;
-                    ++descriptor.descriptor_revision;
-                    changed = publish_local_on_lane (descriptor);
-                }
-                return std::tuple{std::move (descriptor), peers_on_lane (), std::move (changed)};
-            })
-            .get ();
-        if (std::get<2> (publication))
-            std::get<2> (publication) ();
-        co_return publication_t{std::move (std::get<0> (publication)),
-                                std::move (std::get<1> (publication))};
-    });
+    auto publication =
+      _lane
+        .run ([this] {
+            auto descriptor = _local;
+            std::function<void ()> changed;
+            if (descriptor.state != service_node_state_t::draining) {
+                if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+                    throw std::overflow_error ("service descriptor revision is exhausted");
+                descriptor.state = service_node_state_t::draining;
+                ++descriptor.descriptor_revision;
+                changed = publish_local_on_lane (descriptor);
+            }
+            return std::tuple{std::move (descriptor), peers_on_lane (), std::move (changed)};
+        })
+        .get ();
+    if (std::get<2> (publication))
+        std::get<2> (publication) ();
+    return {std::move (std::get<0> (publication)), std::move (std::get<1> (publication))};
 }
 void service_topology_registry_t::set_change_handler (std::function<void ()> handler)
 {

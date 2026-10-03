@@ -4494,11 +4494,6 @@ void mesh_node_runtime_t::set_placement_weight (int weight)
         throw configuration_error ("MeshNode has not started");
     if (weight < 0 || weight > 10000)
         throw configuration_error ("placement weight must be in range 0..10000");
-    auto descriptor = native_node ().transport ().topology ().local_descriptor ();
-    if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
-        throw configuration_error ("MeshNode descriptor revision is exhausted");
-    descriptor.placement_weight = weight;
-    ++descriptor.descriptor_revision;
     std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher;
     std::map<std::string, int> channel_weights;
     _state->lane
@@ -4509,9 +4504,15 @@ void mesh_node_runtime_t::set_placement_weight (int weight)
                   channel_weights.emplace (name, registration.weight);
       })
       .get ();
+    const auto published = native_node ().transport ().publish_descriptor_update (
+      [weight] (runtime::mesh::service_node_descriptor_t &descriptor) {
+          if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+              throw configuration_error ("MeshNode descriptor revision is exhausted");
+          descriptor.placement_weight = weight;
+          ++descriptor.descriptor_revision;
+      });
     if (publisher)
-        publisher (channel_weights, weight, descriptor.descriptor_revision);
-    native_node ().transport ().publish_descriptor_update (std::move (descriptor));
+        publisher (channel_weights, weight, published.descriptor_revision);
     _state->lane.run ([&] { _state->placement_weight = weight; }).get ();
 }
 
@@ -4521,17 +4522,6 @@ void mesh_node_runtime_t::set_channel_weight (const std::string &channel_name, i
         throw configuration_error ("MeshNode has not started");
     if (weight < 0 || weight > 10000)
         throw configuration_error ("channel weight must be in range 0..10000");
-    auto descriptor = native_node ().transport ().topology ().local_descriptor ();
-    const auto descriptor_channel =
-      std::find_if (descriptor.channels.begin (), descriptor.channels.end (),
-                    [&] (const auto &candidate) { return candidate.name == channel_name; });
-    if (descriptor_channel == descriptor.channels.end ())
-        throw configuration_error ("RouteMesh channel is not configured: " + mesh_name () + "/"
-                                   + channel_name);
-    descriptor_channel->weight = weight;
-    if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
-        throw configuration_error ("MeshNode descriptor revision is exhausted");
-    ++descriptor.descriptor_revision;
     std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher;
     std::map<std::string, int> channel_weights;
     int placement_weight = 100;
@@ -4549,9 +4539,21 @@ void mesh_node_runtime_t::set_channel_weight (const std::string &channel_name, i
           publisher = _descriptor_publisher;
       })
       .get ();
+    const auto published = native_node ().transport ().publish_descriptor_update (
+      [&channel_name, weight] (runtime::mesh::service_node_descriptor_t &descriptor) {
+          const auto descriptor_channel =
+            std::find_if (descriptor.channels.begin (), descriptor.channels.end (),
+                          [&] (const auto &candidate) { return candidate.name == channel_name; });
+          if (descriptor_channel == descriptor.channels.end ())
+              throw configuration_error ("RouteMesh channel is not configured: "
+                                         + descriptor.mesh_name + "/" + channel_name);
+          descriptor_channel->weight = weight;
+          if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+              throw configuration_error ("MeshNode descriptor revision is exhausted");
+          ++descriptor.descriptor_revision;
+      });
     if (publisher)
-        publisher (channel_weights, placement_weight, descriptor.descriptor_revision);
-    native_node ().transport ().publish_descriptor_update (std::move (descriptor));
+        publisher (channel_weights, placement_weight, published.descriptor_revision);
     _state->lane.run ([&] { _state->channels.at (channel_name).weight = weight; }).get ();
 }
 

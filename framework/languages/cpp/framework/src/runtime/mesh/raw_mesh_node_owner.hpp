@@ -129,7 +129,11 @@ class raw_mesh_node_owner_t
     std::string endpoint () const;
     zlink::context_t &context ();
     service_topology_registry_t &topology () noexcept;
-    void publish_descriptor_update (service_node_descriptor_t descriptor);
+    // Reads the local descriptor, applies `change` (which raises the revision),
+    // publishes it, and submits the UPDATE to every admitted peer in one owner
+    // turn (wire-protocol §4 DescriptorRevision ordering).
+    service_node_descriptor_t
+    publish_descriptor_update (const std::function<void (service_node_descriptor_t &)> &change);
     task_t<void> publish_draining ();
     service_liveness_registry_t &liveness () noexcept;
     service_mailbox_t &mailbox () noexcept;
@@ -399,6 +403,10 @@ class raw_mesh_node_owner_t
                                     detail::backend::raw_message_t parts,
                                     bool needs_public_completion,
                                     detail::backend::raw_send_stage_trace_t trace = {});
+    send_start_result_t start_send_on_lane (std::vector<std::uint8_t> target_routing_id,
+                                            detail::backend::raw_message_t parts,
+                                            bool needs_public_completion,
+                                            detail::backend::raw_send_stage_trace_t trace);
     task_t<zlink::submit_result_t>
     send_with_header_result (std::vector<std::uint8_t> target_routing_id,
                              std::vector<std::uint8_t> header,
@@ -409,8 +417,11 @@ class raw_mesh_node_owner_t
                                    std::vector<std::uint8_t> header);
     send_start_state_t submit_header_only (const std::vector<std::uint8_t> &target_routing_id,
                                            std::vector<std::uint8_t> header);
-    void send_descriptor_update (const service_node_descriptor_t &descriptor,
-                                 const std::vector<admitted_peer_t> &peers);
+    send_start_state_t
+    submit_header_only_on_lane (const std::vector<std::uint8_t> &target_routing_id,
+                                std::vector<std::uint8_t> header);
+    void send_descriptor_update_on_lane (const service_node_descriptor_t &descriptor,
+                                         const std::vector<admitted_peer_t> &peers);
     task_t<bool>
     request_with_header (std::vector<std::uint8_t> target_routing_id,
                          const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,

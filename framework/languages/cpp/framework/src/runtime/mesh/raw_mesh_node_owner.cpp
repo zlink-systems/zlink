@@ -10,6 +10,7 @@
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/dispatch/application_job_receive_flow.hpp"
+#include "runtime/dispatch/blocking_task.hpp"
 #include "runtime/transport/listener_identity.hpp"
 
 #include "runtime/protocol/service_wire_codec.hpp"
@@ -528,22 +529,42 @@ void raw_mesh_node_owner_t::start ()
       .get ();
 }
 
+// Every read of the local descriptor that is submitted to a route, and every
+// revision change, runs in an owner turn together with its submission, so a
+// route never receives a lower revision after a higher one (wire-protocol §4
+// DescriptorRevision ordering).
 task_t<void> raw_mesh_node_owner_t::publish_draining ()
 {
-    const auto publication = co_await _topology.publish_draining_snapshot ();
-    send_descriptor_update (publication.first, publication.second);
+    return runtime::run_blocking_step<void> ([this] () -> task_t<void> {
+        _lane
+          .run ([this] {
+              const auto publication = _topology.publish_draining_snapshot ();
+              send_descriptor_update_on_lane (publication.first, publication.second);
+          })
+          .get ();
+        co_return;
+    });
 }
 
-void raw_mesh_node_owner_t::publish_descriptor_update (service_node_descriptor_t descriptor)
+service_node_descriptor_t raw_mesh_node_owner_t::publish_descriptor_update (
+  const std::function<void (service_node_descriptor_t &)> &change)
 {
-    const auto peers = _topology.publish_local_snapshot (descriptor);
-    send_descriptor_update (descriptor, peers);
+    return _lane
+      .run ([this, &change] {
+          auto descriptor = _topology.local_descriptor ();
+          change (descriptor);
+          const auto peers = _topology.publish_local_snapshot (descriptor);
+          send_descriptor_update_on_lane (descriptor, peers);
+          return descriptor;
+      })
+      .get ();
 }
-void raw_mesh_node_owner_t::send_descriptor_update (const service_node_descriptor_t &descriptor,
-                                                    const std::vector<admitted_peer_t> &peers)
+
+void raw_mesh_node_owner_t::send_descriptor_update_on_lane (
+  const service_node_descriptor_t &descriptor, const std::vector<admitted_peer_t> &peers)
 {
     for (const auto &peer : peers) {
-        (void) submit_header_only (
+        (void) submit_header_only_on_lane (
           peer.descriptor.node_routing_id,
           protocol::encode_route_mesh_admission (protocol::command::update, descriptor));
     }
@@ -1137,104 +1158,108 @@ raw_mesh_node_owner_t::start_send (std::vector<std::uint8_t> target_routing_id,
                                    bool needs_public_completion,
                                    detail::backend::raw_send_stage_trace_t trace)
 {
+    return _lane
+      .run ([this, parts = std::move (parts), trace = std::move (trace), needs_public_completion,
+             target_routing_id = std::move (target_routing_id)] () mutable {
+          return start_send_on_lane (std::move (target_routing_id), std::move (parts),
+                                     needs_public_completion, std::move (trace));
+      })
+      .get ();
+}
+
+raw_mesh_node_owner_t::send_start_result_t
+raw_mesh_node_owner_t::start_send_on_lane (std::vector<std::uint8_t> target_routing_id,
+                                           detail::backend::raw_message_t parts,
+                                           bool needs_public_completion,
+                                           detail::backend::raw_send_stage_trace_t trace)
+{
     struct send_start_t
     {
         foundation::call_id_t operation;
         std::shared_ptr<task_t<zlink::submit_result_t>> public_completion;
         bool registered = false;
     };
-    auto start =
-      _lane
-        .run ([this, parts = std::move (parts), trace = std::move (trace), needs_public_completion,
-               target_routing_id = std::move (target_routing_id)] () mutable {
-            std::shared_ptr<detail::backend::raw_route_port_t> port;
-            {
-                std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                port = _port;
-            }
-            if (!port) {
-                if (trace)
-                    trace ("router_admission_submit", "terminated");
+    std::shared_ptr<detail::backend::raw_route_port_t> port;
+    {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        port = _port;
+    }
+    if (!port) {
+        if (trace)
+            trace ("router_admission_submit", "terminated");
+        return send_start_result_t{send_start_state_t::terminated, std::nullopt, {}};
+    }
+    // `port` is a lifetime-safe snapshot: close cannot take it out from
+    // under this owner turn, and raw_route_port_t serializes close versus
+    // native submission with its socket gate.
+    auto submission = port->submit_send (target_routing_id, std::move (parts), std::move (trace));
+    if (submission.state == detail::backend::raw_send_submission_state_t::immediate) {
+        return send_start_result_t{
+          send_start_state_t::started, std::move (submission.immediate_result), {}};
+    }
+    foundation::call_id_t operation;
+    {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        operation =
+          operation_id (_options.descriptor.lifecycle_generation, take_reply_route_id_locked ());
+    }
+    send_start_t value{.operation = operation};
+    auto completion = std::make_shared<send_completion_state_t> ();
+    if (needs_public_completion) {
+        completion->source = std::make_shared<task_completion_source_t<zlink::submit_result_t>> ();
+        value.public_completion =
+          std::make_shared<task_t<zlink::submit_result_t>> (completion->source->task ());
+    }
+    value.registered = _operations->register_operation (
+      operation, foundation::operation_registry_t::clock_t::time_point::max (),
+      [completion] (foundation::operation_terminal_t terminal, auto) {
+          const auto result =
+            completion->result.value_or (terminal == foundation::operation_terminal_t::shutdown
+                                           ? zlink::submit_result_t::terminated
+                                           : zlink::submit_result_t::internal_error);
+          if (completion->source) {
+              completion->source->complete (result_t<zlink::submit_result_t>::success (result));
+          } else if (result != zlink::submit_result_t::ok && mesh_trace_enabled ()) {
+              trace_mesh_enabled (
+                std::string ("control-send terminal=")
+                + (terminal == foundation::operation_terminal_t::shutdown ? "shutdown"
+                   : terminal == foundation::operation_terminal_t::transport_failed
+                     ? "transport-failed"
+                     : "completed")
+                + " result=" + std::to_string (static_cast<int> (result)));
+          }
+      });
+    if (value.registered) {
+        try {
+            auto running = std::move (submission.pending_completion);
+            if (!running) {
+                (void) _operations->unregister (operation);
                 return send_start_result_t{send_start_state_t::terminated, std::nullopt, {}};
             }
-            // `port` is a lifetime-safe snapshot: close cannot take it out from
-            // under this owner turn, and raw_route_port_t serializes close versus
-            // native submission with its socket gate.
-            auto submission =
-              port->submit_send (target_routing_id, std::move (parts), std::move (trace));
-            if (submission.state == detail::backend::raw_send_submission_state_t::immediate) {
-                return send_start_result_t{
-                  send_start_state_t::started, std::move (submission.immediate_result), {}};
-            }
-            foundation::call_id_t operation;
-            {
-                std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                operation = operation_id (_options.descriptor.lifecycle_generation,
-                                          take_reply_route_id_locked ());
-            }
-            send_start_t value{.operation = operation};
-            auto completion = std::make_shared<send_completion_state_t> ();
-            if (needs_public_completion) {
-                completion->source =
-                  std::make_shared<task_completion_source_t<zlink::submit_result_t>> ();
-                value.public_completion =
-                  std::make_shared<task_t<zlink::submit_result_t>> (completion->source->task ());
-            }
-            value.registered = _operations->register_operation (
-              operation, foundation::operation_registry_t::clock_t::time_point::max (),
-              [completion] (foundation::operation_terminal_t terminal, auto) {
-                  const auto result = completion->result.value_or (
-                    terminal == foundation::operation_terminal_t::shutdown
-                      ? zlink::submit_result_t::terminated
-                      : zlink::submit_result_t::internal_error);
-                  if (completion->source) {
-                      completion->source->complete (
-                        result_t<zlink::submit_result_t>::success (result));
-                  } else if (result != zlink::submit_result_t::ok && mesh_trace_enabled ()) {
-                      trace_mesh_enabled (
-                        std::string ("control-send terminal=")
-                        + (terminal == foundation::operation_terminal_t::shutdown ? "shutdown"
-                           : terminal == foundation::operation_terminal_t::transport_failed
-                             ? "transport-failed"
-                             : "completed")
-                        + " result=" + std::to_string (static_cast<int> (result)));
+            const auto operations = _operations;
+            detail::observe_task_completion (
+              *running, [operations, operation, completion,
+                         running] (const result_t<zlink::submit_result_t> &settled) {
+                  if (!settled) {
+                      (void) operations->fail (operation,
+                                               foundation::operation_terminal_t::transport_failed);
+                      return;
                   }
+                  const auto result = settled.value ();
+                  (void) operations->complete (
+                    operation, {}, [completion, result] { completion->result = result; });
               });
-            if (value.registered) {
-                try {
-                    auto running = std::move (submission.pending_completion);
-                    if (!running) {
-                        (void) _operations->unregister (operation);
-                        return send_start_result_t{
-                          send_start_state_t::terminated, std::nullopt, {}};
-                    }
-                    const auto operations = _operations;
-                    detail::observe_task_completion (
-                      *running, [operations, operation, completion,
-                                 running] (const result_t<zlink::submit_result_t> &settled) {
-                          if (!settled) {
-                              (void) operations->fail (
-                                operation, foundation::operation_terminal_t::transport_failed);
-                              return;
-                          }
-                          const auto result = settled.value ();
-                          (void) operations->complete (
-                            operation, {}, [completion, result] { completion->result = result; });
-                      });
-                }
-                catch (...) {
-                    (void) _operations->unregister (operation);
-                    throw;
-                }
-            }
-            if (!value.registered) {
-                return send_start_result_t{send_start_state_t::terminated, std::nullopt, {}};
-            }
-            return send_start_result_t{send_start_state_t::started, std::nullopt,
-                                       std::move (value.public_completion)};
-        })
-        .get ();
-    return start;
+        }
+        catch (...) {
+            (void) _operations->unregister (operation);
+            throw;
+        }
+    }
+    if (!value.registered) {
+        return send_start_result_t{send_start_state_t::terminated, std::nullopt, {}};
+    }
+    return send_start_result_t{send_start_state_t::started, std::nullopt,
+                               std::move (value.public_completion)};
 }
 
 task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_with_header_result (
@@ -1289,8 +1314,19 @@ raw_mesh_node_owner_t::send_start_state_t
 raw_mesh_node_owner_t::submit_header_only (const std::vector<std::uint8_t> &target_routing_id,
                                            std::vector<std::uint8_t> header)
 {
-    auto started = start_send (std::vector<std::uint8_t> (target_routing_id),
-                               detail::backend::raw_message_t{std::move (header)}, false);
+    return _lane
+      .run ([this, &target_routing_id, &header] {
+          return submit_header_only_on_lane (target_routing_id, std::move (header));
+      })
+      .get ();
+}
+
+raw_mesh_node_owner_t::send_start_state_t raw_mesh_node_owner_t::submit_header_only_on_lane (
+  const std::vector<std::uint8_t> &target_routing_id, std::vector<std::uint8_t> header)
+{
+    auto started =
+      start_send_on_lane (std::vector<std::uint8_t> (target_routing_id),
+                          detail::backend::raw_message_t{std::move (header)}, false, {});
     if (started.state != send_start_state_t::started && mesh_trace_enabled ())
         trace_mesh_enabled ("control-send start=terminated");
     return started.state;
@@ -2660,37 +2696,39 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                   submit_header_only (received->source_routing_id, protocol::encode_reject (3));
                 co_return raw_mesh_pump_result_t::infrastructure;
             }
-            struct admission_commit_t
-            {
-                peer_admission_result_t result = peer_admission_result_t::invalid_descriptor;
-                service_node_descriptor_t local;
-            };
-            const auto committed =
+            const auto admission =
               _lane
                 .run ([this, &received, &descriptor, &expectation, &connection_id, now, header] {
-                    admission_commit_t value;
-                    std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                    value.result = expectation.expected_descriptor
-                                     ? _topology.admit (descriptor, connection_id,
-                                                        *expectation.expected_descriptor)
-                                     : _topology.admit (descriptor, connection_id);
-                    trace_admission_phase (received->source_routing_id,
-                                           descriptor.lifecycle_generation, header.kind,
-                                           value.result);
-                    if (value.result == peer_admission_result_t::admitted) {
-                        _liveness.admit (descriptor.node_routing_id, connection_id, now);
+                    peer_admission_result_t result;
+                    {
+                        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+                        result = expectation.expected_descriptor
+                                   ? _topology.admit (descriptor, connection_id,
+                                                      *expectation.expected_descriptor)
+                                   : _topology.admit (descriptor, connection_id);
+                        trace_admission_phase (received->source_routing_id,
+                                               descriptor.lifecycle_generation, header.kind,
+                                               result);
+                        if (result == peer_admission_result_t::admitted) {
+                            _liveness.admit (descriptor.node_routing_id, connection_id, now);
+                        }
                     }
-                    value.local = _topology.local_descriptor ();
-                    return value;
+                    // The ADMIT carries the local descriptor read in this owner
+                    // turn, ordered with every descriptor publication.
+                    if (header.kind == protocol::command::hello
+                        && (result == peer_admission_result_t::not_required
+                            || result == peer_admission_result_t::admitted
+                            || result == peer_admission_result_t::duplicate_connection)) {
+                        (void) submit_header_only_on_lane (
+                          received->source_routing_id,
+                          protocol::encode_route_mesh_admission (protocol::command::admit,
+                                                                 _topology.local_descriptor ()));
+                    }
+                    return result;
                 })
                 .get ();
-            const auto admission = committed.result;
             if (admission == peer_admission_result_t::not_required) {
-                if (header.kind == protocol::command::hello) {
-                    const auto submitted = submit_header_only (
-                      received->source_routing_id, protocol::encode_route_mesh_admission (
-                                                     protocol::command::admit, committed.local));
-                } else {
+                if (header.kind != protocol::command::hello) {
                     // NotRequired ends this configured connection intent; the
                     // same manual configuration generation does not reconnect it.
                     _lane
@@ -2719,11 +2757,6 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                 const auto submitted = submit_header_only (received->source_routing_id,
                                                            protocol::encode_reject (reason));
                 co_return raw_mesh_pump_result_t::infrastructure;
-            }
-            if (header.kind == protocol::command::hello) {
-                const auto submitted = submit_header_only (
-                  received->source_routing_id, protocol::encode_route_mesh_admission (
-                                                 protocol::command::admit, committed.local));
             }
             co_return raw_mesh_pump_result_t::infrastructure;
         }
@@ -3440,69 +3473,66 @@ std::size_t raw_mesh_node_owner_t::observe_routes ()
 
 std::size_t raw_mesh_node_owner_t::apply_route_snapshot ()
 {
-    struct observation_t
-    {
-        std::size_t changes = 0;
-        std::vector<std::vector<std::uint8_t>> new_routes;
-        service_node_descriptor_t local;
-    };
-    const auto observation =
-      _lane
-        .run ([this] {
-            observation_t value;
-            std::lock_guard lifecycle_lock (_lifecycle_mutex);
-            if (!_router)
-                return value;
-            std::vector<zlink::router_route_t> snapshot;
-            {
-                std::lock_guard socket_lock (_socket_mutex);
-                snapshot = _router->routes_snapshot ();
-            }
-            decltype (_routes) observed;
-            for (const auto &route : snapshot)
-                observed.emplace (route.routing_id.to_bytes (), route.route_generation);
-            // A route that ended or was replaced loses its admission and
-            // liveness; a new route admits only through a new handshake.
-            for (const auto &[node_routing_id, generation] : _routes) {
-                const auto still = observed.find (node_routing_id);
-                if (still != observed.end () && still->second == generation)
-                    continue;
-                ++value.changes;
-                const auto connection_id = route_connection_id (generation);
-                trace_mesh ("route-ended routing=" + owner_key (node_routing_id)
-                            + " connection=" + owner_key (connection_id));
-                const auto removed = _topology.disconnect (node_routing_id, connection_id);
-                (void) _liveness.disconnect (node_routing_id, connection_id);
-                if (removed)
-                    end_peer_operations_if_disconnected_locked (node_routing_id);
-            }
-            for (const auto &[node_routing_id, generation] : observed) {
-                if (route_current_locked (node_routing_id, generation))
-                    continue;
-                if (!_routes.contains (node_routing_id))
-                    ++value.changes;
-                trace_mesh ("route-selected routing=" + owner_key (node_routing_id)
-                            + " connection=" + owner_key (route_connection_id (generation)));
-                value.new_routes.push_back (node_routing_id);
-            }
-            _routes = std::move (observed);
-            value.local = _topology.local_descriptor ();
-            return value;
-        })
-        .get ();
-    if (_options.shutdown_admission_seal
-        && _options.shutdown_admission_seal->load (std::memory_order_acquire))
-        return observation.changes;
-    for (const auto &node_routing_id : observation.new_routes) {
-        try {
-            (void) submit_header_only (
-              node_routing_id,
-              protocol::encode_route_mesh_admission (protocol::command::hello, observation.local));
-        }
-        catch (const zlink::submit_error_t &) {
-        }
-    }
-    return observation.changes;
+    return _lane
+      .run ([this] {
+          std::size_t changes = 0;
+          std::vector<std::vector<std::uint8_t>> new_routes;
+          {
+              std::lock_guard lifecycle_lock (_lifecycle_mutex);
+              if (!_router)
+                  return changes;
+              std::vector<zlink::router_route_t> snapshot;
+              {
+                  std::lock_guard socket_lock (_socket_mutex);
+                  snapshot = _router->routes_snapshot ();
+              }
+              decltype (_routes) observed;
+              for (const auto &route : snapshot)
+                  observed.emplace (route.routing_id.to_bytes (), route.route_generation);
+              // A route that ended or was replaced loses its admission and
+              // liveness; a new route admits only through a new handshake.
+              for (const auto &[node_routing_id, generation] : _routes) {
+                  const auto still = observed.find (node_routing_id);
+                  if (still != observed.end () && still->second == generation)
+                      continue;
+                  ++changes;
+                  const auto connection_id = route_connection_id (generation);
+                  trace_mesh ("route-ended routing=" + owner_key (node_routing_id)
+                              + " connection=" + owner_key (connection_id));
+                  const auto removed = _topology.disconnect (node_routing_id, connection_id);
+                  (void) _liveness.disconnect (node_routing_id, connection_id);
+                  if (removed)
+                      end_peer_operations_if_disconnected_locked (node_routing_id);
+              }
+              for (const auto &[node_routing_id, generation] : observed) {
+                  if (route_current_locked (node_routing_id, generation))
+                      continue;
+                  if (!_routes.contains (node_routing_id))
+                      ++changes;
+                  trace_mesh ("route-selected routing=" + owner_key (node_routing_id)
+                              + " connection=" + owner_key (route_connection_id (generation)));
+                  new_routes.push_back (node_routing_id);
+              }
+              _routes = std::move (observed);
+          }
+          if (new_routes.empty ()
+              || (_options.shutdown_admission_seal
+                  && _options.shutdown_admission_seal->load (std::memory_order_acquire)))
+              return changes;
+          // The HELLO carries the local descriptor read in this owner turn,
+          // ordered with every descriptor publication.
+          const auto hello = protocol::encode_route_mesh_admission (protocol::command::hello,
+                                                                    _topology.local_descriptor ());
+          for (const auto &node_routing_id : new_routes) {
+              try {
+                  (void) submit_header_only_on_lane (node_routing_id, hello);
+              }
+              catch (const zlink::submit_error_t &) {
+              }
+          }
+          return changes;
+      })
+      .get ();
 }
 
 task_t<service_liveness_tick_t>
