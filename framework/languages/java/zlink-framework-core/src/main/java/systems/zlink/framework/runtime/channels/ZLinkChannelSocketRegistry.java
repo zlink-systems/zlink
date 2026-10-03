@@ -1303,7 +1303,7 @@ final class ZLinkChannelSocketRegistry {
 
     private void runClientServerControlReceive(ClientServerConnection connection) {
         try {
-            while (!connection.physicalClosed) {
+            while (!connection.receiveStopped) {
                 try {
                     receiveClientServerControls(connection, CLIENT_SERVER_CONTROL_RECEIVE_WAIT);
                 } catch (RuntimeException failure) {
@@ -1545,6 +1545,7 @@ final class ZLinkChannelSocketRegistry {
                 LOGGER.log(Level.WARNING, "ClientServer monitor cleanup failed", failure);
             }
         }
+        connection.receiveStopped = true;
         Thread owner = close.receiveOwner();
         if (owner == null) {
             try {
@@ -1555,7 +1556,7 @@ final class ZLinkChannelSocketRegistry {
         } else if (owner != Thread.currentThread()) {
             // The receive owner closes the DEALER when it ends. A close that runs on the owner
             // itself (in a completion it dispatched) returns here, and the owner closes the
-            // DEALER once that completion returns and it sees physicalClosed.
+            // DEALER once that completion returns and it sees receiveStopped.
             awaitReceiveOwner(owner);
         }
     }
@@ -2110,8 +2111,10 @@ final class ZLinkChannelSocketRegistry {
         private final Consumer<AdmissionFence> restartAdmission;
         private ZLinkBackendSocketMonitor monitor;
         private boolean ready;
-        // Written once in the state lane; the DEALER's receive owner reads it to stop.
-        private volatile boolean physicalClosed;
+        private boolean physicalClosed;
+        // Set by the close path after the monitor closed (spec 55 section 6: the monitor never
+        // outlives the DEALER it observes). The receive owner stops on it and closes the DEALER.
+        private volatile boolean receiveStopped;
         // Set once in the state lane; the only poller waiter of the DEALER, and its closer.
         private Thread receiveOwner;
         private long pendingLivenessAckId;
