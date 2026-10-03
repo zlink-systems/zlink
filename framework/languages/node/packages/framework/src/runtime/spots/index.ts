@@ -1245,12 +1245,13 @@ export class DefaultZLinkSpotManager {
       deadline
     );
     this.activations.finishClose(meshName, spotId);
-    let hasIntent = false;
+    const intentRecords: unknown[] = [];
     operation.activation.serial.visitPendingApplication((record) => {
       const context = record.context as
         import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
-      hasIntent ||= context?.replay !== undefined;
+      if (context?.replay !== undefined) intentRecords.push(record);
     });
+    const hasIntent = intentRecords.length > 0;
     const hostState = this.options.statefulExecution?.hostState();
     const intentFailure = !hasIntent
       ? undefined
@@ -1761,10 +1762,18 @@ export class DefaultZLinkSpotManager {
           contentType: envelope.header.contentType,
           awaitFirstHandlerTurn: record.kind === ReceiveKind.InstanceSpotActivation,
           activationRecord: record,
-          onOneWayError: this.options.dispatchErrors?.captureEnabled()
-            ? (error: unknown) =>
-                this.reportInstanceDispatchFailure(meshName, spotId, record, envelope, false, error)
-            : undefined,
+          onOneWayError:
+            this.options.dispatchErrors?.captureEnabled() === true
+              ? (error: unknown) =>
+                  this.reportInstanceDispatchFailure(
+                    meshName,
+                    spotId,
+                    record,
+                    envelope,
+                    false,
+                    error
+                  )
+              : undefined,
           workOptions: zlinkSerialWorkOptions(
             envelope.payload.byteLength,
             record.applicationMetadata?.byteLength ??
@@ -1864,8 +1873,9 @@ export class DefaultZLinkSpotManager {
     request: boolean,
     error: unknown
   ): void {
-    if (!this.options.dispatchErrors?.captureEnabled()) return;
-    this.options.dispatchErrors?.report({
+    const reporter = this.options.dispatchErrors;
+    if (reporter?.captureEnabled() !== true) return;
+    reporter.report({
       surface: ZLinkDispatchErrorSurface.InstanceSpot,
       messageKind: request ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
       packetName: envelope.packetName,

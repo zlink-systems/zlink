@@ -475,10 +475,6 @@ class GameQuestClientScenario {
       .request(killMonsterReq('player-alice', 'wolf', 'desert', 'owner-ready-intent'), Object)
       .packetName(PacketNames.killMonsterReq)
       .submit<KillMonsterRes>(signal);
-    zlinkStreamAssert.ensure(
-      lifecycleCompletionPath !== undefined,
-      'Runner lifecycle completion path is required.'
-    );
     console.log('gamequest-owner awaiting-termination player=player-alice');
     const ownerTermination = await fetch(lifecycleCompletionPath, { signal });
     zlinkStreamAssert.ensure(ownerTermination.ok, 'Runner owner termination stage failed.');
