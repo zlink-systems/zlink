@@ -122,6 +122,7 @@ import {
   ZLinkHostSpotAddressTransport
 } from '../../packages/framework/src/runtime/host/spot-address-transport';
 import {
+  decodeChannelEnvelope,
   encodeChannelEnvelopeParts,
   encodeChannelReplyParts,
   ZLinkChannelMessageKind
@@ -2142,26 +2143,46 @@ for (const scenario of spotCloseFixture.readyRouteCases) {
         } as unknown as import('../../packages/framework/src/runtime/channels/dispatch-error-reporter').ZLinkDispatchErrorReporter,
         'mesh'
       );
+      // The caller still holds the Ready route it cached before the owner
+      // fence changed; the owner refuses it before admission.
+      const cachedFence = {
+        ...current,
+        authorityOwnerGeneration: current.authorityOwnerGeneration + 1n
+      };
       try {
         const kind = scenario.given.messageKind as 'request' | 'send';
-        const ingressResult = await harness.ingress(
-          harness.request(
-            { ...current, authorityOwnerGeneration: current.authorityOwnerGeneration + 1n },
-            kind,
-            instanceIntent
-          )
-        );
         if (kind === 'request') {
-          assert.equal(ingressResult, 'infrastructure');
-          assert.equal(harness.replies.length, scenario.expect.messageTerminalCount);
+          const outcome = await requestThroughCachedReadyRoute(
+            harness,
+            cachedFence,
+            scenario.given.authority === 'Ready' ? current : undefined,
+            instanceIntent
+          );
+          assert.equal(harness.replies.length, 1);
           const reply = decodeStatefulReply(harness.replies[0]![0]!, 2n, 'instanceSpotRequest');
           assert.equal(reply.failureCode, 34);
-          assert.equal(scenario.expect.messageTerminal, 'Unavailable');
-        } else {
-          assert.equal(ingressResult, 'protocolError');
-          assert.deepEqual(diagnostics, scenario.expect.diagnostics);
-          assert.equal(harness.replies.length, 0);
+          assert.equal(outcome.terminal, scenario.expect.messageTerminal);
+          assert.equal(outcome.terminalCount, scenario.expect.messageTerminalCount);
+          assert.equal(
+            harness.queued.length + outcome.coldActivations,
+            scenario.expect.handlerCalls
+          );
+          assert.equal(
+            harness.factoryCalls() + outcome.coldActivations,
+            scenario.expect.factoryCalls
+          );
+          assert.equal(
+            harness.missingPlacementCalls() + outcome.coldActivations,
+            scenario.expect.missingPlacementCalls
+          );
+          return;
         }
+        const ingressResult = await harness.ingress(
+          harness.request(cachedFence, kind, instanceIntent)
+        );
+        assert.equal(ingressResult, 'protocolError');
+        assert.deepEqual(diagnostics, scenario.expect.diagnostics);
+        assert.equal(harness.replies.length, 0);
         assert.equal(harness.queued.length, scenario.expect.handlerCalls);
         assert.equal(harness.factoryCalls(), scenario.expect.factoryCalls);
         assert.equal(harness.missingPlacementCalls(), scenario.expect.missingPlacementCalls);
@@ -2169,6 +2190,135 @@ for (const scenario of spotCloseFixture.readyRouteCases) {
         harness.runtime.close();
       }
     });
+  }
+}
+
+// Drives one public Instance Spot request from a caller holding `cachedFence`
+// through the owner's Ready ingress. After the owner's refusal the caller reads
+// authority once: `authority` is the current Ready fence, or undefined when
+// Close released it. A cold placement stands for one Missing activation, which
+// the Missing Instance tests cover; here it counts as one factory and one
+// handler call on the new incarnation.
+async function requestThroughCachedReadyRoute(
+  harness: ReturnType<typeof readyInstanceIngressHarness>,
+  cachedFence: ServiceInstanceRouteFence,
+  authority: ServiceInstanceRouteFence | undefined,
+  instanceIntent: boolean
+): Promise<{
+  readonly terminal: string;
+  readonly terminalCount: number;
+  readonly coldActivations: number;
+}> {
+  const routeTarget = (fence: ServiceInstanceRouteFence) => ({
+    routerChannelId: 'mesh',
+    targetNodeRid: fence.targetNodeRid,
+    spotId: fence.targetSpotId,
+    spotKind: ZLinkSpotKind.Instance,
+    stableType: 'TenantWorker',
+    targetSpotGeneration: fence.objectGeneration,
+    targetNodeGeneration: fence.targetNodeGeneration,
+    authorityOwnerGeneration: fence.authorityOwnerGeneration,
+    targetOwnerId: fence.ownerId,
+    ownerLeaseGeneration: fence.leaseGeneration,
+    authorityStoreVersion: fence.storeVersion
+  });
+  let invalidated = false;
+  let ownerIngress: Promise<unknown> | undefined;
+  let coldActivations = 0;
+  let coldReply: Message[] = [];
+  const node = {
+    requestInstanceSpot(
+      fence: ServiceInstanceRouteFence,
+      _parts: unknown,
+      _timeoutMs?: number,
+      _source?: string,
+      _metadata?: ReadonlyMap<string, string>,
+      intent?: boolean
+    ) {
+      ownerIngress = Promise.resolve(
+        harness.ingress(harness.request(fence, 'request', intent === true))
+      );
+      return 2n;
+    },
+    instanceSpotPlacementTypes: () => ['TenantWorker'],
+    selectObjectPlacement: () => ({
+      kind: 'selected',
+      target: { targetNodeRid: 'node-b', targetNodeGeneration: 4n, descriptorVersion: '1' }
+    }),
+    requestToMissingInstanceSpot(_target: unknown, parts: readonly ZLinkBackendMessageLike[]) {
+      coldActivations += 1;
+      coldReply = encodeChannelReplyParts(
+        decodeChannelEnvelope(parts.map(toBindingMessage)).header,
+        'new-incarnation'
+      ).map(toBindingMessage);
+      return { high: 9n, low: 1n };
+    }
+  } as unknown as ZLinkBackendMeshNode;
+  const ownerCompletions = {
+    async submit(submit: () => unknown) {
+      submit();
+      await ownerIngress;
+      const reply = decodeStatefulReply(harness.replies[0]![0]!, 2n, 'instanceSpotRequest');
+      return {
+        terminalResult: reply.terminalResult,
+        failureErrno: reply.failureCode,
+        operationKind: 39,
+        kindData: null,
+        parts: []
+      };
+    }
+  };
+  const coldCompletions = {
+    async submit(submit: () => unknown) {
+      submit();
+      return {
+        terminalResult: RequestResult.Ok,
+        failureErrno: 0,
+        operationKind: 39,
+        kindData: null,
+        parts: coldReply
+      };
+    }
+  };
+  const address = new ZLinkHostSpotAddressTransport({
+    resolver: () => ({
+      async resolve() {
+        if (!invalidated) return routeTarget(cachedFence);
+        if (authority !== undefined) return routeTarget(authority);
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.SpotRouteNotFound,
+          'Close released the Instance authority.'
+        );
+      },
+      invalidate() {
+        invalidated = true;
+      }
+    }),
+    routed: new ZLinkRuntimeRouteTransport(
+      () => undefined,
+      undefined,
+      () => ({
+        meshNode: () => node,
+        meshCompletionTable: () => ownerCompletions as never
+      })
+    ),
+    meshNames: () => ['mesh'],
+    meshNode: () => node,
+    completions: () => coldCompletions as never,
+    defaultRequestTimeoutMs: 1_000
+  });
+  class ReadyInstanceApplication {}
+  try {
+    const reply = await address.requestToSpotAddress(
+      cachedFence.targetSpotId,
+      new ReadyInstanceApplication(),
+      { instanceSpot: instanceIntent, instanceSpotType: 'TenantWorker' }
+    );
+    assert.equal(reply, 'new-incarnation');
+    return { terminal: 'reply', terminalCount: 1, coldActivations };
+  } catch (error) {
+    assert.ok(error instanceof ZLinkFrameworkException);
+    return { terminal: ZLinkFrameworkErrorKind[error.kind], terminalCount: 1, coldActivations };
   }
 }
 

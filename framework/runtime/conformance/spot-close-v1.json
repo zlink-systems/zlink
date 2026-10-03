@@ -284,8 +284,7 @@
         "authority": "Missing",
         "ownerFence": "mismatch",
         "instanceIntent": [
-          false,
-          true
+          false
         ],
         "messageKind": "request",
         "routeKind": "ready"
@@ -296,6 +295,25 @@
         "handlerCalls": 0,
         "factoryCalls": 0,
         "missingPlacementCalls": 0
+      }
+    },
+    {
+      "name": "stale-released-ready-owner-fence-instance-intent-request",
+      "given": {
+        "authority": "Missing",
+        "ownerFence": "mismatch",
+        "instanceIntent": [
+          true
+        ],
+        "messageKind": "request",
+        "routeKind": "ready"
+      },
+      "expect": {
+        "messageTerminal": "reply",
+        "messageTerminalCount": 1,
+        "handlerCalls": 1,
+        "factoryCalls": 1,
+        "missingPlacementCalls": 1
       }
     },
     {

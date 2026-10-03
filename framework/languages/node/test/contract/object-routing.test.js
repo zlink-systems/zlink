@@ -11,6 +11,10 @@ const {
 const {
   ServiceRelocationAuthorityPayloadCodec
 } = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
+const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const {
+  ZLinkBufferMessage
+} = require('../../packages/framework/dist/runtime/backend/runtime-message');
 
 function relocationAuthorityPayload(payload) {
   return new ServiceRelocationAuthorityPayloadCodec().publish(payload, {
@@ -874,86 +878,108 @@ test('Spot address requests preserve the original route failure after invalidati
   assert.equal(invalidated, 1);
 });
 
-for (const nextAuthority of ['changed', 'missing', 'unchanged']) {
-  test(`Instance Spot stale terminal is preserved when authority becomes ${nextAuthority}`, async () => {
-    class Lookup {}
-    const route = {
-      routerChannelId: 'play',
-      targetNodeRid: 'node-a',
-      spotId: 'spot-1',
-      spotKind: framework.ZLinkSpotKind.Instance,
-      stableType: 'chat-room',
-      targetSpotGeneration: 1n,
-      targetNodeGeneration: 1n
-    };
-    const terminal = internal.createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-      'stale instance target'
-    );
-    let resolves = 0;
-    let requests = 0;
-    let invalidated = 0;
-    let coldSubmits = 0;
-    const transport = new internal.ZLinkHostSpotAddressTransport({
-      resolver: () => ({
-        async resolve() {
-          resolves += 1;
-          if (invalidated === 0 || nextAuthority === 'unchanged') return route;
-          if (nextAuthority === 'changed') return { ...route, targetNodeRid: 'node-b' };
-          throw internal.createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.SpotRouteNotFound,
-            'authority removed'
-          );
-        },
-        invalidate() {
-          invalidated += 1;
+// Failover policy §4.4: only the owner's pre-admission owner-fence refusal
+// (SpotMoving) lets an Instance intent request read authority once more; a
+// Missing answer activates a new incarnation. Everything else keeps the first
+// terminal.
+for (const terminalKind of ['SpotMoving', 'RequestTargetNotFound']) {
+  for (const instanceIntent of [true, false]) {
+    for (const nextAuthority of ['changed', 'missing', 'unchanged']) {
+      const rereads = instanceIntent && terminalKind === 'SpotMoving';
+      const reactivates = rereads && nextAuthority === 'missing';
+      test(`Instance Spot ${terminalKind} from a cached Ready route ${
+        reactivates ? 'activates a new incarnation' : 'keeps the first terminal'
+      } when authority becomes ${nextAuthority} (instanceIntent=${instanceIntent})`, async () => {
+        class Lookup {}
+        const route = {
+          routerChannelId: 'play',
+          targetNodeRid: 'node-a',
+          spotId: 'spot-1',
+          spotKind: framework.ZLinkSpotKind.Instance,
+          stableType: 'chat-room',
+          targetSpotGeneration: 1n,
+          targetNodeGeneration: 1n
+        };
+        const terminal = internal.createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind[terminalKind],
+          'stale instance owner fence'
+        );
+        let resolves = 0;
+        let requests = 0;
+        let invalidated = 0;
+        let coldSubmits = 0;
+        let replyParts;
+        const transport = new internal.ZLinkHostSpotAddressTransport({
+          resolver: () => ({
+            async resolve() {
+              resolves += 1;
+              if (invalidated === 0 || nextAuthority === 'unchanged') return route;
+              if (nextAuthority === 'changed') return { ...route, targetNodeRid: 'node-b' };
+              throw internal.createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.SpotRouteNotFound,
+                'authority released by Close'
+              );
+            },
+            invalidate() {
+              invalidated += 1;
+            }
+          }),
+          routed: {
+            async sendToSpot() {
+              throw new Error('Unexpected send.');
+            },
+            async requestToSpot() {
+              requests += 1;
+              throw terminal;
+            }
+          },
+          meshNames: () => ['play'],
+          meshNode: () => ({
+            instanceSpotPlacementTypes: () => ['chat-room'],
+            selectObjectPlacement: () => ({
+              kind: 'selected',
+              target: {
+                targetNodeRid: 'node-b',
+                targetNodeGeneration: 2n,
+                descriptorVersion: '2'
+              }
+            }),
+            requestToMissingInstanceSpot(_target, encoded) {
+              coldSubmits += 1;
+              replyParts = channelEnvelope
+                .encodeChannelReplyParts(
+                  channelEnvelope.decodeChannelEnvelope(encoded.map(ZLinkBufferMessage.from)).header,
+                  { activated: true }
+                )
+                .map(ZLinkBufferMessage.from);
+              return { high: 1n, low: 1n };
+            }
+          }),
+          completions: () => ({
+            async submit(operation) {
+              operation();
+              return { terminalResult: 0, failureErrno: 0, parts: replyParts };
+            }
+          }),
+          defaultRequestTimeoutMs: 1_000
+        });
+        const call = () =>
+          transport.requestToSpotAddress('spot-1', new Lookup(), {
+            instanceSpot: instanceIntent,
+            instanceSpotType: 'chat-room'
+          });
+        if (reactivates) {
+          assert.deepEqual(await call(), { activated: true });
+        } else {
+          await assert.rejects(call, (error) => error === terminal);
         }
-      }),
-      routed: {
-        async sendToSpot() {
-          throw new Error('Unexpected send.');
-        },
-        async requestToSpot() {
-          requests += 1;
-          throw terminal;
-        }
-      },
-      meshNames: () => ['play'],
-      meshNode: () => ({
-        instanceSpotPlacementTypes: () => ['chat-room'],
-        selectObjectPlacement: () => ({
-          kind: 'selected',
-          target: {
-            targetNodeRid: 'node-b',
-            targetNodeGeneration: 2n,
-            descriptorVersion: '2'
-          }
-        }),
-        requestToMissingInstanceSpot() {
-          coldSubmits += 1;
-          throw terminal;
-        }
-      }),
-      completions: () => ({
-        submit(operation) {
-          return operation();
-        }
-      }),
-      defaultRequestTimeoutMs: 100
-    });
-    await assert.rejects(
-      () =>
-        transport.requestToSpotAddress('spot-1', new Lookup(), {
-          instanceSpot: true,
-          instanceSpotType: 'chat-room'
-        }),
-      (error) => error === terminal
-    );
-    assert.equal(resolves, 1);
-    assert.equal(requests, 1);
-    assert.equal(invalidated, 1);
-    assert.equal(coldSubmits, 0);
-  });
+        assert.equal(resolves, rereads ? 2 : 1);
+        assert.equal(requests, 1);
+        assert.equal(invalidated, 1);
+        assert.equal(coldSubmits, reactivates ? 1 : 0);
+      });
+    }
+  }
 }
 
 test('Missing Instance synchronous rejection is preserved without a second submission', async (t) => {
