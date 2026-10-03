@@ -1280,7 +1280,7 @@ final class ZLinkChannelSocketRegistry {
     /**
      * Starts the one receive owner of a ClientServer DEALER. Its poller wait is also where the
      * binding completes the DEALER's requests (the public {@code POLLCOMPLETION} owner), so a reply
-     * completes as soon as Core delivers it. The owner is the only thread that uses the DEALER and
+     * completes as soon as Core delivers it. The owner is the only poller waiter of the DEALER and
      * closes it when it ends.
      */
     void startClientServerControlReceive(String connectionId) {
@@ -2112,7 +2112,7 @@ final class ZLinkChannelSocketRegistry {
         private boolean ready;
         // Written once in the state lane; the DEALER's receive owner reads it to stop.
         private volatile boolean physicalClosed;
-        // Set once in the state lane; the only thread that uses the DEALER, and its closer.
+        // Set once in the state lane; the only poller waiter of the DEALER, and its closer.
         private Thread receiveOwner;
         private long pendingLivenessAckId;
         private long physicalGeneration = 1;
