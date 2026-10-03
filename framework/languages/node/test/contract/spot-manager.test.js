@@ -980,7 +980,10 @@ test('ZLinkSpotManager establishes the durable Closing fence before explicit Ins
 });
 
 test('ZLinkSpotManager releases Instance authority when no newer application is present', async () => {
+  // Spot messaging §7 step 3: without Reincarnate, the Close operation releases the
+  // authority through its own Closing fence; the generic release path stays unused.
   const released = [];
+  const genericReleases = [];
   class RelocatedInstanceSpot {}
   const spotId = zlink.RoutingId.from('relocated-instance-close');
   const manager = new framework.DefaultZLinkSpotManager({
@@ -991,18 +994,19 @@ test('ZLinkSpotManager releases Instance authority when no newer application is 
       new Map([['relocated', RelocatedInstanceSpot]])
     ]]),
     instanceSpotApplicationTargetProvider: () => undefined,
-    async beginInstanceClosingAuthority(_meshName, _spotId, onCommitted) {
+    async beginInstanceClosingAuthority(meshName, candidateSpotId, onCommitted) {
       onCommitted();
-      return { release: async () => undefined };
+      return { release: async () => { released.push([meshName, String(candidateSpotId)]); } };
     },
     async releaseInstanceAuthority(meshName, candidateSpotId, objectGeneration) {
-      released.push([meshName, String(candidateSpotId), objectGeneration]);
+      genericReleases.push([meshName, String(candidateSpotId), objectGeneration]);
     }
   });
 
   await manager.materializeInstance('test.mesh', 'relocated', spotId, 7n);
   assert.equal(await manager.close('test.mesh', spotId), true);
-  assert.deepEqual(released, [['test.mesh', String(spotId), 7n]]);
+  assert.deepEqual(released, [['test.mesh', String(spotId)]]);
+  assert.deepEqual(genericReleases, []);
 });
 
 test('Instance context close returns after activation completion', async () => {
@@ -1416,12 +1420,10 @@ test('OnClosing runs as a Spot turn while Close keeps its lifecycle slot', async
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
+    // Spot messaging §7 step 3: the Close operation releases through its Closing fence.
     beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
       onCommitted();
-      return { release: async () => undefined };
-    },
-    releaseInstanceAuthority: async () => {
-      events.push('authority-released');
+      return { release: async () => { events.push('authority-released'); } };
     }
   });
   await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
@@ -1445,11 +1447,11 @@ test('OnClosing failure is diagnosed while Close finishes cleanup once', async (
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
+    // Spot messaging §7 step 3: the Close operation releases through its Closing fence.
     beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
       onCommitted();
-      return { release: async () => undefined };
+      return { release: async () => { releaseCalls++; } };
     },
-    releaseInstanceAuthority: async () => { releaseCalls++; },
     closeErrorSink: { reportRuntimeTaskException: (name, error) => diagnostics.push([name, error]) }
   });
   await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
