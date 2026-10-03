@@ -20,8 +20,13 @@ var timer = new TimerLifecycleTests();
 var maintenance = new MaintenanceRuntimeTests();
 var spot = new EntrySpotActorDispatchTests();
 var relocation = new RelocationBehaviorConformanceTests();
+var stateLane = new StateLaneTests();
 (string Name, Func<Task> Run)[] regressions =
 [
+    (
+        nameof(stateLane.ContendedSynchronousTurn_CompletesWithoutAnotherThreadPoolWorker),
+        stateLane.ContendedSynchronousTurn_CompletesWithoutAnotherThreadPoolWorker
+    ),
     (
         nameof(
             timer.Concurrent_cancel_callers_observe_the_same_cleanup_failure_after_pump_completion
