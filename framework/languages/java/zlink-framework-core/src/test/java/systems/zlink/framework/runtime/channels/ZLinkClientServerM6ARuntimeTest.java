@@ -58,6 +58,66 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkClientServerM6ARuntimeTest {
     @Test
+    void closeWaitsForTheReceiveOwnerAndTheOwnerClosesTheDealer() throws Exception {
+        for (int round = 0; round < 50; round++) {
+            ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+            WaitingDealer dealer = new WaitingDealer();
+            var value =
+                    descriptor(
+                            "orders", RoutingId.from("server"), 7, 1, "tcp://127.0.0.1:7001", 100);
+            sockets.addClientServerConnection("manual", value, dealer);
+            sockets.startClientServerControlReceive("manual");
+            dealer.awaitWaits(1);
+
+            sockets.removeClientServerConnection("manual");
+
+            assertEquals(1, dealer.closes.get());
+            assertEquals(0, dealer.closedWhileWaiting.get());
+            assertNotEquals(Thread.currentThread(), dealer.closedBy);
+        }
+    }
+
+    @Test
+    void closeFromTheReceiveOwnerItselfClosesTheDealerAfterTheWaitReturns() throws Exception {
+        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+        WaitingDealer dealer = new WaitingDealer();
+        var value =
+                descriptor("orders", RoutingId.from("server"), 7, 1, "tcp://127.0.0.1:7001", 100);
+        sockets.addClientServerConnection("manual", value, dealer);
+        // A completion dispatched inside the poller wait closes its own connection.
+        dealer.duringWait = () -> sockets.removeClientServerConnection("manual");
+        sockets.startClientServerControlReceive("manual");
+
+        assertTrue(dealer.closed.await(10, TimeUnit.SECONDS));
+        assertEquals(1, dealer.closes.get());
+        assertEquals(0, dealer.closedWhileWaiting.get());
+    }
+
+    @Test
+    void receiveOwnerReportsAWaitFailureAndKeepsReceiving() throws Exception {
+        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+        WaitingDealer dealer = new WaitingDealer();
+        var failure = new IllegalStateException("wait failed");
+        dealer.waitFailure = failure;
+        var reported = new java.util.concurrent.CopyOnWriteArrayList<Throwable>();
+        sockets.reportClientServerReceiveFailuresTo(
+                (channel, error) -> {
+                    assertEquals("orders", channel);
+                    reported.add(error);
+                });
+        var value =
+                descriptor("orders", RoutingId.from("server"), 7, 1, "tcp://127.0.0.1:7001", 100);
+        sockets.addClientServerConnection("manual", value, dealer);
+        sockets.startClientServerControlReceive("manual");
+
+        dealer.awaitWaits(2);
+        sockets.removeClientServerConnection("manual");
+
+        assertEquals(List.of(failure), reported);
+        assertEquals(1, dealer.closes.get());
+    }
+
+    @Test
     void typedControlReceiveFailureIsReportedAndTheNextReceiveTakesUpdates() {
         for (var result :
                 List.of(
@@ -1170,6 +1230,98 @@ final class ZLinkClientServerM6ARuntimeTest {
             while (!inbound.isEmpty()) {
                 inbound.removeFirst().close();
             }
+        }
+    }
+
+    /** A DEALER whose poller wait blocks for its timeout and records a close during a wait. */
+    private static final class WaitingDealer implements ZLinkBackendDealerSocket {
+        private final AtomicInteger waits = new AtomicInteger();
+        private final AtomicInteger closes = new AtomicInteger();
+        private final AtomicInteger closedWhileWaiting = new AtomicInteger();
+        private final java.util.concurrent.CountDownLatch closed =
+                new java.util.concurrent.CountDownLatch(1);
+        private volatile boolean waiting;
+        private volatile Thread closedBy;
+        private volatile RuntimeException waitFailure;
+        private volatile Runnable duringWait;
+
+        void awaitWaits(int count) throws InterruptedException {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (waits.get() < count) {
+                assertTrue(System.nanoTime() < deadline, "receive owner never waited");
+                Thread.sleep(1);
+            }
+        }
+
+        @Override
+        public boolean waitForReadable(Duration timeout) {
+            waiting = true;
+            try {
+                waits.incrementAndGet();
+                RuntimeException failure = waitFailure;
+                if (failure != null) {
+                    waitFailure = null;
+                    throw failure;
+                }
+                Runnable hook = duringWait;
+                if (hook != null) {
+                    duringWait = null;
+                    hook.run();
+                }
+                Thread.sleep(timeout.toMillis());
+                return false;
+            } catch (InterruptedException interruption) {
+                Thread.currentThread().interrupt();
+                return false;
+            } finally {
+                waiting = false;
+            }
+        }
+
+        @Override
+        public void close() {
+            if (waiting) {
+                closedWhileWaiting.incrementAndGet();
+            }
+            closedBy = Thread.currentThread();
+            closes.incrementAndGet();
+            closed.countDown();
+        }
+
+        @Override
+        public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
+
+        @Override
+        public String name() {
+            return "waiting";
+        }
+
+        @Override
+        public void setChannelName(String channelName) {}
+
+        @Override
+        public void bind(String endpoint) {}
+
+        @Override
+        public void connect(String endpoint) {}
+
+        @Override
+        public void disconnect(String endpoint) {}
+
+        @Override
+        public CompletionStage<Void> send(List<Message> parts) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<ZLinkBackendReceived> request(
+                List<Message> parts, Duration timeout) {
+            return new CompletableFuture<>();
+        }
+
+        @Override
+        public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
+            return null;
         }
     }
 
