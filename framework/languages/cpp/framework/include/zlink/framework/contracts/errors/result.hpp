@@ -3,6 +3,7 @@
 
 #include <zlink/framework/contracts/errors/error.hpp>
 
+#include <memory>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -14,7 +15,8 @@ namespace detail
 {
 struct result_access_t;
 
-inline const framework_exception_t *framework_error (const std::exception_ptr &exception) noexcept
+inline std::shared_ptr<const framework_exception_t>
+framework_error (const std::exception_ptr &exception)
 {
     if (!exception)
         return nullptr;
@@ -22,16 +24,18 @@ inline const framework_exception_t *framework_error (const std::exception_ptr &e
         std::rethrow_exception (exception);
     }
     catch (const framework_exception_t &error) {
-        return &error;
+        // MSVC may copy the exception when rethrowing it. The caught object
+        // then ends with this handler; retain an immutable observation view.
+        return std::make_shared<const framework_exception_t> (error);
     }
     catch (...) {
         return nullptr;
     }
 }
 
-inline framework_error_kind_t result_error_kind (const std::exception_ptr &exception)
+inline framework_error_kind_t result_error_kind (const framework_exception_t *error)
 {
-    if (const auto *error = framework_error (exception))
+    if (error)
         return error->kind ();
     throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                  "result has no Framework error");
@@ -71,12 +75,12 @@ template <typename T> class result_t
 
     const framework_exception_t *error () const noexcept
     {
-        return detail::framework_error (_error);
+        return _framework_error.get ();
     }
 
     std::exception_ptr exception () const noexcept { return _error; }
 
-    framework_error_kind_t error_kind () const { return detail::result_error_kind (_error); }
+    framework_error_kind_t error_kind () const { return detail::result_error_kind (error ()); }
 
   private:
     friend struct detail::result_access_t;
@@ -92,10 +96,14 @@ template <typename T> class result_t
         result_t (std::make_exception_ptr (std::move (error)))
     {
     }
-    explicit result_t (std::exception_ptr error) : _error (std::move (error)) {}
+    explicit result_t (std::exception_ptr error) :
+        _error (std::move (error)), _framework_error (detail::framework_error (_error))
+    {
+    }
 
     std::optional<T> _value;
     std::exception_ptr _error;
+    std::shared_ptr<const framework_exception_t> _framework_error;
 };
 
 template <> class result_t<void>
@@ -121,12 +129,12 @@ template <> class result_t<void>
 
     const framework_exception_t *error () const noexcept
     {
-        return detail::framework_error (_error);
+        return _framework_error.get ();
     }
 
     std::exception_ptr exception () const noexcept { return _error; }
 
-    framework_error_kind_t error_kind () const { return detail::result_error_kind (_error); }
+    framework_error_kind_t error_kind () const { return detail::result_error_kind (error ()); }
 
   private:
     friend struct detail::result_access_t;
@@ -136,9 +144,13 @@ template <> class result_t<void>
         result_t (std::make_exception_ptr (std::move (error)))
     {
     }
-    explicit result_t (std::exception_ptr error) : _error (std::move (error)) {}
+    explicit result_t (std::exception_ptr error) :
+        _error (std::move (error)), _framework_error (detail::framework_error (_error))
+    {
+    }
 
     std::exception_ptr _error;
+    std::shared_ptr<const framework_exception_t> _framework_error;
 };
 
 namespace detail
