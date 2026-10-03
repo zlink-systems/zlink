@@ -5,9 +5,13 @@ import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.stream.Stream;
 
 final class ZLinkChannelDispatchRegistry {
     private final Executor executor;
@@ -23,11 +27,9 @@ final class ZLinkChannelDispatchRegistry {
             new HashMap<>();
     private final Map<String, ZLinkChannelRuntime.RouteInternalRequestHandler> internalRequests =
             new HashMap<>();
-    private final Map<String, ZLinkSerialExecutionQueue> sendQueues = new HashMap<>();
-    private final Map<String, ZLinkSerialExecutionQueue> requestQueues = new HashMap<>();
+    private final Map<String, ZLinkSerialExecutionQueue> clientServerQueues = new HashMap<>();
     private final Map<String, ZLinkSerialExecutionQueue> publishQueues = new HashMap<>();
-    private final Map<String, ZLinkSerialExecutionQueue> routeRequestQueues = new HashMap<>();
-    private final Map<String, ZLinkSerialExecutionQueue> routeSendQueues = new HashMap<>();
+    private final Map<String, ZLinkSerialExecutionQueue> routeQueues = new HashMap<>();
 
     ZLinkChannelDispatchRegistry(Executor executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
@@ -39,10 +41,7 @@ final class ZLinkChannelDispatchRegistry {
             Map<String, ChannelRequestHandlerRegistration> requests) {
         sendHandlers.put(channelName, sends);
         requestHandlers.put(channelName, requests);
-        sendQueues.put(
-                channelName,
-                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic()));
-        requestQueues.put(
+        clientServerQueues.put(
                 channelName,
                 new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic()));
     }
@@ -61,10 +60,7 @@ final class ZLinkChannelDispatchRegistry {
             Map<String, ChannelRouteRequestHandlerRegistration> requests) {
         routeSendHandlers.put(channelName, sends);
         routeRequestHandlers.put(channelName, requests);
-        routeSendQueues.put(
-                channelName,
-                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic()));
-        routeRequestQueues.put(
+        routeQueues.put(
                 channelName,
                 new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic()));
     }
@@ -102,23 +98,32 @@ final class ZLinkChannelDispatchRegistry {
         return internalRequests.get(packetName);
     }
 
-    ZLinkSerialExecutionQueue requestQueue(String channelName) {
-        return requestQueues.get(channelName);
-    }
-
-    ZLinkSerialExecutionQueue sendQueue(String channelName) {
-        return sendQueues.get(channelName);
+    ZLinkSerialExecutionQueue clientServerQueue(String channelName) {
+        return clientServerQueues.get(channelName);
     }
 
     ZLinkSerialExecutionQueue publishQueue(String channelName) {
         return publishQueues.get(channelName);
     }
 
-    ZLinkSerialExecutionQueue routeRequestQueue(String channelName) {
-        return routeRequestQueues.get(channelName);
+    ZLinkSerialExecutionQueue routeQueue(String channelName) {
+        return routeQueues.get(channelName);
     }
 
-    ZLinkSerialExecutionQueue routeSendQueue(String channelName) {
-        return routeSendQueues.get(channelName);
+    CompletionStage<Void> awaitQuiescence() {
+        List<CompletableFuture<Void>> waiters =
+                queues()
+                        .map(queue -> queue.awaitQuiescence().toCompletableFuture())
+                        .toList();
+        return CompletableFuture.allOf(waiters.toArray(CompletableFuture[]::new));
+    }
+
+    void sealClosingAdmission() {
+        queues().forEach(ZLinkSerialExecutionQueue::sealClosingAdmission);
+    }
+
+    private Stream<ZLinkSerialExecutionQueue> queues() {
+        return Stream.of(clientServerQueues, publishQueues, routeQueues)
+                .flatMap(map -> map.values().stream());
     }
 }

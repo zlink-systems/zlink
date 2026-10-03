@@ -31,6 +31,7 @@ import {
   type ZLinkRouteRuntimeSendHandler
 } from './channel-dispatchers';
 import {
+  createChannelApplicationDispatchQueue,
   ZLinkChannelReceiveLoop,
   ZLinkReceiveRoundRobinCoordinator,
   ZLinkRouteReceiveLoop,
@@ -50,6 +51,7 @@ import {
 import type { ApplicationJobQueue } from '../host/application-job-queue';
 import { AsyncResource } from 'node:async_hooks';
 import { ZLinkStateLane } from '../execution/state-lane';
+import { ZLinkSerialExecutionQueue } from '../execution/serial-execution-queue';
 
 const detachedStateLaneResource = new AsyncResource('zlink:channel-runtime-lifecycle');
 
@@ -82,6 +84,7 @@ interface ChannelRuntimeDisposeWork {
   readonly subscriberLoops: readonly ZLinkSubscriberReceiveLoop[];
   readonly manualTransitions: readonly Promise<void>[];
   readonly routeLoops: readonly { stop(): Promise<void> }[];
+  readonly applicationDispatchQueues: readonly ZLinkSerialExecutionQueue[];
   readonly clientServerLocation?: ZLinkClientServerLocationRuntime;
   readonly fanoutLocation?: ZLinkFanoutLocationRuntime;
   readonly spotRouteBridges: readonly ZLinkBackendSpotRouteBridge[];
@@ -108,6 +111,7 @@ export class ZLinkChannelRuntimeLifecycle {
   private readonly manualFanoutSubscribers = new Map<string, ManualFanoutSubscriberState>();
   private readonly manualFanoutSubscriberOwners = new Set<object>();
   private readonly routeReceiveLoops: Array<{ stop(): Promise<void> }> = [];
+  private readonly applicationDispatchQueues = new Map<string, ZLinkSerialExecutionQueue>();
   private readonly meshChannelDispatchers = new Map<string, ZLinkChannelRequestDispatcher>();
   private readonly meshRouteDispatchers = new Map<string, ZLinkRoutePacketDispatcher>();
   private nextManualFanoutIndex = 0;
@@ -398,6 +402,9 @@ export class ZLinkChannelRuntimeLifecycle {
         ...work.manualTransitions
       ])
     );
+    const applicationStopped = await startOutsideStateLane(() =>
+      Promise.allSettled(work.applicationDispatchQueues.map((queue) => queue.close()))
+    );
     const descriptorStopped =
       work.clientServerLocation === undefined
         ? []
@@ -418,6 +425,7 @@ export class ZLinkChannelRuntimeLifecycle {
     );
     const errors = [
       ...transportStopped,
+      ...applicationStopped,
       ...descriptorStopped,
       ...fanoutDescriptorStopped,
       ...cleanup
@@ -450,12 +458,14 @@ export class ZLinkChannelRuntimeLifecycle {
       this.drainManualFanoutSubscriberCore(state)
     );
     const routeLoops = [...this.routeReceiveLoops];
+    const applicationDispatchQueues = [...this.applicationDispatchQueues.values()];
     const clientServerLocation = this.clientServerLocation;
     const fanoutLocation = this.fanoutLocation;
     const spotRouteBridges = [...this.options.spotRouteBridges.values()];
     this.channelReceiveLoops.length = 0;
     this.subscriberReceiveLoops.length = 0;
     this.routeReceiveLoops.length = 0;
+    this.applicationDispatchQueues.clear();
     this.clientServerLocation = undefined;
     this.fanoutLocation = undefined;
     this.taskRunner = undefined;
@@ -467,10 +477,20 @@ export class ZLinkChannelRuntimeLifecycle {
       subscriberLoops,
       manualTransitions,
       routeLoops,
+      applicationDispatchQueues,
       clientServerLocation,
       fanoutLocation,
       spotRouteBridges
     };
+  }
+
+  private applicationDispatchQueue(channelName: string): ZLinkSerialExecutionQueue {
+    let queue = this.applicationDispatchQueues.get(channelName);
+    if (queue === undefined) {
+      queue = createChannelApplicationDispatchQueue();
+      this.applicationDispatchQueues.set(channelName, queue);
+    }
+    return queue;
   }
 
   private openOutboundSockets(): void {
@@ -536,7 +556,8 @@ export class ZLinkChannelRuntimeLifecycle {
         this.options.applicationJobQueue,
         (error) =>
           taskRunner.errorSink.reportRuntimeTaskException(`channel:${channelName}:dispatch`, error),
-        this.receiveRoundRobin
+        this.receiveRoundRobin,
+        this.applicationDispatchQueue(channelName)
       );
       this.channelReceiveLoops.push(loop);
       tasks.push(taskRunner.run(`channel:${channelName}`, (signal) => loop.run(signal)));
@@ -748,7 +769,8 @@ export class ZLinkChannelRuntimeLifecycle {
           taskRunner.errorSink.reportRuntimeTaskException(
             `subscriber:${state.channelName}:manual:${state.index}:dispatch`,
             error
-          )
+          ),
+        this.applicationDispatchQueue(channelName)
       );
       state.openingToken = undefined;
       state.active = { token, loop };
@@ -868,7 +890,8 @@ export class ZLinkChannelRuntimeLifecycle {
         taskRunner.errorSink.reportRuntimeTaskException(
           `subscriber:${channelName}:automatic:${connectionId}:dispatch`,
           error
-        )
+        ),
+      this.applicationDispatchQueue(channelName)
     );
     this.subscriberReceiveLoops.push(loop);
     void taskRunner.run(`subscriber:${channelName}:automatic:${connectionId}`, (signal) =>
@@ -937,7 +960,8 @@ export class ZLinkChannelRuntimeLifecycle {
           taskRunner.errorSink.reportRuntimeTaskException(
             `route:${routeChannel.routerChannelId}:dispatch`,
             error
-          )
+          ),
+        this.applicationDispatchQueue(routeChannel.routerChannelId)
       );
       this.routeReceiveLoops.push(loop);
       tasks.push(

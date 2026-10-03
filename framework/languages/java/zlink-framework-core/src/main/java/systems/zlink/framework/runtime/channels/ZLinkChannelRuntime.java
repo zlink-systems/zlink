@@ -69,12 +69,14 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.LongConsumer;
@@ -483,7 +485,7 @@ public final class ZLinkChannelRuntime
                         suspendHandlerInvokers,
                         filterTypes);
         this.receiveLoops =
-                new ZLinkChannelReceiveLoops(() -> running, registration.applicationJobQueue());
+                new ZLinkChannelReceiveLoops(registration.applicationJobQueue());
         this.defaultRequestTimeout = registration.defaultRequestTimeout();
         this.spotRouteBridgeDrainer = new ZLinkSpotRouteBridgeDrainer(sockets.spotRouteBridges());
         this.backendFactory = backendFactory;
@@ -1477,43 +1479,88 @@ public final class ZLinkChannelRuntime
 
     @Override
     public void close() {
+        closeAsyncInternal(null).toCompletableFuture().join();
+    }
+
+    /** Completes the channel teardown using the host's absolute shutdown deadline. */
+    public CompletionStage<Void> closeAsync(Instant deadline) {
+        Objects.requireNonNull(deadline, "deadline");
+        return closeAsyncInternal(deadline);
+    }
+
+    private CompletionStage<Void> closeAsyncInternal(Instant deadline) {
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        Thread.ofVirtual()
+                .name("zlink-java-channel-close")
+                .start(
+                        () -> {
+                            try {
+                                closeCore(deadline);
+                                completion.complete(null);
+                            } catch (Throwable failure) {
+                                completion.completeExceptionally(failure);
+                            }
+                        });
+        return completion;
+    }
+
+    private void closeCore(Instant deadline)
+            throws InterruptedException, TimeoutException, ExecutionException {
         beginClose();
-        CompletionStage<Void> clientServerStop = CompletableFuture.completedFuture(null);
-        if (clientServerLocationRuntime != null) {
-            clientServerStop = clientServerLocationRuntime.stop();
-        }
-        CompletionStage<Void> fanoutStop = CompletableFuture.completedFuture(null);
-        if (fanoutLocationRuntime != null) {
-            fanoutStop = fanoutLocationRuntime.stop();
-        }
-        if (manualFanoutRuntime != null) {
-            manualFanoutRuntime.close();
-        }
-        timeoutExecutor.shutdownNow();
-        receiveLoops.close();
-        awaitInfrastructureSettlement("ClientServer location", clientServerStop);
-        awaitInfrastructureSettlement("fanout location", fanoutStop);
-        infrastructureExecutor.shutdown();
-        receiveLoops.awaitTermination();
-        awaitTerminated(timeoutExecutor);
-        awaitTerminated(infrastructureExecutor);
-        closeSpotRouteBridges();
-        sockets.closeAll();
-        if (ownsContext) {
-            context.close();
+        try {
+            CompletionStage<Void> clientServerStop = CompletableFuture.completedFuture(null);
+            if (clientServerLocationRuntime != null) {
+                clientServerStop = clientServerLocationRuntime.stop();
+            }
+            CompletionStage<Void> fanoutStop = CompletableFuture.completedFuture(null);
+            if (fanoutLocationRuntime != null) {
+                fanoutStop = fanoutLocationRuntime.stop();
+            }
+            if (manualFanoutRuntime != null) {
+                manualFanoutRuntime.close();
+            }
+            awaitInfrastructureSettlement("ClientServer location", clientServerStop, deadline);
+            awaitInfrastructureSettlement("fanout location", fanoutStop, deadline);
+            awaitWithinDeadline(dispatchRegistry.awaitQuiescence(), deadline);
+        } finally {
+            receiveLoops.close();
+            receiveLoops.awaitTermination();
+            timeoutExecutor.shutdownNow();
+            infrastructureExecutor.shutdown();
+            awaitTerminated(timeoutExecutor);
+            awaitTerminated(infrastructureExecutor);
+            closeSpotRouteBridges();
+            sockets.closeAll();
+            if (ownsContext) {
+                context.close();
+            }
         }
     }
 
     private static void awaitInfrastructureSettlement(
-            String owner, CompletionStage<Void> settlement) {
+            String owner, CompletionStage<Void> settlement, Instant deadline)
+            throws InterruptedException, TimeoutException {
         try {
-            settlement.toCompletableFuture().join();
-        } catch (CompletionException failure) {
+            awaitWithinDeadline(settlement, deadline);
+        } catch (ExecutionException failure) {
             LOGGER.log(
                     Level.WARNING,
                     owner + " cleanup failed while closing the channel runtime",
                     failure.getCause());
         }
+    }
+
+    private static void awaitWithinDeadline(CompletionStage<Void> stage, Instant deadline)
+            throws InterruptedException, TimeoutException, ExecutionException {
+        if (deadline == null) {
+            stage.toCompletableFuture().get();
+            return;
+        }
+        long remaining = Duration.between(Instant.now(), deadline).toNanos();
+        if (remaining <= 0L) {
+            throw new TimeoutException("host shutdown deadline expired");
+        }
+        stage.toCompletableFuture().get(remaining, TimeUnit.NANOSECONDS);
     }
 
     public void closeSpotRouteBridges() {
@@ -1523,6 +1570,7 @@ public final class ZLinkChannelRuntime
     public void beginClose() {
         running = false;
         callRuntime.beginClose();
+        dispatchRegistry.sealClosingAdmission();
     }
 
     private void scheduleInfrastructureAtFixedRate(

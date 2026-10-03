@@ -2628,8 +2628,13 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
   const receiveFlags = [];
   let releaseFirst;
   const firstPending = new Promise((resolve) => { releaseFirst = resolve; });
+  let observeFirst;
+  const firstEntered = new Promise((resolve) => { observeFirst = resolve; });
+  let observeSecondReceive;
+  const secondReceived = new Promise((resolve) => { observeSecondReceive = resolve; });
   let observeSecond;
   const secondObserved = new Promise((resolve) => { observeSecond = resolve; });
+  let secondStarted = 0;
   const queue = applicationJobQueue(1n);
   const loop = new framework.ZLinkSubscriberReceiveLoop(
     {
@@ -2655,14 +2660,21 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
         if (next === undefined) return false;
         target.topic = next.topic;
         target.parts = next.parts;
+        if (next.topic === 'second') observeSecondReceive();
         return true;
       }
     },
     {
       async dispatch(topicMessage) {
         releaseApplicationJobPermitBeforeHandler();
-        if (topicMessage.topic === 'first') await firstPending;
-        if (topicMessage.topic === 'second') observeSecond();
+        if (topicMessage.topic === 'first') {
+          observeFirst();
+          await firstPending;
+        }
+        if (topicMessage.topic === 'second') {
+          secondStarted += 1;
+          observeSecond();
+        }
       }
     },
     queue
@@ -2670,14 +2682,24 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
 
   const running = loop.run();
   try {
+    await firstEntered;
     await Promise.race([
-      secondObserved,
+      secondReceived,
       new Promise((_, reject) => setTimeout(
-        () => reject(new Error('Second subscriber record waited for the first handler.')),
+        () => reject(new Error('Second subscriber record was not received during the first handler.')),
         1_000
       ))
     ]);
     assert.deepEqual(receiveFlags, [1, 1]);
+    assert.equal(secondStarted, 0);
+    releaseFirst();
+    await Promise.race([
+      secondObserved,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('Second subscriber handler did not start after the first terminal.')),
+        1_000
+      ))
+    ]);
   } finally {
     releaseFirst();
     await loop.stop();
