@@ -1288,12 +1288,6 @@ void public_host_runtime_t::configure_spot_route_fence_resolver (
       .get ();
 }
 
-void public_host_runtime_t::configure_peer_readiness_resolver (peer_readiness_resolver_t resolver)
-{
-    _lifecycle_configuration_lane.run ([&] { _peer_readiness_resolver = std::move (resolver); })
-      .get ();
-}
-
 void public_host_runtime_t::configure_actor_create_operations (
   actor_create_operation_target_t target)
 {
@@ -2765,17 +2759,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
     if (!peer) {
         co_return zlink::submit_result_t::not_connected;
     }
-    peer_readiness_resolver_t readiness_resolver;
-    _lifecycle_configuration_lane.run ([&] { readiness_resolver = _peer_readiness_resolver; })
-      .get ();
-    if (readiness_resolver && !readiness_resolver (target_routing_id)) {
-        co_return zlink::submit_result_t::not_connected;
-    }
     const auto node_generation = peer->descriptor.lifecycle_generation;
-    const auto current_peer = _transport->topology ().peer (target_routing_id.to_bytes ());
-    if (!current_peer || current_peer->descriptor.lifecycle_generation != node_generation) {
-        co_return zlink::submit_result_t::not_connected;
-    }
     const auto object =
       _objects.find (stateful::object_kind_t::actor, std::string (target.actor_id ().value ()));
     const auto authority_generation = authority_owner_generation != 0 ? authority_owner_generation
@@ -2844,17 +2828,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
     if (!peer) {
         co_return zlink::submit_result_t::not_connected;
     }
-    peer_readiness_resolver_t readiness_resolver;
-    _lifecycle_configuration_lane.run ([&] { readiness_resolver = _peer_readiness_resolver; })
-      .get ();
-    if (readiness_resolver && !readiness_resolver (target_routing_id)) {
-        co_return zlink::submit_result_t::not_connected;
-    }
     const auto node_generation = peer->descriptor.lifecycle_generation;
-    const auto current_peer = _transport->topology ().peer (target_routing_id.to_bytes ());
-    if (!current_peer || current_peer->descriptor.lifecycle_generation != node_generation) {
-        co_return zlink::submit_result_t::not_connected;
-    }
     const auto object =
       _objects.find (stateful::object_kind_t::actor, std::string (target.actor_id ().value ()));
     const auto authority_generation = authority_owner_generation != 0 ? authority_owner_generation

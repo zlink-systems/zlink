@@ -646,8 +646,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                     user_spot_materializer_t materializer,
                                     user_spot_closer_t closer = {});
     void configure_spot_route_fence_resolver (spot_route_fence_resolver_t resolver);
-    using peer_readiness_resolver_t = std::function<bool (const zlink::routing_id_t &)>;
-    void configure_peer_readiness_resolver (peer_readiness_resolver_t resolver);
     void configure_actor_create_operations (actor_create_operation_target_t target);
     void configure_actor_join_operations (actor_join_operation_target_t target);
     using actor_join_relocation_prepare_validator_t =
@@ -933,7 +931,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     user_spot_materializer_t _user_spot_materializer;
     user_spot_closer_t _user_spot_closer;
     spot_route_fence_resolver_t _spot_route_fence_resolver;
-    peer_readiness_resolver_t _peer_readiness_resolver;
     struct cached_spot_route_fence_t
     {
         route_fence_t fence;
