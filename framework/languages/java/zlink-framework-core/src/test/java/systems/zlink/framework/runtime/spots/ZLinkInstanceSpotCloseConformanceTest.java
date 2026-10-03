@@ -80,6 +80,69 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         run(null, "Relocating", true, false, false);
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void shutdownClosingWaitDoesNotOwnExplicitCloseCallback() throws Exception {
+        String spotId = "java-close-shutdown-overlap-" + UUID.randomUUID();
+        Observation observation = new Observation(false, false);
+        observation.closingRelease.complete(null);
+        current = observation;
+        ObservedStore store = new ObservedStore(spotId, observation);
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        options.addRouteMesh(MESH)
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(RoutingId.from(spotId))
+                .objects()
+                .server()
+                .addEntrySpot(Entry.class)
+                .addInstanceSpotFactory(
+                        TYPE, Instance.class, factory -> factory.disableRelocation());
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(options, new CapturingBackend())) {
+            runtime.route()
+                    .requestToSpot(spotId, new InitialProbe())
+                    .instanceSpot(TYPE)
+                    .inMesh(MESH)
+                    .timeout(WAIT)
+                    .submit(Reply.class)
+                    .toCompletableFuture()
+                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            var activations = ZLinkSpotRuntime.class.getDeclaredField("instanceSpotActivations");
+            activations.setAccessible(true);
+            ZLinkInstanceSpotActivation activation =
+                    ((Map<String, ZLinkInstanceSpotActivation>)
+                                    activations.get(runtime.spotManager()))
+                            .get(spotId);
+            CompletableFuture<Void> started = new CompletableFuture<>();
+            CompletableFuture<Void> release = new CompletableFuture<>();
+            CompletionStage<Void> accepted =
+                    activation
+                            .context
+                            .ownerQueue()
+                            .enqueuePreviouslyAccepted(
+                                    () -> {
+                                        started.complete(null);
+                                        return release;
+                                    });
+            try {
+                started.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                CompletionStage<Boolean> explicit = activation.closeExplicit();
+                CompletionStage<Void> shutdown =
+                        activation.closingStage(
+                                ZLinkSpotCloseReason.HOST_SHUTDOWN, java.time.Instant.now());
+                assertFalse(shutdown.toCompletableFuture().isDone());
+                release.complete(null);
+                accepted.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                assertTrue(explicit.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                shutdown.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                assertEquals(1, observation.closingCalls.get());
+            } finally {
+                release.complete(null);
+            }
+        }
+    }
+
     static void runReadyRouteCase(JsonNode routeCase) throws Exception {
         JsonNode given = routeCase.path("given");
         JsonNode expected = routeCase.path("expect");

@@ -586,23 +586,22 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         if (spot == null) {
             return CompletableFuture.completedFuture(null);
         }
-        return closingCallback(
-                () -> {
-                    Supplier<CompletionStage<Void>> callback =
-                            () ->
-                                    host.runWithOutbound(
-                                            context.dispatchOutbound(),
-                                            () ->
-                                                    ZLinkHandlerStages.fromStageSupplier(
-                                                            () ->
-                                                                    spot.onClosing(
-                                                                            new ZLinkSpotClosingContext(
-                                                                                    reason,
-                                                                                    deadline))));
-                    return context.isCurrentSpotTurn()
-                            ? context.runLifecycleExecution(callback)
-                            : context.enqueueLifecycle(callback);
-                });
+        Supplier<CompletionStage<Void>> callback =
+                () ->
+                        closingCallback(
+                                () ->
+                                        host.runWithOutbound(
+                                                context.dispatchOutbound(),
+                                                () ->
+                                                        ZLinkHandlerStages.fromStageSupplier(
+                                                                () ->
+                                                                        spot.onClosing(
+                                                                                new ZLinkSpotClosingContext(
+                                                                                        reason,
+                                                                                        deadline)))));
+        return context.isCurrentSpotTurn()
+                ? context.runLifecycleExecution(callback)
+                : context.enqueueLifecycle(callback);
     }
 
     private CompletionStage<Void> closeResourcesAsync() {
