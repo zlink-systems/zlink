@@ -896,9 +896,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     ZLinkFrameworkErrorKind.NOT_FOUND,
                                                     "Spot is still creating: " + spotId));
                                 }
-                                if (activationPresent
-                                        || (instanceIntent
-                                                && authority.get().instance().isPresent())) {
+                                if (activationPresent) {
+                                    return CompletableFuture.completedFuture(null);
+                                }
+                                if (instanceIntent && authority.get().instance().isPresent()) {
+                                    //  The target takes the Instance route fence from the
+                                    //  authority it has just read, so the admitted message
+                                    //  does not depend on the background route scan.
+                                    ZLinkInternalMeshNode routeNode =
+                                            routeMeshNodesByName.get(authority.get().meshName());
+                                    if (routeNode != null) {
+                                        routeNode.registerInstanceIntent(
+                                                authority.get().stableType(),
+                                                instanceRoute(authority.get(), snapshot));
+                                    }
                                     return CompletableFuture.completedFuture(null);
                                 }
                                 return CompletableFuture.completedFuture(
@@ -2779,15 +2790,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         new ZLinkConfigurationException(
                                 "Object client Mesh is not configured: " + authority.meshName()));
             }
-            var route =
-                    new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .InstanceRouteFence(
-                            authority.nodeRid(), authority.nodeGeneration(),
-                            authority.spotId(), snapshot.objectGeneration(),
-                            snapshot.ownerId(), snapshot.authorityOwnerGeneration(),
-                            snapshot.ownerLeaseGeneration(), snapshot.storeVersion());
             return CompletableFuture.completedFuture(
-                    new InstanceActivation(source, route, authority.stableType()));
+                    new InstanceActivation(
+                            source, instanceRoute(authority, snapshot), authority.stableType()));
         }
         if (System.currentTimeMillis() >= deadline) {
             return CompletableFuture.failedFuture(
@@ -3028,6 +3033,26 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             String stableType,
             systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor
                     descriptor) {}
+
+    /** The Instance route fence of one authority snapshot read from the Location Store. */
+    private static systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                    .InstanceRouteFence
+            instanceRoute(
+                    systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec
+                                    .SpotAuthority
+                            authority,
+                    ZLinkAuthoritySnapshot snapshot) {
+        return new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                .InstanceRouteFence(
+                authority.nodeRid(),
+                authority.nodeGeneration(),
+                authority.spotId(),
+                snapshot.objectGeneration(),
+                snapshot.ownerId(),
+                snapshot.authorityOwnerGeneration(),
+                snapshot.ownerLeaseGeneration(),
+                snapshot.storeVersion());
+    }
 
     private record InstanceActivation(
             ZLinkInternalMeshNode source,
