@@ -374,7 +374,7 @@ class close_fault_store_t final : public zf::location_store_t
     std::atomic_bool owner_lease_released{false};
     std::promise<void> commit_held;
 
-    // Completes the held Closing commit: applied, or an owner fence conflict.
+    // Completes the held Closing commit: applied, or an authority version conflict.
     void release_held_commit (bool conflict)
     {
         std::optional<zf::store_write_request_t> request;
@@ -389,8 +389,7 @@ class close_fault_store_t final : public zf::location_store_t
         if (!completion)
             return;
         if (conflict) {
-            completion->complete (
-              zf::result_t<zf::store_write_result_t>::success (zf::store_write_conflict_t{}));
+            completion->complete (conflict_after_authority_change (std::move (*request)).result ());
             return;
         }
         completion->complete (_inner->write (std::move (*request)).result ());
@@ -427,8 +426,9 @@ class close_fault_store_t final : public zf::location_store_t
             commit_held.set_value ();
             co_return co_await held;
         }
-        if ((watched_put && fail_closing_commit_once.exchange (false))
-            || (watched_delete && fail_authority_release_once.exchange (false))) {
+        if (watched_put && fail_closing_commit_once.exchange (false))
+            co_return co_await conflict_after_authority_change (std::move (request));
+        if (watched_delete && fail_authority_release_once.exchange (false)) {
             co_return zf::store_write_result_t{zf::store_write_conflict_t{}};
         }
         auto result = co_await _inner->write (std::move (request));
@@ -445,6 +445,29 @@ class close_fault_store_t final : public zf::location_store_t
     }
 
   private:
+    zf::task_t<zf::store_write_result_t>
+    conflict_after_authority_change (zf::store_write_request_t request)
+    {
+        for (const auto &mutation : request.mutations) {
+            const auto &key = std::visit (
+              [] (const auto &value) -> const zf::store_key_t & { return value.key; }, mutation);
+            if (!is_watched (key))
+                continue;
+            const auto current = std::get<zf::store_found_t> (co_await _inner->read (key));
+            zf::store_write_request_t concurrent{
+              {}, {zf::store_put_t{key, current.value.bytes, std::nullopt}}};
+            const auto rewritten = co_await _inner->write (std::move (concurrent));
+            const auto *applied = std::get_if<zf::store_write_applied_t> (&rewritten);
+            if (!applied || applied->put_versions.size () != 1)
+                throw std::runtime_error ("fixture authority rewrite failed");
+            EXPECT_NE (current.value.version.value, applied->put_versions.front ().version.value);
+            const auto result = co_await _inner->write (std::move (request));
+            EXPECT_TRUE (std::holds_alternative<zf::store_write_conflict_t> (result));
+            co_return result;
+        }
+        throw std::runtime_error ("fixture authority mutation missing");
+    }
+
     bool is_watched (const zf::store_key_t &key) const
     {
         std::string suffix ("\0spot\0", 6);

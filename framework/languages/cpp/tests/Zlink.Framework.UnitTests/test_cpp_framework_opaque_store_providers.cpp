@@ -2291,12 +2291,127 @@ class counter_conflict_store_t final : public location_store_t
                                              {store_put_t{key, current.value.bytes, std::nullopt}}};
             (void) co_await inner.write (std::move (concurrent));
         }
+        if (remaining_conflicts != 0) {
+            --remaining_conflicts;
+            ++rejected;
+            if (on_conflict) {
+                auto action = std::move (on_conflict);
+                co_await action ();
+            }
+            co_return store_write_result_t{
+              store_write_conflict_t{std::chrono::system_clock::now ()}};
+        }
         co_return co_await inner.write (std::move (request));
     }
 
     in_memory_location_store_t inner;
     std::optional<store_key_t> conflict_key;
+    std::size_t remaining_conflicts = 0;
+    std::size_t rejected = 0;
+    std::function<task_t<void> ()> on_conflict;
 };
+
+TEST (CppFrameworkOpaqueLocationStore, EveryAuthorityMutationRechecksConflictQualification)
+{
+    for (int kind = 0; kind != 5; ++kind) {
+        for (int loss = 0; loss != 3; ++loss) {
+            SCOPED_TRACE (kind);
+            SCOPED_TRACE (loss);
+            counter_conflict_store_t provider;
+            provider_location_repository_t repository (provider);
+            const auto owner =
+              std::get<owner_lease_claimed_t> (
+                repository.claim_owner_lease ("mutation-owner", 30s).result ().value ())
+                .token;
+            mesh_node_descriptor_t descriptor;
+            descriptor.mesh_name = "mutation-mesh";
+            descriptor.rid = zlink::routing_id_t::from (std::string{"mutation-node"});
+            descriptor.lifecycle_generation = 1;
+            descriptor.descriptor_revision = 1;
+            descriptor.endpoint = "tcp://127.0.0.1:7001";
+            descriptor.owner_id = owner.owner_id;
+            descriptor.lease_generation = owner.lease_generation;
+            descriptor.object_role = object_role_t::server;
+            descriptor.state = framework_runtime_state_t::serving;
+            descriptor.object_capabilities.push_back ({placement_object_kind_t::actor, "player",
+                                                       maintenance_policy_kind_t::recreate, false,
+                                                       0});
+            descriptor.capacity.actors.limit = 2;
+            ASSERT_EQ (location_write_status_t::stored,
+                       repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                         .result ()
+                         .value ()
+                         .status);
+            object_reserve_request_t request;
+            request.key = {placement_object_kind_t::actor, "mutation-actor"};
+            request.intent.stable_type = "player";
+            request.target = {descriptor.mesh_name, node_rid_t::from_string ("mutation-node"), 1,
+                              owner};
+            request.capacity_bundle.actor_slots = 1;
+            const auto reserved =
+              std::get<object_reserved_t> (repository.reserve (request).result ().value ());
+            const auto ready = std::get<object_committed_t> (
+                                 repository.commit ({request.key, reserved.fence, bytes ("ready")})
+                                   .result ()
+                                   .value ())
+                                 .ready;
+            const auto key = actor_authority_key (request.key.global_id);
+            const auto capacity_before = capacity_record (provider.inner, descriptor);
+            const std::vector<authority_mutation_t> mutations{
+              authority_put_t{bytes ("changed")}, authority_reincarnate_t{bytes ("changed")},
+              authority_restore_t{bytes ("changed"), owner},
+              authority_retarget_t{bytes ("changed"), request.target}, authority_delete_t{}};
+            provider.remaining_conflicts = loss == 0 ? 65 : 1;
+            provider.on_conflict = [&] () -> task_t<void> {
+                if (loss == 2) {
+                    EXPECT_TRUE (std::holds_alternative<owner_lease_released_t> (
+                      co_await repository.release_owner_lease (owner)));
+                } else if (loss == 1) {
+                    authority_mutation_t concurrent = authority_put_t{bytes ("ready")};
+                    EXPECT_TRUE (std::holds_alternative<authority_stored_t> (
+                      co_await repository.compare_exchange_authority (key, ready.store_version,
+                                                                      std::move (concurrent))));
+                } else {
+                    const auto row_key = object_generation_counter_key;
+                    const auto row =
+                      std::get<store_found_t> (co_await provider.inner.read (row_key));
+                    store_write_request_t concurrent{
+                      {}, {store_put_t{row_key, row.value.bytes, std::nullopt}}};
+                    EXPECT_TRUE (std::holds_alternative<store_write_applied_t> (
+                      co_await provider.inner.write (std::move (concurrent))));
+                }
+            };
+            const auto result =
+              repository.compare_exchange_authority (key, ready.store_version, mutations[kind])
+                .result ()
+                .value ();
+            if (loss != 0) {
+                EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (result));
+                EXPECT_EQ (provider.rejected, 1u);
+                const auto current = std::get<authority_snapshot_t> (
+                  repository.read_authority (key).result ().value ());
+                EXPECT_EQ (current.payload, bytes ("ready"));
+                EXPECT_EQ (capacity_before, capacity_record (provider.inner, descriptor));
+            } else {
+                EXPECT_EQ (provider.rejected, 65u);
+                EXPECT_EQ (provider.remaining_conflicts, 0u);
+                if (kind == 4) {
+                    EXPECT_TRUE (std::holds_alternative<authority_deleted_t> (result));
+                    EXPECT_TRUE (std::holds_alternative<authority_missing_t> (
+                      repository.read_authority (key).result ().value ()));
+                } else {
+                    const auto *stored = std::get_if<authority_stored_t> (&result);
+                    EXPECT_NE (stored, nullptr);
+                    if (!stored)
+                        continue;
+                    EXPECT_EQ (stored->snapshot.payload, bytes ("changed"));
+                    EXPECT_NE (stored->snapshot.store_version, ready.store_version);
+                    EXPECT_EQ (capacity_before, capacity_record (provider.inner, descriptor));
+                }
+            }
+        }
+    }
+}
 
 TEST (CppFrameworkOpaqueLocationStore, ReincarnateAtomicallyIssuesPairAndPreservesCapacity)
 {
@@ -2352,12 +2467,12 @@ TEST (CppFrameworkOpaqueLocationStore, ReincarnateAtomicallyIssuesPairAndPreserv
         repository.commit ({request.key, reservation.fence, bytes ("ready")}).result ().value ())
         .ready;
     const auto capacity_before = capacity_record (provider, descriptor);
-    const auto result = repository
-                          .compare_exchange_authority (key, ready.store_version,
-                                                       authority_reincarnate_t{bytes ("new")})
-                          .result ()
-                          .value ();
-    const auto *stored = std::get_if<authority_stored_t> (&result);
+    auto result = repository
+                    .compare_exchange_authority (key, ready.store_version,
+                                                 authority_reincarnate_t{bytes ("new")})
+                    .result ()
+                    .value ();
+    auto *stored = std::get_if<authority_stored_t> (&result);
     ASSERT_NE (nullptr, stored);
     EXPECT_GT (stored->snapshot.object_generation, ready.object_generation);
     EXPECT_GT (stored->snapshot.authority_owner_generation, ready.authority_owner_generation);
@@ -2382,25 +2497,29 @@ TEST (CppFrameworkOpaqueLocationStore, ReincarnateAtomicallyIssuesPairAndPreserv
             .result ()
             .value ()));
 
-    const auto object_unexhausted = counter (object_counter);
-    const auto owner_unexhausted = counter (owner_counter);
     for (const auto &conflict_key : {object_counter, owner_counter}) {
         conflict_store.conflict_key = conflict_key;
-        EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (
-          repository
-            .compare_exchange_authority (key, stored->snapshot.store_version,
-                                         authority_reincarnate_t{bytes ("counter-conflict")})
-            .result ()
-            .value ()));
+        result = repository
+                   .compare_exchange_authority (key, stored->snapshot.store_version,
+                                                authority_reincarnate_t{bytes ("counter-conflict")})
+                   .result ()
+                   .value ();
+        stored = std::get_if<authority_stored_t> (&result);
+        ASSERT_NE (stored, nullptr);
         EXPECT_FALSE (conflict_store.conflict_key);
-        EXPECT_EQ (object_unexhausted.bytes, counter (object_counter).bytes);
-        EXPECT_EQ (owner_unexhausted.bytes, counter (owner_counter).bytes);
+        EXPECT_EQ (bytes ("counter-conflict"), stored->snapshot.payload);
+        EXPECT_EQ (bytes (std::to_string (stored->snapshot.object_generation + 1)),
+                   counter (object_counter).bytes);
+        EXPECT_EQ (bytes (std::to_string (stored->snapshot.authority_owner_generation + 1)),
+                   counter (owner_counter).bytes);
         EXPECT_EQ (
           stored->snapshot.store_version,
           std::get<authority_snapshot_t> (repository.read_authority (key).result ().value ())
             .store_version);
         EXPECT_EQ (capacity_before, capacity_record (provider, descriptor));
     }
+    const auto object_unexhausted = counter (object_counter);
+    const auto owner_unexhausted = counter (owner_counter);
     for (const auto &exhausted_key : {object_counter, owner_counter}) {
         ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
           provider
