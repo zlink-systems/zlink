@@ -5,6 +5,7 @@
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/provider_relocation_repository.hpp"
 #include "runtime/execution/infrastructure_wait_guard.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "../support/owner_lease_time_store.hpp"
 
 #include <gtest/gtest.h>
@@ -62,6 +63,78 @@ TEST (ProviderLocationRepositoryTest, OwnerLeaseReadContinuesAfterProviderComple
     ASSERT_FALSE (read.await_ready ());
     store.completion.complete (result_t<store_read_result_t>::success (store_missing_t{}));
     ASSERT_TRUE (std::holds_alternative<owner_lease_missing_t> (read.result ().value ()));
+}
+
+class deferred_relocation_provider_t final : public relocation_store_t
+{
+  public:
+    task_t<blob_put_result_t> put (blob_reference_t reference,
+                                   std::span<const std::byte> payload,
+                                   std::chrono::milliseconds retention) override
+    {
+        return inner.put (std::move (reference), payload, retention);
+    }
+    task_t<blob_read_result_t> read (blob_reference_t) override
+    {
+        entered.set_value ();
+        return read_completion.task ();
+    }
+    task_t<blob_renew_result_t> renew (blob_reference_t, std::chrono::milliseconds) override
+    {
+        entered.set_value ();
+        return renew_completion.task ();
+    }
+    task_t<void> erase (blob_reference_t) override
+    {
+        entered.set_value ();
+        return erase_completion.task ();
+    }
+    in_memory_relocation_store_t inner;
+    std::promise<void> entered;
+    task_completion_source_t<blob_read_result_t> read_completion;
+    task_completion_source_t<blob_renew_result_t> renew_completion;
+    task_completion_source_t<void> erase_completion;
+};
+
+TEST (CppFrameworkOpaqueRelocationStore, ProviderTasksYieldHandlerWorkerUntilCompletion)
+{
+    configure_handler_coroutine_executor (1);
+    install_host_context_hooks ();
+    for (int operation = 0; operation < 3; ++operation) {
+        SCOPED_TRACE (operation);
+        deferred_relocation_provider_t provider;
+        provider_relocation_repository_t repository (provider);
+        auto entered = provider.entered.get_future ();
+        std::promise<void> probe;
+        auto probed = probe.get_future ();
+        std::promise<bool> completion;
+        auto completed = completion.get_future ();
+        const auto observe = [&completion] (auto pending) {
+            detail::observe_task_completion (pending, [&completion] (const auto &result) {
+                completion.set_value (result.has_value ());
+            });
+        };
+        handler_coroutine_executor ().post_native_continuation ([&] {
+            if (operation == 0)
+                observe (repository.get_relocation ("held"));
+            else if (operation == 1)
+                observe (repository.renew_relocation ("held", std::chrono::hours (1)));
+            else
+                observe (repository.delete_relocation ("held"));
+        });
+        entered.wait ();
+        handler_coroutine_executor ().post_native_continuation ([&probe] { probe.set_value (); });
+        const bool yielded = probed.wait_for (300ms) == std::future_status::ready;
+        provider.read_completion.complete (
+          result_t<blob_read_result_t>::success (blob_missing_t{}));
+        provider.renew_completion.complete (
+          result_t<blob_renew_result_t>::success (blob_missing_t{}));
+        provider.erase_completion.complete (result_t<void>::success ());
+        EXPECT_TRUE (completed.get ());
+        probed.wait ();
+        EXPECT_TRUE (yielded);
+    }
+    shutdown_handler_coroutine_executor ();
 }
 
 std::vector<std::byte> bytes (std::string_view value)
@@ -799,18 +872,17 @@ class reject_next_authority_capacity_write_store_t final : public location_store
                 rejected_capacity_mutations = capacity_mutations;
                 const auto authority_key = std::visit (
                   [] (const auto &mutation) { return mutation.key; }, request.mutations.front ());
-                const auto row =
-                  std::get<store_found_t> (inner.read (authority_key).result ().value ());
-                (void) inner
-                  .write ({{store_version_condition_t{authority_key, row.value.version}},
-                           {store_put_t{authority_key, row.value.bytes, std::nullopt}}})
-                  .result ()
-                  .value ();
-                return task_t<store_write_result_t> (result_t<store_write_result_t>::success (
-                  store_write_result_t{store_write_conflict_t{std::chrono::system_clock::now ()}}));
+                // Awaited: the repository may resume on the inner store's lane.
+                const auto row = std::get<store_found_t> (co_await inner.read (authority_key));
+                store_write_request_t concurrent{
+                  {store_version_condition_t{authority_key, row.value.version}},
+                  {store_put_t{authority_key, row.value.bytes, std::nullopt}}};
+                (void) co_await inner.write (std::move (concurrent));
+                co_return store_write_result_t{
+                  store_write_conflict_t{std::chrono::system_clock::now ()}};
             }
         }
-        return inner.write (std::move (request));
+        co_return co_await inner.write (std::move (request));
     }
 
     task_t<store_scan_result_t> scan (store_scan_request_t request) override
@@ -987,10 +1059,12 @@ class aggregate_commit_contention_store_t final : public location_store_t
     {
         if (on_counter_read && key.value == "zlink:v11:authority-owner-counter"
             && ++counter_reads == 2) {
+            // The injected peer step runs on the lane that resumes the
+            // repository, so it is awaited rather than blocking that lane.
             auto action = std::move (on_counter_read);
-            action ();
+            co_await action ();
         }
-        return inner.read (std::move (key));
+        co_return co_await inner.read (std::move (key));
     }
     task_t<store_scan_result_t> scan (store_scan_request_t request) override
     {
@@ -1016,19 +1090,19 @@ class aggregate_commit_contention_store_t final : public location_store_t
             ++rejected;
             if (on_conflict) {
                 auto action = std::move (on_conflict);
-                action ();
+                co_await action ();
             }
-            return task_t<store_write_result_t> (result_t<store_write_result_t>::success (
-              store_write_result_t{store_write_conflict_t{std::chrono::system_clock::now ()}}));
+            co_return store_write_result_t{
+              store_write_conflict_t{std::chrono::system_clock::now ()}};
         }
-        return inner.write (std::move (request));
+        co_return co_await inner.write (std::move (request));
     }
     in_memory_location_store_t inner;
     phase_t phase = phase_t::transition;
     std::size_t remaining = 0;
     std::size_t rejected = 0;
-    std::function<void ()> on_conflict;
-    std::function<void ()> on_counter_read;
+    std::function<task_t<void> ()> on_conflict;
+    std::function<task_t<void> ()> on_counter_read;
     std::size_t counter_reads = 0;
 };
 
@@ -1060,14 +1134,15 @@ class aggregate_lock_contention_store_t final : public location_store_t
                 marker["peerMarker"] = true;
                 put->bytes = bytes (marker.dump ());
             }
-            const auto published = inner.write (std::move (peer_request)).result ().value ();
+            // The repository may resume on the inner store's lane, so await
+            // the peer write instead of blocking that lane.
+            const auto published = co_await inner.write (std::move (peer_request));
             const auto now = std::holds_alternative<store_write_applied_t> (published)
                                ? std::get<store_write_applied_t> (published).store_now
                                : std::get<store_write_conflict_t> (published).store_now;
-            return task_t<store_write_result_t> (
-              result_t<store_write_result_t>::success (store_write_conflict_t{now}));
+            co_return store_write_conflict_t{now};
         }
-        return inner.write (std::move (request));
+        co_return co_await inner.write (std::move (request));
     }
 
     task_t<store_scan_result_t> scan (store_scan_request_t request) override
@@ -1948,21 +2023,21 @@ TEST (CppFrameworkOpaqueLocationStore, AggregateCommitRechecksFenceAfterTransien
         provider.phase = phase;
         provider.remaining = phase == phase_t::counter_race ? 0 : 65;
         if (phase == phase_t::counter_race) {
-            provider.on_counter_read = [&] {
+            provider.on_counter_read = [&] () -> task_t<void> {
                 object_reserve_request_t peer;
                 peer.key = {placement_object_kind_t::actor, "aggregate-contention-peer"};
                 peer.intent.stable_type = "player";
                 peer.target = target;
                 peer.creating_payload = bytes ("peer-creating");
                 peer.capacity_bundle.actor_slots = 1;
-                EXPECT_TRUE (std::holds_alternative<object_reserved_t> (
-                  repository.reserve (peer).result ().value ()));
+                const auto reserved = co_await repository.reserve (peer);
+                EXPECT_TRUE (std::holds_alternative<object_reserved_t> (reserved));
             };
         }
         if (phase == phase_t::lease_loss) {
-            provider.on_conflict = [&] {
-                EXPECT_TRUE (std::holds_alternative<owner_lease_released_t> (
-                  repository.release_owner_lease (claimed->token).result ().value ()));
+            provider.on_conflict = [&] () -> task_t<void> {
+                const auto released = co_await repository.release_owner_lease (claimed->token);
+                EXPECT_TRUE (std::holds_alternative<owner_lease_released_t> (released));
             };
             EXPECT_EQ (repository.commit_aggregate (fence->fence).result ().value (),
                        aggregate_commit_result_t::stale);
@@ -2282,13 +2357,14 @@ class counter_conflict_store_t final : public location_store_t
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
         if (conflict_key) {
+            // Awaited: the repository may resume on the inner store's lane.
             const auto key = std::exchange (conflict_key, std::nullopt).value ();
-            const auto current = std::get<store_found_t> (inner.read (key).result ().value ());
-            inner.write ({{}, {store_put_t{key, current.value.bytes, std::nullopt}}})
-              .result ()
-              .value ();
+            const auto current = std::get<store_found_t> (co_await inner.read (key));
+            store_write_request_t concurrent{{},
+                                             {store_put_t{key, current.value.bytes, std::nullopt}}};
+            (void) co_await inner.write (std::move (concurrent));
         }
-        return inner.write (std::move (request));
+        co_return co_await inner.write (std::move (request));
     }
 
     in_memory_location_store_t inner;
@@ -2946,7 +3022,7 @@ TEST (CppFrameworkOpaqueLocationStore, MissingRecordVersionFailsClosed)
     EXPECT_NE (std::string (owner_failure.error ()->what ()).find ("recordVersion"),
                std::string::npos);
     try {
-        (void) reopened.read_authority (actor_key);
+        (void) reopened.read_authority (actor_key).result ().value ();
         FAIL () << "Missing authority recordVersion must fail";
     }
     catch (const framework_exception_t &error) {

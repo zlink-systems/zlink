@@ -61,7 +61,10 @@ function Wait-LogCount {
         [string]$Text,
         [int]$Expected)
     for ($attempt = 0; $attempt -lt 300; $attempt++) {
-        $count = @(Select-String -Path $PathPattern -Pattern $Text -SimpleMatch -ErrorAction SilentlyContinue).Count
+        $count = 0
+        if (Test-Path -Path $PathPattern) {
+            $count = @(Select-String -Path $PathPattern -Pattern $Text -SimpleMatch).Count
+        }
         if ($count -eq $Expected) {
             return
         }

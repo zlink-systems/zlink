@@ -15,6 +15,40 @@ namespace Zlink.Framework.UnitTests;
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
     [Theory]
+    [InlineData(1)]
+    [InlineData(10)]
+    public async Task DeleteRebuildsCapacityConditionsAfterProviderConflict(int conflicts)
+    {
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var provider = new DeleteCapacityContentionStore(inner) { RemainingConflicts = conflicts };
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "delete-capacity-conflict");
+        var descriptor = Descriptor("source", owner);
+        _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("actor:delete-capacity-conflict", descriptor, owner);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request)
+        );
+        var created = Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(reserved.Reservation, new byte[] { 0x33 })
+            )
+            .Snapshot;
+
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
+            await repository.CompareExchangeAuthorityAsync(
+                request.Key,
+                created.StoreVersion,
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
+        Assert.Equal(conflicts + 1, provider.DeleteAttempts);
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
+            await repository.ReadAuthorityAsync(request.Key)
+        );
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ReincarnateIssuesBothGenerationsAndPreservesOwnerCapacity(bool opaqueProvider)
@@ -4323,6 +4357,59 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                     if (CommitConflictLatency > TimeSpan.Zero)
                         await Task.Delay(CommitConflictLatency, cancellationToken);
                     return new ZLinkStoreWriteResult.Conflict(DateTimeOffset.UtcNow);
+                }
+            }
+            return await inner.WriteAsync(request, cancellationToken);
+        }
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
+    }
+
+    private sealed class DeleteCapacityContentionStore(IZLinkLocationStore inner)
+        : IZLinkLocationStore
+    {
+        public int RemainingConflicts { get; set; }
+        public int DeleteAttempts { get; private set; }
+
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        ) => inner.ReadAsync(key, cancellationToken);
+
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (
+                request
+                    .Mutations.OfType<ZLinkStoreMutation.Delete>()
+                    .Any(delete =>
+                        delete.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                    )
+            )
+            {
+                DeleteAttempts++;
+                if (RemainingConflicts > 0)
+                {
+                    RemainingConflicts--;
+                    var capacityKey = request
+                        .Mutations.OfType<ZLinkStoreMutation.Put>()
+                        .Single()
+                        .Key;
+                    var capacity = Assert.IsType<ZLinkStoreReadResult.Found>(
+                        await inner.ReadAsync(capacityKey, cancellationToken)
+                    );
+                    _ = await inner.WriteAsync(
+                        new ZLinkStoreWriteRequest(
+                            [],
+                            [new ZLinkStoreMutation.Put(capacityKey, capacity.Value.Bytes, null)]
+                        ),
+                        cancellationToken
+                    );
                 }
             }
             return await inner.WriteAsync(request, cancellationToken);

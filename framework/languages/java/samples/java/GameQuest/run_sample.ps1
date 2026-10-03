@@ -48,7 +48,10 @@ function Wait-Http([string]$Endpoint) {
 }
 
 function Get-LogCount([string[]]$Paths, [string]$Evidence) {
-    return @(Select-String -Path $Paths -Pattern $Evidence -SimpleMatch -ErrorAction SilentlyContinue).Count
+    # On Windows cmd.exe creates the redirected log after Start-Role returns.
+    $existingPaths = @($Paths | Where-Object { Test-Path -LiteralPath $_ })
+    if ($existingPaths.Count -eq 0) { return 0 }
+    return @(Select-String -LiteralPath $existingPaths -Pattern $Evidence -SimpleMatch).Count
 }
 
 function Wait-LogCount([string[]]$Paths, [string]$Evidence, [int]$Expected) {

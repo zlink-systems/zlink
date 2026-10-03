@@ -169,15 +169,21 @@ export class ZLinkSpotRuntimeOptionsFactory {
         this.options.releaseInstanceAuthority(meshName, String(spotId), objectGeneration),
       beginInstanceIdleClosingAuthority: (meshName, spotId, onCommitted) =>
         this.options.beginInstanceIdleClosingAuthority(meshName, String(spotId), onCommitted),
-      beginInstanceClosingAuthority: async (meshName, spotId, onCommitted) => {
+      beginInstanceClosingAuthority: async (meshName, spotId, onCommitted, objectGeneration) => {
         const authority = await this.options.beginInstanceClosingAuthority(
           meshName,
           String(spotId),
           onCommitted
         );
-        if (authority?.reincarnate === undefined) return authority;
+        if (authority === undefined) return undefined;
+        // A Close without Reincarnate ends this incarnation. The Instance authority
+        // release also forgets the node's Ready projection, so a request on a cached
+        // Ready route is refused instead of rematerializing the closed generation.
+        const release = () =>
+          this.options.releaseInstanceAuthority(meshName, String(spotId), objectGeneration);
+        if (authority.reincarnate === undefined) return { release };
         return {
-          release: () => authority.release(),
+          release,
           reincarnate: async (initialize) => {
             const current = await authority.reincarnate!(initialize);
             const node = this.options.spotNodeRuntime()?.meshNode(meshName);

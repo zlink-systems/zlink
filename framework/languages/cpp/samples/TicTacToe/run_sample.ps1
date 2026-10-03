@@ -60,19 +60,23 @@ function Wait-Port([string]$Name, [string]$Endpoint, [int]$TimeoutSeconds = 30) 
 function Wait-Grep([string]$Pattern, [string]$Path) {
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     while ([DateTime]::UtcNow -lt $deadline) {
-        if (Select-String -Path $Path -Pattern $Pattern -Quiet -ErrorAction SilentlyContinue) {
+        if ((Test-Path -LiteralPath $Path) -and (Select-String -LiteralPath $Path -Pattern $Pattern -Quiet)) {
             return
         }
         Start-Sleep -Milliseconds 100
     }
-    if (-not (Select-String -Path $Path -Pattern $Pattern -Quiet -ErrorAction SilentlyContinue)) {
+    if (-not ((Test-Path -LiteralPath $Path) -and (Select-String -LiteralPath $Path -Pattern $Pattern -Quiet))) {
         throw "Pattern '$Pattern' was not found in $Path"
     }
 }
 
 function Wait-LogCount([string[]]$Path, [string]$Pattern, [int]$Expected) {
     for ($attempt = 0; $attempt -lt 300; $attempt++) {
-        $actual = @(Select-String -Path $Path -Pattern $Pattern -SimpleMatch -ErrorAction SilentlyContinue).Count
+        $existingPaths = @($Path | Where-Object { Test-Path -Path $_ })
+        $actual = 0
+        if ($existingPaths.Count -gt 0) {
+            $actual = @(Select-String -Path $existingPaths -Pattern $Pattern -SimpleMatch).Count
+        }
         if ($actual -eq $Expected) { return }
         Start-Sleep -Milliseconds 100
     }

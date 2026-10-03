@@ -2,6 +2,7 @@
 
 #include <zlink/framework/detail/binary_text_codec.hpp>
 
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 
@@ -28,11 +29,14 @@ std::uint64_t random_u64 ()
 /* Coroutine-suspension flow propagation (flow-correlation MFLOW-EXT-014):
  * the task machinery captures the ambient flow when a continuation or
  * callback registers and re-enters it around the resume. The guard restores
- * the previous value, so the id never leaks into unrelated callbacks. */
+ * the previous value, so the id never leaks into unrelated callbacks. The
+ * current stream dispatch header rides the same snapshot, so a session
+ * handler can relay after an await that resumed outside its dispatch scope. */
 struct ambient_context_snapshot_t
 {
     std::optional<flow_value_t> flow;
     std::optional<actor_execution_context_t> actor;
+    std::optional<framework::detail::stream_header_t> relay;
 };
 
 class ambient_context_scope_t
@@ -44,18 +48,22 @@ class ambient_context_scope_t
             _flow.emplace (snapshot.flow);
         if (snapshot.actor)
             _actor.emplace (snapshot.actor->actor_key, snapshot.actor->spot_id);
+        if (snapshot.relay)
+            _relay.emplace (*snapshot.relay);
     }
 
   private:
     std::optional<flow_context_t::scope_t> _flow;
     std::optional<actor_execution_scope_t> _actor;
+    std::optional<framework::detail::stream_relay_dispatch_scope_t> _relay;
 };
 
 std::shared_ptr<void> capture_ambient_flow ()
 {
     const auto &current = flow_context_t::current ();
     const auto &actor = current_actor_execution;
-    if (!current && actor.actor_key.empty () && actor.spot_id.empty ()) {
+    auto relay = framework::detail::current_stream_relay_dispatch ();
+    if (!current && actor.actor_key.empty () && actor.spot_id.empty () && !relay) {
         return nullptr;
     }
     auto snapshot = std::make_shared<ambient_context_snapshot_t> ();
@@ -63,6 +71,7 @@ std::shared_ptr<void> capture_ambient_flow ()
         snapshot->flow = *current;
     if (!actor.actor_key.empty () || !actor.spot_id.empty ())
         snapshot->actor = actor;
+    snapshot->relay = std::move (relay);
     return snapshot;
 }
 

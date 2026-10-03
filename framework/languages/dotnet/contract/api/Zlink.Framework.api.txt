@@ -459,8 +459,8 @@ assembly Zlink.Framework
   type interface Zlink.Framework.Contracts.Configuration.IZLinkSocketConfig
     property System.Nullable<System.TimeSpan> ConnectTimeout { get; set; } [nullability=read:nullable,write:nullable]
     property System.Nullable<System.TimeSpan> HandshakeInterval { get; set; } [nullability=read:nullable,write:nullable]
-    property System.Boolean IPv6 { get; set; } [nullability=read:not-null,write:not-null]
-    property System.Boolean Immediate { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Nullable<System.Boolean> IPv6 { get; set; } [nullability=read:nullable,write:nullable]
+    property System.Nullable<System.Boolean> Immediate { get; set; } [nullability=read:nullable,write:nullable]
     property System.Nullable<System.TimeSpan> Linger { get; set; } [nullability=read:nullable,write:nullable]
     property System.Int64 MaxMessageSize { get; set; } [nullability=read:not-null,write:not-null]
     property System.Int32 ReceiveBufferSize { get; set; } [nullability=read:not-null,write:not-null]
@@ -469,7 +469,7 @@ assembly Zlink.Framework
     property System.Int32 SendBufferSize { get; set; } [nullability=read:not-null,write:not-null]
     property System.UInt64 SendHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
     property System.Nullable<System.TimeSpan> SendTimeout { get; set; } [nullability=read:nullable,write:nullable]
-    property System.Boolean TcpNoDelay { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Nullable<System.Boolean> TcpNoDelay { get; set; } [nullability=read:nullable,write:nullable]
     property System.Int32 Weight { get; set; } [nullability=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Configuration.IZLinkSpotPublisherConfig
     property System.Nullable<System.TimeSpan> Linger { get; set; } [nullability=read:nullable,write:nullable]
@@ -499,8 +499,8 @@ assembly Zlink.Framework
   type interface Zlink.Framework.Contracts.Configuration.IZLinkStreamSocketConfig
     property System.Nullable<System.TimeSpan> ConnectTimeout { get; set; } [nullability=read:nullable,write:nullable]
     property System.Nullable<System.TimeSpan> HandshakeInterval { get; set; } [nullability=read:nullable,write:nullable]
-    property System.Boolean IPv6 { get; set; } [nullability=read:not-null,write:not-null]
-    property System.Boolean Immediate { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Nullable<System.Boolean> IPv6 { get; set; } [nullability=read:nullable,write:nullable]
+    property System.Nullable<System.Boolean> Immediate { get; set; } [nullability=read:nullable,write:nullable]
     property System.Nullable<System.TimeSpan> Linger { get; set; } [nullability=read:nullable,write:nullable]
     property System.Int32 ReceiveBufferSize { get; set; } [nullability=read:not-null,write:not-null]
     property System.UInt64 ReceiveHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
@@ -508,7 +508,7 @@ assembly Zlink.Framework
     property System.Int32 SendBufferSize { get; set; } [nullability=read:not-null,write:not-null]
     property System.UInt64 SendHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
     property System.Nullable<System.TimeSpan> SendTimeout { get; set; } [nullability=read:nullable,write:nullable]
-    property System.Boolean TcpNoDelay { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Nullable<System.Boolean> TcpNoDelay { get; set; } [nullability=read:nullable,write:nullable]
   type interface Zlink.Framework.Contracts.Configuration.IZLinkUserSpotFactoryBuilder<TSpot>
     generic TSpot variance=invariant nullable=unspecified
     where TSpot : class, Zlink.Framework.Contracts.Spots.IZLinkSpot

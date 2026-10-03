@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "metric_test_reader.hpp"
+
+#include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/location_runtime.hpp"
@@ -57,27 +60,23 @@ TEST (ZLinkFrameworkLocationRuntime, RejectsLeaseRenewalWindowOverflow)
 class timed_renew_repository_t final : public in_memory_location_repository_t
 {
   public:
-    std::future<std::chrono::steady_clock::duration> renew_spacing ()
+    std::future<std::chrono::steady_clock::time_point> second_renew_called ()
     {
-        return _spacing.get_future ();
+        return _second_renew_called.get_future ();
     }
 
     zlink::framework::task_t<zlink::framework::owner_lease_renew_result_t>
     renew_owner_lease (zlink::framework::location_owner_token_t token,
                        std::chrono::milliseconds ttl) override
     {
-        const auto now = std::chrono::steady_clock::now ();
-        if (_calls++ == 0)
-            _first_started = now;
-        else if (_calls == 2)
-            _spacing.set_value (now - _first_started);
+        if (++_calls == 2)
+            _second_renew_called.set_value (std::chrono::steady_clock::now ());
         return in_memory_location_repository_t::renew_owner_lease (std::move (token), ttl);
     }
 
   private:
     int _calls = 0;
-    std::chrono::steady_clock::time_point _first_started;
-    std::promise<std::chrono::steady_clock::duration> _spacing;
+    std::promise<std::chrono::steady_clock::time_point> _second_renew_called;
 };
 
 TEST (ZLinkFrameworkLocationRuntime, CompletedHeartbeatWaitsUntilPreviousStartPlusInterval)
@@ -88,11 +87,84 @@ TEST (ZLinkFrameworkLocationRuntime, CompletedHeartbeatWaitsUntilPreviousStartPl
                                 location_options_t{.owner_lease_renew_interval = interval,
                                                    .owner_lease_renew_timeout = interval / 4},
                                 "owner-spacing");
-    auto spacing = store.renew_spacing ();
+    auto second_renew_called = store.second_renew_called ();
+    // The runtime starts a renewal before its state lane hands the request to the store, so a
+    // store call time is later than the runtime's start time by a scheduling delay that differs
+    // per renewal. Only a time taken before startup bounds the runtime's start times from below:
+    // the first heartbeat starts one interval after startup, and the second starts one interval
+    // after the first started.
+    const auto start_requested_at = std::chrono::steady_clock::now ();
     runtime.start (zlink::routing_id_t::from ("node-spacing"));
-    ASSERT_EQ (std::future_status::ready, spacing.wait_for (std::chrono::seconds (5)));
-    EXPECT_GE (spacing.get (), interval);
+    ASSERT_EQ (std::future_status::ready, second_renew_called.wait_for (std::chrono::seconds (5)));
+    EXPECT_GE (second_renew_called.get () - start_requested_at, 2 * interval);
     runtime.stop ();
+}
+
+class slow_claim_repository_t final : public in_memory_location_repository_t
+{
+  public:
+    explicit slow_claim_repository_t (std::chrono::milliseconds claim_delay) :
+        _claim_delay (claim_delay)
+    {
+    }
+
+    std::future<void> first_renew_called () { return _first_renew_called.get_future (); }
+
+    zlink::framework::task_t<zlink::framework::owner_lease_claim_result_t>
+    claim_owner_lease (std::string owner_id, std::chrono::milliseconds ttl) override
+    {
+        std::this_thread::sleep_for (_claim_delay);
+        return in_memory_location_repository_t::claim_owner_lease (std::move (owner_id), ttl);
+    }
+
+    zlink::framework::task_t<zlink::framework::owner_lease_renew_result_t>
+    renew_owner_lease (zlink::framework::location_owner_token_t token,
+                       std::chrono::milliseconds ttl) override
+    {
+        if (++_renew_calls == 1)
+            _first_renew_called.set_value ();
+        return in_memory_location_repository_t::renew_owner_lease (std::move (token), ttl);
+    }
+
+  private:
+    std::chrono::milliseconds _claim_delay;
+    std::atomic_int _renew_calls = 0;
+    std::promise<void> _first_renew_called;
+};
+
+TEST (ZLinkFrameworkLocationRuntime, RenewLatenessIsMeasuredFromTheHeartbeatSchedule)
+{
+    // Startup claims the lease and the heartbeat schedules its first renewal one interval after
+    // the claim completed. Lateness compares a renewal start with that schedule, so a slow claim
+    // must not appear as lateness of the first heartbeat.
+    metric_test::provider_t metrics;
+    const auto claim_delay = std::chrono::milliseconds (300);
+    slow_claim_repository_t store (claim_delay);
+    location_runtime_t runtime (
+      store,
+      location_options_t{.owner_lease_renew_interval = std::chrono::milliseconds (100),
+                         .owner_lease_renew_timeout = std::chrono::seconds (1)},
+      "owner-lateness");
+    runtime.bind_monitoring (
+      std::make_shared<zlink::framework::detail::monitoring_runtime_state_t> ());
+    auto first_renew_called = store.first_renew_called ();
+    runtime.start (zlink::routing_id_t::from ("node-lateness"));
+    ASSERT_EQ (std::future_status::ready, first_renew_called.wait_for (std::chrono::seconds (5)));
+
+    std::optional<metric_test::sdk::HistogramPointData> lateness;
+    for (const auto &metric : metrics.collect ()) {
+        if (metric.instrument_descriptor.name_ != "zlink.location.owner_lease.renew.lateness")
+            continue;
+        for (const auto &point : metric.point_data_attr_)
+            if (const auto *histogram =
+                  opentelemetry::nostd::get_if<metric_test::sdk::HistogramPointData> (
+                    &point.point_data))
+                lateness = *histogram;
+    }
+    runtime.stop ();
+    ASSERT_TRUE (lateness.has_value ());
+    EXPECT_LT (opentelemetry::nostd::get<double> (lateness->max_),
+               std::chrono::duration<double> (claim_delay).count ());
 }
 
 class pending_renew_repository_t final : public in_memory_location_repository_t

@@ -959,6 +959,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_TESTS
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
+  add_executable(test_cpp_framework_result_lifetime
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_result_lifetime.cpp)
+  target_compile_features(test_cpp_framework_result_lifetime PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_result_lifetime PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include)
+  zlink_framework_cpp_add_test(NAME test_cpp_framework_result_lifetime
+    COMMAND test_cpp_framework_result_lifetime LABELS "framework-unit;framework-foundation" TIMEOUT 30)
+
   add_executable(test_cpp_framework_error_mapping
     tests/Zlink.Framework.UnitTests/test_cpp_framework_error_mapping.cpp
     framework/src/runtime/messaging/request_failure_mapper.cpp)
@@ -1671,6 +1679,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       LABELS "framework-unit;framework-regression;framework-actor;relocation"
       TIMEOUT 30)
   endforeach()
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_infrastructure_store_wait
+    COMMAND test_cpp_framework_actor_gateway --infrastructure-store-wait
+    LABELS "framework-unit;framework-regression;framework-actor"
+    TIMEOUT 30)
   target_link_libraries(test_cpp_framework_app_host PRIVATE zlink::http_client)
   if(ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE)
     set(ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT "http://127.0.0.1:18180")
@@ -1886,6 +1899,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_location_runtime)
   target_link_libraries(test_cpp_framework_location_runtime PRIVATE
     zlink::framework
+    opentelemetry-cpp::metrics
     GTest::gtest_main)
   target_include_directories(test_cpp_framework_location_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
