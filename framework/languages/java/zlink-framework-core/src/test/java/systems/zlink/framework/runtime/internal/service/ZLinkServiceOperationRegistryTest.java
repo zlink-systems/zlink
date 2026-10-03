@@ -349,6 +349,33 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
+    void submittedRequestCancellationReachesTheBindingWaiterBeforeClose() throws Exception {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        try (ZLinkServiceOperationRegistry registry =
+                new ZLinkServiceOperationRegistry(scheduler)) {
+            CompletableFuture<String> binding = new CompletableFuture<>();
+            CountDownLatch bindingCancelled = new CountDownLatch(1);
+            binding.whenComplete(
+                    (ignored, failure) -> {
+                        if (binding.isCancelled()) bindingCancelled.countDown();
+                    });
+            CompletableFuture<String> caller =
+                    registry.submit(
+                            UUID.randomUUID(),
+                            Duration.ofSeconds(1),
+                            () -> binding,
+                            ignored -> {});
+            assertTrue(caller.cancel(false));
+            assertTrue(bindingCancelled.await(1, TimeUnit.SECONDS));
+            registry.close();
+            assertTrue(caller.isCancelled());
+            assertEquals(0, registry.pendingCount());
+        } finally {
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
     void terminalCompletionRunsOnANewTurnOutsideTheRegistryGate() {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         try (ZLinkServiceOperationRegistry registry =

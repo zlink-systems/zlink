@@ -218,6 +218,72 @@ final class ZLinkNodeSubmitTurnTest {
     }
 
     @Test
+    void busyRegistryLaneFinishesFirstBindingAttemptBeforeSubmitReturns() throws Exception {
+        for (boolean request : new boolean[] {false, true}) {
+            try (Fixture f = new Fixture();
+                    var workers = Executors.newVirtualThreadPerTaskExecutor()) {
+                NodeProbe node = new NodeProbe(f.lane);
+                f.runtime.registerSpotRouterNode(CHANNEL, node.node);
+                CountDownLatch turnEntered = new CountDownLatch(1);
+                CountDownLatch releaseTurn = new CountDownLatch(1);
+                CompletionStage<Void> occupied =
+                        f.lane.runAsync(
+                                () -> {
+                                    turnEntered.countDown();
+                                    await(releaseTurn);
+                                });
+                try {
+                    await(turnEntered);
+                    var submission =
+                            workers.submit(
+                                    () ->
+                                            request
+                                                    ? f.request().submit(String.class)
+                                                    : f.send().submit());
+                    awaitQueued(f.lane);
+                    assertFalse(submission.isDone(), "submit must wait for its first binding attempt");
+                    assertEquals(0, node.nodeCalls());
+                    releaseTurn.countDown();
+                    CompletionStage<?> completion = submission.get(5, TimeUnit.SECONDS);
+                    assertEquals(1, node.nodeCalls());
+                    if (request) assertTerminal(completion);
+                    else completion.toCompletableFuture().join();
+                } finally {
+                    releaseTurn.countDown();
+                    occupied.toCompletableFuture().join();
+                }
+            }
+        }
+    }
+
+    @Test
+    void laneRejectionPreservesItsCauseForCallbackAndReturnedStage() throws Exception {
+        try (Fixture f = new Fixture()) {
+            var rejection = new ZLinkConfigurationException("rejection callback failed");
+            var callbackFailure = new AtomicReference<Throwable>();
+            var callbacks = new AtomicInteger();
+            CompletionStage<Void> result =
+                    f.sockets.submitToNode(
+                            "missing",
+                            null,
+                            DEFAULT_TIMEOUT,
+                            (router, timeout) -> CompletableFuture.completedFuture(null),
+                            (node, timeout) -> CompletableFuture.completedFuture(null),
+                            failure -> {
+                                if (callbacks.incrementAndGet() == 1) throw rejection;
+                                callbackFailure.set(failure);
+                            });
+
+            assertEquals(2, callbacks.get());
+            assertSame(rejection, callbackFailure.get());
+            assertSame(
+                    rejection,
+                    assertThrows(CompletionException.class, () -> result.toCompletableFuture().join())
+                            .getCause());
+        }
+    }
+
+    @Test
     void nodeAndDirectSpotSubmissionsUseExactlyOneRegistryTurn() throws Exception {
         for (boolean alreadyOnLane : new boolean[] {false, true}) {
             CountingDirectExecutor executor = new CountingDirectExecutor();

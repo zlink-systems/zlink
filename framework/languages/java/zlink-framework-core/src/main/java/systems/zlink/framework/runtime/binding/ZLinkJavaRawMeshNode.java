@@ -2249,26 +2249,27 @@ final class ZLinkJavaRawMeshNode
                         operationId,
                         timeout,
                         () ->
-                                port.requestMessages(
-                                                requireStarted(),
-                                                targetNodeRid,
-                                                frames,
-                                                timeout,
-                                                replyFrames ->
-                                                        completeSpotRequest(
-                                                                targetNodeRid,
-                                                                targetSpotId,
-                                                                correlation,
-                                                                RequestResult.OK,
-                                                                replyFrames))
-                                        .exceptionally(
-                                                failure ->
-                                                        completeSpotRequest(
-                                                                targetNodeRid,
-                                                                targetSpotId,
-                                                                correlation,
-                                                                requestTerminal(failure, false),
-                                                                List.of())),
+                                mapRequestFailure(
+                                        port.requestMessages(
+                                                        requireStarted(),
+                                                        targetNodeRid,
+                                                        frames,
+                                                        timeout,
+                                                        replyFrames ->
+                                                                completeSpotRequest(
+                                                                        targetNodeRid,
+                                                                        targetSpotId,
+                                                                        correlation,
+                                                                        RequestResult.OK,
+                                                                        replyFrames),
+                                                ZLinkBackendReceived::close),
+                                        failure ->
+                                                completeSpotRequest(
+                                                        targetNodeRid,
+                                                        targetSpotId,
+                                                        correlation,
+                                                        requestTerminal(failure, false),
+                                                        List.of())),
                         ZLinkBackendReceived::close);
             } finally {
                 Message.closeAll(frames);
@@ -4318,6 +4319,27 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
+    private static CompletionStage<ZLinkBackendReceived> mapRequestFailure(
+            CompletionStage<ZLinkBackendReceived> binding,
+            Function<Throwable, ZLinkBackendReceived> onFailure) {
+        CompletableFuture<ZLinkBackendReceived> result = new CompletableFuture<>();
+        binding.whenComplete(
+                (received, failure) -> {
+                    try {
+                        ZLinkBackendReceived outcome =
+                                failure == null ? received : onFailure.apply(failure);
+                        if (!result.complete(outcome) && outcome != null) outcome.close();
+                    } catch (RuntimeException | Error error) {
+                        result.completeExceptionally(error);
+                    }
+                });
+        result.whenComplete(
+                (ignored, failure) -> {
+                    if (result.isCancelled()) binding.toCompletableFuture().cancel(false);
+                });
+        return result;
+    }
+
     private CompletionStage<ZLinkBackendReceived> request(
             RouterSocket router,
             RoutingId target,
@@ -4330,24 +4352,25 @@ final class ZLinkJavaRawMeshNode
                 operationId,
                 timeout,
                 () ->
-                        port.requestMessages(
-                                        router,
-                                        target,
-                                        frames,
-                                        timeout,
-                                        replyFrames ->
-                                                decodeRequestReply(
-                                                        target,
-                                                        correlation,
-                                                        RequestResult.OK,
-                                                        replyFrames))
-                                .exceptionally(
-                                        failure ->
-                                                decodeRequestReply(
-                                                        target,
-                                                        correlation,
-                                                        requestTerminal(failure, false),
-                                                        List.of())),
+                        mapRequestFailure(
+                                port.requestMessages(
+                                                router,
+                                                target,
+                                                frames,
+                                                timeout,
+                                                replyFrames ->
+                                                        decodeRequestReply(
+                                                                target,
+                                                                correlation,
+                                                                RequestResult.OK,
+                                                                replyFrames),
+                                                ZLinkBackendReceived::close),
+                                failure ->
+                                        decodeRequestReply(
+                                                target,
+                                                correlation,
+                                                requestTerminal(failure, false),
+                                                List.of())),
                 ZLinkBackendReceived::close);
     }
 
