@@ -19,6 +19,38 @@ import java.util.concurrent.TimeoutException;
 
 final class ZLinkFrameworkShutdownTest {
     @Test
+    void socketCloseFailuresReachTheCallerForSynchronousAndAsyncCleanup() {
+        for (boolean async : List.of(false, true)) {
+            var shutdown =
+                    new ZLinkFrameworkShutdown(
+                            Instant.now().plus(ZLinkFrameworkRuntime.DEFAULT_TERMINATION_DEADLINE));
+            var failure =
+                    new systems.zlink.contracts.errors.ZlinkCloseException(
+                            systems.zlink.contracts.errors.CloseResult.BUSY, 16);
+            var remaining = new ArrayList<String>();
+            shutdown.defer("remaining", () -> remaining.add("closed"));
+            if (async) {
+                shutdown.deferCloseStage(
+                        "socket_close", () -> CompletableFuture.failedFuture(failure));
+            } else {
+                shutdown.defer(
+                        "socket_close",
+                        () -> {
+                            throw failure;
+                        });
+            }
+            var thrown =
+                    assertThrows(
+                            CompletionException.class,
+                            () -> shutdown.closeAsync().toCompletableFuture().join());
+            var stage = assertInstanceOf(ZLinkFrameworkShutdown.Failure.class, thrown.getCause());
+            assertEquals("socket_close", stage.stage());
+            assertSame(failure, stage.getCause());
+            assertEquals(List.of("closed"), remaining);
+        }
+    }
+
+    @Test
     void expiredHostDeadlineStartsAsyncResourcesAndRejectsNewStoreWork() {
         var shutdown = new ZLinkFrameworkShutdown(Instant.EPOCH);
         var resources = new ArrayList<String>();

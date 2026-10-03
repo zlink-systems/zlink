@@ -380,17 +380,20 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     }
 
     private void closeOnLane() {
-        if (!closed.compareAndSet(false, true)) {
+        if (closed.get()) {
             return;
         }
-        for (var entry : receivePollers.reversed().entrySet()) {
+        var remaining = receivePollers.reversed().entrySet().iterator();
+        while (remaining.hasNext()) {
+            var entry = remaining.next();
             entry.getValue().close();
             entry.getKey().close();
+            remaining.remove();
         }
-        receivePollers.clear();
         if (ownsContext) {
             context.close();
         }
+        closed.set(true);
     }
 
     private void ensureOwnedOnLane(RouterSocket router) {

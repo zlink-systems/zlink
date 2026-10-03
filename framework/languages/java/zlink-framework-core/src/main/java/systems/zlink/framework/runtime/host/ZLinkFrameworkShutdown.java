@@ -1,7 +1,5 @@
 package systems.zlink.framework.runtime.host;
 
-import systems.zlink.contracts.errors.ZlinkCloseException;
-
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -105,15 +103,11 @@ final class ZLinkFrameworkShutdown {
             return action.get()
                     .handle(
                             (ignored, error) -> {
-                                if (error != null
-                                        && !(unwrap(error).getCause()
-                                                instanceof ZlinkCloseException)) {
+                                if (error != null) {
                                     recordFailure(failure, unwrap(error));
                                 }
                                 return null;
                             });
-        } catch (ZlinkCloseException ignored) {
-            return CompletableFuture.completedFuture(null);
         } catch (RuntimeException error) {
             recordFailure(failure, error);
             return CompletableFuture.completedFuture(null);

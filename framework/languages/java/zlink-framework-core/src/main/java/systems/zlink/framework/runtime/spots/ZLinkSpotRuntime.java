@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
@@ -1890,6 +1889,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 firstFailure = closeRuntimeComponent(context::close, firstFailure);
                             }
                             if (firstFailure != null) {
+                                reportSpotClosingFailure(null, firstFailure);
                                 throw firstFailure;
                             }
                             return null;
@@ -2243,7 +2243,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             Runnable close, RuntimeException firstFailure) {
         try {
             close.run();
-        } catch (ZlinkCloseException ignored) {
         } catch (RuntimeException error) {
             if (firstFailure == null) {
                 return error;
