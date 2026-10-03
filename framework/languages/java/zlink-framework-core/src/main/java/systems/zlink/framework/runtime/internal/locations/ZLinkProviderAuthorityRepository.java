@@ -163,26 +163,15 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                     next),
                                                                                             null));
                                                                         }
-                                                                        return provider.write(
-                                                                                        new ZLinkStoreWriteRequest(
-                                                                                                conditions,
-                                                                                                mutations),
-                                                                                        opaqueCancellation)
-                                                                                .thenApply(
-                                                                                        result ->
-                                                                                                result
-                                                                                                                instanceof
-                                                                                                                ZLinkStoreWriteApplied
-                                                                                                                        applied
-                                                                                                        ? new ZLinkAuthorityDeleted(
-                                                                                                                found.value()
-                                                                                                                        .version()
-                                                                                                                        .value(),
-                                                                                                                applied
-                                                                                                                        .storeNow())
-                                                                                                        : new ZLinkAuthorityConflict(
-                                                                                                                toRead(
-                                                                                                                        read)));
+                                                                        return writeAuthority(
+                                                                                rowKey,
+                                                                                found,
+                                                                                null,
+                                                                                conditions,
+                                                                                mutations,
+                                                                                cancellation,
+                                                                                key,
+                                                                                mutation);
                                                                     });
                                                 });
                             }
@@ -194,7 +183,13 @@ final class ZLinkProviderAuthorityRepository {
                                 }
                                 AuthorityRecord next = current.withPayload(restore.payload());
                                 return put(
-                                        rowKey, found, next, conditions, opaqueCancellation, read);
+                                        rowKey,
+                                        found,
+                                        next,
+                                        conditions,
+                                        cancellation,
+                                        key,
+                                        mutation);
                             }
                             byte[] reincarnatePayload =
                                     ZLinkAuthorityMutation.reincarnatePayload(mutation);
@@ -249,8 +244,9 @@ final class ZLinkProviderAuthorityRepository {
                                                                                 next,
                                                                                 conditions,
                                                                                 mutations,
-                                                                                opaqueCancellation,
-                                                                                read);
+                                                                                cancellation,
+                                                                                key,
+                                                                                mutation);
                                                                     });
                                                 }
                                                 return put(
@@ -260,8 +256,9 @@ final class ZLinkProviderAuthorityRepository {
                                                                 ((ZLinkAuthorityPut) mutation)
                                                                         .payload()),
                                                         conditions,
-                                                        opaqueCancellation,
-                                                        read);
+                                                        cancellation,
+                                                        key,
+                                                        mutation);
                                             });
                         });
     }
@@ -2620,8 +2617,9 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkStoreReadFound found,
             AuthorityRecord next,
             List<ZLinkStoreCondition> conditions,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
-            ZLinkStoreReadResult current) {
+            ZLinkStoreCancellation cancellation,
+            String authorityKey,
+            ZLinkAuthorityMutation mutation) {
         return writeAuthority(
                 key,
                 found,
@@ -2629,7 +2627,8 @@ final class ZLinkProviderAuthorityRepository {
                 conditions,
                 List.of(new ZLinkStorePut(key, encode(next), null)),
                 cancellation,
-                current);
+                authorityKey,
+                mutation);
     }
 
     private CompletionStage<ZLinkAuthorityWriteResult> writeAuthority(
@@ -2638,16 +2637,47 @@ final class ZLinkProviderAuthorityRepository {
             AuthorityRecord next,
             List<ZLinkStoreCondition> conditions,
             List<ZLinkStoreMutation> mutations,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
-            ZLinkStoreReadResult current) {
-        return provider.write(new ZLinkStoreWriteRequest(conditions, mutations), cancellation)
-                .thenApply(
+            ZLinkStoreCancellation cancellation,
+            String authorityKey,
+            ZLinkAuthorityMutation mutation) {
+        var opaqueCancellation = adapt(cancellation);
+        return provider.write(new ZLinkStoreWriteRequest(conditions, mutations), opaqueCancellation)
+                .thenCompose(
                         result -> {
                             if (!(result instanceof ZLinkStoreWriteApplied applied)) {
-                                return new ZLinkAuthorityConflict(toRead(current));
+                                AuthorityRecord initial = decode(found.value().bytes());
+                                return canRebuild(
+                                                key,
+                                                found.value().version().value(),
+                                                null,
+                                                new ZLinkLocationOwnerToken(
+                                                        initial.ownerId(),
+                                                        initial.ownerLeaseGeneration()),
+                                                opaqueCancellation)
+                                        .thenComposeAsync(
+                                                unchanged ->
+                                                        unchanged
+                                                                ? compareExchange(
+                                                                        authorityKey,
+                                                                        new ZLinkAuthorityExpectFound(
+                                                                                found.value()
+                                                                                        .version()
+                                                                                        .value()),
+                                                                        mutation,
+                                                                        cancellation)
+                                                                : read(authorityKey, cancellation)
+                                                                        .thenApply(
+                                                                                ZLinkAuthorityConflict
+                                                                                        ::new));
+                            }
+                            if (mutation instanceof ZLinkAuthorityDelete) {
+                                return completed(
+                                        new ZLinkAuthorityDeleted(
+                                                found.value().version().value(),
+                                                applied.storeNow()));
                             }
                             ZLinkStoreVersion version = applied.putVersions().get(key);
-                            return stored(next, version.value(), applied.storeNow());
+                            return completed(stored(next, version.value(), applied.storeNow()));
                         });
     }
 
