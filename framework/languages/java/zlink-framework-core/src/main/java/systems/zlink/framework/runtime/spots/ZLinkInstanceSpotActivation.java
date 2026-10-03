@@ -471,7 +471,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     private CompletionStage<Boolean> closeOnLifecycle(ZLinkSpotCloseReason reason) {
-        boolean initiatedInsideTurn = context.isCurrentDispatchTurn();
         ZLinkSpotCloseCoordinator existing = existingCloseCoordinator();
         if (existing != null) {
             return existing.close();
@@ -537,7 +536,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                 closingCallback(
                                                                         () ->
                                                                                 context.runClosing(
-                                                                                        initiatedInsideTurn,
                                                                                         () ->
                                                                                                 spot
                                                                                                         .onClosing(

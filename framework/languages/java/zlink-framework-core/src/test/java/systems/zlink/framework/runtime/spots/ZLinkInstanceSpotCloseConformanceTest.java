@@ -128,6 +128,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                     before.authorityOwnerGeneration() + 1,
                                     before.ownerLeaseGeneration(),
                                     before.storeVersion());
+                    ZLinkStoreReadResult readyRecord = store.currentAuthority();
                     if (given.path("authority").asText().equals("Missing")) {
                         runtime.route()
                                 .sendToSpot(spotId, new CloseProbe())
@@ -152,7 +153,29 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                     AtomicInteger terminalCount = new AtomicInteger();
                     ZLinkFrameworkException failure = null;
                     String sendDiagnostic = null;
-                    if (given.path("messageKind").asText().equals("request")) {
+                    boolean replied = false;
+                    if (given.path("messageKind").asText().equals("request")
+                            && intent.asBoolean()
+                            && given.path("authority").asText().equals("Missing")) {
+                        //  The caller read the released Ready record and sends to its fence.
+                        store.staleAuthorityRead.set(readyRecord);
+                        try {
+                            runtime.route()
+                                    .requestToSpot(spotId, new PendingProbe())
+                                    .instanceSpot(TYPE)
+                                    .inMesh(MESH)
+                                    .timeout(WAIT)
+                                    .submit(Reply.class)
+                                    .toCompletableFuture()
+                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                            replied = true;
+                        } catch (java.util.concurrent.ExecutionException terminal) {
+                            failure =
+                                    assertInstanceOf(
+                                            ZLinkFrameworkException.class, terminal.getCause());
+                        }
+                        terminalCount.incrementAndGet();
+                    } else if (given.path("messageKind").asText().equals("request")) {
                         Throwable terminal =
                                 ZLinkJavaReadyRouteTestAccess.rejectReadyRequest(
                                                 backend.mesh,
@@ -239,9 +262,13 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                             case "messageTerminal" ->
                                     assertEquals(
                                             field.getValue().asText(),
-                                            failure.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE
-                                                    ? "Unavailable"
-                                                    : failure.kind().toString());
+                                            replied
+                                                    ? "reply"
+                                                    : failure.kind()
+                                                                    == ZLinkFrameworkErrorKind
+                                                                            .UNAVAILABLE
+                                                            ? "Unavailable"
+                                                            : failure.kind().toString());
                             case "messageTerminalCount" ->
                                     assertEquals(field.getValue().asInt(), terminalCount.get());
                             case "surface", "reason" ->
@@ -1122,6 +1149,10 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         private long originalGeneration;
         private long lastGeneration;
         final AtomicInteger missingPlacementAttempts = new AtomicInteger();
+        /** One authority read answered with an earlier record, as a caller's racing read. */
+        final java.util.concurrent.atomic.AtomicReference<ZLinkStoreReadResult>
+                staleAuthorityRead = new java.util.concurrent.atomic.AtomicReference<>();
+        private volatile ZLinkStoreKey authorityKey;
 
         ObservedStore(String spotId, Observation observation) {
             this.spotId = spotId;
@@ -1131,7 +1162,18 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         public CompletionStage<ZLinkStoreReadResult> read(
                 ZLinkStoreKey key,
                 systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            if (authority(key)) {
+                authorityKey = key;
+                ZLinkStoreReadResult stale = staleAuthorityRead.getAndSet(null);
+                if (stale != null) return CompletableFuture.completedFuture(stale);
+            }
             return inner.read(key, cancellation);
+        }
+
+        ZLinkStoreReadResult currentAuthority() throws Exception {
+            return inner.read(authorityKey, () -> false)
+                    .toCompletableFuture()
+                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
         }
 
         public CompletionStage<ZLinkStoreWriteResult> write(
