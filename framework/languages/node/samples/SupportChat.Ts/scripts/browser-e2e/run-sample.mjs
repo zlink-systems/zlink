@@ -121,7 +121,11 @@ async function serve(request, response, bundleBytes, definition) {
     && typeof definition.config.lifecycleCompletionPath === 'string'
     && requestUrl.pathname === definition.config.lifecycleCompletionPath
   ) {
-    await waitForFile(definition.completionSignalPath, definition.timeoutMs);
+    const stage = requestUrl.searchParams.get('stage');
+    const signalPath = stage !== null && /^[a-zA-Z0-9_-]+$/.test(stage)
+      ? `${definition.completionSignalPath}.${stage}`
+      : definition.completionSignalPath;
+    await waitForFile(signalPath, definition.timeoutMs);
     response.writeHead(204, { 'cache-control': 'no-store' });
     response.end();
     return;
