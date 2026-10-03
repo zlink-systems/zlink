@@ -216,7 +216,10 @@ class serial_execution_queue_t
     std::size_t pending_count (serial_work_lane_t lane) const;
     std::size_t pending_bytes () const;
     bool closed () const;
-    std::shared_ptr<const void> first_pending_message () const;
+    /* Spot address messaging §7 step 3 under this queue's mutex: the first
+     * retained message waiting behind a Close, or none, in which case the
+     * queue closes in the same decision and refuses later work. */
+    std::shared_ptr<const void> first_pending_message_or_close ();
     std::vector<std::shared_ptr<const void>> pending_messages () const;
     bool allows_yield () const noexcept { return _lane_policy.allows_turn_yield (); }
 
@@ -265,6 +268,7 @@ class serial_execution_queue_t
     };
 
     bool schedule_drain_locked ();
+    void close_locked ();
     void drain_loop ();
     void execute_item (work_item_t item);
     void complete_one (std::string name,

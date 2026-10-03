@@ -2585,8 +2585,9 @@ void spot_context_state_t::run_local_close_steps (
                                            "Spot Close could not release its local activation"));
             return;
         }
-        const auto original = self->serial_queue ? self->serial_queue->first_pending_message ()
-                                                 : std::shared_ptr<const void>{};
+        const auto original = self->serial_queue
+                                ? self->serial_queue->first_pending_message_or_close ()
+                                : std::shared_ptr<const void>{};
         const auto fail_pending = [self, owner] (const result_t<bool> &failure) {
             const auto messages = self->serial_queue ? self->serial_queue->pending_messages ()
                                                      : std::vector<std::shared_ptr<const void>>{};
@@ -4920,6 +4921,19 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                 // The queue did not take the work: its admission ends here.
                 if (!admission_preclaimed)
                     settle_handler_admission_once (admission_terminal);
+                /* Spot address messaging §7 step 3: the Close that releases this
+                 * incarnation closed its queue in the same decision, so a retained
+                 * Instance intent message is refused before admission with the
+                 * owner fence. */
+                if (retained_message && state->state_sync ([&state] { return state->closed; }))
+                    return task_t<zlink::message_t> (
+                      detail::result_access_t::failure<zlink::message_t> (
+                        detail::with_failure_code (
+                          detail::make_framework_origin_exception (
+                            framework_error_kind_t::unavailable,
+                            "Spot incarnation released its authority"),
+                          static_cast<std::uint32_t> (
+                            runtime::protocol::framework_error_code::spotMoving))));
                 /* Dispatch rejection is framework-generated (zlink.origin
                  * marker on the resulting error reply). */
                 return task_t<zlink::message_t> (

@@ -945,12 +945,13 @@ void serial_execution_queue_t::drain ()
     });
 }
 
-std::shared_ptr<const void> serial_execution_queue_t::first_pending_message () const
+std::shared_ptr<const void> serial_execution_queue_t::first_pending_message_or_close ()
 {
     std::lock_guard lock (_mutex);
     for (const auto &item : _application.queue)
         if (item.retained_message)
             return item.retained_message;
+    close_locked ();
     return {};
 }
 
@@ -967,6 +968,11 @@ std::vector<std::shared_ptr<const void>> serial_execution_queue_t::pending_messa
 void serial_execution_queue_t::close ()
 {
     std::lock_guard<std::mutex> lock (_mutex);
+    close_locked ();
+}
+
+void serial_execution_queue_t::close_locked ()
+{
     _closed = true;
     if (!has_queued_locked () && _active == 0 && !_draining && !_drain_scheduled) {
         _empty.notify_all ();
