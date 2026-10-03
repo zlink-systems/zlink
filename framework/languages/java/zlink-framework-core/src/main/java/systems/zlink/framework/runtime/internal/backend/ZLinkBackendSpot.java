@@ -133,6 +133,4 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
 
     void replyActorJoin(
             ZLinkBackendActorJoinRequest request, int joinResultCode, List<Message> parts);
-
-    ZLinkBackendActorLifecycleEvent recvActorLifecycle(ZLinkBackendRecvMode mode);
 }

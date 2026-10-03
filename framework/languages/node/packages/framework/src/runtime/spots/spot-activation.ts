@@ -1096,7 +1096,13 @@ export class ZLinkSpotActivationLifecycle {
     }
     if (
       !state.locationReleased &&
-      !(owningLifecycle && reason === ZLinkSpotCloseReason.ExplicitClose) &&
+      // Spot messaging §7 step 3: an Instance Spot's ExplicitClose releases its authority
+      // through the Close operation's Closing fence; a User Spot still releases its location.
+      !(
+        owningLifecycle &&
+        reason === ZLinkSpotCloseReason.ExplicitClose &&
+        activation.domain.kind === 'instance'
+      ) &&
       state.timersDisposed &&
       state.serialDisposed &&
       state.handlersDisposed &&

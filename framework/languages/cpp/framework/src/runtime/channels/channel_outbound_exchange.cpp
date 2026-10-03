@@ -975,12 +975,6 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
     const auto call_packet_name = std::move (packet_name);
     channel_request_terminal_trace_t terminal_trace (state->dispatch, channel_name,
                                                      call_packet_name);
-    state->lane
-      .run ([&] {
-          state->outbound_calls.push_back (
-            {"request", channel_name, "", call_packet_name, timeout, metadata});
-      })
-      .get ();
     auto reservation = runtime.reserve_outbound_request (channel_name);
     if (!reservation) {
         if (reservation.error () != nullptr) {
@@ -1198,8 +1192,6 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                 channel_runtime_outbound_error_state_locked (*state),
                 channel_runtime_outbound_error_message_locked (*state));
           }
-          state->outbound_calls.push_back (
-            {"send", channel_name, "", call_packet_name, timeout, metadata});
       })
       .get ();
     const auto *client = client_capability (*state, channel_name);
@@ -1326,8 +1318,6 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
                 channel_runtime_outbound_error_state_locked (*state),
                 channel_runtime_outbound_error_message_locked (*state));
           }
-          state->outbound_calls.push_back (
-            {"publish", channel_name, topic, call_packet_name, timeout, metadata});
       })
       .get ();
     const auto *publisher = publisher_capability (*state, channel_name);

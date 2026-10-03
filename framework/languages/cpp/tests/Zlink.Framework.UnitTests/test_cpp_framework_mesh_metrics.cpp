@@ -771,17 +771,17 @@ void verify_public_host_local_spot_and_actor_requests ()
     // its actual local object and generation, with the initial owner lease
     // used by the minimal stateful runtime (as in mesh_node_vertical).
     node.configure_spot_route_fence_resolver (
-      [&node] (const zlink::routing_id_t &target_node, std::string_view spot_id,
-               std::uint64_t generation) -> std::optional<host::route_fence_t> {
+      [&node] (zlink::routing_id_t target_node, std::string spot_id, std::uint64_t generation)
+        -> zlink::framework::task_t<std::optional<host::route_fence_t>> {
           const auto local = node.status ().routing_id ();
           if (target_node.to_bytes () != local.to_bytes ())
-              return std::nullopt;
+              co_return std::nullopt;
           const auto object = node.native_node ().objects ().find (
-            runtime::stateful::object_kind_t::user_spot, std::string (spot_id));
+            runtime::stateful::object_kind_t::user_spot, spot_id);
           if (!object || object->object_generation != generation
               || object->node_id != local.to_string ())
-              return std::nullopt;
-          return host::route_fence_t{object->authority_owner_generation, 1};
+              co_return std::nullopt;
+          co_return host::route_fence_t{object->authority_owner_generation, 1};
       },
       0ms);
     node.start ();

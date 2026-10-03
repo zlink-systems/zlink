@@ -119,7 +119,7 @@ final class ZLinkRouteMeshRuntimeView
             state = ZLinkTopologyState.DEGRADED;
         }
         ZLinkMeshNodeMonitoringProjection placement =
-                runtime.monitoringMeshNodeProjection(meshName, nativeStatus.routingId());
+                runtime.monitoringMeshNodeProjection(meshName);
         boolean placementAvailable =
                 state == ZLinkTopologyState.READY
                         && placement.objectRole() == ZLinkMeshNodeObjectRole.SERVER

@@ -420,9 +420,9 @@ internal abstract partial class ZLinkSpotActivation
         );
     }
 
-    internal Task<T>? PostCloseLifecycle<T>(
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> close
-    ) => _serial.PostCloseLifecycle(close);
+    internal Task<T>? PostLifecycleOperation<T>(
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation
+    ) => _serial.PostLifecycleOperation(operation);
 
     internal void AttachNativeDispatch()
     {
@@ -583,7 +583,8 @@ internal abstract partial class ZLinkSpotActivation
         ReadOnlyMemory<byte>? metadata,
         bool request,
         CancellationToken cancellationToken,
-        InstanceSpotActivationOperation originalOperation
+        InstanceSpotActivationOperation originalOperation,
+        Func<CancellationToken, ValueTask>? recordTerminal = null
     )
     {
         if (
@@ -665,7 +666,42 @@ internal abstract partial class ZLinkSpotActivation
         Func<ReadOnlyMemory<byte>> acceptedJournalFactory = () =>
             ZLinkSpotAcceptedJournal.Encode(received, request ? operationId.Low : 0);
 
-        var queued = _serial.RunIngress(() =>
+        // Spot messaging §4 step 12 with §7 step 1: the first terminal record is
+        // the lifecycle item posted before the first message runs, so a Close
+        // that message's handler requests is the next lifecycle item and starts
+        // only after the record (C++ "instance-activation-terminal" barrier).
+        var recorded = recordTerminal is null
+            ? null
+            : PostLifecycleOperation(
+                async (_, ct) =>
+                {
+                    var turn =
+                        ZLinkSerialTurn.Current
+                        ?? throw new InvalidOperationException(
+                            "The first terminal record requires a lifecycle turn."
+                        );
+                    await turn.YieldFrameworkCallAsync(
+                            async token =>
+                            {
+                                await completion.Task.ConfigureAwait(false);
+                                await recordTerminal(token).ConfigureAwait(false);
+                            },
+                            ct
+                        )
+                        .ConfigureAwait(false);
+                    return true;
+                }
+            );
+        if (recordTerminal is not null && recorded is null)
+        {
+            received.Dispose();
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "The Instance Spot activation queue stopped before admission."
+            );
+        }
+
+        _serial.RunIngress(() =>
             QueueApplicationSerialized(
                 static (activation, state, ct) =>
                     activation.DispatchQueuedApplicationRouteAsync(state, ct),
@@ -688,11 +724,18 @@ internal abstract partial class ZLinkSpotActivation
                 state.ReleaseForRelocation
             )
         );
-        if (!queued)
+        // Once admitted, caller cancellation no longer removes the accepted
+        // queue record or prevents terminal publication. A refused admission
+        // has already completed the terminal with its failure.
+        try
+        {
             return await completion.Task.ConfigureAwait(false);
-        // Admission is durable at this point. Caller cancellation no longer
-        // removes the accepted queue record or prevents terminal publication.
-        return await completion.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            if (recorded is not null)
+                await recorded.ConfigureAwait(false);
+        }
     }
 
     private async ValueTask DispatchQueuedApplicationRouteAsync(

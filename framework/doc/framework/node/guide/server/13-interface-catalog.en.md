@@ -77,7 +77,7 @@ module.
 | --- | --- |
 | `ZLinkModule.forRootFactory({ useFactory })` | The registration entry point. The factory returns a builder |
 | `zlinkFramework()` | Creates the builder |
-| `zlinkModule(__dirname, options)` | Collects that directory's handlers/Spots/Actors as providers |
+| `zlinkModule(__dirname, options)` | Collects that directory's handler classes as providers. Register Spot and Actor classes that take constructor injection in the module's `providers` yourself |
 | `zlinkDiscoverProviders(...)` | For controlling provider discovery directly |
 | `ZLinkFrameworkOptions` | The builder type |
 | `ZLinkMeshNodeBuilder` · `ZLinkMeshChannelBuilder` · `ZLinkMeshObjectRoleBuilder` | MeshNode and its roles |

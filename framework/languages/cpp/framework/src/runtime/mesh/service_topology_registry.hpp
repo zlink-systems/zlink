@@ -114,8 +114,7 @@ class service_topology_registry_t
 
     void publish_local (service_node_descriptor_t descriptor);
     std::vector<admitted_peer_t> publish_local_snapshot (service_node_descriptor_t descriptor);
-    task_t<std::pair<service_node_descriptor_t, std::vector<admitted_peer_t>>>
-    publish_draining_snapshot ();
+    std::pair<service_node_descriptor_t, std::vector<admitted_peer_t>> publish_draining_snapshot ();
     service_node_descriptor_t local_descriptor () const;
     task_t<std::tuple<service_node_descriptor_t,
                       std::vector<admitted_peer_t>,

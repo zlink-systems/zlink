@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "runtime/execution/task_result.hpp"
 #include "runtime/diagnostics/mesh_trace.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 
@@ -270,10 +271,10 @@ struct route_owner_fence_read_t
     std::optional<std::chrono::steady_clock::duration> admission_lifetime;
 };
 
-std::optional<route_owner_fence_read_t>
-read_route_owner_fence (const std::shared_ptr<zlink::framework::location_repository_t> &store,
+task_t<std::optional<route_owner_fence_read_t>>
+read_route_owner_fence (std::shared_ptr<zlink::framework::location_repository_t> store,
                         char object_kind,
-                        std::string_view object_id,
+                        std::string object_id,
                         std::uint64_t object_generation,
                         std::uint64_t authority_owner_generation,
                         std::uint64_t owner_lease_generation,
@@ -284,25 +285,23 @@ read_route_owner_fence (const std::shared_ptr<zlink::framework::location_reposit
                         std::chrono::milliseconds owner_lease_fencing_margin)
 {
     if (object_id.empty () || object_generation == 0)
-        return std::nullopt;
+        co_return std::nullopt;
     if (authority_owner_generation != 0 || owner_lease_generation != 0) {
         if (authority_owner_generation == 0 || owner_lease_generation == 0)
-            return std::nullopt;
-        return route_owner_fence_read_t{{authority_owner_generation, owner_lease_generation},
-                                        std::nullopt};
+            co_return std::nullopt;
+        co_return route_owner_fence_read_t{{authority_owner_generation, owner_lease_generation},
+                                           std::nullopt};
     }
     if (!store) {
         trace_mesh_host ("route-owner-fence-read", "reason=no-store");
-        return std::nullopt;
+        co_return std::nullopt;
     }
     try {
-        auto read = store
-                      ->read_authority (object_kind == '1' ? actor_authority_key (object_id)
-                                                           : spot_authority_key (object_id))
-                      .result ();
+        auto read = co_await await_result (store->read_authority (
+          object_kind == '1' ? actor_authority_key (object_id) : spot_authority_key (object_id)));
         if (!read) {
             trace_mesh_host ("route-owner-fence-read", "reason=authority-read-failed");
-            return std::nullopt;
+            co_return std::nullopt;
         }
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
         if (!snapshot || snapshot->authority_owner_generation == 0
@@ -316,27 +315,27 @@ read_route_owner_fence (const std::shared_ptr<zlink::framework::location_reposit
                          + " lease=" + std::to_string (snapshot->owner.lease_generation)
                      : "missing")
                 + " expected_generation=" + std::to_string (object_generation));
-            return std::nullopt;
+            co_return std::nullopt;
         }
         location_options_t location_options;
         location_options.owner_lease_fencing_margin = owner_lease_fencing_margin;
         live_location_reader_t live (*store, std::move (location_options));
-        const auto admission_lifetime = live.owner_admission_lifetime (snapshot->owner);
+        const auto admission_lifetime = co_await live.owner_admission_lifetime (snapshot->owner);
         if (!admission_lifetime) {
             trace_mesh_host ("route-owner-fence-read",
                              "reason=admission-lifetime-null owner=" + snapshot->owner.owner_id
                                + " lease=" + std::to_string (snapshot->owner.lease_generation)
                                + " margin_ms="
                                + std::to_string (owner_lease_fencing_margin.count ()));
-            return std::nullopt;
+            co_return std::nullopt;
         }
-        return route_owner_fence_read_t{
+        co_return route_owner_fence_read_t{
           {snapshot->authority_owner_generation,
            static_cast<std::uint64_t> (snapshot->owner.lease_generation)},
           admission_lifetime};
     }
     catch (...) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 }
 
@@ -568,8 +567,8 @@ spot_handle_t::send_to_spot (const zlink::routing_id_t &target_node_rid,
     const auto peer = _host->transport ().topology ().peer (target_node_rid.to_bytes ());
     const auto target_node_generation =
       peer ? peer->descriptor.lifecycle_generation : _host->status ().lifecycle_generation ();
-    const auto route_fence =
-      _host->resolve_spot_route_fence (target_node_rid, target_spot_id, target_spot_generation);
+    const auto route_fence = co_await _host->resolve_spot_route_fence (
+      target_node_rid, target_spot_id, target_spot_generation);
     if (!route_fence)
         co_return zlink::submit_result_t::not_found;
     const auto target = protocol::spot_route_fence_t{
@@ -603,8 +602,8 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
         const auto peer = _host->transport ().topology ().peer (target_node_rid.to_bytes ());
         const auto target_node_generation =
           peer ? peer->descriptor.lifecycle_generation : _host->status ().lifecycle_generation ();
-        const auto route_fence =
-          _host->resolve_spot_route_fence (target_node_rid, target_spot_id, target_spot_generation);
+        const auto route_fence = co_await _host->resolve_spot_route_fence (
+          target_node_rid, target_spot_id, target_spot_generation);
         if (!route_fence) {
             co_return zlink::submit_result_t::not_found;
         }
@@ -1285,12 +1284,6 @@ void public_host_runtime_t::configure_spot_route_fence_resolver (
           _spot_route_fence_resolver = std::move (resolver);
           _route_cache_lane.run ([this] { _spot_route_fences.clear (); }).get ();
       })
-      .get ();
-}
-
-void public_host_runtime_t::configure_peer_readiness_resolver (peer_readiness_resolver_t resolver)
-{
-    _lifecycle_configuration_lane.run ([&] { _peer_readiness_resolver = std::move (resolver); })
       .get ();
 }
 
@@ -2665,9 +2658,9 @@ actor_handle_t public_host_runtime_t::create_reserved_actor (std::string actor_t
     return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type), *object);
 }
 
-std::optional<route_fence_t>
-public_host_runtime_t::resolve_spot_route_fence (const zlink::routing_id_t &target_node_rid,
-                                                 std::string_view target_spot_id,
+task_t<std::optional<route_fence_t>>
+public_host_runtime_t::resolve_spot_route_fence (zlink::routing_id_t target_node_rid,
+                                                 std::string target_spot_id,
                                                  std::uint64_t target_spot_generation)
 {
     spot_route_fence_resolver_t resolver;
@@ -2679,12 +2672,9 @@ public_host_runtime_t::resolve_spot_route_fence (const zlink::routing_id_t &targ
       })
       .get ();
     if (resolver) {
-        try {
-            return resolver (target_node_rid, target_spot_id, target_spot_generation);
-        }
-        catch (...) {
-            return std::nullopt;
-        }
+        auto resolved = co_await await_result (
+          resolver (target_node_rid, target_spot_id, target_spot_generation));
+        co_return resolved ? resolved.value () : std::nullopt;
     }
 
     const auto key = spot_route_cache_key (target_node_rid, target_spot_id, target_spot_generation);
@@ -2700,18 +2690,19 @@ public_host_runtime_t::resolve_spot_route_fence (const zlink::routing_id_t &targ
                           })
                           .get ();
     if (cached) {
-        return cached;
+        co_return cached;
     }
 
     const auto measured_at = std::chrono::steady_clock::now ();
-    const auto read = read_route_owner_fence (store, '2', target_spot_id, target_spot_generation, 0,
-                                              0, _options.owner_lease_fencing_margin);
+    const auto read =
+      co_await read_route_owner_fence (store, '2', target_spot_id, target_spot_generation, 0, 0,
+                                       _options.owner_lease_fencing_margin);
     if (read && read->admission_lifetime) {
         const auto admission_expires_at = measured_at + *read->admission_lifetime;
         if (std::chrono::steady_clock::now () >= admission_expires_at)
-            return std::nullopt;
+            co_return std::nullopt;
         if (_options.route_cache_max_age <= std::chrono::milliseconds::zero ())
-            return read->fence;
+            co_return read->fence;
         const auto lifetime =
           std::min (std::chrono::duration_cast<std::chrono::steady_clock::duration> (
                       _options.route_cache_max_age),
@@ -2723,7 +2714,7 @@ public_host_runtime_t::resolve_spot_route_fence (const zlink::routing_id_t &targ
           })
           .get ();
     }
-    return read ? std::optional<route_fence_t> (read->fence) : std::nullopt;
+    co_return read ? std::optional<route_fence_t> (read->fence) : std::nullopt;
 }
 
 void public_host_runtime_t::invalidate_spot_route_fence (
@@ -2765,24 +2756,14 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
     if (!peer) {
         co_return zlink::submit_result_t::not_connected;
     }
-    peer_readiness_resolver_t readiness_resolver;
-    _lifecycle_configuration_lane.run ([&] { readiness_resolver = _peer_readiness_resolver; })
-      .get ();
-    if (readiness_resolver && !readiness_resolver (target_routing_id)) {
-        co_return zlink::submit_result_t::not_connected;
-    }
     const auto node_generation = peer->descriptor.lifecycle_generation;
-    const auto current_peer = _transport->topology ().peer (target_routing_id.to_bytes ());
-    if (!current_peer || current_peer->descriptor.lifecycle_generation != node_generation) {
-        co_return zlink::submit_result_t::not_connected;
-    }
     const auto object =
       _objects.find (stateful::object_kind_t::actor, std::string (target.actor_id ().value ()));
     const auto authority_generation = authority_owner_generation != 0 ? authority_owner_generation
                                       : object ? object->authority_owner_generation
                                                : target.object_generation ();
-    const auto route_fence = read_route_owner_fence (
-      _user_spot_store, '1', target.actor_id ().value (), target.object_generation (),
+    const auto route_fence = co_await read_route_owner_fence (
+      _user_spot_store, '1', std::string (target.actor_id ().value ()), target.object_generation (),
       authority_generation, owner_lease_generation, _options.owner_lease_fencing_margin);
     if (!route_fence || route_fence->fence.first != authority_generation)
         co_return zlink::submit_result_t::not_found;
@@ -2844,24 +2825,14 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
     if (!peer) {
         co_return zlink::submit_result_t::not_connected;
     }
-    peer_readiness_resolver_t readiness_resolver;
-    _lifecycle_configuration_lane.run ([&] { readiness_resolver = _peer_readiness_resolver; })
-      .get ();
-    if (readiness_resolver && !readiness_resolver (target_routing_id)) {
-        co_return zlink::submit_result_t::not_connected;
-    }
     const auto node_generation = peer->descriptor.lifecycle_generation;
-    const auto current_peer = _transport->topology ().peer (target_routing_id.to_bytes ());
-    if (!current_peer || current_peer->descriptor.lifecycle_generation != node_generation) {
-        co_return zlink::submit_result_t::not_connected;
-    }
     const auto object =
       _objects.find (stateful::object_kind_t::actor, std::string (target.actor_id ().value ()));
     const auto authority_generation = authority_owner_generation != 0 ? authority_owner_generation
                                       : object ? object->authority_owner_generation
                                                : target.object_generation ();
-    const auto route_fence = read_route_owner_fence (
-      _user_spot_store, '1', target.actor_id ().value (), target.object_generation (),
+    const auto route_fence = co_await read_route_owner_fence (
+      _user_spot_store, '1', std::string (target.actor_id ().value ()), target.object_generation (),
       authority_generation, owner_lease_generation, _options.owner_lease_fencing_margin);
     if (!route_fence || route_fence->fence.first != authority_generation) {
         co_return zlink::submit_result_t::not_found;
@@ -4426,9 +4397,12 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                     || snapshot->allocation.target.node_rid.value ()
                          != zlink::routing_id_t::from (request.target.target_node_routing_id)
                               .to_string ()) {
+                    // Refused before admission: spotMoving tells the caller that no
+                    // message was accepted (Spot address messaging §9, failover §4.4).
                     const auto failure =
                       messaging::request_failure_mapper_t{}.target_failure_reply (
-                        framework_error_kind_t::unavailable);
+                        framework_error_kind_t::unavailable,
+                        static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
                     reply_terminal (
                       {failure->terminal_result, failure->failure_code, std::nullopt});
                     co_return true;
@@ -4550,7 +4524,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     }
     if (std::holds_alternative<authority_missing_t> (current)
         && instance_materializer.select_target) {
-        const auto selected = instance_materializer.select_target (request);
+        const auto selected = co_await instance_materializer.select_target (request);
         if (!selected) {
             const auto failure =
               messaging::request_failure_mapper_t{}.target_failure_reply (*selected.error ());

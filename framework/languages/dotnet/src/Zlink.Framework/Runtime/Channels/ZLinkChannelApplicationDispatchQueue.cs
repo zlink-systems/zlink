@@ -42,7 +42,12 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         _dispatch = dispatch ?? throw new ArgumentNullException(nameof(dispatch));
         _reject = reject ?? throw new ArgumentNullException(nameof(reject));
         _stop = CancellationTokenSource.CreateLinkedTokenSource(laneCancellationToken);
-        _worker = Task.Run(() => RunAsync(_stop.Token).AsTask(), CancellationToken.None);
+        // The queue is built inside state-lane turns (fanout subscriber registration). Its worker
+        // runs application handlers, so it must not inherit that turn's lane ownership
+        // (06-state-ownership-and-lanes §6 type 2).
+        _worker = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+            Task.Run(() => RunAsync(_stop.Token).AsTask(), CancellationToken.None)
+        );
     }
 
     internal ValueTask<bool> PostAsync(TWork payload, CancellationToken cancellationToken)

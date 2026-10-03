@@ -709,8 +709,6 @@ public sealed partial class StreamConnectorTests
 
         public IReadOnlyCollection<ZlinkStreamFrame> Written => _written;
 
-        public bool CanWriteSegments => false;
-
         public void Deliver(byte[] bytes) => _inbound.Writer.TryWrite(bytes);
 
         public void FailRead(Exception failure) => _inbound.Writer.TryWrite(failure);

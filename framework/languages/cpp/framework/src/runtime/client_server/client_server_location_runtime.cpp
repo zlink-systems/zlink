@@ -237,18 +237,31 @@ struct client_server_location_runtime_t::client_channel_t
     bool selector_dirty = true;
 };
 
-namespace
-{
-
 task_t<void>
 pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        mesh::service_liveness_registry_t::clock_t::time_point now,
-                       std::shared_ptr<application_job_queue_t::permit_t> application_permit)
+                       std::shared_ptr<application_job_queue_t> application_jobs,
+                       std::shared_ptr<application_job_queue_t::permit_t> application_permit,
+                       receive_batch_budget_t budget)
 {
     (void) co_await server->drain_monitor_events_task (now);
-    (void) co_await server->pump_one (now, std::move (application_permit));
+    while (application_permit && budget.can_receive ()) {
+        const auto result =
+          co_await server->pump_one (now, std::move (application_permit), &budget);
+        if (result == client_server_pump_result_t::no_data
+            || result == client_server_pump_result_t::backpressured)
+            break;
+        if (budget.exhausted ())
+            break;
+        if (auto next = application_jobs->try_reserve_supply ())
+            application_permit =
+              std::make_shared<application_job_queue_t::permit_t> (std::move (*next));
+    }
     (void) co_await server->tick_liveness (now);
 }
+
+namespace
+{
 
 task_t<void> pump_client_transport (std::shared_ptr<raw_client_server_client_t> client,
                                     mesh::service_liveness_registry_t::clock_t::time_point now)
@@ -1025,7 +1038,10 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_ch
     std::vector<bool> remove;
     remove.reserve (stale.size ());
     for (const auto &[_, replacement] : stale) {
-        remove.push_back (!replacement || co_await replacement->ready_task ());
+        bool remove_stale = !replacement;
+        if (replacement)
+            remove_stale = co_await replacement->ready_task ();
+        remove.push_back (remove_stale);
     }
     if (!stale.empty ()) {
         co_await _lane.run_task ([&] {
@@ -1082,17 +1098,11 @@ task_t<void> client_server_location_runtime_t::pump ()
                 server.pump_task.reset ();
             }
             if (!server.pump_task) {
-                std::shared_ptr<application_job_queue_t::permit_t> application_permit;
                 _application_supply->ensure_waiter ();
-                auto reserved = _application_supply->take ();
-                const bool may_pump = reserved.has_value ();
-                if (reserved) {
-                    application_permit =
-                      std::make_shared<application_job_queue_t::permit_t> (std::move (*reserved));
-                }
-                if (may_pump) {
-                    server.pump_task = start_task (
-                      pump_server_transport (server.owner, now, std::move (application_permit)));
+                if (auto reserved = _application_supply->take ()) {
+                    server.pump_task = start_task (pump_server_transport (
+                      server.owner, now, _application_jobs,
+                      std::make_shared<application_job_queue_t::permit_t> (std::move (*reserved))));
                 }
             }
             if (const auto completed = take_completed (server.dispatch_task)) {

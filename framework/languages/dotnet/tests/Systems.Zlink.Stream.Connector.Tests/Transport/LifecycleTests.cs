@@ -2733,8 +2733,6 @@ public sealed partial class StreamConnectorTests
     {
         public int CloseCount { get; private set; }
 
-        public bool CanWriteSegments => true;
-
         public async ValueTask<int> ReadAsync(
             Memory<byte> buffer,
             CancellationToken cancellationToken
@@ -2759,8 +2757,6 @@ public sealed partial class StreamConnectorTests
     private sealed class RecordingCloseConnection : IZlinkStreamConnection
     {
         public int CloseCount { get; private set; }
-
-        public bool CanWriteSegments => true;
 
         public async ValueTask<int> ReadAsync(
             Memory<byte> buffer,
@@ -2792,7 +2788,6 @@ public sealed partial class StreamConnectorTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseWrite { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public bool CanWriteSegments => true;
 
         public async ValueTask<int> ReadAsync(
             Memory<byte> buffer,
@@ -2821,7 +2816,6 @@ public sealed partial class StreamConnectorTests
     {
         private int _writeCount;
         public int WriteCount => Volatile.Read(ref _writeCount);
-        public bool CanWriteSegments => true;
 
         public async ValueTask<int> ReadAsync(
             Memory<byte> buffer,
@@ -2850,8 +2844,6 @@ public sealed partial class StreamConnectorTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseWrite { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public bool CanWriteSegments => true;
 
         public async ValueTask<int> ReadAsync(
             Memory<byte> buffer,
@@ -2886,8 +2878,6 @@ public sealed partial class StreamConnectorTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource CloseStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public bool CanWriteSegments => true;
 
         public async ValueTask<int> ReadAsync(
             Memory<byte> buffer,

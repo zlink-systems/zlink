@@ -909,8 +909,11 @@ task_t<bool> maintenance_runtime_t::relocate_boundary_and_send (
     }
     state->records = build_boundary_records ({state->seal_attempt.seal.participants.front ()},
                                              state->context, state->batch, state->failure);
-    if (!state->records
-        || !co_await send_boundary_records (state->context, *state->records, state->batch)) {
+    bool records_sent = false;
+    if (state->records)
+        records_sent =
+          co_await send_boundary_records (state->context, *state->records, state->batch);
+    if (!records_sent) {
         if (abort_target_before_cutover (state->context))
             (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
         state->result.emplace (finish (
@@ -1142,7 +1145,10 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
       boundary_error == stateful_error_t::none
         ? build_boundary_records (seal.participants, *canonical_wire, batch, failure)
         : std::nullopt;
-    if (!records || !co_await send_boundary_records (*canonical_wire, *records, batch)) {
+    bool records_sent = false;
+    if (records)
+        records_sent = co_await send_boundary_records (*canonical_wire, *records, batch);
+    if (!records_sent) {
         if (abort_target_before_cutover (*canonical_wire))
             (void) _objects.abort_relocation_before_cutover (seal.token);
         co_return aggregate_relocation_result_t{
@@ -1763,9 +1769,12 @@ task_t<termination_result_t>
 host_maintenance_runtime_t::run_termination_attempt (termination_intent_t intent,
                                                      std::uint64_t attempt)
 {
-    const auto result = intent == termination_intent_t::retire
-                          ? co_await run_retire ()
-                          : run_shutdown (termination_intent_t::shutdown);
+    if (intent == termination_intent_t::retire) {
+        const auto result = co_await run_retire ();
+        complete_attempt (attempt, result);
+        co_return result;
+    }
+    const auto result = run_shutdown (termination_intent_t::shutdown);
     complete_attempt (attempt, result);
     co_return result;
 }

@@ -45,11 +45,11 @@ internal sealed class ZLinkSocketConfig
 
     public TimeSpan? HandshakeInterval { get; set; }
 
-    public bool IPv6 { get; set; }
+    public bool? IPv6 { get; set; }
 
-    public bool TcpNoDelay { get; set; }
+    public bool? TcpNoDelay { get; set; }
 
-    public bool Immediate { get; set; }
+    public bool? Immediate { get; set; }
 
     public int Weight
     {

@@ -169,17 +169,6 @@ final class ZLinkActorLocationCoordinator {
                 });
     }
 
-    CompletionStage<Void> actorLeftSpot(ZLinkActor actor) {
-        if (lifecycle == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        String actorType = actorTypeFor(actor);
-        if (actorType == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        return lifecycle.notifyActorLeftSpot(actorType, actor.context().actorId());
-    }
-
     CompletionStage<Void> actorMovedToEntrySpot(ZLinkActor actor, RoutingId nodeRid) {
         if (lifecycle == null) {
             return CompletableFuture.completedFuture(null);

@@ -291,6 +291,19 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
         if (isSpotRouteRefreshError(error)) {
           this.options.resolver()?.invalidate?.(spotId);
         }
+        // Failover policy §4.4: SpotMoving is the owner's Ready owner-fence
+        // refusal, made before admission. With Instance intent, one authority
+        // read under the same deadline decides: Missing means Close released
+        // the incarnation, so the request activates a new one. Any other
+        // answer, and any message the owner admitted, keeps this terminal.
+        if (
+          call.instanceSpot &&
+          isOwnerFenceRefusal(error) &&
+          (await this.resolveExisting(spotId, deadline.signal)) === undefined
+        ) {
+          deadline.requireRemaining();
+          return await this.requestToMissingInstance(spotId, request, call, deadline);
+        }
         this.reportInstanceRequestError(
           spotId,
           request,
@@ -765,6 +778,13 @@ function isSpotRouteRefreshError(error: unknown): error is ZLinkFrameworkExcepti
     kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound ||
     kind === ZLinkFrameworkInternalErrorKind.ActorLocationStale ||
     kind === ZLinkFrameworkInternalErrorKind.RouteNotConnected
+  );
+}
+
+function isOwnerFenceRefusal(error: unknown): boolean {
+  return (
+    error instanceof ZLinkFrameworkException &&
+    internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.SpotMoving
   );
 }
 

@@ -14,6 +14,7 @@
 #include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "../support/owner_lease_time_store.hpp"
 
 #include <gtest/gtest.h>
@@ -29,6 +30,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <future>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -1197,8 +1201,7 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
 
     zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
-        if (_observed_store)
-            _observed_store->observe_owner_read_order (_user_spot_id, 0);
+        auto user_flow = observe_request_flow (_user_spot_id, 0);
         try {
             auto user = services.get_required<zlink::framework::spot_manager_t> ()
                           .get_or_create (zlink::framework::spot_id_t (_user_spot_id), "room")
@@ -1220,9 +1223,9 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
         if (_observed_store)
             user_owner_checked_before_authority =
               _observed_store->owner_was_read_in_expected_order ();
+        user_flow.reset ();
 
-        if (_observed_store)
-            _observed_store->observe_owner_read_order (_instance_spot_id, 1);
+        auto instance_flow = observe_request_flow (_instance_spot_id, 1);
         try {
             auto route_client = _app->advanced ().zlink ().route_client (
               services.get_required<zlink::framework::serializer_registry_t> ());
@@ -1246,12 +1249,30 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
         if (_observed_store)
             instance_owner_checked_before_authority =
               _observed_store->owner_was_read_in_expected_order ();
+        instance_flow.reset ();
 
         _app->stop ();
         co_return;
     }
 
     void stop () noexcept override {}
+
+    /* Each request runs in its own flow so the store counts only that
+     * request's reads, on whichever worker the request resumes. */
+    std::optional<zlink::framework::runtime::flow_context_t::scope_t>
+    observe_request_flow (const std::string &authority_fragment,
+                          unsigned authority_reads_before_owner)
+    {
+        if (!_observed_store)
+            return std::nullopt;
+        auto flow_id = zlink::framework::runtime::flow_id_t::create ();
+        _observed_store->observe_owner_read_order (authority_fragment, authority_reads_before_owner,
+                                                   flow_id);
+        return std::optional<zlink::framework::runtime::flow_context_t::scope_t> (
+          std::in_place, zlink::framework::runtime::flow_value_t{
+                           std::move (flow_id), zlink::framework::flow_origin_t::application,
+                           zlink::framework::message_flow_log_mode_t::normal, std::nullopt});
+    }
 
     std::optional<std::string> user_target;
     std::optional<zlink::framework::framework_error_kind_t> user_error;
@@ -1381,6 +1402,8 @@ descriptor_owner_lease_result_t run_descriptor_owner_lease_selection (
     client = service.get ();
     app.add_hosted_service (std::move (service));
 
+    // Request submission keeps the caller's flow only while flow capture is on.
+    app.set_message_flow_mode (zlink::framework::message_flow_log_mode_t::normal);
     descriptor_owner_lease_result_t result;
     result.app_result = app.run (0, nullptr);
     if (client != nullptr) {
@@ -2272,7 +2295,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ReadyAuthorityWithExpiredOwnerIsUnav
 
     store_location_resolvers_t resolvers (store);
     try {
-        (void) resolvers.resolve_spot_address ({}, "expired-spot").result ();
+        (void) resolvers.resolve_spot_address ({}, "expired-spot").result ().value ();
         FAIL () << "an expired authority owner must be unavailable";
     }
     catch (const zlink::framework::framework_exception_t &error) {
@@ -2476,6 +2499,52 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsMeshNodeDescript
     ASSERT_EQ (1u, summaries.items.size ());
     EXPECT_EQ (2u, summaries.items.front ().total_count);
     EXPECT_EQ (2u, summaries.items.front ().ready_count);
+}
+
+// Location runtime §7.4: a descriptor whose owner lease is gone still counts,
+// as stopped, even though its stored state says serving.
+TEST (ZLinkFrameworkStoreLocationResolvers, ServiceSummaryCountsReleasedOwnerAsStopped)
+{
+    in_memory_location_repository_t store;
+    const auto live_owner = claim_test_owner (store, "owner-live");
+    const auto released_owner = claim_test_owner (store, "owner-released");
+    for (const auto &[rid, owner] :
+         std::vector<std::pair<std::string, zlink::framework::location_owner_token_t>>{
+           {"node-live", live_owner}, {"node-released", released_owner}}) {
+        ASSERT_EQ (location_write_status_t::stored,
+                   store
+                     .update_mesh_node (
+                       zlink::framework::mesh_node_descriptor_t{
+                         .mesh_name = "mesh-a",
+                         .rid = zlink::routing_id_t::from (rid),
+                         .lifecycle_generation = 1,
+                         .descriptor_revision = 1,
+                         .endpoint = "tcp://127.0.0.1:7001",
+                         .application_version = 1,
+                         .object_role = zlink::framework::object_role_t::server,
+                         .capacity = {.actors = {.limit = 128}, .spots = {.limit = 128}},
+                         .activation_concurrency = {.limit = 128},
+                         .state = zlink::framework::framework_runtime_state_t::serving,
+                         .security_identity = "test",
+                         .owner_id = owner.owner_id,
+                         .lease_generation = owner.lease_generation},
+                       location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status);
+    }
+    (void) store.release_owner_lease (released_owner).result ();
+    location_options_t options;
+    location_runtime_t runtime (store, options, "owner-query");
+    store_location_runtime_query_t query (store, runtime, options);
+
+    const auto summaries =
+      query.list_service_summaries ({.mesh_name = "mesh-a"}).result ().value ();
+    ASSERT_EQ (1u, summaries.items.size ());
+    EXPECT_EQ (2u, summaries.items.front ().total_count);
+    EXPECT_EQ (1u, summaries.items.front ().ready_count);
+    EXPECT_EQ (1u, summaries.items.front ().stopped_count);
+    EXPECT_EQ (0u, summaries.items.front ().error_count);
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsExactAndPagedObjects)
@@ -3720,6 +3789,165 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppStreamHostStartsAndStopsTcpListen
     EXPECT_EQ (0, app.run (0, nullptr));
     ASSERT_NE (nullptr, client_ptr);
     EXPECT_TRUE (client_ptr->observed) << client_ptr->last_error_message ();
+}
+
+
+/* The descriptor owner order checks above rely on this observation: only the
+ * observed flow's reads count, and a wrong order or a read from another flow
+ * leaves the check false. */
+TEST (ZLinkFrameworkStoreLocationResolvers, OwnerReadOrderObservationCountsOnlyTheObservedFlow)
+{
+    namespace fw = zlink::framework;
+    using fw::runtime::flow_context_t;
+    using fw::runtime::flow_id_t;
+    using fw::runtime::flow_value_t;
+    using fw::tests::owner_lease_time_store_t;
+
+    in_memory_location_store_t inner;
+    owner_lease_time_store_t store (inner, "observed-owner",
+                                    owner_lease_time_store_t::lease_view_t::live);
+    const fw::store_key_t owner_key{std::string ("owner-lease") + '\0' + "observed-owner"};
+    const fw::store_key_t authority_key{"zla1:s:13:observed-spot"};
+    const auto enter = [] (const std::string &flow_id) {
+        return flow_context_t::scope_t (flow_value_t{flow_id, fw::flow_origin_t::application,
+                                                     fw::message_flow_log_mode_t::normal,
+                                                     std::nullopt});
+    };
+    const auto read = [&] (const fw::store_key_t &key) { (void) store.read (key).result (); };
+
+    // Expected order: one authority read, then the owner read.
+    auto observed = flow_id_t::create ();
+    store.observe_owner_read_order ("observed-spot", 1, observed);
+    {
+        auto scope = enter (observed);
+        read (authority_key);
+        read (owner_key);
+    }
+    EXPECT_TRUE (store.owner_was_read_in_expected_order ());
+
+    // Wrong order: the owner is read before the authority.
+    observed = flow_id_t::create ();
+    store.observe_owner_read_order ("observed-spot", 1, observed);
+    {
+        auto scope = enter (observed);
+        read (owner_key);
+        read (authority_key);
+    }
+    EXPECT_FALSE (store.owner_was_read_in_expected_order ());
+
+    // Reads of another flow and reads without a flow are not counted.
+    observed = flow_id_t::create ();
+    store.observe_owner_read_order ("observed-spot", 0, observed);
+    {
+        auto scope = enter (flow_id_t::create ());
+        read (owner_key);
+    }
+    read (owner_key);
+    EXPECT_FALSE (store.owner_was_read_in_expected_order ());
+    {
+        auto scope = enter (observed);
+        read (owner_key);
+    }
+    EXPECT_TRUE (store.owner_was_read_in_expected_order ());
+}
+
+zlink::framework::task_t<void> resolve_on_handler_executor (store_location_resolvers_t &resolvers,
+                                                            std::atomic_int &resolved,
+                                                            std::atomic_int &remaining,
+                                                            std::promise<void> &all_resolved)
+{
+    try {
+        const auto address = co_await resolvers.resolve_spot_address ({}, "spot-1");
+        if (address && address->node_rid.to_string () == "node-1")
+            ++resolved;
+    }
+    catch (...) {
+    }
+    if (--remaining == 0)
+        all_resolved.set_value ();
+}
+
+/* Execution gate §12: a handler that awaits a Spot request yields its
+ * executor worker, so the Location Store read that completes the request
+ * still progresses when every worker runs such a handler. Before #1380 the
+ * resolver read the authority with blocking waits whose continuations were
+ * queued behind those same workers. */
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      SpotResolutionOnEveryHandlerWorkerDoesNotBlockStoreContinuations)
+{
+    using namespace std::chrono_literals;
+    namespace fw = zlink::framework;
+    constexpr std::size_t workers = 2;
+    constexpr int requests = 8;
+
+    fw::runtime::in_memory_location_store_t provider;
+    fw::runtime::provider_location_repository_t repository (provider);
+    const auto claim = repository.claim_owner_lease ("owner-1", 30s).result ().value ();
+    const auto *claimed = std::get_if<fw::owner_lease_claimed_t> (&claim);
+    ASSERT_NE (claimed, nullptr);
+    fw::mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "mesh-1";
+    descriptor.rid = zlink::routing_id_t::from (std::string{"node-1"});
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = claimed->token.owner_id;
+    descriptor.lease_generation = claimed->token.lease_generation;
+    descriptor.object_role = fw::object_role_t::server;
+    descriptor.state = fw::framework_runtime_state_t::serving;
+    descriptor.object_capabilities.push_back ({fw::placement_object_kind_t::user_spot, "room",
+                                               fw::maintenance_policy_kind_t::snapshot, true, 10});
+    descriptor.capacity.spots.limit = 10;
+    descriptor.capacity.spot_types.push_back (
+      {fw::placement_object_kind_t::user_spot, "room", {0, 0, 10}});
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    fw::object_reserve_request_t request;
+    request.key = {fw::placement_object_kind_t::user_spot, "spot-1"};
+    request.intent.stable_type = "room";
+    request.target = {"mesh-1", fw::node_rid_t::from_string ("node-1"), 1, claimed->token};
+    request.creating_payload = {std::byte{0}};
+    request.capacity_bundle.spot_slots = 1;
+    request.capacity_bundle.spot_type =
+      fw::spot_type_capacity_delta_t{fw::placement_object_kind_t::user_spot, "room", 1};
+    const auto reserved = repository.reserve (request).result ().value ();
+    const auto *reservation = std::get_if<fw::object_reserved_t> (&reserved);
+    ASSERT_NE (reservation, nullptr);
+    const auto committed =
+      repository
+        .commit ({request.key, reservation->fence, user_spot_authority_payload ("spot-1", 1)})
+        .result ()
+        .value ();
+    ASSERT_TRUE (std::holds_alternative<fw::object_committed_t> (committed));
+
+    location_options_t options;
+    options.route_cache_max_age = std::chrono::milliseconds::zero ();
+    store_location_resolvers_t resolvers (repository, options);
+
+    fw::runtime::configure_handler_coroutine_executor (workers);
+    fw::runtime::install_host_context_hooks ();
+    std::atomic_int resolved{0};
+    std::atomic_int remaining{requests};
+    std::promise<void> all_resolved;
+    auto finished = all_resolved.get_future ();
+    for (int index = 0; index < requests; ++index) {
+        fw::runtime::handler_coroutine_executor ().post_native_continuation ([&] {
+            (void) resolve_on_handler_executor (resolvers, resolved, remaining, all_resolved);
+        });
+    }
+    if (finished.wait_for (10s) != std::future_status::ready) {
+        // Every handler worker is parked in a blocking wait; the executor
+        // cannot be drained, so end the process instead of hanging teardown.
+        std::fprintf (stderr, "Spot resolution deadlocked the handler executor (%d/%d)\n",
+                      resolved.load (), requests);
+        std::fflush (stderr);
+        std::_Exit (EXIT_FAILURE);
+    }
+    fw::runtime::shutdown_handler_coroutine_executor ();
+    EXPECT_EQ (requests, resolved.load ());
 }
 
 } // namespace

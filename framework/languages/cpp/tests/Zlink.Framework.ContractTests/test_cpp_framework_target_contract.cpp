@@ -11,6 +11,7 @@
 #include <array>
 #include <filesystem>
 #include <iostream>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,35 @@ std::string read_source_tree (const std::filesystem::path &root)
         }
     }
     return source;
+}
+
+// GCC 13 evaluates a co_await operand of ||, && or ?: even when the other
+// operand already decides the result, so a guarded null dereference runs.
+// Runtime sources split such awaits into if statements.
+std::vector<std::string> short_circuit_awaits (const std::filesystem::path &root)
+{
+    static const std::regex same_line (R"((\|\||&&|\?)[^;]*co_await)");
+    static const std::regex continued (R"(^\s*(\|\||&&|\?|:)\s*[!(]*\s*co_await)");
+    std::vector<std::string> found;
+    for (const auto &entry : std::filesystem::recursive_directory_iterator (root)) {
+        const auto ext = entry.path ().extension ();
+        if (!entry.is_regular_file () || (ext != ".hpp" && ext != ".cpp"))
+            continue;
+        const auto text = read_text_file (entry.path ());
+        std::size_t line_number = 0;
+        std::size_t start = 0;
+        while (start < text.size ()) {
+            const auto end = text.find ('\n', start);
+            const auto line = text.substr (start, end == std::string::npos ? end : end - start);
+            ++line_number;
+            if (std::regex_search (line, same_line) || std::regex_search (line, continued))
+                found.push_back (entry.path ().string () + ":" + std::to_string (line_number));
+            if (end == std::string::npos)
+                break;
+            start = end + 1;
+        }
+    }
+    return found;
 }
 
 struct gate_t
@@ -820,10 +850,16 @@ int main ()
     gate.require (channel_outbound_exchange.find ("client topology changed; rotate transport")
                     == std::string::npos,
                   "E2E-CP-40", "topology diff still reconnects every surviving endpoint");
-    gate.require (app_runtime.find ("propagation_bound") != std::string::npos
-                    && app_runtime.find ("polling_interval") != std::string::npos
-                    && app_runtime.find ("std::chrono::seconds (5)") != std::string::npos,
-                  "E2E-CP-43", "drain removes owner rows before the polling propagation bound");
+    /* E2E-CP-43 — Shutdown publishes the Draining owner rows and descriptor and
+     * waits only for the publish terminal; no time wait for propagation follows
+     * (host-relocation-flow §14 step 2). */
+    gate.require (
+      app_runtime.find ("republish_peer_rows_draining") != std::string::npos
+        && app_runtime.find (
+             "publish_mesh_descriptor_state (state, framework_runtime_state_t::draining)")
+             != std::string::npos
+        && app_runtime.find ("propagation_bound") == std::string::npos,
+      "E2E-CP-43", "drain must publish Draining rows and descriptor without a propagation wait");
     gate.require (client_server_location_runtime.find ("descriptor.state") != std::string::npos
                     && client_server_location_runtime.find ("!= framework_runtime_state_t::serving")
                          != std::string::npos,
@@ -961,9 +997,13 @@ int main ()
      * on the node owner; the unified Actor token carries that lease through
      * handler terminal. */
     gate.require (
-      spot_runtime.find ("bool spot_context_state_t::admit_core (bool claim) noexcept")
+      spot_runtime.find ("bool spot_context_state_t::admit_core (\n"
+                         "  bool claim, const instance_spot_retained_message_t *retained_record) "
+                         "noexcept")
           != std::string::npos
-        && spot_runtime.find ("return state_sync ([this, claim] { return admit_core (claim); });")
+        && spot_runtime.find ("return state_sync (\n"
+                              "      [this, claim, retained_record] { return admit_core (claim, "
+                              "retained_record); });")
              != std::string::npos
         && spot_runtime.find ("class actor_dispatch_admission_token_t final") != std::string::npos
         && spot_runtime.find ("admission_token->acquire_dispatch_phase") != std::string::npos
@@ -971,7 +1011,8 @@ int main ()
         && spot_runtime.find ("admission_token ? admission_token->handler_terminal ()")
              != std::string::npos
         && spot_runtime.find ("const bool admission_preclaimed =") != std::string::npos
-        && spot_runtime.find ("!admission_preclaimed && !state->admit (true)") != std::string::npos
+        && spot_runtime.find ("if (!admission_preclaimed\n                && !state->admit (true,")
+             != std::string::npos
         && spot_runtime.find ("&& state->close_reservation == 0") != std::string::npos
         && spot_runtime.find ("return queue->try_post_async") != std::string::npos,
       "CPP-DISP-006",
@@ -1361,6 +1402,12 @@ int main ()
                     && connector_contract.find ("namespace zlink::stream_connector::assertions")
                          != std::string::npos,
                   "TH-CP-01", "C++ stream connector contract omits the common test helper surface");
+
+    for (const auto &scanned : {root / "framework/src", include_root}) {
+        for (const auto &site : short_circuit_awaits (scanned))
+            gate.require (false, "GCC-COAWAIT-01",
+                          "co_await inside a short-circuit or conditional operand: " + site);
+    }
 
     if (gate.failures != 0) {
         std::cerr << "target contract gate failures: " << gate.failures << '\n';

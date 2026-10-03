@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -275,22 +276,35 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             );
         var operationTimeout = _timeout ?? runtime.Registration.DefaultRequestTimeout;
         var deadline = Stopwatch.GetElapsedTime(0) + operationTimeout;
-        var handle = _exactSpotIdCall
-            ? await runtime
-                .ResolveSpotHandleAsync(target.SpotId, cancellationToken)
-                .ConfigureAwait(false)
-            : await runtime
-                .ResolveInstanceSpotHandleAsync(target, cancellationToken)
-                .ConfigureAwait(false);
+        var handle = await ResolveHandleAsync(cancellationToken).ConfigureAwait(false);
         if (handle is not null)
         {
-            return await RequestExistingAsync<TReply>(
-                    handle,
-                    terminator,
-                    Remaining(deadline),
-                    cancellationToken
+            try
+            {
+                return await RequestExistingAsync<TReply>(
+                        handle,
+                        terminator,
+                        Remaining(deadline),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (ZLinkFrameworkException error)
+                when (_instanceIntent
+                    && error.FrameworkFailureCode
+                        == (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving
                 )
-                .ConfigureAwait(false);
+            {
+                // Failover policy §4.4: after Close released authority, the next
+                // Instance intent message cold-activates. SpotMoving is the
+                // owner's Ready owner-fence refusal, made before admission, and
+                // the route is already invalidated; a message the owner accepted
+                // ends with its own terminal (§7 step 3) and is never placed
+                // again. One authority read decides: Missing continues as the
+                // cold activation below; any other authority keeps the terminal.
+                if (await ResolveHandleAsync(cancellationToken).ConfigureAwait(false) is not null)
+                    throw;
+            }
         }
 
         if (!_instanceIntent)
@@ -329,6 +343,13 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             runtime.Flow.CaptureEnabled
         );
     }
+
+    private ValueTask<ZLinkResolvedSpotHandle?> ResolveHandleAsync(
+        CancellationToken cancellationToken
+    ) =>
+        _exactSpotIdCall
+            ? runtime.ResolveSpotHandleAsync(target.SpotId, cancellationToken)
+            : runtime.ResolveInstanceSpotHandleAsync(target, cancellationToken);
 
     private async ValueTask<TReply> RequestExistingAsync<TReply>(
         ZLinkResolvedSpotHandle handle,

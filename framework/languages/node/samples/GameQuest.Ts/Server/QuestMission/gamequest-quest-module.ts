@@ -86,7 +86,8 @@ function createQuestMissionModule(instanceId: 'mission-a' | 'mission-b') {
       },
       QuestEventProcessor,
       PlayerQuestNotifier,
-      PlayerQuestSpotProvisioner
+      PlayerQuestSpotProvisioner,
+      PlayerQuestSpot
     ]
   })(GameQuestQuestModule);
 

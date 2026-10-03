@@ -613,7 +613,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     @Override
     public CompletionStage<Void> leaveActor(ZLinkActor actor) {
         rejectAfterRelocationReady("leaveActor");
-        return host.leaveActor(nodeRid, spot, actor, spotId());
+        return host.leaveActor(actor);
     }
 
     @Override

@@ -189,6 +189,7 @@ test('operation deadline cancellation completes with DeadlineExceeded instead of
   const { M6bServiceWireCommand, encodeUserSpotCreateHeader, decodeStatefulReply } = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
   const { ApplicationIngressRecordOwner } = require('../../packages/framework/dist/runtime/application-jobs/application-ingress-record-owner');
   const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+  const { ServiceWireFrameworkErrorCode } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
   context.mock.timers.enable({ apis: ['setTimeout'] });
   let ingress;
   let handlerStarted;
@@ -235,7 +236,11 @@ test('operation deadline cancellation completes with DeadlineExceeded instead of
     });
     await started;
     context.mock.timers.tick(1000);
-    assert.equal(decodeStatefulReply((await reply)[0], 3n, 'userSpotCreate').terminalResult, RequestResult.TimedOut);
+    // Error model §2.1: DeadlineExceeded is sent as its representative workerTimedOut,
+    // whose exact terminal is internalError (schema terminal-failure-integrity).
+    const deadlineReply = decodeStatefulReply((await reply)[0], 3n, 'userSpotCreate');
+    assert.equal(deadlineReply.terminalResult, RequestResult.InternalError);
+    assert.equal(deadlineReply.failureCode, ServiceWireFrameworkErrorCode.workerTimedOut);
   } finally {
     runtime.close();
   }

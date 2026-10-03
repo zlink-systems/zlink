@@ -11,9 +11,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOpe
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEvent;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEventKind;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleInfo;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindOperation;
@@ -250,34 +247,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                 encodeStreamHeader(2, 0, packetName, Optional.of(requestSeq)),
                 payload,
                 Optional.empty());
-    }
-
-    public void dispatchEntrySpotActorLifecycleLeft(String actorId) {
-        FakeSpot entrySpot =
-                spots.stream()
-                        .filter(spot -> "entrySpot".equals(spot.name()))
-                        .findFirst()
-                        .orElseThrow(
-                                () -> new IllegalStateException("no fake entry spot is available"));
-        entrySpot.enqueueActorLifecycleLeft(actorId);
-        entrySpot.dispatchActorLifecycleReadable();
-    }
-
-    public void dispatchEntrySpotActorLifecycleJoined(String actorId, String spotId) {
-        FakeSpot entrySpot =
-                spots.stream()
-                        .filter(spot -> "entrySpot".equals(spot.name()))
-                        .findFirst()
-                        .orElseThrow(
-                                () -> new IllegalStateException("no fake entry spot is available"));
-        entrySpot.enqueueActorLifecycleJoined(actorId, spotId);
-        entrySpot.dispatchActorLifecycleReadable();
-    }
-
-    public void dispatchSpotActorLifecycleLeft(String actorId) {
-        FakeSpot spot = firstUserSpot();
-        spot.enqueueActorLifecycleLeft(actorId);
-        spot.dispatchActorLifecycleReadable();
     }
 
     public void dispatchSpotRoute(String packetName, String payload) {
@@ -1231,13 +1200,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         }
 
         @Override
-        public CompletionStage<List<Message>> leaveActor(
-                ZLinkBackendActorRef actor, String currentSpotId, Duration timeout) {
-            record("leaveActor." + actor.actorId() + "." + currentSpotId);
-            return CompletableFuture.completedFuture(List.of());
-        }
-
-        @Override
         public CompletionStage<Void> destroyActor(ZLinkBackendActorRef actor, Duration timeout) {
             record("destroyActor." + actor.actorId());
             owner.actors.remove(actor.actorId());
@@ -1488,7 +1450,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         private final Deque<ZLinkBackendActorJoinRequest> actorJoins = new ArrayDeque<>();
         private final Map<String, CompletableFuture<FakeActorJoinReply>> actorJoinReplies =
                 new ConcurrentHashMap<>();
-        private final Deque<ZLinkBackendActorLifecycleEvent> actorLifecycles = new ArrayDeque<>();
         private final Deque<ZLinkBackendReceived> routes = new ArrayDeque<>();
         private final Deque<ZLinkBackendTopicMessage> subscriptions = new ArrayDeque<>();
         private final List<String> replies = new ArrayList<>();
@@ -1538,35 +1499,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
             dispatchHandler.handle(
                     new ZLinkBackendSpotDispatchInfo(
                             ZLinkBackendSpotDispatchEvent.ACTOR_JOIN_READABLE, List.of()));
-        }
-
-        void enqueueActorLifecycleLeft(String actorId) {
-            ZLinkBackendActorRef actor =
-                    new ZLinkBackendActorRef(RoutingId.from("spot-node"), actorId, 1);
-            actorLifecycles.add(
-                    new ZLinkBackendActorLifecycleEvent(
-                            ZLinkBackendActorLifecycleEventKind.LEFT,
-                            new ZLinkBackendActorLifecycleInfo(
-                                    actor, actor, Optional.of(spotId()), Optional.empty(), 1, 0)));
-        }
-
-        void enqueueActorLifecycleJoined(String actorId, String spotId) {
-            ZLinkBackendActorRef actor =
-                    new ZLinkBackendActorRef(RoutingId.from("spot-node"), actorId, 1);
-            actorLifecycles.add(
-                    new ZLinkBackendActorLifecycleEvent(
-                            ZLinkBackendActorLifecycleEventKind.JOINED,
-                            new ZLinkBackendActorLifecycleInfo(
-                                    actor, actor, Optional.empty(), Optional.of(spotId), 0, 1)));
-        }
-
-        void dispatchActorLifecycleReadable() {
-            if (dispatchHandler == null) {
-                throw new IllegalStateException("fake spot dispatch handler is not registered");
-            }
-            dispatchHandler.handle(
-                    new ZLinkBackendSpotDispatchInfo(
-                            ZLinkBackendSpotDispatchEvent.ACTOR_LIFECYCLE_READABLE, List.of()));
         }
 
         void enqueueRoute(String packetName, String payload, Optional<Long> requestSeq) {
@@ -1815,12 +1747,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                 pending.complete(new FakeActorJoinReply(joinResultCode, replyParts));
             }
         }
-
-        @Override
-        public ZLinkBackendActorLifecycleEvent recvActorLifecycle(ZLinkBackendRecvMode mode) {
-            record("recvActorLifecycle." + mode);
-            return actorLifecycles.pollFirst();
-        }
     }
 
     private static final class FakeStreamSocket extends FakeSocket
@@ -2033,6 +1959,12 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         @Override
         public boolean waitForReadable(Duration timeout) {
             try {
+                // A negative timeout (WAIT_UNTIL_EVENT) waits until an event or close, as the
+                // binding poller does.
+                if (timeout.isNegative()) {
+                    readable.acquire();
+                    return !closed;
+                }
                 return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS) && !closed;
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();

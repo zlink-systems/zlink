@@ -4,6 +4,8 @@
 #include <runtime/locations/location_repository.hpp>
 
 #include "runtime/actors/actor_client.hpp"
+#include "runtime/execution/task_result.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/channel_host_service.hpp"
 #include "runtime/channels/channel_runtime.hpp"
@@ -170,11 +172,11 @@ class store_actor_directory_t final : public actor_directory_t
 
     task_t<std::optional<actor_ref_t>> find (std::string actor_id) override
     {
-        auto read = _store.read_authority (runtime::actor_authority_key (actor_id)).result ();
+        auto read = co_await runtime::await_result (
+          _store.read_authority (runtime::actor_authority_key (actor_id)));
         if (!read) {
-            return task_t<std::optional<actor_ref_t>> (
-              detail::propagate_failure<std::optional<actor_ref_t>> (
-                read, "actor authority lookup failed"));
+            co_return detail::propagate_failure<std::optional<actor_ref_t>> (
+              read, "actor authority lookup failed");
         }
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
         const auto projection = snapshot ? runtime::decode_actor_authority_payload (
@@ -183,11 +185,9 @@ class store_actor_directory_t final : public actor_directory_t
         if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
             || snapshot->allocation.object_kind != placement_object_kind_t::actor || !projection
             || projection->actor.actor_id ().value () != actor_id) {
-            return task_t<std::optional<actor_ref_t>> (
-              result_t<std::optional<actor_ref_t>>::success (std::nullopt));
+            co_return result_t<std::optional<actor_ref_t>>::success (std::nullopt);
         }
-        return task_t<std::optional<actor_ref_t>> (
-          result_t<std::optional<actor_ref_t>>::success (projection->actor));
+        co_return result_t<std::optional<actor_ref_t>>::success (projection->actor);
     }
 
   private:
@@ -1687,25 +1687,24 @@ void app_t::_apply_zlink_framework ()
             mesh_node_descriptor_t target;
             std::string stable_type;
         };
-        auto select_instance_target =
-          [mesh_nodes, &location_store, &location_resolvers] (
-            const spot_id_t &spot_id, const detail::spot_activation_intent_t &intent,
-            const std::optional<runtime::spot_address_t> &cached_route = {})
-          -> result_t<selected_instance_target_t> {
+        auto select_instance_target = [mesh_nodes, &location_store, &location_resolvers] (
+                                        spot_id_t spot_id, detail::spot_activation_intent_t intent,
+                                        std::optional<runtime::spot_address_t> cached_route = {})
+          -> task_t<result_t<selected_instance_target_t>> {
             if (cached_route) {
                 const auto source =
                   std::find_if (mesh_nodes.begin (), mesh_nodes.end (), [&] (const auto &mesh) {
                       return mesh->mesh_name () == cached_route->mesh_name;
                   });
                 if (source == mesh_nodes.end ())
-                    return result_t<selected_instance_target_t>::failure (
+                    co_return result_t<selected_instance_target_t>::failure (
                       framework_error_kind_t::not_configured,
                       "Ready Instance Spot source Mesh is not configured");
                 mesh_node_descriptor_t target;
                 target.rid = cached_route->node_rid;
                 target.lifecycle_generation = cached_route->node_generation;
                 target.mesh_name = cached_route->mesh_name;
-                return result_t<selected_instance_target_t>::success (
+                co_return result_t<selected_instance_target_t>::success (
                   {*source, std::move (target), {}});
             }
             std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> sources;
@@ -1714,20 +1713,21 @@ void app_t::_apply_zlink_framework ()
                     sources.push_back (mesh);
             }
             if (sources.empty ())
-                return result_t<selected_instance_target_t>::failure (
+                co_return result_t<selected_instance_target_t>::failure (
                   intent.mesh_name ? framework_error_kind_t::not_found
                                    : framework_error_kind_t::not_configured,
                   "No Instance Spot source Mesh is configured");
             if (!intent.mesh_name && sources.size () != 1)
-                return result_t<selected_instance_target_t>::failure (
+                co_return result_t<selected_instance_target_t>::failure (
                   framework_error_kind_t::invalid_operation,
                   "More than one object Mesh is configured; select one with in_mesh");
             const auto source = sources.front ();
             std::vector<mesh_node_descriptor_t> candidates;
             std::vector<mesh_node_descriptor_t> visible_targets;
-            auto listed = location_resolvers.list_live_mesh_nodes (source->mesh_name ()).result ();
+            auto listed = co_await runtime::await_result (
+              location_resolvers.list_live_mesh_nodes (source->mesh_name ()));
             if (!listed.has_value ())
-                return detail::propagate_failure<selected_instance_target_t> (
+                co_return detail::propagate_failure<selected_instance_target_t> (
                   listed, "Instance Spot target lookup failed");
             for (auto &descriptor : listed.value ()) {
                 if (descriptor.state != framework_runtime_state_t::serving
@@ -1761,9 +1761,7 @@ void app_t::_apply_zlink_framework ()
                     candidates.push_back (std::move (descriptor));
             }
             const auto authority =
-              location_store.read_authority (runtime::spot_authority_key (spot_id))
-                .result ()
-                .value ();
+              co_await location_store.read_authority (runtime::spot_authority_key (spot_id));
             if (const auto *snapshot = std::get_if<authority_snapshot_t> (&authority);
                 snapshot && snapshot->allocation.state == placement_allocation_state_t::active
                 && snapshot->allocation.object_kind == placement_object_kind_t::instance_spot
@@ -1779,14 +1777,14 @@ void app_t::_apply_zlink_framework ()
                                   == snapshot->allocation.target.node_lifecycle_generation;
                   });
                 if (current != visible_targets.end ()) {
-                    return result_t<selected_instance_target_t>::success (
+                    co_return result_t<selected_instance_target_t>::success (
                       {source, *current, snapshot->allocation.stable_type});
                 }
-                return result_t<selected_instance_target_t>::failure (
+                co_return result_t<selected_instance_target_t>::failure (
                   framework_error_kind_t::unavailable, "Ready Instance Spot owner is unavailable");
             }
             if (candidates.empty ())
-                return result_t<selected_instance_target_t>::failure (
+                co_return result_t<selected_instance_target_t>::failure (
                   framework_error_kind_t::not_found, "No eligible Instance Spot target is Ready");
             std::set<std::string> stable_types;
             for (const auto &candidate : candidates)
@@ -1795,7 +1793,7 @@ void app_t::_apply_zlink_framework ()
                         && (!intent.stable_type || capability.stable_type == *intent.stable_type))
                         stable_types.insert (capability.stable_type);
             if (!intent.stable_type && stable_types.size () != 1)
-                return result_t<selected_instance_target_t>::failure (
+                co_return result_t<selected_instance_target_t>::failure (
                   framework_error_kind_t::not_configured,
                   "Instance Spot stable type is required when the Mesh publishes multiple types");
             const auto stable_type =
@@ -1824,11 +1822,11 @@ void app_t::_apply_zlink_framework ()
                 }),
               candidates.end ());
             if (candidates.empty ())
-                return result_t<selected_instance_target_t>::failure (
+                co_return result_t<selected_instance_target_t>::failure (
                   framework_error_kind_t::not_found,
                   "No eligible Instance Spot target has capacity");
             const auto index = std::hash<std::string>{}(std::string (spot_id)) % candidates.size ();
-            return result_t<selected_instance_target_t>::success (
+            co_return result_t<selected_instance_target_t>::success (
               {source, candidates[index], stable_type});
         };
         for (const auto &registration : mesh_node_registrations) {
@@ -1836,16 +1834,16 @@ void app_t::_apply_zlink_framework ()
                 continue;
             registration->spot_state->select_instance_spot_target =
               [select_instance_target] (
-                const runtime::protocol::instance_spot_activation_header_t &original)
-              -> result_t<runtime::protocol::instance_spot_activation_header_t> {
+                runtime::protocol::instance_spot_activation_header_t original)
+              -> task_t<result_t<runtime::protocol::instance_spot_activation_header_t>> {
                 const detail::spot_activation_intent_t intent{
                   .instance = true,
                   .stable_type = original.target.stable_type,
                   .mesh_name = original.target.mesh_name};
                 const auto selected =
-                  select_instance_target (spot_id_t (original.target.spot_id), intent);
+                  co_await select_instance_target (spot_id_t (original.target.spot_id), intent);
                 if (!selected)
-                    return detail::propagate_failure<
+                    co_return detail::propagate_failure<
                       runtime::protocol::instance_spot_activation_header_t> (
                       selected, "Instance Spot target selection failed");
                 auto header = original;
@@ -1856,7 +1854,7 @@ void app_t::_apply_zlink_framework ()
                 header.target.stable_type = selected.value ().stable_type;
                 header.target.descriptor_version =
                   std::to_string (selected.value ().target.descriptor_revision);
-                return result_t<runtime::protocol::instance_spot_activation_header_t>::success (
+                co_return result_t<runtime::protocol::instance_spot_activation_header_t>::success (
                   std::move (header));
             };
         }
@@ -1912,7 +1910,7 @@ void app_t::_apply_zlink_framework ()
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application, detail::message_flow_tracer_t (dispatch).mode ());
               const auto flow = runtime::flow_context_t::current ();
-              auto selected = select_instance_target (spot_id, intent, cached_route);
+              auto selected = co_await select_instance_target (spot_id, intent, cached_route);
               if (!selected)
                   co_return detail::propagate_failure<void> (
                     selected, "Instance Spot target selection failed");
@@ -1957,7 +1955,7 @@ void app_t::_apply_zlink_framework ()
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application, detail::message_flow_tracer_t (dispatch).mode ());
               const auto flow = runtime::flow_context_t::current ();
-              auto selected = select_instance_target (spot_id, intent, cached_route);
+              auto selected = co_await select_instance_target (spot_id, intent, cached_route);
               if (!selected)
                   co_return detail::propagate_failure<zlink::message_t> (
                     selected, "Instance Spot target selection failed");
@@ -3158,7 +3156,8 @@ relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &
                   return descriptor.rid.to_hex () == local_rid->to_hex ()
                          && descriptor.lifecycle_generation == status.lifecycle_generation ();
               });
-            if (source == descriptors.end () || !live.owner_admission_lifetime (source->owner_id)) {
+            if (source == descriptors.end ()
+                || !live.owner_admission_lifetime (source->owner_id).result ().value ()) {
                 return {relocation_reason_t::store_unavailable, 0};
             }
             if (source_application_version
@@ -3182,7 +3181,7 @@ relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &
               [&] (const mesh_node_descriptor_t &candidate) {
                   return !local_rids.contains (candidate.rid.to_hex ())
                          && candidate.lifecycle_generation != 0
-                         && live.owner_admission_lifetime (candidate.owner_id)
+                         && live.owner_admission_lifetime (candidate.owner_id).result ().value ()
                          && supports_relocation_source (*source, candidate,
                                                         target_application_version)
                          && node->has_admitted_peer (candidate.rid, candidate.lifecycle_generation);
@@ -3242,9 +3241,9 @@ relocation_topology_preflight_until (detail::app_state_t &state,
 }
 
 template <typename Predicate>
-std::optional<mesh_node_descriptor_t>
+task_t<std::optional<mesh_node_descriptor_t>>
 wait_for_relocation_target (runtime::store_location_resolvers_t &peers,
-                            std::string_view mesh_name,
+                            std::string mesh_name,
                             std::chrono::steady_clock::time_point deadline_at,
                             std::chrono::milliseconds polling_interval,
                             const std::function<bool ()> &shutdown_requested,
@@ -3252,7 +3251,7 @@ wait_for_relocation_target (runtime::store_location_resolvers_t &peers,
                             relocation_reason_t &failure_reason)
 {
     for (;;) {
-        auto live = peers.list_live_mesh_nodes (std::string (mesh_name)).result ().value ();
+        auto live = co_await peers.list_live_mesh_nodes (mesh_name);
         // Spec step 6: apply node-wide placement weight to the final eligible
         // candidate set with a deterministic weighted draw instead of taking the
         // first eligible node in store order. The candidate key pairs RID with
@@ -3276,17 +3275,21 @@ wait_for_relocation_target (runtime::store_location_resolvers_t &peers,
                   return candidate_key (candidate) == *chosen;
               });
             if (target != live.end ())
-                return *target;
+                co_return *target;
         }
         if (shutdown_requested ()) {
             failure_reason = relocation_reason_t::shutdown_requested;
-            return std::nullopt;
+            co_return std::nullopt;
         }
         if (std::chrono::steady_clock::now () >= deadline_at) {
             failure_reason = relocation_reason_t::target_unavailable;
-            return std::nullopt;
+            co_return std::nullopt;
         }
-        wait_for_relocation_topology_poll (deadline_at, polling_interval);
+        co_await detail::delay (
+          std::max (std::chrono::milliseconds::zero (),
+                    std::chrono::ceil<std::chrono::milliseconds> (
+                      std::min<std::chrono::steady_clock::duration> (
+                        deadline_at - std::chrono::steady_clock::now (), polling_interval))));
     }
 }
 
@@ -3585,8 +3588,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
             mesh_node_descriptor_t source_descriptor;
             {
                 const auto source_generation = node->status ().lifecycle_generation ();
-                auto live_source =
-                  peers->get ().list_live_mesh_nodes (node->mesh_name ()).result ().value ();
+                auto live_source = co_await peers->get ().list_live_mesh_nodes (node->mesh_name ());
                 const auto found =
                   std::find_if (live_source.begin (), live_source.end (),
                                 [&] (const mesh_node_descriptor_t &descriptor) {
@@ -3604,7 +3606,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
 
             std::set<std::string> aggregate_actor_ids;
             for (const auto &unit : application_units) {
-                const auto target = wait_for_relocation_target (
+                const auto target = co_await wait_for_relocation_target (
                   peers->get (), node->mesh_name (), deadline_at, topology_poll_interval,
                   shutdown_requested,
                   [&] (const mesh_node_descriptor_t &peer) {
@@ -3668,7 +3670,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                         ? runtime::actor_authority_key (source.key)
                         : runtime::spot_authority_key (source.key);
                     const auto authority_read =
-                      location_store->get ().read_authority (authority_key).result ().value ();
+                      co_await location_store->get ().read_authority (authority_key);
                     const auto *authority = std::get_if<authority_snapshot_t> (&authority_read);
                     if (!authority
                         || authority->allocation.state != placement_allocation_state_t::active
@@ -3715,7 +3717,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     complete (terminal);
                     co_return;
                 }
-                const auto target = wait_for_relocation_target (
+                const auto target = co_await wait_for_relocation_target (
                   peers->get (), node->mesh_name (), deadline_at, topology_poll_interval,
                   shutdown_requested,
                   [&] (const mesh_node_descriptor_t &peer) {
@@ -3740,7 +3742,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 const auto authority_key =
                   runtime::actor_authority_key (actor.actor_id ().value ());
                 const auto authority_read =
-                  location_store->get ().read_authority (authority_key).result ().value ();
+                  co_await location_store->get ().read_authority (authority_key);
                 const auto *authority = std::get_if<authority_snapshot_t> (&authority_read);
                 if (!authority
                     || authority->allocation.state != placement_allocation_state_t::active

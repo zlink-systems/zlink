@@ -439,7 +439,6 @@ public sealed partial class StreamConnectorTests
         public TaskCompletionSource ReleaseWrite { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int WriteCount => Volatile.Read(ref _writeCount);
-        public bool CanWriteSegments => false;
 
         public async ValueTask<int> ReadAsync(
             Memory<byte> buffer,
@@ -477,7 +476,6 @@ public sealed partial class StreamConnectorTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseClose { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public bool CanWriteSegments => false;
 
         public async ValueTask<int> ReadAsync(
             Memory<byte> buffer,

@@ -1788,7 +1788,7 @@ class stream_host_service_t::listener_t
             throw framework_exception_t (framework_error_kind_t::not_configured,
                                          "STREAM Actor dispatch MeshNode has no routing id");
         }
-        auto actor_route = _mesh_node->resolve_application_actor_route (actor);
+        auto actor_route = co_await _mesh_node->resolve_application_actor_route (actor);
         if (!actor_route) {
             throw framework_exception_t (framework_error_kind_t::not_found,
                                          "Actor session binding route is unavailable");
@@ -1804,7 +1804,8 @@ class stream_host_service_t::listener_t
          * freshly resolved route. */
         if (previous_binding) {
             const auto cached_route = *actor_route;
-            actor_route = _mesh_node->refresh_application_actor_route (actor, cached_route);
+            actor_route =
+              co_await _mesh_node->refresh_application_actor_route (actor, cached_route);
             if (!actor_route) {
                 throw framework_exception_t (framework_error_kind_t::not_found,
                                              "Actor session binding route refresh failed");
@@ -1999,7 +2000,7 @@ class stream_host_service_t::listener_t
                 /* Invalidate the stale cached route, then wait (capped
                  * ~1s) for the authority to publish a changed route
                  * before re-entering the bind. */
-                (void) _mesh_node->refresh_application_actor_route (actor, *actor_route);
+                (void) co_await _mesh_node->refresh_application_actor_route (actor, *actor_route);
                 (void) co_await _mesh_node->wait_for_application_actor_route_change (
                   actor, *actor_route, std::min (remaining, std::chrono::milliseconds (1000)));
             } else {
@@ -2008,7 +2009,7 @@ class stream_host_service_t::listener_t
                  * Store watcher has not observed the committed relocation
                  * yet. Refresh before retrying so a reconnect cannot pin the
                  * removed source Actor for the entire binding deadline. */
-                (void) _mesh_node->refresh_application_actor_route (actor, *actor_route);
+                (void) co_await _mesh_node->refresh_application_actor_route (actor, *actor_route);
                 co_await detail::delay (std::min (remaining, std::chrono::milliseconds (10)));
             }
             co_await bind_actor_session (transport_connection, session_rid, actor, replacement,
