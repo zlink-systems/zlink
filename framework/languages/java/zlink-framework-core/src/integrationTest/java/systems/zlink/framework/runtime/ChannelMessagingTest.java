@@ -188,9 +188,11 @@ final class ChannelMessagingTest {
                                             .toCompletableFuture()
                                             .join());
 
+            // 00-foundation/06-framework-api.ko.md#no-eligible-select-one-member: weight 0
+            // removes the only member, so the call ends with Unavailable, not NotFound.
             assertTrue(failure.getCause() instanceof ZLinkFrameworkException);
             assertEquals(
-                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
                     ((ZLinkFrameworkException) failure.getCause()).kind());
         }
     }

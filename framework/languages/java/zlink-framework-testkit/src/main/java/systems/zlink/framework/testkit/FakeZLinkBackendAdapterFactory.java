@@ -1959,6 +1959,12 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         @Override
         public boolean waitForReadable(Duration timeout) {
             try {
+                // A negative timeout (WAIT_UNTIL_EVENT) waits until an event or close, as the
+                // binding poller does.
+                if (timeout.isNegative()) {
+                    readable.acquire();
+                    return !closed;
+                }
                 return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS) && !closed;
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();

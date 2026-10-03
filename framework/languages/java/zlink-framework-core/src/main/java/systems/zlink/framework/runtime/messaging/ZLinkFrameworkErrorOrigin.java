@@ -38,6 +38,23 @@ public final class ZLinkFrameworkErrorOrigin {
                 .receivedFailure(kind, message, failureCode, FRAMEWORK_METADATA);
     }
 
+    /**
+     * The target refuses a message routed with an owner fence that is no longer current, before
+     * admission. The reply carries {@code spotMoving}, which tells the caller that the message was
+     * never accepted; the cause holds that code so the reported error stays a Framework error.
+     */
+    public static ZLinkFrameworkException ownerFenceRefusal(String message) {
+        return framework(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                message,
+                framework(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        message,
+                        (int)
+                                systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                        .FRAMEWORK_ERROR_SPOT_MOVING));
+    }
+
     public static boolean isFramework(Throwable error) {
         return error instanceof ZLinkFrameworkException framework
                 && FRAMEWORK.equals(framework.metadata().get(METADATA_KEY));

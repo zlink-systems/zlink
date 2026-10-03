@@ -632,7 +632,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     var existing =
                                                             instanceSpotActivations.get(
                                                                     message.route().targetSpotId());
+                                                    // An older object generation is a closing
+                                                    // incarnation that keeps its lane until its
+                                                    // release ends; a route of a later generation
+                                                    // belongs to the next incarnation.
                                                     return existing == null
+                                                                    || message.route()
+                                                                                    .objectGeneration()
+                                                                            > existing.context
+                                                                                    .objectGeneration()
                                                             ? null
                                                             : existing.admitExisting(
                                                                     message, received);
@@ -835,7 +843,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 && snapshot.authorityOwnerGeneration()
                                                         != authorityOwnerGeneration)) {
                                     return CompletableFuture.completedFuture(
-                                            ownerFenceRefusal(
+                                            ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
                                                     "Spot owner fence has changed: " + spotId));
                                 }
                                 if (authority.get().state()
@@ -917,28 +925,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             }
                             return CompletableFuture.completedFuture(
                                     authorityOwnerGeneration != 0
-                                            ? ownerFenceRefusal("Spot is not available: " + spotId)
+                                            ? ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
+                                                    "Spot is not available: " + spotId)
                                             : ZLinkFrameworkErrorOrigin.framework(
                                                     ZLinkFrameworkErrorKind.NOT_FOUND,
                                                     "Spot is not available: " + spotId));
                         });
-    }
-
-    /**
-     * The target refuses a message routed with an owner fence that is no longer current, before
-     * admission. The reply carries {@code spotMoving}, which tells the caller that the message was
-     * never accepted; the cause holds that code so the reported error stays a Framework error.
-     */
-    private static ZLinkFrameworkException ownerFenceRefusal(String message) {
-        return ZLinkFrameworkErrorOrigin.framework(
-                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                message,
-                ZLinkFrameworkErrorOrigin.framework(
-                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                        message,
-                        (int)
-                                systems.zlink.framework.runtime.protocol.ServiceWireConstants
-                                        .FRAMEWORK_ERROR_SPOT_MOVING));
     }
 
     private static ZLinkBackendSpotNodeMode resolveSpotNodeMode(SpotNodeRegistration registration) {
