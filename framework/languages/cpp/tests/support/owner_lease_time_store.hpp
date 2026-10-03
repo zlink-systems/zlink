@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 
 #include <chrono>
@@ -36,7 +37,8 @@ class owner_lease_time_store_t final : public location_store_t
         const auto inject_owner_time = key.value == _owner_key;
         {
             const std::lock_guard lock (_observation_mutex);
-            if (_observing) {
+            const auto &flow = runtime::flow_context_t::current ();
+            if (flow && !_observed_flow_id.empty () && flow->flow_id == _observed_flow_id) {
                 if (!_watched_authority_fragment.empty ()
                     && key.value.find (_watched_authority_fragment) != std::string::npos)
                     ++_watched_authority_reads;
@@ -67,13 +69,16 @@ class owner_lease_time_store_t final : public location_store_t
         return _inner->scan (std::move (request));
     }
 
-    /* Observes reads from every thread: a request that awaits the store
-     * resumes on a handler worker, not on the thread that started it. */
+    /* Counts only the reads of one request flow. The request resumes on
+     * handler workers after it awaits the store, and the ambient flow follows
+     * those continuations (flow-correlation MFLOW-EXT-014), so reads of other
+     * flows and background reads are never counted. */
     void observe_owner_read_order (std::string authority_fragment,
-                                   unsigned authority_reads_before_owner)
+                                   unsigned authority_reads_before_owner,
+                                   std::string flow_id)
     {
         const std::lock_guard lock (_observation_mutex);
-        _observing = true;
+        _observed_flow_id = std::move (flow_id);
         _watched_authority_fragment = std::move (authority_fragment);
         _authority_reads_before_owner = authority_reads_before_owner;
         _watched_authority_reads = 0;
@@ -91,7 +96,7 @@ class owner_lease_time_store_t final : public location_store_t
     std::string _owner_key;
     lease_view_t _lease_view;
     mutable std::mutex _observation_mutex;
-    bool _observing = false;
+    std::string _observed_flow_id;
     std::string _watched_authority_fragment;
     unsigned _authority_reads_before_owner = 0;
     unsigned _watched_authority_reads = 0;

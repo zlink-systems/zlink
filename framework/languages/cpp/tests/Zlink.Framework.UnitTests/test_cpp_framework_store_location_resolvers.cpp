@@ -1201,8 +1201,7 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
 
     zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
-        if (_observed_store)
-            _observed_store->observe_owner_read_order (_user_spot_id, 0);
+        auto user_flow = observe_request_flow (_user_spot_id, 0);
         try {
             auto user = services.get_required<zlink::framework::spot_manager_t> ()
                           .get_or_create (zlink::framework::spot_id_t (_user_spot_id), "room")
@@ -1224,9 +1223,9 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
         if (_observed_store)
             user_owner_checked_before_authority =
               _observed_store->owner_was_read_in_expected_order ();
+        user_flow.reset ();
 
-        if (_observed_store)
-            _observed_store->observe_owner_read_order (_instance_spot_id, 1);
+        auto instance_flow = observe_request_flow (_instance_spot_id, 1);
         try {
             auto route_client = _app->advanced ().zlink ().route_client (
               services.get_required<zlink::framework::serializer_registry_t> ());
@@ -1250,12 +1249,30 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
         if (_observed_store)
             instance_owner_checked_before_authority =
               _observed_store->owner_was_read_in_expected_order ();
+        instance_flow.reset ();
 
         _app->stop ();
         co_return;
     }
 
     void stop () noexcept override {}
+
+    /* Each request runs in its own flow so the store counts only that
+     * request's reads, on whichever worker the request resumes. */
+    std::optional<zlink::framework::runtime::flow_context_t::scope_t>
+    observe_request_flow (const std::string &authority_fragment,
+                          unsigned authority_reads_before_owner)
+    {
+        if (!_observed_store)
+            return std::nullopt;
+        auto flow_id = zlink::framework::runtime::flow_id_t::create ();
+        _observed_store->observe_owner_read_order (authority_fragment, authority_reads_before_owner,
+                                                   flow_id);
+        return std::optional<zlink::framework::runtime::flow_context_t::scope_t> (
+          std::in_place, zlink::framework::runtime::flow_value_t{
+                           std::move (flow_id), zlink::framework::flow_origin_t::application,
+                           zlink::framework::message_flow_log_mode_t::normal, std::nullopt});
+    }
 
     std::optional<std::string> user_target;
     std::optional<zlink::framework::framework_error_kind_t> user_error;
@@ -1385,6 +1402,8 @@ descriptor_owner_lease_result_t run_descriptor_owner_lease_selection (
     client = service.get ();
     app.add_hosted_service (std::move (service));
 
+    // Request submission keeps the caller's flow only while flow capture is on.
+    app.set_message_flow_mode (zlink::framework::message_flow_log_mode_t::normal);
     descriptor_owner_lease_result_t result;
     result.app_result = app.run (0, nullptr);
     if (client != nullptr) {
@@ -3772,6 +3791,65 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppStreamHostStartsAndStopsTcpListen
     EXPECT_TRUE (client_ptr->observed) << client_ptr->last_error_message ();
 }
 
+
+/* The descriptor owner order checks above rely on this observation: only the
+ * observed flow's reads count, and a wrong order or a read from another flow
+ * leaves the check false. */
+TEST (ZLinkFrameworkStoreLocationResolvers, OwnerReadOrderObservationCountsOnlyTheObservedFlow)
+{
+    namespace fw = zlink::framework;
+    using fw::runtime::flow_context_t;
+    using fw::runtime::flow_id_t;
+    using fw::runtime::flow_value_t;
+    using fw::tests::owner_lease_time_store_t;
+
+    in_memory_location_store_t inner;
+    owner_lease_time_store_t store (inner, "observed-owner",
+                                    owner_lease_time_store_t::lease_view_t::live);
+    const fw::store_key_t owner_key{std::string ("owner-lease") + '\0' + "observed-owner"};
+    const fw::store_key_t authority_key{"zla1:s:13:observed-spot"};
+    const auto enter = [] (const std::string &flow_id) {
+        return flow_context_t::scope_t (flow_value_t{flow_id, fw::flow_origin_t::application,
+                                                     fw::message_flow_log_mode_t::normal,
+                                                     std::nullopt});
+    };
+    const auto read = [&] (const fw::store_key_t &key) { (void) store.read (key).result (); };
+
+    // Expected order: one authority read, then the owner read.
+    auto observed = flow_id_t::create ();
+    store.observe_owner_read_order ("observed-spot", 1, observed);
+    {
+        auto scope = enter (observed);
+        read (authority_key);
+        read (owner_key);
+    }
+    EXPECT_TRUE (store.owner_was_read_in_expected_order ());
+
+    // Wrong order: the owner is read before the authority.
+    observed = flow_id_t::create ();
+    store.observe_owner_read_order ("observed-spot", 1, observed);
+    {
+        auto scope = enter (observed);
+        read (owner_key);
+        read (authority_key);
+    }
+    EXPECT_FALSE (store.owner_was_read_in_expected_order ());
+
+    // Reads of another flow and reads without a flow are not counted.
+    observed = flow_id_t::create ();
+    store.observe_owner_read_order ("observed-spot", 0, observed);
+    {
+        auto scope = enter (flow_id_t::create ());
+        read (owner_key);
+    }
+    read (owner_key);
+    EXPECT_FALSE (store.owner_was_read_in_expected_order ());
+    {
+        auto scope = enter (observed);
+        read (owner_key);
+    }
+    EXPECT_TRUE (store.owner_was_read_in_expected_order ());
+}
 
 zlink::framework::task_t<void> resolve_on_handler_executor (store_location_resolvers_t &resolvers,
                                                             std::atomic_int &resolved,
