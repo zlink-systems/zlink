@@ -836,8 +836,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 && snapshot.authorityOwnerGeneration()
                                                         != authorityOwnerGeneration)) {
                                     return CompletableFuture.completedFuture(
-                                            ZLinkFrameworkErrorOrigin.framework(
-                                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                            ownerFenceRefusal(
                                                     "Spot owner fence has changed: " + spotId));
                                 }
                                 if (authority.get().state()
@@ -918,12 +917,29 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 "Spot activation is unavailable: " + spotId));
                             }
                             return CompletableFuture.completedFuture(
-                                    ZLinkFrameworkErrorOrigin.framework(
-                                            authorityOwnerGeneration != 0
-                                                    ? ZLinkFrameworkErrorKind.UNAVAILABLE
-                                                    : ZLinkFrameworkErrorKind.NOT_FOUND,
-                                            "Spot is not available: " + spotId));
+                                    authorityOwnerGeneration != 0
+                                            ? ownerFenceRefusal("Spot is not available: " + spotId)
+                                            : ZLinkFrameworkErrorOrigin.framework(
+                                                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                                                    "Spot is not available: " + spotId));
                         });
+    }
+
+    /**
+     * The target refuses a message routed with an owner fence that is no longer current, before
+     * admission. The reply carries {@code spotMoving}, which tells the caller that the message was
+     * never accepted; the cause holds that code so the reported error stays a Framework error.
+     */
+    private static ZLinkFrameworkException ownerFenceRefusal(String message) {
+        return ZLinkFrameworkErrorOrigin.framework(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                message,
+                ZLinkFrameworkErrorOrigin.framework(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        message,
+                        (int)
+                                systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                        .FRAMEWORK_ERROR_SPOT_MOVING));
     }
 
     private static ZLinkBackendSpotNodeMode resolveSpotNodeMode(SpotNodeRegistration registration) {
@@ -2405,51 +2421,91 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     Duration timeout) {
                 Duration effective = timeout == null ? defaultRequestTimeout : timeout;
                 long deadline = System.currentTimeMillis() + effective.toMillis();
-                return activateInstanceSpot(
-                                spotId,
-                                stableType,
-                                meshName,
-                                payload,
+                byte[] applicationMetadata =
+                        systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata.copyOf(
+                                        metadata)
+                                .encode();
+                List<Message> parts =
+                        routeMessages.encodeRequest(
+                                "",
                                 packetName,
+                                payload,
+                                contentType,
                                 metadata,
-                                deadline)
-                        .thenCompose(
-                                activation -> {
-                                    byte[] applicationMetadata =
-                                            systems.zlink.framework.runtime.messaging
-                                                    .ZLinkApplicationMetadata.copyOf(metadata)
-                                                    .encode();
-                                    List<Message> parts =
-                                            routeMessages.encodeRequest(
-                                                    "",
-                                                    packetName,
-                                                    payload,
-                                                    contentType,
-                                                    metadata,
-                                                    systems.zlink.framework.runtime.internal
-                                                            .diagnostics.ZLinkFlowContext
-                                                            .current());
-                                    long remainingMillis = deadline - System.currentTimeMillis();
-                                    if (remainingMillis <= 0) {
-                                        parts.forEach(Message::close);
-                                        return CompletableFuture.failedFuture(
-                                                ZLinkFrameworkErrorOrigin.framework(
-                                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                                                        "Instance Spot request deadline expired"));
-                                    }
-                                    return activation
-                                            .source()
-                                            .requestInstanceSpot(
-                                                    activation.route(),
-                                                    activation.stableType(),
-                                                    primaryNode.entrySpot().spotId(),
-                                                    applicationMetadata,
-                                                    parts,
-                                                    Duration.ofMillis(remainingMillis))
-                                            .whenComplete(
-                                                    (ignored, failure) ->
-                                                            parts.forEach(Message::close));
-                                });
+                                systems.zlink.framework.runtime.internal.diagnostics
+                                        .ZLinkFlowContext.current());
+                Supplier<CompletionStage<List<Message>>> attempt =
+                        () ->
+                                activateInstanceSpot(
+                                                spotId,
+                                                stableType,
+                                                meshName,
+                                                payload,
+                                                packetName,
+                                                metadata,
+                                                deadline)
+                                        .thenCompose(
+                                                activation ->
+                                                        requestInstanceSpot(
+                                                                activation,
+                                                                applicationMetadata,
+                                                                parts,
+                                                                deadline));
+                //  Failover policy §4.4: after Close released the authority, the next Instance
+                //  intent message cold-activates. spotMoving is the owner fence refusal made
+                //  before admission, so one authority read decides: Missing continues as a cold
+                //  activation, any other authority keeps that first terminal. A message the
+                //  owner accepted ends with its own terminal and is never placed again.
+                return attempt.get()
+                        .exceptionallyCompose(
+                                failure ->
+                                        ZLinkRequestFailureMapping.causeCode(failure)
+                                                        != (int)
+                                                                systems.zlink.framework.runtime
+                                                                        .protocol
+                                                                        .ServiceWireConstants
+                                                                        .FRAMEWORK_ERROR_SPOT_MOVING
+                                                ? CompletableFuture.failedFuture(failure)
+                                                : requireUserSpotLocationStore()
+                                                        .read(
+                                                                systems.zlink.framework.runtime
+                                                                        .locations
+                                                                        .ZLinkAuthorityKeyCodec
+                                                                        .spot(spotId),
+                                                                () -> false)
+                                                        .thenCompose(
+                                                                read ->
+                                                                        read
+                                                                                        instanceof
+                                                                                        ZLinkAuthorityMissing
+                                                                                ? attempt.get()
+                                                                                : CompletableFuture
+                                                                                        .failedFuture(
+                                                                                                failure)))
+                        .whenComplete((ignored, failure) -> parts.forEach(Message::close));
+            }
+
+            private CompletionStage<List<Message>> requestInstanceSpot(
+                    InstanceActivation activation,
+                    byte[] applicationMetadata,
+                    List<Message> parts,
+                    long deadline) {
+                long remainingMillis = deadline - System.currentTimeMillis();
+                if (remainingMillis <= 0) {
+                    return CompletableFuture.failedFuture(
+                            ZLinkFrameworkErrorOrigin.framework(
+                                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                    "Instance Spot request deadline expired"));
+                }
+                return activation
+                        .source()
+                        .requestInstanceSpot(
+                                activation.route(),
+                                activation.stableType(),
+                                primaryNode.entrySpot().spotId(),
+                                applicationMetadata,
+                                parts,
+                                Duration.ofMillis(remainingMillis));
             }
         };
     }

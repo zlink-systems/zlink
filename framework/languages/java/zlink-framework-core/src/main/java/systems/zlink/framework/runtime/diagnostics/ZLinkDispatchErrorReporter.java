@@ -197,8 +197,11 @@ public final class ZLinkDispatchErrorReporter {
 
     public static ZLinkDispatchErrorReason reasonFrom(Throwable error, int failureCode) {
         if (failureCode
-                == systems.zlink.framework.runtime.protocol.ServiceWireConstants
-                        .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED) {
+                        == systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED
+                || failureCode
+                        == systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                .FRAMEWORK_ERROR_SPOT_MOVING) {
             return ZLinkDispatchErrorReason.STALE_TARGET;
         }
         return error instanceof systems.zlink.framework.errors.ZLinkFrameworkException framework
