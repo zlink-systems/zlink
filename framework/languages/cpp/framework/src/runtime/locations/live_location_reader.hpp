@@ -84,6 +84,14 @@ class live_location_reader_t final
         }
     }
 
+    /* Every stored descriptor, including those whose owner lease is gone.
+     * Location runtime §7.4 service summaries classify these by the lease. */
+    task_t<location_page_t<mesh_node_descriptor_t>>
+    list_stored_mesh_nodes (std::string mesh_name, location_page_request_t page = {})
+    {
+        return _store->list_mesh_nodes (std::move (mesh_name), std::move (page));
+    }
+
     task_t<authority_read_result_t> read_authority (authority_key_t key)
     {
         return _store->read_authority (std::move (key));

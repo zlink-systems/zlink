@@ -537,29 +537,39 @@ class store_location_runtime_query_t final : public location_runtime_query_t
     list_service_summaries (location_service_summary_filter_t filter,
                             location_page_request_t page = {}) override
     {
-        auto descriptors =
-          _store->list_mesh_nodes (filter.mesh_name.value_or (""), {}).result ().value ();
+        using summary_page_t = location_page_t<location_service_summary_t>;
         std::map<std::string, location_service_summary_t> grouped;
-        for (const auto &descriptor : descriptors.items) {
-            auto &summary = grouped[descriptor.mesh_name];
-            summary.mesh_name = descriptor.mesh_name;
-            ++summary.total_count;
-            switch (topology_state (descriptor.state)) {
-                case location_topology_state_t::ready:
+        location_page_request_t descriptor_page;
+        do {
+            auto listed =
+              _store->list_stored_mesh_nodes (filter.mesh_name.value_or (""), descriptor_page)
+                .result ();
+            if (!listed.has_value ())
+                return task_t<summary_page_t> (detail::propagate_failure<summary_page_t> (
+                  listed, "Location Store MeshNode lookup failed"));
+            auto descriptors = std::move (listed).value ();
+            for (const auto &descriptor : descriptors.items) {
+                /* Location runtime §7.4: the owner lease alone classifies a
+                 * descriptor, and a lease lookup failure fails the query. */
+                auto live = _store
+                              ->owner_available (location_owner_token_t{
+                                descriptor.owner_id, descriptor.lease_generation})
+                              .result ();
+                if (!live.has_value ())
+                    return task_t<summary_page_t> (detail::propagate_failure<summary_page_t> (
+                      live, "Location Store owner lease lookup failed"));
+                auto &summary = grouped[descriptor.mesh_name];
+                summary.mesh_name = descriptor.mesh_name;
+                ++summary.total_count;
+                if (live.value ())
                     ++summary.ready_count;
-                    break;
-                case location_topology_state_t::error:
-                case location_topology_state_t::lost:
-                    ++summary.error_count;
-                    break;
-                case location_topology_state_t::stopped:
+                else
                     ++summary.stopped_count;
-                    break;
-                default:
-                    break;
+                summary.last_updated_at =
+                  std::max (summary.last_updated_at, descriptor.updated_at);
             }
-            summary.last_updated_at = std::max (summary.last_updated_at, descriptor.updated_at);
-        }
+            descriptor_page.continuation_token = descriptors.continuation_token;
+        } while (descriptor_page.continuation_token);
         std::vector<location_service_summary_t> result;
         result.reserve (grouped.size ());
         for (auto &[_, summary] : grouped) {

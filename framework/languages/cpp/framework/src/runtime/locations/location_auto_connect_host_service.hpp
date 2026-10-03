@@ -13,6 +13,7 @@
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 #include "runtime/transport/listener_identity.hpp"
 
+#include <zlink/Contracts/Errors/errors.hpp>
 #include <zlink/framework/contracts/configuration/module.hpp>
 
 #include <algorithm>
@@ -575,8 +576,16 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
     static void connect (loop_t &loop, const target_t &target)
     {
-        if (loop.connect_target)
+        if (!loop.connect_target)
+            return;
+        try {
             loop.connect_target (target);
+        }
+        catch (const zlink::binding_error_t &rejection) {
+            /* Mesh node: a binding rejection fails only this attempt. The
+             * intent stays selected and the next tick connects again. */
+            trace_failure ("connect-rejected", loop.mesh_name, target.endpoint, rejection.what ());
+        }
     }
 
     static void disconnect (loop_t &loop, const target_t &target)
