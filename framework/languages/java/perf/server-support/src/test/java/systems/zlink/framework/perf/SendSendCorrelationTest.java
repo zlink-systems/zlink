@@ -1,12 +1,14 @@
 package systems.zlink.framework.perf;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Field;
 import org.junit.jupiter.api.Test;
 
 import java.util.Base64;
@@ -60,6 +62,12 @@ class SendSendCorrelationTest {
                     () -> CompletableFuture.completedFuture(null)).accepted());
         }
 
+    }
+
+    private static PerfEchoRequest retainedRequest(SendSendCorrelation.Entry entry) throws ReflectiveOperationException {
+        Field request = SendSendCorrelation.Entry.class.getDeclaredField("request");
+        request.setAccessible(true);
+        return (PerfEchoRequest) request.get(entry);
     }
 
     @Test
@@ -146,6 +154,61 @@ class SendSendCorrelationTest {
         assertTrue(result.completedTicks() >= entry.startedTicks());
         assertEquals("1", f.count("messages.duplicateReply"));
         assertEquals("0", f.count("messages.lateReply"));
+    }
+
+    @Test
+    void entryReleasesRequestAfterCloseAndStillCountsDuplicateReply() throws Exception {
+        Fixture f = new Fixture(1000);
+        PerfEchoRequest request = f.request(1);
+        SendSendCorrelation.Entry entry = f.correlations.register(request, PerfClock.now());
+        PerfEchoReply reply = f.reply(request);
+
+        assertSame(request, retainedRequest(entry));
+        f.correlations.reply(reply);
+
+        assertNull(f.complete(entry).error());
+        assertNull(retainedRequest(entry));
+        f.correlations.reply(reply);
+        assertEquals("1", f.count("messages.duplicateReply"));
+    }
+
+    @Test
+    void concurrentCloseAfterReplyValidationKeepsLateClassification() throws Exception {
+        Fixture f = new Fixture(20_000);
+        PerfEchoRequest request = f.request(1);
+        SendSendCorrelation.Entry entry = f.correlations.register(request, PerfClock.now());
+        PerfEchoReply reply = f.reply(request);
+        IllegalStateException sendFailure = new IllegalStateException("send failed");
+        CompletableFuture<Throwable> replyError = new CompletableFuture<>();
+        Thread replyThread = new Thread(() -> {
+            try {
+                f.correlations.reply(reply);
+                replyError.complete(null);
+            } catch (Throwable error) {
+                replyError.complete(error);
+            }
+        });
+
+        boolean blockedAfterValidation;
+        synchronized (entry) {
+            replyThread.start();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (replyThread.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+                Thread.yield();
+            }
+            blockedAfterValidation = replyThread.getState() == Thread.State.BLOCKED;
+            if (blockedAfterValidation) {
+                f.correlations.firstSendEnded(entry, sendFailure);
+            }
+        }
+
+        replyThread.join(TimeUnit.SECONDS.toMillis(5));
+        assertTrue(blockedAfterValidation, "The reply did not reach state classification while the entry was locked.");
+        assertFalse(replyThread.isAlive(), "The reply remained blocked after the entry lock was released.");
+        assertNull(replyError.get(5, TimeUnit.SECONDS));
+        assertSame(sendFailure, f.complete(entry).error());
+        assertNull(retainedRequest(entry));
+        assertEquals("1", f.count("messages.lateReply"));
     }
 
     @Test

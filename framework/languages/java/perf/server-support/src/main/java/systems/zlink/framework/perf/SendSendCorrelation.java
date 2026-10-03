@@ -20,7 +20,7 @@ public final class SendSendCorrelation {
     public record Result(Throwable error, long completedTicks) {}
 
     public static final class Entry {
-        private final PerfEchoRequest request;
+        private volatile PerfEchoRequest request;
         private final long startedTicks;
         private final long expiresAtTicks;
         private final CompletableFuture<Throwable> result = new CompletableFuture<>();
@@ -89,11 +89,15 @@ public final class SendSendCorrelation {
             return;
         }
         Throwable invalid = null;
-        try {
-            PayloadPattern.validateIdentity(entry.request, reply);
-            measurement.pattern().validate(reply.payload());
-        } catch (PerfValidationException error) {
-            invalid = error;
+        // Keep a local snapshot during validation if another thread closes and clears the entry.
+        PerfEchoRequest request = entry.request;
+        if (request != null) {
+            try {
+                PayloadPattern.validateIdentity(request, reply);
+                measurement.pattern().validate(reply.payload());
+            } catch (PerfValidationException error) {
+                invalid = error;
+            }
         }
         synchronized (entry) {
             long now = PerfClock.now();
@@ -135,6 +139,7 @@ public final class SendSendCorrelation {
         }
         entry.state = state;
         entry.closedTicks = now;
+        entry.request = null;
         entry.result.complete(error);
         return true;
     }

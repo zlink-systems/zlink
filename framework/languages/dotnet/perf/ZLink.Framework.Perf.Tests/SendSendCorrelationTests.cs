@@ -45,6 +45,18 @@ public sealed class SendSendCorrelationTests
     }
 
     [Fact]
+    public void ClosingAValidReplyReleasesTheRequestDto()
+    {
+        using var f = new Fixture();
+        var request = f.Request(1);
+        var entry = f.Correlations.Register(request, PerfClock.Now);
+
+        f.Correlations.Reply(f.Reply(request));
+
+        Assert.Null(entry.Request);
+    }
+
+    [Fact]
     public async Task EchoBeforeTheFirstSendTerminalKeepsItsOwnTime()
     {
         using var f = new Fixture();
@@ -68,6 +80,7 @@ public sealed class SendSendCorrelationTests
         var (error, _) = await f.Correlations.CompleteAsync(entry);
         var expired = Assert.IsType<PerfValidationException>(error);
         Assert.Equal("CorrelationExpired", expired.Kind);
+        Assert.Null(entry.Request);
         f.Correlations.Reply(f.Reply(request));
         Assert.Equal("1", f.Count("messages.expired"));
         Assert.Equal("1", f.Count("messages.lateReply"));
@@ -165,6 +178,7 @@ public sealed class SendSendCorrelationTests
         var entry = f.Correlations.Register(failedSend, PerfClock.Now);
         var boom = new InvalidOperationException("send failed");
         f.Correlations.FirstSendEnded(entry, boom);
+        Assert.Null(entry.Request);
         f.Correlations.Reply(f.Reply(failedSend));
         Assert.Same(boom, (await f.Correlations.CompleteAsync(entry)).Error);
         Assert.Equal("1", f.Count("messages.lateReply"));
