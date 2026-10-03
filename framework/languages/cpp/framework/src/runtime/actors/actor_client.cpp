@@ -476,6 +476,10 @@ class actor_client_impl_t final : public actor_client_t
                               message_t message,
                               const actor_send_call_t::metadata_map_t &metadata) override
     {
+        /* Frame-owned metadata copy before the first suspension: the reference
+         * belongs to a caller-owned call object that can unwind while the
+         * route lookup is suspended. */
+        actor_send_call_t::metadata_map_t metadata_frame = metadata;
         if (!first_mesh_node ())
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "actor send requires a running MeshNode");
@@ -489,11 +493,8 @@ class actor_client_impl_t final : public actor_client_t
                                                                  ? error->what ()
                                                                  : "actor route was not found");
         }
-        /* Frame-owned metadata copy: the reference belongs to a caller-owned
-         * call object that can unwind while the send is suspended. */
-        const auto submitted =
-          co_await submit_send (actor.value (), std::move (packet_name), std::move (message),
-                                actor_send_call_t::metadata_map_t (metadata));
+        const auto submitted = co_await submit_send (
+          actor.value (), std::move (packet_name), std::move (message), std::move (metadata_frame));
         if (!submitted) {
             const auto *error = submitted.error ();
             throw framework_exception_t (submitted.error_kind (),
@@ -508,6 +509,11 @@ class actor_client_impl_t final : public actor_client_t
                                       std::optional<std::chrono::milliseconds> timeout,
                                       const actor_request_call_t::metadata_map_t &metadata) override
     {
+        /* The metadata reference belongs to a caller-owned call object that
+         * can unwind while this coroutine is suspended: keep a frame-owned copy
+         * before the first await so no resume reads through the dead reference
+         * (session-reconnect-and-coroutine-lifetime doc). */
+        const actor_request_call_t::metadata_map_t metadata_frame = metadata;
         const auto release_turn = detail::actor_request_releases_current_turn ();
         if (!release_turn && detail::current_serial_turn_allows_yield ()
             && !runtime::current_actor_execution.spot_id.empty ()) {
@@ -526,11 +532,6 @@ class actor_client_impl_t final : public actor_client_t
         // re-resolves and retries. The caller's timeout keeps running across
         // retries — the move does not reset it (10.5-2).
         const auto actor_id_value = std::string (actor_id.value ());
-        /* The metadata reference belongs to a caller-owned call object that
-         * can unwind while a retry is suspended: keep a frame-owned copy so
-         * iteration 2+ never reads through the dead reference
-         * (session-reconnect-and-coroutine-lifetime doc). */
-        const actor_request_call_t::metadata_map_t metadata_frame = metadata;
         // Stable across every retry and the commit replay so the target
         // dispatches this request exactly once (§10.2-1). Scoped by the client
         // instance so ids do not collide across nodes.
