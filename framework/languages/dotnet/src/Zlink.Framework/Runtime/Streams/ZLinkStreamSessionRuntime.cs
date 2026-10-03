@@ -266,11 +266,18 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         );
     }
 
-    public void EnqueuePacket(Message header, Message payload)
+    public void EnqueuePacket(
+        Message header,
+        Message payload,
+        ZLinkApplicationJobQueueLease? applicationJobAdmission = null
+    )
     {
-        if (TryEnqueuePacket(header, payload) == ZLinkSerialPostAdmission.Accepted)
+        if (
+            TryEnqueuePacket(header, payload, applicationJobAdmission)
+            == ZLinkSerialPostAdmission.Accepted
+        )
             return;
-        DisposeRejectedPacket(header, payload);
+        DisposeRejectedPacket(header, payload, applicationJobAdmission);
     }
 
     public ZLinkSerialPostAdmission TryEnqueuePacket(
@@ -1070,10 +1077,15 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         );
     }
 
-    private static void DisposeRejectedPacket(Message header, Message payload)
+    private static void DisposeRejectedPacket(
+        Message header,
+        Message payload,
+        ZLinkApplicationJobQueueLease? applicationJobAdmission
+    )
     {
         header.Dispose();
         payload.Dispose();
+        applicationJobAdmission?.Dispose();
     }
 
     private async ValueTask<bool> EnsureConnectedAsync(CancellationToken cancellationToken)

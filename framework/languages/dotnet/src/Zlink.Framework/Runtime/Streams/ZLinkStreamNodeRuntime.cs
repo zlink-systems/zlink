@@ -516,7 +516,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             var admitted = IsApplicationPacket(header)
                 ? await AdmitApplicationPacketAsync(
                         routingId,
-                        frame,
                         header,
                         payload,
                         frame.ApplicationJobAdmission
@@ -548,7 +547,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
     private async Task<bool> AdmitApplicationPacketAsync(
         RoutingId routingId,
-        ZLinkStreamInboundFrame frame,
         Message header,
         Message payload,
         ZLinkApplicationJobQueueLease? applicationJobAdmission
@@ -557,12 +555,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         applicationJobAdmission?.MarkQueued();
         if (await _sessions.TryGetAsync(routingId).ConfigureAwait(false) is { } existing)
         {
-            var admission = existing.TryEnqueuePacket(header, payload, applicationJobAdmission);
-            if (admission == ZLinkSerialPostAdmission.Accepted)
-            {
-                return true;
-            }
-            throw new ZLinkStreamPeerAdmissionException("STREAM peer session queue is closed.");
+            existing.EnqueuePacket(header, payload, applicationJobAdmission);
+            return true;
         }
 
         var ingressAdmission = _sessionIngress.ExecuteApplication(async cancellationToken =>
@@ -574,9 +568,10 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     .GetOrCreateAsync(routingId, cancellationToken)
                     .ConfigureAwait(false);
                 if (session is not null)
-                    ownershipTransferred =
-                        session.TryEnqueuePacket(header, payload, applicationJobAdmission)
-                        == ZLinkSerialPostAdmission.Accepted;
+                {
+                    session.EnqueuePacket(header, payload, applicationJobAdmission);
+                    ownershipTransferred = true;
+                }
             }
             finally
             {
