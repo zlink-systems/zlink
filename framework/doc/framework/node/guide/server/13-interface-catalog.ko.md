@@ -75,7 +75,7 @@ topic이다.
 | --- | --- |
 | `ZLinkModule.forRootFactory({ useFactory })` | 등록 진입점. factory가 builder를 돌려준다 |
 | `zlinkFramework()` | builder를 만든다 |
-| `zlinkModule(__dirname, options)` | 그 디렉터리의 handler·Spot·Actor를 provider로 모은다 |
+| `zlinkModule(__dirname, options)` | 그 디렉터리의 handler class를 provider로 모은다. 생성자 주입을 받는 Spot·Actor class는 module의 `providers`에 직접 등록한다 |
 | `zlinkDiscoverProviders(...)` | provider 탐색을 직접 제어할 때 |
 | `ZLinkFrameworkOptions` | builder 타입 |
 | `ZLinkMeshNodeBuilder` · `ZLinkMeshChannelBuilder` · `ZLinkMeshObjectRoleBuilder` | MeshNode와 역할 |

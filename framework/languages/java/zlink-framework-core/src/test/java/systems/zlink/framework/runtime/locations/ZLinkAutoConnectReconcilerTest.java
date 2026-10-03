@@ -106,6 +106,58 @@ final class ZLinkAutoConnectReconcilerTest {
     }
 
     @Test
+    void pendingPreviousIntentCloseRetriesTheMeshReplacementOnTheNextReconcile() {
+        MutableResolver resolver = new MutableResolver();
+        resolver.rows = List.of(peer());
+        var replacements = new java.util.concurrent.atomic.AtomicInteger();
+        var node =
+                (systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                getClass().getClassLoader(),
+                                new Class<?>[] {
+                                    systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkInternalMeshNode.class
+                                },
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("replacePeerConnection")) {
+                                        if (replacements.incrementAndGet() == 1) {
+                                            throw new systems.zlink.framework.runtime.internal
+                                                    .backend.ZLinkPeerIntentClosePendingException();
+                                        }
+                                        return 7L;
+                                    }
+                                    if (method.isDefault()) {
+                                        return java.lang.reflect.InvocationHandler.invokeDefault(
+                                                proxy, method, arguments);
+                                    }
+                                    throw new UnsupportedOperationException(method.getName());
+                                });
+        var errors = new java.util.ArrayList<Throwable>();
+        var reconciler =
+                new ZLinkAutoConnectReconciler(
+                        new ZLinkAutoConnectPlanner.Local(
+                                ZLinkAutoConnectType.CLIENT_SERVER,
+                                "orders",
+                                ZLinkLocationRole.DEALER,
+                                RoutingId.from("client"),
+                                "inproc://client"),
+                        resolver,
+                        new ZLinkLocationAutoConnectHost.MeshNodeExecutor(
+                                node, java.util.Set.of(), Map.of()),
+                        new ZLinkLocationOptions(),
+                        System::nanoTime,
+                        errors::add);
+
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(1, replacements.get());
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(2, replacements.get());
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(2, replacements.get());
+        assertEquals(List.of(), errors);
+    }
+
+    @Test
     void programmingFailureIsNotConvertedToARejectedAttempt() {
         MutableResolver resolver = new MutableResolver();
         resolver.rows = List.of(peer());

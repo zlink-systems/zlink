@@ -5,6 +5,7 @@
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
+#include "runtime/execution/task_result.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -158,12 +159,12 @@ make_location_store_authority_resolver (zlink::framework::location_repository_t 
                               : query.target.kind == object_kind_t::user_spot
                                 ? placement_object_kind_t::user_spot
                                 : placement_object_kind_t::instance_spot;
-            const auto authority = store
-                                     .read_authority (query.target.kind == object_kind_t::actor
-                                                        ? actor_authority_key (query.target.key)
-                                                        : spot_authority_key (query.target.key))
-                                     .result ()
-                                     .value ();
+            const auto authority =
+              infrastructure_result ([&] {
+                  return store.read_authority (query.target.kind == object_kind_t::actor
+                                                 ? actor_authority_key (query.target.key)
+                                                 : spot_authority_key (query.target.key));
+              }).value ();
             const auto *snapshot = std::get_if<authority_snapshot_t> (&authority);
             const auto target_rid = node_rid_t::from_string (
               zlink::routing_id_t::from (query.target_node_routing_id).to_string ());
@@ -177,7 +178,9 @@ make_location_store_authority_resolver (zlink::framework::location_repository_t 
                 return std::nullopt;
             }
 
-            const auto nodes = store.list_mesh_nodes (query.target.mesh_name).result ().value ();
+            const auto nodes = infrastructure_result ([&] {
+                                   return store.list_mesh_nodes (query.target.mesh_name);
+                               }).value ();
             const auto source_rid = zlink::routing_id_t::from (query.source_node_routing_id);
             const auto source = std::find_if (
               nodes.items.begin (), nodes.items.end (), [&] (const mesh_node_descriptor_t &node) {
@@ -188,7 +191,9 @@ make_location_store_authority_resolver (zlink::framework::location_repository_t 
                 || source->lease_generation <= 0) {
                 return std::nullopt;
             }
-            const auto lease = store.read_owner_lease (source->owner_id).result ().value ();
+            const auto lease = infrastructure_result ([&] {
+                                   return store.read_owner_lease (source->owner_id);
+                               }).value ();
             const auto *live = std::get_if<owner_lease_found_t> (&lease);
             if (!live || live->token.lease_generation != source->lease_generation
                 || live->lease_expires_at <= live->store_now) {
@@ -359,11 +364,12 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
             session = protocol::actor_message_header_t::bound_session_source_t{
               *application.source_session_routing_id, application.source_binding_generation,
               application.source_session_sequence};
-        sent = application.reply_route_id.has_value ()
-                 ? co_await _transport->request_to_actor (
-                     target_routing_id, application.source_actor, target, *application.application,
-                     window, std::move (complete), application.operation, session)
-                 : co_await _transport->send_to_actor (target_routing_id, application.source_actor,
+        if (application.reply_route_id.has_value ())
+            sent = co_await _transport->request_to_actor (
+              target_routing_id, application.source_actor, target, *application.application, window,
+              std::move (complete), application.operation, session);
+        else
+            sent = co_await _transport->send_to_actor (target_routing_id, application.source_actor,
                                                        target, *application.application, session,
                                                        application.operation);
     } else {
@@ -373,13 +379,14 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
         target.target_node_generation = target_generation;
         ++target.authority_owner_generation;
         target.owner_lease_generation = target_lease_generation;
-        sent = application.reply_route_id.has_value ()
-                 ? co_await _transport->request_to_spot (
-                     target_routing_id, application.source_spot_id.value_or (""), target,
-                     *application.application, window, std::move (complete), application.operation)
-                 : co_await _transport->send_to_spot (
-                     target_routing_id, application.source_spot_id.value_or (""), target,
-                     *application.application, application.operation);
+        if (application.reply_route_id.has_value ())
+            sent = co_await _transport->request_to_spot (
+              target_routing_id, application.source_spot_id.value_or (""), target,
+              *application.application, window, std::move (complete), application.operation);
+        else
+            sent = co_await _transport->send_to_spot (
+              target_routing_id, application.source_spot_id.value_or (""), target,
+              *application.application, application.operation);
     }
     co_return sent;
 }

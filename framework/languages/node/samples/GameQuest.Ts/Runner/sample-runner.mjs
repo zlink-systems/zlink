@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import { SampleNames } from '../dist/Shared/Configuration/sample-names.js';
 
 export const sampleName = 'GameQuest.Ts';
 
@@ -77,6 +76,8 @@ export async function runSample(ctx) {
   });
   await ctx.waitLog('browser-client', 'gamequest-close awaiting-on-closing player=player-alice');
   await waitCombinedLog(ctx, ['mission-a', 'mission-b'], 'gamequest-spot closing-entered player=player-alice generation=');
+  // dist exists only after run-sample.mjs builds, so it cannot be imported statically.
+  const { SampleNames } = await import('../dist/Shared/Configuration/sample-names.js');
   browser.observe(SampleNames.closeObservationStage);
   await ctx.waitLog('browser-client', 'gamequest-owner awaiting-termination player=player-alice');
   await waitCombinedLog(ctx, ['mission-a', 'mission-b'], 'gamequest-owner ready player=player-alice node=');

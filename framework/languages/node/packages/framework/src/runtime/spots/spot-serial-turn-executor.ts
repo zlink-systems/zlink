@@ -34,6 +34,7 @@ export class ZLinkSpotSerialTurnExecutor {
   private executionBarrier: ZLinkExecutionBarrier | undefined;
   private resumedOwnerTurn: ZLinkSpotSerialTurn | undefined;
   private lastActivityAtMs = performance.now();
+  private lifecycleAdmissionClosed = false;
   activeTurnId = 0;
 
   constructor(
@@ -74,6 +75,14 @@ export class ZLinkSpotSerialTurnExecutor {
 
   closeAdmission(): void {
     this.scheduler.closeAdmission();
+  }
+
+  /**
+   * Spot messaging §7: once Close commits Closing, membership work can no longer
+   * enter this incarnation while Instance intent messages still queue behind Close.
+   */
+  setLifecycleAdmissionClosed(closed: boolean): void {
+    this.lifecycleAdmissionClosed = closed;
   }
 
   /** Distinguishes a gate-owning turn from a suspended AsyncLocalStorage tail. */
@@ -179,6 +188,12 @@ export class ZLinkSpotSerialTurnExecutor {
   executeLifecycleOperation<T>(operation: () => Promise<T> | T): Promise<T> {
     let entry: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim> | undefined;
     try {
+      if (this.lifecycleAdmissionClosed) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RequestRejected,
+          'Spot lifecycle admission is closed by a committed Close.'
+        );
+      }
       entry = this.executionBarrier?.enter();
     } catch (error) {
       return Promise.reject(error);

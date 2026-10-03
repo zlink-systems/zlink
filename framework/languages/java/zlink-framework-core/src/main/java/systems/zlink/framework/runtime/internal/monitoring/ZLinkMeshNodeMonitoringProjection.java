@@ -9,7 +9,6 @@ import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
-import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 
 import java.util.ArrayList;
@@ -36,22 +35,6 @@ public record ZLinkMeshNodeMonitoringProjection(
         lastPlacementReservationFailure =
                 Objects.requireNonNull(
                         lastPlacementReservationFailure, "lastPlacementReservationFailure");
-    }
-
-    public static ZLinkMeshNodeMonitoringProjection fromDescriptor(
-            ZLinkMeshNodeDescriptor descriptor) {
-        Objects.requireNonNull(descriptor, "descriptor");
-        return new ZLinkMeshNodeMonitoringProjection(
-                descriptor.descriptorRevision(),
-                descriptor.objectRole(),
-                descriptor.placementWeight(),
-                descriptor.capacity(),
-                new ZLinkActivationConcurrency(
-                        descriptor.activationConcurrency().active(),
-                        descriptor.activationConcurrency().limit()),
-                descriptor.objectCapabilities(),
-                0,
-                Optional.empty());
     }
 
     /**

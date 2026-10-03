@@ -276,6 +276,8 @@ export interface ReceiveRecord {
   >;
   readonly messageFollowOrigin?: ZLinkMessageFollowOrigin;
   readonly onTerminalCompletion?: () => void | Promise<void>;
+  /** Marks the start of the first handler turn whose terminal record a Close waits for. */
+  readonly onHandlerTurnStarted?: () => void;
   readonly applicationJobPermit?: ApplicationJobPermitPort;
   readonly releaseRetainedIngress?: () => void;
   reply(parts: MessageLike | readonly MessageLike[], flags?: number): SubmitResult;

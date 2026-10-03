@@ -241,7 +241,9 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         _game.leave (actor.actor_id);
         std::cout << "bingo-lifecycle room-leave actor=" << actor.actor_id << std::endl;
         if (actors.empty () && observers.empty ()) {
-            (void) co_await _context->close ();
+            // Close runs after this leave callback ends, so request it without
+            // waiting here.
+            (void) _context->close ();
         }
         co_return;
     }

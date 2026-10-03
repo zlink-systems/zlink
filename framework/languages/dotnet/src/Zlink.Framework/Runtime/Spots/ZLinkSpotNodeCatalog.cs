@@ -1887,7 +1887,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         UserSpotCloseFence? fence,
         DateTimeOffset? deadline
     ) =>
-        activation.PostCloseLifecycle(
+        activation.PostLifecycleOperation(
             (current, ct) =>
                 CloseOnLifecycleLaneAsync(spotId, current, transaction, fence, deadline, ct)
         );

@@ -1,8 +1,5 @@
 package systems.zlink.framework.runtime.spots;
 
-import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEvent;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
@@ -418,16 +415,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         return tail.thenCompose(ignored -> operation.get());
     }
 
-    @Override
-    CompletionStage<Void> appendActorLifecycle(
-            CompletionStage<Void> tail,
-            ZLinkBackendActorLifecycleEvent event,
-            ZLinkBackendActorRef actorRef,
-            ZLinkActor actor) {
-        return CompletableFuture.failedFuture(
-                new IllegalStateException("Instance Spot does not own Actor lifecycle"));
-    }
-
     CompletionStage<Void> closeAsync(ZLinkSpotCloseReason reason, Instant deadline) {
         return onStateLane(
                         () -> {
@@ -471,7 +458,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     private CompletionStage<Boolean> closeOnLifecycle(ZLinkSpotCloseReason reason) {
-        boolean initiatedInsideTurn = context.isCurrentDispatchTurn();
         ZLinkSpotCloseCoordinator existing = existingCloseCoordinator();
         if (existing != null) {
             return existing.close();
@@ -537,7 +523,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                 closingCallback(
                                                                         () ->
                                                                                 context.runClosing(
-                                                                                        initiatedInsideTurn,
                                                                                         () ->
                                                                                                 spot
                                                                                                         .onClosing(

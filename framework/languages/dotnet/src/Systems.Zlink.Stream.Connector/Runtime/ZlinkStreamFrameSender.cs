@@ -101,60 +101,20 @@ internal sealed class ZlinkStreamFrameSender(
             await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (connection.CanWriteSegments)
+                // One write per frame, as the Java, C++ and Node connectors do. A frame split
+                // across writes leaves its tail behind Nagle until the peer's delayed ACK (#1382).
+                var frameSize = ZlinkStreamFrameCodec.GetFrameSize(header.Length, payload.Length);
+                var frame = ArrayPool<byte>.Shared.Rent(frameSize);
+                try
                 {
-                    var prefix = ArrayPool<byte>.Shared.Rent(ZlinkStreamFrameCodec.PrefixSize);
-                    try
-                    {
-                        ZlinkStreamFrameCodec.WritePrefix(
-                            prefix.AsSpan(0, ZlinkStreamFrameCodec.PrefixSize),
-                            header.Length,
-                            payload.Length
-                        );
-                        await connection
-                            .WriteAsync(
-                                prefix.AsMemory(0, ZlinkStreamFrameCodec.PrefixSize),
-                                cancellationToken
-                            )
-                            .ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(prefix);
-                    }
-
-                    if (header.Length > 0)
-                        await connection
-                            .WriteAsync(header, cancellationToken)
-                            .ConfigureAwait(false);
-
-                    if (payload.Length > 0)
-                        await connection
-                            .WriteAsync(payload, cancellationToken)
-                            .ConfigureAwait(false);
+                    ZlinkStreamFrameCodec.WriteFrame(frame.AsSpan(0, frameSize), header, payload);
+                    await connection
+                        .WriteAsync(frame.AsMemory(0, frameSize), cancellationToken)
+                        .ConfigureAwait(false);
                 }
-                else
+                finally
                 {
-                    var frameSize = ZlinkStreamFrameCodec.GetFrameSize(
-                        header.Length,
-                        payload.Length
-                    );
-                    var frame = ArrayPool<byte>.Shared.Rent(frameSize);
-                    try
-                    {
-                        ZlinkStreamFrameCodec.WriteFrame(
-                            frame.AsSpan(0, frameSize),
-                            header,
-                            payload
-                        );
-                        await connection
-                            .WriteAsync(frame.AsMemory(0, frameSize), cancellationToken)
-                            .ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(frame);
-                    }
+                    ArrayPool<byte>.Shared.Return(frame);
                 }
             }
             finally

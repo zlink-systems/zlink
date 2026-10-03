@@ -104,9 +104,7 @@ final class ZLinkInMemoryAuthorityStore {
                     Row current = rows.get(key);
                     if (!matches(current, expectation)
                             || current == null
-                            || current.allocation.state() != ZLinkPlacementAllocationState.ACTIVE
-                            || (!(mutation instanceof ZLinkAuthorityRestore)
-                                    && participantIsPrepared(key))) {
+                            || current.allocation.state() != ZLinkPlacementAllocationState.ACTIVE) {
                         return completed(
                                 new ZLinkAuthorityConflict(
                                         current == null

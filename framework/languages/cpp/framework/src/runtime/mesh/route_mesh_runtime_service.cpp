@@ -279,28 +279,6 @@ struct route_mesh_runtime_service_t::state_t
 namespace
 {
 
-bool route_peer_is_ready (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &state,
-                          const std::string &mesh_name,
-                          const zlink::routing_id_t &target)
-{
-    const auto hub = state->require_hub (mesh_name);
-    const auto peer = hub->node->native_node ().transport ().topology ().peer (target.to_bytes ());
-    if (!peer || peer->descriptor.state == mesh::service_node_state_t::draining)
-        return false;
-
-    std::lock_guard lock (hub->mutex);
-    if (state->location_runtime == nullptr)
-        return true;
-    if (!hub->location_store_healthy)
-        return false;
-    const auto found = std::find_if (
-      hub->location_descriptors.begin (), hub->location_descriptors.end (),
-      [&target] (const mesh_node_descriptor_t &location) { return location.rid == target; });
-    return found != hub->location_descriptors.end ()
-           && found->state == framework_runtime_state_t::serving
-           && found->lifecycle_generation == peer->descriptor.lifecycle_generation;
-}
-
 class observation_t final : public mesh_runtime_observation_t
 {
   public:
@@ -353,19 +331,6 @@ void route_mesh_runtime_service_t::start ()
             continue;
         std::weak_ptr<state_t> weak_state = _state;
         std::weak_ptr<state_t::hub_t> weak_hub = hub;
-        const auto mesh_name = hub->node->mesh_name ();
-        hub->node->native_node ().configure_peer_readiness_resolver (
-          [weak_state, mesh_name] (const zlink::routing_id_t &target) {
-              const auto state = weak_state.lock ();
-              if (!state || state->stopped.load (std::memory_order_acquire))
-                  return false;
-              try {
-                  return route_peer_is_ready (state, mesh_name, target);
-              }
-              catch (...) {
-                  return false;
-              }
-          });
         hub->node->native_node ().transport ().topology ().set_change_handler (
           [weak_state, weak_hub] {
               const auto state = weak_state.lock ();
@@ -396,13 +361,6 @@ void route_mesh_runtime_service_t::stop () noexcept
         return;
     for (const auto &[_, hub] : _state->hubs)
         hub->stopped.store (true, std::memory_order_release);
-    for (const auto &[_, hub] : _state->hubs) {
-        try {
-            hub->node->native_node ().configure_peer_readiness_resolver ({});
-        }
-        catch (...) {
-        }
-    }
     for (const auto &[_, hub] : _state->hubs) {
         if (hub->pump.joinable ())
             hub->node->native_node ().transport ().topology ().set_change_handler ({});

@@ -2843,12 +2843,6 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public CompletionStage<List<Message>> leaveActor(
-                ZLinkBackendActorRef actor, String currentSpotId, Duration timeout) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
         public CompletionStage<Void> destroyActor(ZLinkBackendActorRef actor, Duration timeout) {
             throw new UnsupportedOperationException();
         }
@@ -3031,11 +3025,6 @@ final class ZLinkChannelRuntimeTest {
         @Override
         public void replyActorJoin(
                 ZLinkBackendActorJoinRequest request, int joinResultCode, List<Message> parts) {}
-
-        @Override
-        public ZLinkBackendActorLifecycleEvent recvActorLifecycle(ZLinkBackendRecvMode mode) {
-            return null;
-        }
 
         @Override
         public String name() {

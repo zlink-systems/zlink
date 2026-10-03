@@ -32,10 +32,6 @@ public interface ZLinkInternalAsyncSpotDispatchHandler extends ZLinkBackendSpotD
         return null;
     }
 
-    default CompletionStage<Void> handleLifecycle(ZLinkBackendActorLifecycleEvent event) {
-        return null;
-    }
-
     @Override
     default void handle(ZLinkBackendSpotDispatchInfo info) {
         handleAsync(info);

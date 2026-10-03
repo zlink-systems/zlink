@@ -258,6 +258,7 @@ class remote_create_entry_spot_t final
     {
         _context.handlers ().add_actor_send<&remote_create_entry_spot_t::on_probe> (
           "remote-create-probe");
+        _context.handlers ().add_actor_request<&remote_create_entry_spot_t::on_echo> ();
     }
 
     zlink::framework::task_t<zlink::framework::actor_create_response_t>
@@ -285,6 +286,13 @@ class remote_create_entry_spot_t final
                                              const relocation_ready_message_t &)
     {
         co_return;
+    }
+
+    degraded_object_message_t on_echo (configuration_actor_t &,
+                                       zlink::framework::message_context_t &,
+                                       const degraded_object_message_t &request)
+    {
+        return degraded_object_message_t{request.value + 1};
     }
 
     static inline std::atomic_int created_count{0};
@@ -663,6 +671,97 @@ bool verify_remote_actor_create_target_owns_completion ()
                   << " error=" << (created.error () ? created.error ()->what () : "-") << '\n';
     }
     return passed;
+}
+
+/* Actor model §5 and Spot-Actor membership §2: a Created result publishes the
+ * Ready authority and message admission together, so the first request to the
+ * created Actor is accepted. The caller starts before the Actor node, waits for
+ * the public ready peer as the perf ActorCaller does, creates, and requests at
+ * once (#1385). */
+bool verify_first_request_after_remote_actor_create (int iterations)
+{
+    for (int iteration = 0; iteration < iterations; ++iteration) {
+        auto location_store =
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
+        auto target_location_store =
+          std::make_shared<observing_actor_creation_store_t> (location_store);
+        auto source_location_store =
+          std::make_shared<observing_actor_creation_store_t> (location_store);
+
+        auto source = zlink::framework::app_t::create ();
+        configure_remote_actor_create_app (source, source_location_store,
+                                           "host-first-request-source", false);
+        char source_program[] = "host-first-request-source";
+        char *source_arguments[] = {source_program, nullptr};
+        int source_exit_code = -1;
+        std::thread source_thread ([&] { source_exit_code = source.run (1, source_arguments); });
+        const bool source_ready =
+          wait_until ([&] { return source.is_ready (); }, std::chrono::seconds (3));
+
+        auto target = zlink::framework::app_t::create ();
+        configure_remote_actor_create_app (target, target_location_store,
+                                           "host-first-request-target", true);
+        char target_program[] = "host-first-request-target";
+        char *target_arguments[] = {target_program, nullptr};
+        int target_exit_code = -1;
+        std::thread target_thread ([&] { target_exit_code = target.run (1, target_arguments); });
+
+        bool route_ready = false;
+        std::string created_error = "-";
+        std::string request_error = "-";
+        bool created = false;
+        bool replied = false;
+        if (source_ready) {
+            auto source_services = source.advanced ().services ().build_provider ();
+            auto &routes = source_services.get_required<zlink::framework::route_mesh_runtime_t> ();
+            route_ready = wait_until (
+              [&] {
+                  return routes.snapshot ("host-remote-actor-create-mesh").ready_peer_count == 1;
+              },
+              std::chrono::seconds (5));
+            const auto actor_id = "actor-first-request-" + std::to_string (iteration);
+            if (route_ready) {
+                auto &actors = source_services.get_required<zlink::framework::actor_manager_t> ();
+                const auto result =
+                  actors
+                    .get_or_create (zlink::framework::actor_id_t (actor_id), "remote-create-actor")
+                    .timeout (std::chrono::seconds (5))
+                    .async ()
+                    .result ();
+                created = result
+                          && std::holds_alternative<zlink::framework::actor_create_created_t> (
+                            result.value ());
+                if (!result && result.error ())
+                    created_error = result.error ()->what ();
+            }
+            if (created) {
+                auto &client = source_services.get_required<zlink::framework::actor_client_t> ();
+                const auto reply = client
+                                     .request (zlink::framework::actor_id_t (actor_id),
+                                               degraded_object_message_t{iteration})
+                                     .timeout (std::chrono::seconds (5))
+                                     .async<degraded_object_message_t> ()
+                                     .result ();
+                replied = reply && reply.value ().value == iteration + 1;
+                if (!reply && reply.error ())
+                    request_error = reply.error ()->what ();
+            }
+        }
+
+        source.request_stop ();
+        target.request_stop ();
+        source_thread.join ();
+        target_thread.join ();
+        if (!source_ready || !route_ready || !created || !replied) {
+            std::cerr << "first request after remote Actor create must be accepted: iteration="
+                      << iteration << " source-ready=" << source_ready
+                      << " route-ready=" << route_ready << " created=" << created
+                      << " create-error=" << created_error << " replied=" << replied
+                      << " request-error=" << request_error << '\n';
+            return false;
+        }
+    }
+    return true;
 }
 
 class mesh_started_probe_service_t final : public zlink::framework::hosted_service_t
@@ -1965,6 +2064,12 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
 
 int main ()
 {
+    if (const char *iterations = std::getenv ("ZLINK_CPP_FIRST_ACTOR_REQUEST_ITERATIONS")) {
+        return verify_first_request_after_remote_actor_create (std::atoi (iterations))
+                 ? EXIT_SUCCESS
+                 : EXIT_FAILURE;
+    }
+
     if (!verify_degraded_host_republishes_descriptor_after_owner_claim ())
         return EXIT_FAILURE;
 
@@ -1981,6 +2086,9 @@ int main ()
         return EXIT_FAILURE;
 
     if (!verify_remote_actor_create_target_owns_completion ())
+        return EXIT_FAILURE;
+
+    if (!verify_first_request_after_remote_actor_create (5))
         return EXIT_FAILURE;
 
     if (!verify_relocation_retry_after_target_unavailable ())

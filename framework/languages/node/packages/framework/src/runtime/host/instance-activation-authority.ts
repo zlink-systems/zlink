@@ -503,7 +503,6 @@ function readyRead(
   if (
     creating?.state === 'coldActivating' &&
     snapshot.allocation.objectKind === 'instance_spot' &&
-    (snapshot.allocation.state === 'reserved' || snapshot.allocation.state === 'active') &&
     creating.stableType === target.stableType &&
     creating.spotId === target.targetSpotId &&
     creating.ownerId === snapshot.ownerId &&

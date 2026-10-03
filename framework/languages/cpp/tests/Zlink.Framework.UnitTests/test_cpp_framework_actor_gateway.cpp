@@ -2,11 +2,14 @@
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/live_location_reader.hpp"
+#include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -136,6 +139,44 @@ int relay_dispatch_scope_restores_nested_and_exception_state ()
         }
     }
     return current_stream_relay_dispatch () ? 3 : 0;
+}
+
+// A session handler that relays after an await which resumed outside the
+// dispatch scope still sees the header of the frame it is handling.
+int relay_dispatch_header_follows_handler_await ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    runtime::install_host_context_hooks ();
+    auto pending = std::make_shared<task_completion_source_t<void>> ();
+    auto observed = std::make_shared<std::optional<std::string>> ();
+    auto handler = [] (std::shared_ptr<task_completion_source_t<void>> pending,
+                       std::shared_ptr<std::optional<std::string>> observed) -> task_t<void> {
+        co_await pending->task ();
+        if (const auto header = current_stream_relay_dispatch ())
+            *observed = std::string (header->packet_name ());
+        co_return;
+    };
+    task_t<void> running = [&] {
+        const stream_relay_dispatch_scope_t scope (
+          stream_header_t (stream_message_kind_t::request, stream_codec_t::json,
+                           stream_header_flags_t::none, std::nullopt, "dispatched"));
+        return handler (pending, observed);
+    }();
+    if (current_stream_relay_dispatch ())
+        return 1;
+    bool resumer_leaked = true;
+    std::thread resumer ([&] {
+        pending->complete (result_t<void>::success ());
+        resumer_leaked = current_stream_relay_dispatch ().has_value ();
+    });
+    resumer.join ();
+    if (!running.result ())
+        return 2;
+    if (*observed != std::optional<std::string> ("dispatched"))
+        return 3;
+    return resumer_leaked ? 4 : 0;
 }
 
 int actor_identity_validation_is_bounded_and_utf8_exact ()
@@ -4689,8 +4730,8 @@ int local_bound_session_refreshes_cached_route_before_fast_path ()
                                           18};
     bool invalidated = false;
     runtime.configure_actor_route_resolver (
-      [&] (const actor_ref_t &) -> std::optional<runtime::spot_address_t> {
-          return invalidated ? current : stale;
+      [&] (actor_ref_t) -> task_t<std::optional<runtime::spot_address_t>> {
+          co_return invalidated ? current : stale;
       },
       [&] (const runtime::protocol::actor_route_fence_t &route) {
           invalidated = route.actor_id == "reconnected-player"
@@ -4700,10 +4741,11 @@ int local_bound_session_refreshes_cached_route_before_fast_path ()
                         && route.owner_lease_generation
                              == static_cast<std::uint64_t> (stale.owner.lease_generation);
       });
-    const auto cached = runtime.resolve_application_actor_route (actor);
+    const auto cached = runtime.resolve_application_actor_route (actor).result ().value ();
     if (!cached || cached->node_rid != stale.node_rid)
         return 1;
-    const auto refreshed = runtime.refresh_application_actor_route (actor, *cached);
+    const auto refreshed =
+      runtime.refresh_application_actor_route (actor, *cached).result ().value ();
     return invalidated && refreshed && refreshed->node_rid == current.node_rid
                && refreshed->node_generation == current.node_generation
                && refreshed->authority_owner_generation == current.authority_owner_generation
@@ -4993,6 +5035,124 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
         no_factory != 0)
         return no_factory;
     return admission_calls.load () == 1 ? 0 : 8;
+}
+
+/* A Location Store whose reads complete on the provider's own thread, as a
+ * networked provider does. */
+class provider_thread_location_store_t final : public zlink::framework::location_store_t
+{
+  public:
+    ~provider_thread_location_store_t () override
+    {
+        for (auto &completer : _completers)
+            completer.join ();
+    }
+
+    zlink::framework::task_t<zlink::framework::store_read_result_t>
+    read (zlink::framework::store_key_t key) override
+    {
+        using namespace zlink::framework;
+        auto completion = std::make_shared<task_completion_source_t<store_read_result_t>> ();
+        auto pending = completion->task ();
+        auto value = inner.read (std::move (key)).result ();
+        std::lock_guard lock (_mutex);
+        _completers.emplace_back ([completion, value] { completion->complete (value); });
+        return pending;
+    }
+    zlink::framework::task_t<zlink::framework::store_scan_result_t>
+    scan (zlink::framework::store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    zlink::framework::task_t<zlink::framework::store_write_result_t>
+    write (zlink::framework::store_write_request_t request) override
+    {
+        return inner.write (std::move (request));
+    }
+
+    zlink::framework::runtime::in_memory_location_store_t inner;
+
+  private:
+    std::mutex _mutex;
+    std::vector<std::thread> _completers;
+};
+
+/* Execution gate §1, §13: the actorJoin admission reads the Authority row
+ * from an infrastructure thread. That read must finish while every handler
+ * executor worker is busy; before #1380's follow-up its Store continuations
+ * were queued behind those workers and the admission never returned. */
+int remote_actor_join_store_read_does_not_wait_for_handler_workers ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    using namespace std::chrono_literals;
+
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-join-infrastructure");
+    node->worker_executor =
+      std::make_shared<runtime::offload_executor_t> (1, "actor-join-infrastructure");
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+
+    provider_thread_location_store_t provider;
+    runtime::provider_location_repository_t repository (provider);
+    spot_node_runtime_t spots (node);
+    service_collection_t services;
+    services.add_factory<runtime::live_location_reader_t> (
+      [&repository] (service_provider_t &) {
+          return std::make_unique<runtime::live_location_reader_t> (repository);
+      },
+      service_lifetime_t::singleton);
+    auto provider_services = services.build_provider ();
+    spots.bind_service_provider (provider_services);
+
+    runtime::configure_handler_coroutine_executor (1);
+    runtime::install_host_context_hooks ();
+    std::promise<void> worker_entered;
+    std::promise<void> release_worker;
+    auto released = release_worker.get_future ().share ();
+    runtime::handler_coroutine_executor ().post_native_continuation ([&worker_entered, released] {
+        worker_entered.set_value ();
+        released.wait ();
+    });
+    worker_entered.get_future ().wait ();
+
+    std::promise<std::pair<framework_error_kind_t, framework_error_kind_t>> outcome;
+    auto finished = outcome.get_future ();
+    std::thread infrastructure ([&] {
+        const auto admitted =
+          spots
+            .admit_remote_actor_to_spot ("infrastructure-store-read",
+                                         test_actor_ref ("actor-owner", "", "absent-actor", 17),
+                                         spot_id_t ("source-spot"), spot_id_t ("target-spot"),
+                                         zlink::message_t{}, 1, 2, 23, 19, 29, true)
+            .result ();
+        runtime::protocol::spot_route_fence_t fence;
+        fence.spot_id = "absent-spot";
+        fence.object_generation = 3;
+        fence.target_node_routing_id = {1};
+        fence.target_node_generation = 5;
+        fence.authority_owner_generation = 7;
+        fence.owner_lease_generation = 9;
+        const auto target = spots.resolve_wire_actor_join_target (fence);
+        outcome.set_value (
+          {admitted ? framework_error_kind_t::internal_failure : admitted.error_kind (),
+           target ? framework_error_kind_t::internal_failure : target.error_kind ()});
+    });
+    if (finished.wait_for (10s) != std::future_status::ready) {
+        // The infrastructure thread waits for a continuation queued behind the
+        // held worker; the executor cannot drain, so end the process.
+        std::cerr << "infrastructure Store read waited for a handler worker\n";
+        std::_Exit (1);
+    }
+    release_worker.set_value ();
+    infrastructure.join ();
+    runtime::shutdown_handler_coroutine_executor ();
+    const auto [admission, target] = finished.get ();
+    if (admission != framework_error_kind_t::not_found)
+        return 2;
+    return target == framework_error_kind_t::not_found ? 0 : 3;
 }
 
 } // namespace
@@ -5929,6 +6089,8 @@ int main (int argc, char **argv)
             return reconcile_deadline_adopts_target_when_store_shows_committed ();
         if (test == "--reconcile-indeterminate")
             return reconcile_deadline_fast_fails_when_store_is_indeterminate ();
+        if (test == "--infrastructure-store-wait")
+            return remote_actor_join_store_read_does_not_wait_for_handler_workers ();
         return 1;
     }
     if (const auto route = local_relay_preserves_handoff_request_route (true); route != 0)
@@ -6145,6 +6307,9 @@ int main (int argc, char **argv)
     if (const auto relay_scope = relay_dispatch_scope_restores_nested_and_exception_state ();
         relay_scope != 0) {
         return 110 + relay_scope;
+    }
+    if (const auto relay_await = relay_dispatch_header_follows_handler_await (); relay_await != 0) {
+        return 465 + relay_await;
     }
     if (const auto route_fence = bound_session_route_preserves_private_fences ();
         route_fence != 0) {

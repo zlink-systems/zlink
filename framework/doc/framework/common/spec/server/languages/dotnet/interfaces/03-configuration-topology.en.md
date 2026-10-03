@@ -566,9 +566,9 @@ public interface IZLinkSocketConfig
  TimeSpan? SendTimeout { get; set; }
  TimeSpan? ConnectTimeout { get; set; }
  TimeSpan? HandshakeInterval { get; set; }
- bool IPv6 { get; set; }
- bool TcpNoDelay { get; set; }
- bool Immediate { get; set; }
+ bool? IPv6 { get; set; }
+ bool? TcpNoDelay { get; set; }
+ bool? Immediate { get; set; }
  int Weight { get; set; }
 }
 
@@ -583,9 +583,9 @@ public interface IZLinkStreamSocketConfig
  TimeSpan? SendTimeout { get; set; }
  TimeSpan? ConnectTimeout { get; set; }
  TimeSpan? HandshakeInterval { get; set; }
- bool IPv6 { get; set; }
- bool TcpNoDelay { get; set; }
- bool Immediate { get; set; }
+ bool? IPv6 { get; set; }
+ bool? TcpNoDelay { get; set; }
+ bool? Immediate { get; set; }
 }
 
 public interface IZLinkRouteConfig
@@ -627,6 +627,8 @@ public interface IZLinkMeshNodeSocketConfig
 ```
 
 `MaxMessageSize` is the .NET ClientServer application listener option. [Framework API §4](../../../00-foundation/06-framework-api.en.md#4-routemesh-registration) owns its default bound, the meaning of `0`, and its exclusion from RouteMesh.
+
+`IPv6`, `TcpNoDelay`, and `Immediate` are applied to the socket only when a value is set. A `null` value isn't applied, so the Core default stays in effect.
 
 `ConfigureSpotPublisher()` has no publish-only delivery policy option.
 [Submit and completion §6](../../../01-execution/01-submit-and-completion.en.md)

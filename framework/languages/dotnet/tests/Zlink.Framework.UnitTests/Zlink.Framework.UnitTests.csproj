@@ -97,6 +97,7 @@
         <Compile Include="Runtime/BackendMonitorWrapperTests.cs"/>
         <Compile Include="Runtime/CoverageCriticalRuntimeTests.cs"/>
         <Compile Include="Runtime/ChannelOutboundTerminalTests.cs"/>
+        <Compile Include="Runtime/ChannelApplicationDispatchQueueShutdownTests.cs"/>
         <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
         <Compile Include="Runtime/ControllableTimeProvider.cs"/>
         <Compile Include="Runtime/CapacityMonitoringProjectionTests.cs"/>
@@ -143,6 +144,7 @@
         <Compile Include="Runtime/SharedAsyncDisposalTests.cs"/>
         <Compile Include="Runtime/SubmitAdmissionRuntimeTests.cs"/>
         <Compile Include="Runtime/FanoutPublishAdmissionTests.cs"/>
+        <Compile Include="Runtime/BackendSocketOptionsMapperTests.cs"/>
         <Compile Include="Runtime/ChannelNoEligibleMemberTests.cs"/>
         <Compile Include="Runtime/FanoutNoDropTests.cs"/>
         <Compile Include="Runtime/BlockingSubmitTests.cs"/>
@@ -182,6 +184,7 @@
         <Compile Include="Runtime/StreamSessionLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
+        <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>
         <Compile Include="Runtime/SessionJobQueueLoadTests.cs"/>
         <Compile Include="Runtime/TimerLifecycleTests.cs"/>
         <Compile Include="Runtime/SpotHandlerInvokerTests.cs"/>

@@ -148,8 +148,8 @@ using spot_request_completion_t =
   std::function<void (foundation::operation_terminal_t, result_t<std::vector<zlink::message_t>>)>;
 
 using route_fence_t = std::pair<std::uint64_t, std::uint64_t>;
-using spot_route_fence_resolver_t = std::function<std::optional<route_fence_t> (
-  const zlink::routing_id_t &, std::string_view, std::uint64_t)>;
+using spot_route_fence_resolver_t = std::function<task_t<std::optional<route_fence_t>> (
+  zlink::routing_id_t, std::string, std::uint64_t)>;
 
 enum class bound_session_bind_admission_t
 {
@@ -236,7 +236,6 @@ struct host_options_t
     mesh::raw_mesh_node_options_t mesh;
     std::string entry_spot_name = "entry";
     std::set<std::string> object_stable_types;
-    std::chrono::milliseconds route_cache_max_age{15'000};
     std::chrono::milliseconds owner_lease_fencing_margin{5'000};
     std::shared_ptr<zlink::context_t> core_context;
     std::chrono::milliseconds session_relocation_seal_timeout =
@@ -427,8 +426,8 @@ struct instance_spot_activation_materializer_t
       std::function<task_t<zlink::message_t> (std::function<void ()> &)>,
       std::shared_ptr<::zlink::framework::detail::deferred_barrier_t> *)>
       dispatch;
-    std::function<result_t<protocol::instance_spot_activation_header_t> (
-      const protocol::instance_spot_activation_header_t &)>
+    std::function<task_t<result_t<protocol::instance_spot_activation_header_t>> (
+      protocol::instance_spot_activation_header_t)>
       select_target;
 
     explicit operator bool () const noexcept
@@ -646,8 +645,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                     user_spot_materializer_t materializer,
                                     user_spot_closer_t closer = {});
     void configure_spot_route_fence_resolver (spot_route_fence_resolver_t resolver);
-    using peer_readiness_resolver_t = std::function<bool (const zlink::routing_id_t &)>;
-    void configure_peer_readiness_resolver (peer_readiness_resolver_t resolver);
     void configure_actor_create_operations (actor_create_operation_target_t target);
     void configure_actor_join_operations (actor_join_operation_target_t target);
     using actor_join_relocation_prepare_validator_t =
@@ -900,11 +897,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                                        std::chrono::milliseconds timeout,
                                                        std::span<const std::uint8_t> metadata,
                                                        spot_request_completion_t completion = {});
-    std::optional<route_fence_t>
-    resolve_spot_route_fence (const zlink::routing_id_t &target_node_rid,
-                              std::string_view target_spot_id,
+    task_t<std::optional<route_fence_t>>
+    resolve_spot_route_fence (zlink::routing_id_t target_node_rid,
+                              std::string target_spot_id,
                               std::uint64_t target_spot_generation);
-    void invalidate_spot_route_fence (const protocol::message_follow_notice_t &notice);
     bool complete_local_request (const pending_operation_t &operation,
                                  const std::vector<zlink::message_t> &parts);
     void complete_operation (const pending_operation_t &operation,
@@ -933,15 +929,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     user_spot_materializer_t _user_spot_materializer;
     user_spot_closer_t _user_spot_closer;
     spot_route_fence_resolver_t _spot_route_fence_resolver;
-    peer_readiness_resolver_t _peer_readiness_resolver;
-    struct cached_spot_route_fence_t
-    {
-        route_fence_t fence;
-        std::chrono::steady_clock::time_point expires_at;
-    };
-    runtime::offload_executor_t _route_cache_lane_executor;
-    mutable runtime::state_lane_t _route_cache_lane{_route_cache_lane_executor};
-    std::map<std::string, cached_spot_route_fence_t> _spot_route_fences;
     actor_create_operation_target_t _actor_create_target;
     actor_join_operation_target_t _actor_join_target;
     actor_join_relocation_prepare_validator_t _actor_join_relocation_prepare_validator;

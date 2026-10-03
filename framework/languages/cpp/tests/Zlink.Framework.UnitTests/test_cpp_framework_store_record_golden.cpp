@@ -466,46 +466,10 @@ int main ()
         assert (threw && "unrecognized format tag must fail explicitly, not be guessed at");
     }
 
-    // Sol review [M] (cpp-store-record-convergence e14bce0297, finding 3):
-    // every check above drives a standalone or production *decoder*, but
-    // nothing drives a record through the production *writer*
-    // (provider_location_repository_t) and compares the result against the
-    // golden. Do that for the owner-lease record against a fake in-memory
-    // store, field-compared (order-independent) against the golden's
-    // "decoded" object per notes.jsonByteLayering.
-    //
-    // NOT byte-exact: driving this test surfaced that
-    // provider_location_repository.hpp's owner-lease payload is built with
-    // plain `nlohmann::json{...}` (claim_owner_lease, near the top of the
-    // class), whose default ObjectType is std::map -- so `.dump()` emits
-    // keys in *alphabetical* order ({"leaseGeneration",...,"ownerId",...,
-    // "recordVersion",...}) while the golden's jsonBytesHex pins *insertion*
-    // order ({"recordVersion",...,"ownerId",...,"leaseGeneration",...}, see
-    // notes.jsonByteLayering: "the byte-compare step pins one exact
-    // serialization"). The same alphabetical-vs-insertion mismatch applies
-    // to json_t (= plain nlohmann::json, provider_location_repository.hpp)
-    // and therefore to every other encode_* function in the file, including
-    // encode_authority.
-    //
-    // This is one of five confirmed divergences between the current cpp
-    // encoders and the golden's canonical §2.4 schema, none of them fixed
-    // by this pass (the authority "storeVersion" extra field was
-    // investigated and found genuinely load-bearing -- a production
-    // consumer at framework/src/runtime/stateful/public_host_runtime.cpp
-    // compares a freshly re-read `authority_snapshot_t::store_version`
-    // against a wire-echoed "expected_store_version" that only stays valid
-    // because storeVersion round-trips through the record body today;
-    // removing it broke that check and is reported, not fixed, see the
-    // handoff notes for this finding). The other four:
-    // encode_mesh_record's "generation" field, encode_target's
-    // "owner"/"nodeLifecycleGeneration" fields, encode_bundle's "slots" vs
-    // golden's "count" (plus int vs string objectKind), and mesh descriptor
-    // encode()'s ~12 additional fields. All five plus this json_t ordering
-    // defect are recommended as a single follow-up unit of work -- fixing
-    // storeVersion alone (or the ordering alone) does not move the golden
-    // byte-compare goal forward, so they should land together with the
-    // production consumer(s) each one touches audited in the same pass.
-    // Until then this block stays a field-compare, not a byte-compare.
+    // Drive the owner-lease record through the production writer
+    // (provider_location_repository_t::claim_owner_lease) and byte-compare it
+    // with the golden's jsonBytesHex. Records that no Value condition reads
+    // are field-compared in the block below.
     {
         using namespace zlink::framework;
         using namespace zlink::framework::runtime;
@@ -552,12 +516,16 @@ int main ()
         const auto &owner_lease_vector = root.at ("valueVectors").at ("genericOpaqueRecord").at (4);
         assert (owner_lease_vector.at ("name").get<std::string> () == "ownerLease-expired");
 
-        // Field-compare (order-independent) against the golden's "decoded"
-        // object -- see the block comment above for why this is not yet a
-        // byte-exact compare.
-        const auto produced_json = nlohmann::json::parse (std::string (
-          reinterpret_cast<const char *> (found->value.bytes.data ()), found->value.bytes.size ()));
-        assert (produced_json == owner_lease_vector.at ("decoded"));
+        // Byte-compare against the golden's jsonBytesHex. The owner lease is
+        // checked with a Value condition (01-location-runtime §3.1), so a
+        // host's lease bytes must equal the bytes every other language writes
+        // for the same (OwnerId, LeaseGeneration).
+        const auto expected = from_hex (owner_lease_vector.at ("jsonBytesHex").get<std::string> ());
+        assert (found->value.bytes.size () == expected.size ());
+        assert (std::equal (expected.begin (), expected.end (), found->value.bytes.begin (),
+                            [] (std::uint8_t left, std::byte right) {
+                                return left == std::to_integer<std::uint8_t> (right);
+                            }));
     }
 
     // Checklist C-4d: extend the finding-3 pattern above to the mesh

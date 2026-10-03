@@ -811,19 +811,23 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 )
                 .ConfigureAwait(false);
             published = true;
-            var terminal = await DispatchFirstMessageAsync(
+            return await DispatchFirstMessageAsync(
                     prepared.Activation,
                     operation,
                     requestSource,
                     readySnapshot,
                     metadata,
                     payload,
-                    cancellationToken
+                    cancellationToken,
+                    _ =>
+                        CompleteAndClearRecoveryAsync(
+                            key,
+                            readySnapshot,
+                            readyPayload,
+                            stored.Reference
+                        )
                 )
                 .ConfigureAwait(false);
-            await CompleteAndClearRecoveryAsync(key, readySnapshot, readyPayload, stored.Reference)
-                .ConfigureAwait(false);
-            return terminal;
         }
         catch
         {
@@ -1052,10 +1056,15 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 snapshot,
                 record.Metadata,
                 record.Payload,
-                cancellationToken
+                cancellationToken,
+                _ =>
+                    CompleteAndClearRecoveryAsync(
+                        entry.Key,
+                        snapshot,
+                        authority,
+                        recovery.Reference
+                    )
             )
-            .ConfigureAwait(false);
-        await CompleteAndClearRecoveryAsync(entry.Key, snapshot, authority, recovery.Reference)
             .ConfigureAwait(false);
     }
 
@@ -1300,24 +1309,23 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     await relocationStore
                         .DeleteRelocationAsync(previousRecovery.Reference, CancellationToken.None)
                         .ConfigureAwait(false);
-                var terminal = await DispatchFirstMessageAsync(
+                return await DispatchFirstMessageAsync(
                         activation,
                         operation,
                         requestSource,
                         stored.Snapshot,
                         metadata,
                         payload,
-                        cancellationToken
+                        cancellationToken,
+                        _ =>
+                            CompleteAndClearRecoveryAsync(
+                                key,
+                                stored.Snapshot,
+                                claimedAuthority,
+                                operationRoot.Reference
+                            )
                     )
                     .ConfigureAwait(false);
-                await CompleteAndClearRecoveryAsync(
-                        key,
-                        stored.Snapshot,
-                        claimedAuthority,
-                        operationRoot.Reference
-                    )
-                    .ConfigureAwait(false);
-                return terminal;
             }
 
             var remaining = (deadline - Stopwatch.GetElapsedTime(0)).TotalMilliseconds;
@@ -1355,7 +1363,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
         ZLinkAuthoritySnapshot authority,
         ReadOnlyMemory<byte>? metadata,
         IReadOnlyList<ReadOnlyMemory<byte>> payload,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Func<CancellationToken, ValueTask>? recordTerminal = null
     )
     {
         return await activation
@@ -1371,7 +1380,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 metadata,
                 operation.IsRequest,
                 cancellationToken,
-                operation
+                operation,
+                recordTerminal
             )
             .ConfigureAwait(false);
     }

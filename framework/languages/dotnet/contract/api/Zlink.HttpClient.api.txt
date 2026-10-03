@@ -73,7 +73,7 @@ assembly Zlink.HttpClient
     method System.Threading.Tasks.ValueTask<Zlink.HttpClient.RawHttpResponse> AsyncRaw(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method System.Threading.Tasks.ValueTask<Zlink.HttpClient.HttpResponse<T>> Async<T>(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
       generic T variance=invariant nullable=unspecified
-    method System.Void Async<T>(Zlink.HttpClient.ZLinkHttpCallback<T?> callback [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method System.Threading.Tasks.Task Async<T>(Zlink.HttpClient.ZLinkHttpCallback<T?> callback [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
       generic T variance=invariant nullable=nullable
     method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder BodyStream(System.Func<System.Byte[]?> provider [nullability=read:not-null,write:not-null], System.String contentType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Body(System.String content [nullability=read:not-null,write:not-null], System.String contentType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]

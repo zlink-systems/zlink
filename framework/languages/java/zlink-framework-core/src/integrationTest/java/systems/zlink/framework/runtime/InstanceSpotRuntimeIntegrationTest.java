@@ -91,6 +91,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                         RuntimeTestSupport.startFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             SourceEntrySpot.request.set(new Request("echo-" + suffix));
+            awaitPeersReady(
+                    source, target, "instance-source-" + suffix, "instance-target-" + suffix);
             SourceEntrySpot.start.complete(null);
             assertTrue(EchoInstanceSpot.closeCompleted.get(5, TimeUnit.SECONDS));
             SourceEntrySpot.afterCloseStart.complete(null);
@@ -110,6 +112,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         EchoInstanceSpot.generations.clear();
         EchoInstanceSpot.sends.set(0);
         EchoInstanceSpot.closes.set(null);
+        EchoInstanceSpot.closingCalls.set(0);
         SourceEntrySpot.reset();
         SourceEntrySpot.afterCloseStart = new CompletableFuture<>();
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
@@ -149,10 +152,18 @@ final class InstanceSpotRuntimeIntegrationTest {
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             try {
                 SourceEntrySpot.request.set(new Request(spotId));
+                awaitPeersReady(
+                        source,
+                        target,
+                        "close-order-source-" + suffix,
+                        "close-order-target-" + suffix);
                 SourceEntrySpot.start.complete(null);
                 store.deleteApplied.get(5, TimeUnit.SECONDS);
 
-                assertEquals(0, target.activeSpotCount("game"));
+                // Spot address messaging §7 step 2-3: OnClosing and local cleanup finish before
+                // the authority release. The activation record keeps the Spot lane for messages
+                // placed behind Close until step 3 ends, so the count is not read here.
+                assertEquals(1, EchoInstanceSpot.closingCalls.get());
                 SourceEntrySpot.afterCloseStart.complete(null);
                 assertEquals(
                         "echo:hello|echo:again|echo:after-close",
@@ -183,27 +194,22 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     @Test
-    void failedAdmissionSealResumesAtSeal() throws Exception {
-        verifyCloseFailure("seal");
-    }
-
-    @Test
     void failedInstanceResourceReleaseResumesAtRelease() throws Exception {
         verifyCloseFailure("resource");
     }
 
     @Test
-    void closingVerdictSurvivesLocalRetirementUntilAuthorityRelease() throws Exception {
+    void requestWithoutIntentDuringAuthorityReleaseDoesNotRun() throws Exception {
         verifyCloseFailure("window");
     }
 
     @Test
-    void closingCommitRejectsBeforeLocalSeal() throws Exception {
+    void requestWithoutIntentAfterClosingCommitDoesNotRun() throws Exception {
         verifyCloseFailure("cas-window");
     }
 
     @Test
-    void directMissingWithoutIntentIsNotFound() throws Exception {
+    void directMissingWithoutIntentDoesNotRun() throws Exception {
         verifyCloseFailure("missing");
     }
 
@@ -236,6 +242,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         EchoInstanceSpot.closingCalls.set(0);
         EchoInstanceSpot.generations.clear();
         EchoInstanceSpot.closingEntered = new CompletableFuture<>();
+        EchoInstanceSpot.closeCompleted = new CompletableFuture<>();
         EchoInstanceSpot.closingRelease = CompletableFuture.completedFuture(null);
         EchoInstanceSpot.closingFailure =
                 failureStage.equals("callback")
@@ -336,6 +343,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                         RuntimeTestSupport.startFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             SourceEntrySpot.request.set(new Request(spotId));
+            awaitPeersReady(
+                    source,
+                    target,
+                    "release-failure-source-" + suffix,
+                    "release-failure-target-" + suffix);
             SourceEntrySpot.start.complete(null);
             try {
                 if (failureStage.equals("creating") || failureStage.equals("missing")) {
@@ -343,13 +355,22 @@ final class InstanceSpotRuntimeIntegrationTest {
                         store.readyPending.get(5, TimeUnit.SECONDS);
                     } else {
                         store.deleteApplied.get(5, TimeUnit.SECONDS);
+                        // The probe starts after Close has ended, so the target no longer holds
+                        // the Spot and the source sends on the Ready route it read before Close.
+                        assertTrue(EchoInstanceSpot.closeCompleted.get(5, TimeUnit.SECONDS));
+                        assertEquals(0, target.activeSpotCount("game"));
                     }
                     SourceEntrySpot.probeStart.complete(null);
-                    Throwable notFound = SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS);
-                    assertTrue(notFound instanceof ZLinkFrameworkException);
-                    assertEquals(
-                            ZLinkFrameworkErrorKind.NOT_FOUND,
-                            ((ZLinkFrameworkException) notFound).kind());
+                    Throwable probe = SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS);
+                    // creating: spot address messaging §9, a direct call without Instance intent
+                    // to a Creating authority is NotFound. missing: the released Ready route is
+                    // refused by its owner fence (spot-close-v1.json
+                    // stale-released-ready-owner-fence-request).
+                    assertProbeKind(
+                            failureStage.equals("creating")
+                                    ? ZLinkFrameworkErrorKind.NOT_FOUND
+                                    : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            probe);
                     store.releaseReady.complete(null);
                     SourceEntrySpot.afterCloseStart.complete(null);
                     if (failureStage.equals("creating")) {
@@ -377,13 +398,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                 field.setAccessible(true);
                 var spots = field.get(target);
                 AtomicInteger completedBackendOperation =
-                        failureStage.equals("seal") || failureStage.equals("resource")
-                                ? installBackendFailure(
-                                        spots,
-                                        spotId,
-                                        failureStage.equals("seal")
-                                                ? "sealSpotAdmission"
-                                                : "closeInstanceSpot")
+                        failureStage.equals("resource")
+                                ? installBackendFailure(spots, spotId, "closeInstanceSpot")
                                 : null;
                 var close =
                         spots.getClass()
@@ -399,7 +415,6 @@ final class InstanceSpotRuntimeIntegrationTest {
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
                             () -> closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
-                    assertEquals(0, target.activeSpotCount("game"));
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> second =
                             (CompletionStage<Boolean>)
@@ -416,6 +431,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                                             spots, spotId, EchoInstanceSpot.generations.getFirst());
                     assertTrue(resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     store.deleteApplied.get(5, TimeUnit.SECONDS);
+                    // The activation record holds the Spot lane until the release succeeds.
+                    assertEquals(0, target.activeSpotCount("game"));
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
                     return;
                 }
@@ -437,29 +454,30 @@ final class InstanceSpotRuntimeIntegrationTest {
                 }
                 if (failureStage.equals("cas-window")) {
                     store.closingApplied.get(5, TimeUnit.SECONDS);
-                    assertEquals(1, target.activeSpotCount("game"));
                     SourceEntrySpot.probeStart.complete(null);
-                    Throwable rejected = SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS);
-                    assertTrue(rejected instanceof ZLinkFrameworkException);
-                    assertEquals(
-                            ZLinkFrameworkErrorKind.REJECTED,
-                            ((ZLinkFrameworkException) rejected).kind());
+                    // Spot address messaging §7 step 1: the probe reaches the owner while Close
+                    // runs and waits behind it. §9 Closing row: without Instance intent it ends
+                    // with NotFound once Close ends.
+                    awaitPendingMessage(spots, spotId);
                     store.releaseClosing.complete(null);
+                    assertProbeKind(
+                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                            SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS));
                     assertTrue(closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
                     return;
                 }
                 if (failureStage.equals("window")) {
                     store.deleteAttempted.get(5, TimeUnit.SECONDS);
-                    assertEquals(0, target.activeSpotCount("game"));
                     SourceEntrySpot.probeStart.complete(null);
-                    Throwable rejected = SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS);
-                    assertTrue(rejected instanceof ZLinkFrameworkException);
-                    assertEquals(
-                            ZLinkFrameworkErrorKind.REJECTED,
-                            ((ZLinkFrameworkException) rejected).kind());
+                    // The authority is Closing until the held Delete applies. §9 Closing row: a
+                    // request without Instance intent ends with NotFound before the release.
+                    assertProbeKind(
+                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                            SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS));
                     store.releaseDelete.complete(null);
                     assertTrue(closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
+                    assertEquals(0, target.activeSpotCount("game"));
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
                     return;
                 }
@@ -518,6 +536,65 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
     }
 
+    private static void assertProbeKind(ZLinkFrameworkErrorKind expected, Throwable failure) {
+        assertTrue(failure instanceof ZLinkFrameworkException, String.valueOf(failure));
+        assertEquals(expected, ((ZLinkFrameworkException) failure).kind());
+    }
+
+    /**
+     * Waits until each RouteMesh node sees the other as a ready peer. The RouteMesh send path does
+     * not wait for a peer (00-foundation/06-framework-api.ko.md channel selection result), so the
+     * scenario starts only after both connections are ready.
+     */
+    private static void awaitPeersReady(
+            ZLinkFrameworkRuntime source,
+            ZLinkFrameworkRuntime target,
+            String sourceRid,
+            String targetRid)
+            throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!peerReady(source, targetRid) || !peerReady(target, sourceRid)) {
+            if (System.nanoTime() > deadline) {
+                throw new java.util.concurrent.TimeoutException(
+                        "RouteMesh peers never became ready");
+            }
+            Thread.sleep(2);
+        }
+    }
+
+    private static boolean peerReady(ZLinkFrameworkRuntime runtime, String peerRid) {
+        RoutingId rid = RoutingId.from(peerRid);
+        return runtime.routeMeshRuntime().snapshot("game").peers().stream()
+                .anyMatch(
+                        peer ->
+                                peer.nodeRid().equals(rid)
+                                        && peer.state()
+                                                == systems.zlink.framework.monitoring.ZLinkPeerState
+                                                        .READY);
+    }
+
+    /** Waits until the Instance Spot owner queue holds an accepted message behind Close. */
+    private static void awaitPendingMessage(Object spots, String spotId) throws Exception {
+        var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
+        activations.setAccessible(true);
+        Object activation = ((java.util.Map<?, ?>) activations.get(spots)).get(spotId);
+        var contextField = activation.getClass().getSuperclass().getDeclaredField("context");
+        contextField.setAccessible(true);
+        Object context = contextField.get(activation);
+        var ownerQueue = context.getClass().getDeclaredMethod("ownerQueue");
+        ownerQueue.setAccessible(true);
+        var queue =
+                (systems.zlink.framework.execution.ZLinkSerialExecutionQueue)
+                        ownerQueue.invoke(context);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (queue.pendingMessages().isEmpty()) {
+            if (System.nanoTime() > deadline) {
+                throw new java.util.concurrent.TimeoutException("probe never reached the owner");
+            }
+            Thread.sleep(2);
+        }
+    }
+
     private static AtomicInteger installBackendFailure(
             Object spots, String spotId, String operation) throws Exception {
         var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
@@ -561,8 +638,11 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     @Test
-    void publicRequestToClosingInstanceIsRejected() throws Exception {
-        verifyClosingInstanceVerdict(false, ZLinkFrameworkErrorKind.REJECTED);
+    void publicRequestToClosingInstanceRunsOnNextIncarnation() throws Exception {
+        // Spot address messaging §7 step 1 and 3, §9 Closing row: an Instance intent request
+        // that reaches the owner during Close waits behind Close and runs on the next
+        // incarnation.
+        verifyClosingInstanceVerdict(false, null);
     }
 
     @Test
@@ -623,6 +703,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             try {
                 SourceEntrySpot.request.set(new Request(spotId));
+                awaitPeersReady(
+                        source,
+                        target,
+                        "closing-verdict-source-" + suffix,
+                        "closing-verdict-target-" + suffix);
                 SourceEntrySpot.start.complete(null);
                 EchoInstanceSpot.closingEntered.get(5, TimeUnit.SECONDS);
                 if (drain) {
@@ -634,9 +719,21 @@ final class InstanceSpotRuntimeIntegrationTest {
                             .get(5, TimeUnit.SECONDS);
                 }
                 SourceEntrySpot.probeStart.complete(null);
-                Throwable failure = SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS);
-                assertTrue(failure instanceof ZLinkFrameworkException);
-                assertEquals(expectedKind, ((ZLinkFrameworkException) failure).kind());
+                if (expectedKind == null) {
+                    // OnClosing stays held until the probe waits in the owner queue, so step 3
+                    // sees the pending Instance intent message and creates the next incarnation.
+                    var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
+                    spotsField.setAccessible(true);
+                    awaitPendingMessage(spotsField.get(target), spotId);
+                    EchoInstanceSpot.closingRelease.complete(null);
+                    assertEquals(
+                            "echo:during-close",
+                            SourceEntrySpot.probeReply.get(5, TimeUnit.SECONDS));
+                } else {
+                    Throwable failure = SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS);
+                    assertTrue(failure instanceof ZLinkFrameworkException);
+                    assertEquals(expectedKind, ((ZLinkFrameworkException) failure).kind());
+                }
             } finally {
                 EchoInstanceSpot.closingRelease.complete(null);
                 SourceEntrySpot.afterCloseStart.complete(null);
@@ -706,6 +803,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                         RuntimeTestSupport.startFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             IdleSourceEntrySpot.request.set(new Request(spotId));
+            awaitPeersReady(
+                    source,
+                    target,
+                    "instance-idle-source-" + suffix,
+                    "instance-idle-target-" + suffix);
             IdleSourceEntrySpot.start.complete(null);
             String reply = IdleSourceEntrySpot.reply.get(10, TimeUnit.SECONDS);
 
@@ -728,6 +830,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         static CompletableFuture<Void> afterCloseStart;
         static CompletableFuture<Void> probeStart;
         static CompletableFuture<Throwable> probeFailure;
+        static CompletableFuture<String> probeReply;
         static boolean probeDirect;
         static AtomicReference<Request> request;
         static CompletableFuture<String> reply;
@@ -744,6 +847,7 @@ final class InstanceSpotRuntimeIntegrationTest {
             afterCloseStart = CompletableFuture.completedFuture(null);
             probeStart = null;
             probeFailure = null;
+            probeReply = new CompletableFuture<>();
             probeDirect = false;
             request = new AtomicReference<>();
             reply = new CompletableFuture<>();
@@ -832,17 +936,19 @@ final class InstanceSpotRuntimeIntegrationTest {
                                                                 .submit(String.class);
                                             })
                                     .whenComplete(
-                                            (value, failure) ->
-                                                    probeFailure.complete(
-                                                            failure == null
-                                                                    ? new AssertionError(
-                                                                            "Closing request was admitted")
-                                                                    : failure
-                                                                                    instanceof
-                                                                                    CompletionException
-                                                                                            wrapped
-                                                                            ? wrapped.getCause()
-                                                                            : failure));
+                                            (value, failure) -> {
+                                                if (failure == null) probeReply.complete(value);
+                                                probeFailure.complete(
+                                                        failure == null
+                                                                ? new AssertionError(
+                                                                        "Closing request was admitted")
+                                                                : failure
+                                                                                instanceof
+                                                                                CompletionException
+                                                                                        wrapped
+                                                                        ? wrapped.getCause()
+                                                                        : failure);
+                                            });
                         }
                         CompletableFuture<String> completion =
                                 beforeAfterClose
@@ -956,22 +1062,48 @@ final class InstanceSpotRuntimeIntegrationTest {
                                                                             }
                                                                             Throwable cause =
                                                                                     unwrap(failure);
+                                                                            // This step waits only
+                                                                            // for the
+                                                                            // Missing row, not for
+                                                                            // the
+                                                                            // owner's Close to end.
+                                                                            // A probe
+                                                                            // that reaches the
+                                                                            // owner while
+                                                                            // Close still runs is
+                                                                            // NotFound
+                                                                            // (§9 Closing row); one
+                                                                            // that
+                                                                            // arrives after the
+                                                                            // release on
+                                                                            // the Ready route read
+                                                                            // before
+                                                                            // is refused by its
+                                                                            // owner fence
+                                                                            // as Unavailable (§9
+                                                                            // owner fence
+                                                                            // row,
+                                                                            // spot-close-v1.json
+                                                                            // stale-released-ready-owner-fence-request).
                                                                             assertTrue(
                                                                                     cause
                                                                                             instanceof
                                                                                             ZLinkFrameworkException,
-                                                                                    "ordinary"
-                                                                                            + " request"
-                                                                                            + " failure"
-                                                                                            + " was not"
-                                                                                            + " typed: "
-                                                                                            + cause);
-                                                                            assertEquals(
-                                                                                    ZLinkFrameworkErrorKind
-                                                                                            .NOT_FOUND,
+                                                                                    String.valueOf(
+                                                                                            cause));
+                                                                            var kind =
                                                                                     ((ZLinkFrameworkException)
                                                                                                     cause)
-                                                                                            .kind());
+                                                                                            .kind();
+                                                                            assertTrue(
+                                                                                    kind
+                                                                                                    == ZLinkFrameworkErrorKind
+                                                                                                            .NOT_FOUND
+                                                                                            || kind
+                                                                                                    == ZLinkFrameworkErrorKind
+                                                                                                            .UNAVAILABLE,
+                                                                                    kind
+                                                                                            .toString());
                                                                             return (Void) null;
                                                                         }),
                                                 CompletableFuture.delayedExecutor(

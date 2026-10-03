@@ -789,7 +789,6 @@ void mesh_node_runtime_t::start ()
                 _state->application_jobs},
               spot_snapshot.entry_spot_name.value_or ("entry"),
               std::move (stable_types),
-              _route_cache_max_age,
               _owner_lease_fencing_margin,
               _state->core_context,
               _session_relocation_seal_timeout};
@@ -996,27 +995,23 @@ void mesh_node_runtime_t::configure_user_spot_operations (
 
 void mesh_node_runtime_t::configure_spot_route_fence_resolver (
   host::spot_route_fence_resolver_t resolver,
-  std::chrono::milliseconds route_cache_max_age,
   std::chrono::milliseconds owner_lease_fencing_margin,
   std::chrono::milliseconds session_relocation_seal_timeout)
 {
     if (_node)
         throw configuration_error (
           "Spot route fence resolver must be configured before MeshNode start");
-    if (route_cache_max_age < std::chrono::milliseconds::zero ())
-        throw configuration_error ("Spot route cache age must not be negative");
     if (owner_lease_fencing_margin < std::chrono::milliseconds::zero ())
         throw configuration_error ("Owner lease fencing margin must not be negative");
     if (session_relocation_seal_timeout <= std::chrono::milliseconds::zero ())
         throw configuration_error ("Session relocation seal timeout must be greater than zero");
     _spot_route_fence_resolver = std::move (resolver);
-    _route_cache_max_age = route_cache_max_age;
     _owner_lease_fencing_margin = owner_lease_fencing_margin;
     _session_relocation_seal_timeout = session_relocation_seal_timeout;
 }
 
 void mesh_node_runtime_t::configure_actor_route_resolver (
-  std::function<std::optional<runtime::spot_address_t> (const actor_ref_t &)> resolver,
+  std::function<task_t<std::optional<runtime::spot_address_t>> (actor_ref_t)> resolver,
   std::function<void (const runtime::protocol::actor_route_fence_t &)> invalidator)
 {
     if (_node)
@@ -1464,12 +1459,13 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
         result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
         co_return result;
     }
-    if (result.terminal == runtime::stateful::relocation_terminal_t::blocked
-        && !co_await route_bound_sessions (
-          session_seal->checkpoints, {},
-          runtime::protocol::session_relocation_route_action_t::abort)) {
-        result.terminal = runtime::stateful::relocation_terminal_t::recovery_required;
-        result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+    if (result.terminal == runtime::stateful::relocation_terminal_t::blocked) {
+        if (!co_await route_bound_sessions (
+              session_seal->checkpoints, {},
+              runtime::protocol::session_relocation_route_action_t::abort)) {
+            result.terminal = runtime::stateful::relocation_terminal_t::recovery_required;
+            result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+        }
     }
     co_return result;
 }
@@ -1709,12 +1705,14 @@ mesh_node_runtime_t::relocate_application_unit (
                                 : relocation_terminal_t::blocked;
             result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
         }
-        if (result.terminal == relocation_terminal_t::blocked
-            && !co_await route_bound_sessions (
-              session_seal->checkpoints, {},
-              runtime::protocol::session_relocation_route_action_t::abort)) {
-            result.terminal = relocation_terminal_t::recovery_required;
-            result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+        if (result.terminal == relocation_terminal_t::blocked) {
+            if (!co_await route_bound_sessions (
+                  session_seal->checkpoints, {},
+                  runtime::protocol::session_relocation_route_action_t::abort)) {
+                result.terminal = relocation_terminal_t::recovery_required;
+                result.reason =
+                  runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+            }
         }
         co_return runtime::stateful::aggregate_relocation_result_t{
           result.terminal, result.reason, {}, result.replay_records, result.target_handoff};
@@ -1727,12 +1725,13 @@ mesh_node_runtime_t::relocate_application_unit (
                                                           : relocation_terminal_t::blocked;
         result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
     }
-    if (result.terminal == relocation_terminal_t::blocked
-        && !co_await route_bound_sessions (
-          session_seal->checkpoints, {},
-          runtime::protocol::session_relocation_route_action_t::abort)) {
-        result.terminal = relocation_terminal_t::recovery_required;
-        result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+    if (result.terminal == relocation_terminal_t::blocked) {
+        if (!co_await route_bound_sessions (
+              session_seal->checkpoints, {},
+              runtime::protocol::session_relocation_route_action_t::abort)) {
+            result.terminal = relocation_terminal_t::recovery_required;
+            result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
+        }
     }
     co_return result;
 }
@@ -2624,7 +2623,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     }
     spot_node_runtime_t spot (_state->spot_state);
     const auto source_spot_generation =
-      spot.resolve_spot_generation (_node->status ().routing_id (), *s->source_spot);
+      co_await spot.resolve_spot_generation (_node->status ().routing_id (), *s->source_spot);
     if (!source_spot_generation) {
         const auto failed = result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::not_found, "source Spot generation is unavailable");
@@ -2876,7 +2875,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     s->target_completion_operation_id_low = correlation;
     spot_node_runtime_t spot (_state->spot_state);
     const auto source_spot_generation =
-      spot.resolve_spot_generation (local.routing_id (), *s->source_spot);
+      co_await spot.resolve_spot_generation (local.routing_id (), *s->source_spot);
     if (!source_spot_generation) {
         co_return co_await fail_remote_actor_join (
           *s,
@@ -3662,8 +3661,8 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
               metadata, follow_target.target_fence);
             auto request_parts =
               codec.encode_envelope_parts (request_header, request, *_serializers);
-            const auto target_generation =
-              spot_runtime.resolve_spot_generation (target_node, follow_target.route.spot_id);
+            const auto target_generation = co_await spot_runtime.resolve_spot_generation (
+              target_node, follow_target.route.spot_id);
             if (!target_generation) {
                 co_return result_t<std::optional<zlink::message_t>>::failure (
                   framework_error_kind_t::not_found,
@@ -3756,7 +3755,7 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
             authority_owner_generation = stale_route.authority_owner_generation;
             owner_lease_generation = stale_route.owner_lease_generation;
         } else if (_actor_route_resolver) {
-            const auto resolved = _actor_route_resolver (target_actor);
+            const auto resolved = co_await _actor_route_resolver (target_actor);
             if (!resolved || resolved->authority_owner_generation == 0
                 || resolved->owner.lease_generation <= 0) {
                 co_return result_t<std::optional<zlink::message_t>>::failure (
@@ -3867,21 +3866,22 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
     }
 }
 
-std::optional<runtime::spot_address_t>
-mesh_node_runtime_t::resolve_application_actor_route (const actor_ref_t &actor) const
+task_t<std::optional<runtime::spot_address_t>>
+mesh_node_runtime_t::resolve_application_actor_route (actor_ref_t actor) const
 {
     if (!_actor_route_resolver)
-        return std::nullopt;
-    const auto resolved = _actor_route_resolver (actor);
+        co_return std::nullopt;
+    const auto resolved = co_await _actor_route_resolver (actor);
     if (!resolved || resolved->object_generation != actor.object_generation ()
         || resolved->authority_owner_generation == 0 || resolved->node_generation == 0
         || resolved->owner.lease_generation <= 0)
-        return std::nullopt;
-    return resolved;
+        co_return std::nullopt;
+    co_return resolved;
 }
 
-std::optional<runtime::spot_address_t> mesh_node_runtime_t::refresh_application_actor_route (
-  const actor_ref_t &actor, const runtime::spot_address_t &stale_route) const
+task_t<std::optional<runtime::spot_address_t>>
+mesh_node_runtime_t::refresh_application_actor_route (actor_ref_t actor,
+                                                      runtime::spot_address_t stale_route) const
 {
     if (_actor_route_invalidator) {
         _actor_route_invalidator (runtime::protocol::actor_route_fence_t{
@@ -3890,7 +3890,7 @@ std::optional<runtime::spot_address_t> mesh_node_runtime_t::refresh_application_
           stale_route.authority_owner_generation,
           static_cast<std::uint64_t> (stale_route.owner.lease_generation)});
     }
-    return resolve_application_actor_route (actor);
+    co_return co_await resolve_application_actor_route (std::move (actor));
 }
 
 task_t<std::optional<runtime::spot_address_t>>
@@ -3910,12 +3910,12 @@ mesh_node_runtime_t::wait_for_application_actor_route_change (
     };
     const auto deadline = std::chrono::steady_clock::now () + timeout;
     do {
-        const auto candidate = resolve_application_actor_route (actor);
+        const auto candidate = co_await resolve_application_actor_route (actor);
         if (candidate && changed (*candidate))
             co_return candidate;
         co_await detail::delay (std::chrono::milliseconds (1));
     } while (std::chrono::steady_clock::now () < deadline);
-    const auto candidate = resolve_application_actor_route (actor);
+    const auto candidate = co_await resolve_application_actor_route (actor);
     co_return candidate &&changed (*candidate) ? candidate
                                                : std::optional<runtime::spot_address_t>{};
 }
@@ -4189,24 +4189,24 @@ mesh_node_runtime_t::await_completion (const host::pending_operation_t &operatio
     return operation.completion->task ();
 }
 
-std::optional<zlink::submit_result_t>
+task_t<std::optional<zlink::submit_result_t>>
 mesh_node_runtime_t::classify_node_direct_target (const zlink::routing_id_t &target) const
 {
     if (!_user_spot_store)
-        return std::nullopt;
+        co_return std::nullopt;
     try {
         location_page_request_t page;
         for (;;) {
             const auto listed =
-              _user_spot_store->list_mesh_nodes (_state->mesh_name, page).result ().value ();
+              co_await _user_spot_store->list_mesh_nodes (_state->mesh_name, page);
             const auto found = std::find_if (listed.items.begin (), listed.items.end (),
                                              [&target] (const mesh_node_descriptor_t &descriptor) {
                                                  return descriptor.rid == target;
                                              });
             if (found != listed.items.end ()) {
-                return found->object_role == object_role_t::client
-                         ? std::optional<zlink::submit_result_t> (zlink::submit_result_t::not_found)
-                         : std::nullopt;
+                co_return found->object_role == object_role_t::client
+                  ? std::optional<zlink::submit_result_t> (zlink::submit_result_t::not_found)
+                  : std::nullopt;
             }
             if (!listed.continuation_token) {
                 /* The target being absent from this page of the Location
@@ -4222,13 +4222,13 @@ mesh_node_runtime_t::classify_node_direct_target (const zlink::routing_id_t &tar
                  * such peers as not found regardless of admission state.
                  * Falling through with nullopt lets the caller consult the
                  * actual transport-level topology instead. */
-                return std::nullopt;
+                co_return std::nullopt;
             }
             page.continuation_token = listed.continuation_token;
         }
     }
     catch (...) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 }
 
@@ -4241,7 +4241,7 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
         throw configuration_error ("MeshNode has not started");
     }
     if (!framework_owned_node_message (parts)) {
-        if (const auto classified = classify_node_direct_target (target))
+        if (const auto classified = co_await classify_node_direct_target (target))
             co_return *classified;
     }
     (void) metadata;
@@ -4257,7 +4257,7 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
         throw configuration_error ("MeshNode has not started");
     }
     if (!framework_owned_node_message (parts)) {
-        if (const auto classified = classify_node_direct_target (target))
+        if (const auto classified = co_await classify_node_direct_target (target))
             co_return *classified;
     }
     (void) metadata;
@@ -4284,7 +4284,7 @@ mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
         throw configuration_error ("MeshNode has not started");
     }
     if (!framework_owned_node_message (parts)) {
-        if (const auto classified = classify_node_direct_target (target))
+        if (const auto classified = co_await classify_node_direct_target (target))
             co_return *classified;
     }
     (void) metadata;
@@ -4490,11 +4490,6 @@ void mesh_node_runtime_t::set_placement_weight (int weight)
         throw configuration_error ("MeshNode has not started");
     if (weight < 0 || weight > 10000)
         throw configuration_error ("placement weight must be in range 0..10000");
-    auto descriptor = native_node ().transport ().topology ().local_descriptor ();
-    if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
-        throw configuration_error ("MeshNode descriptor revision is exhausted");
-    descriptor.placement_weight = weight;
-    ++descriptor.descriptor_revision;
     std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher;
     std::map<std::string, int> channel_weights;
     _state->lane
@@ -4505,9 +4500,15 @@ void mesh_node_runtime_t::set_placement_weight (int weight)
                   channel_weights.emplace (name, registration.weight);
       })
       .get ();
+    const auto published = native_node ().transport ().publish_descriptor_update (
+      [weight] (runtime::mesh::service_node_descriptor_t &descriptor) {
+          if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+              throw configuration_error ("MeshNode descriptor revision is exhausted");
+          descriptor.placement_weight = weight;
+          ++descriptor.descriptor_revision;
+      });
     if (publisher)
-        publisher (channel_weights, weight, descriptor.descriptor_revision);
-    native_node ().transport ().publish_descriptor_update (std::move (descriptor));
+        publisher (channel_weights, weight, published.descriptor_revision);
     _state->lane.run ([&] { _state->placement_weight = weight; }).get ();
 }
 
@@ -4517,17 +4518,6 @@ void mesh_node_runtime_t::set_channel_weight (const std::string &channel_name, i
         throw configuration_error ("MeshNode has not started");
     if (weight < 0 || weight > 10000)
         throw configuration_error ("channel weight must be in range 0..10000");
-    auto descriptor = native_node ().transport ().topology ().local_descriptor ();
-    const auto descriptor_channel =
-      std::find_if (descriptor.channels.begin (), descriptor.channels.end (),
-                    [&] (const auto &candidate) { return candidate.name == channel_name; });
-    if (descriptor_channel == descriptor.channels.end ())
-        throw configuration_error ("RouteMesh channel is not configured: " + mesh_name () + "/"
-                                   + channel_name);
-    descriptor_channel->weight = weight;
-    if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
-        throw configuration_error ("MeshNode descriptor revision is exhausted");
-    ++descriptor.descriptor_revision;
     std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher;
     std::map<std::string, int> channel_weights;
     int placement_weight = 100;
@@ -4545,9 +4535,21 @@ void mesh_node_runtime_t::set_channel_weight (const std::string &channel_name, i
           publisher = _descriptor_publisher;
       })
       .get ();
+    const auto published = native_node ().transport ().publish_descriptor_update (
+      [&channel_name, weight] (runtime::mesh::service_node_descriptor_t &descriptor) {
+          const auto descriptor_channel =
+            std::find_if (descriptor.channels.begin (), descriptor.channels.end (),
+                          [&] (const auto &candidate) { return candidate.name == channel_name; });
+          if (descriptor_channel == descriptor.channels.end ())
+              throw configuration_error ("RouteMesh channel is not configured: "
+                                         + descriptor.mesh_name + "/" + channel_name);
+          descriptor_channel->weight = weight;
+          if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+              throw configuration_error ("MeshNode descriptor revision is exhausted");
+          ++descriptor.descriptor_revision;
+      });
     if (publisher)
-        publisher (channel_weights, placement_weight, descriptor.descriptor_revision);
-    native_node ().transport ().publish_descriptor_update (std::move (descriptor));
+        publisher (channel_weights, placement_weight, published.descriptor_revision);
     _state->lane.run ([&] { _state->channels.at (channel_name).weight = weight; }).get ();
 }
 

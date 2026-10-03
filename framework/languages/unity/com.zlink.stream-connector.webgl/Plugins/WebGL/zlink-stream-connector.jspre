@@ -205,6 +205,7 @@ var ZlinkStreamConnectorBundle = (() => {
     ZlinkStreamCloseReasonCode2[ZlinkStreamCloseReasonCode2["TransportError"] = 6] = "TransportError";
     return ZlinkStreamCloseReasonCode2;
   })(ZlinkStreamCloseReasonCode || {});
+  var unicodeWhiteSpaceOnly = /^\p{White_Space}*$/u;
   var validMessageKinds = new Set(
     Object.values(ZlinkStreamMessageKind).filter((value) => typeof value === "number")
   );
@@ -300,11 +301,12 @@ var ZlinkStreamConnectorBundle = (() => {
     }
     return frames;
   }
+  var ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX = "$zlink.";
   var ZlinkStreamControlPacket = Object.freeze({
-    HeartbeatPing: "$zlink.heartbeat.ping",
-    HeartbeatPong: "$zlink.heartbeat.pong",
-    ActorBound: "$zlink.actor.bound",
-    ActorUnbound: "$zlink.actor.unbound",
+    HeartbeatPing: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}heartbeat.ping`,
+    HeartbeatPong: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}heartbeat.pong`,
+    ActorBound: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}actor.bound`,
+    ActorUnbound: `${ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX}actor.unbound`,
     SessionClosing: "session-closing"
   });
   var ZlinkStreamContentType = Object.freeze({
@@ -365,8 +367,7 @@ var ZlinkStreamConnectorBundle = (() => {
     const flags = flagOverrides != null ? flagOverrides : defaultHeaderFlags;
     const reply = isReplyKind(header.kind);
     const packetName = reply ? "" : header.name;
-    if (!reply) validateStreamWirePacketName(packetName);
-    const nameBytes = utf8Encode(packetName);
+    const nameBytes = reply ? new Uint8Array() : validateStreamWirePacketName(packetName);
     const hasRequestSeq = header.requestSeq !== void 0;
     const hasMetadata = header.metadata.size > 0;
     const correlationBytes = header.correlationId !== void 0 && header.correlationId.length > 0 ? utf8Encode(header.correlationId) : void 0;
@@ -639,9 +640,10 @@ var ZlinkStreamConnectorBundle = (() => {
   }
   function validateStreamWirePacketName(name) {
     const nameBytes = utf8Encode(name);
-    if (name.trim().length === 0 || nameBytes.length > 255) {
+    if (unicodeWhiteSpaceOnly.test(name) || nameBytes.length > ZLINK_STREAM_MAX_PACKET_NAME_BYTES) {
       throw new Error("Stream packet name is invalid.");
     }
+    return nameBytes;
   }
   function isReplyKind(kind) {
     return kind === 3 /* Response */ || kind === 4 /* Error */;
@@ -832,6 +834,10 @@ var ZlinkStreamConnectorBundle = (() => {
   }
 
   // packages/stream-connector/src/Runtime/ZlinkStreamSupport.ts
+  var BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
+  function shouldCompactBackingArray(head, length) {
+    return head >= BACKING_ARRAY_COMPACTION_MIN_HEAD && head * 2 >= length;
+  }
   function connectorError(code, message, cause) {
     return new ZlinkStreamException({ code, message, cause });
   }
@@ -845,11 +851,7 @@ var ZlinkStreamConnectorBundle = (() => {
     if (error instanceof ZlinkStreamException) {
       return error.error;
     }
-    return {
-      code: "remoteError" /* RemoteError */,
-      message: error instanceof Error ? error.message : String(error),
-      cause: error
-    };
+    throw error;
   }
   function subscription(dispose) {
     return { dispose };
@@ -883,9 +885,6 @@ var ZlinkStreamConnectorBundle = (() => {
       signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
     });
   }
-  function utf8Encode2(value) {
-    return new TextEncoder().encode(value);
-  }
   function utf8Decode2(value) {
     return new TextDecoder().decode(value);
   }
@@ -904,57 +903,46 @@ var ZlinkStreamConnectorBundle = (() => {
       }
     },
     async expectFailure(action, errorKind) {
-      let failure;
       try {
         await action();
-      } catch (error) {
-        failure = error;
+      } catch (failure) {
+        if (!(failure instanceof ZlinkStreamException)) throw failure;
+        const streamError = failure.error;
+        if (errorKind !== void 0 && streamError.code !== errorKind) {
+          throw connectorError(
+            "validationFailed" /* ValidationFailed */,
+            `Expected failure kind '${errorKind}', got '${streamError.code}'.`,
+            failure
+          );
+        }
+        return streamError;
       }
-      if (failure === void 0) {
-        throw connectorError("validationFailed" /* ValidationFailed */, "Expected action to fail.");
-      }
-      const streamError = unwrapStreamError(failure);
-      if (errorKind !== void 0 && streamError.code !== errorKind) {
-        throw connectorError(
-          "validationFailed" /* ValidationFailed */,
-          `Expected failure kind '${errorKind}', got '${streamError.code}'.`,
-          failure
-        );
-      }
-      return streamError;
+      throw connectorError("validationFailed" /* ValidationFailed */, "Expected action to fail.");
     },
     async expectTimeout(action) {
-      let failure;
       try {
         await action();
-      } catch (error) {
-        failure = error;
+      } catch (failure) {
+        if (!(failure instanceof ZlinkStreamException) || failure.error.code !== "requestTimeout" /* RequestTimeout */ && failure.error.code !== "connectTimeout" /* ConnectTimeout */) {
+          throw failure;
+        }
+        return;
       }
-      if (failure === void 0) {
-        throw connectorError("validationFailed" /* ValidationFailed */, "Expected action to time out.");
-      }
-      const code = unwrapStreamError(failure).code;
-      if (code !== "requestTimeout" /* RequestTimeout */ && code !== "connectTimeout" /* ConnectTimeout */) {
-        throw failure;
-      }
+      throw connectorError("validationFailed" /* ValidationFailed */, "Expected action to time out.");
     }
   };
 
   // packages/stream-connector/src/Runtime/Protocol/ZlinkStreamPacketNameValidator.ts
   function validateName(name, allowReserved = false) {
-    if (name.length === 0) {
-      throw connectorError("validationFailed" /* ValidationFailed */, "Message name must not be empty.");
+    try {
+      validateStreamWirePacketName(name);
+    } catch (cause) {
+      throw connectorError("validationFailed" /* ValidationFailed */, "Message name is invalid.", cause);
     }
-    if (!allowReserved && name.startsWith("$zlink.")) {
+    if (!allowReserved && name.startsWith(ZLINK_STREAM_RESERVED_PACKET_NAME_PREFIX)) {
       throw connectorError(
         "validationFailed" /* ValidationFailed */,
         "Message name uses a reserved zlink prefix."
-      );
-    }
-    if (utf8Encode2(name).length > ZLINK_STREAM_MAX_PACKET_NAME_BYTES) {
-      throw connectorError(
-        "validationFailed" /* ValidationFailed */,
-        "Message name must not exceed 255 UTF-8 bytes."
       );
     }
   }
@@ -1338,7 +1326,7 @@ var ZlinkStreamConnectorBundle = (() => {
   }
 
   // packages/stream-connector/src/Contracts/ZlinkStreamConnectorOptions.ts
-  var ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES = 64 * 1024;
+  var ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES = 64 * 1024;
 
   // packages/stream-connector/src/Runtime/Transport/ZlinkStreamEndpoint.ts
   function inferTransport(endpoint) {
@@ -1395,8 +1383,8 @@ var ZlinkStreamConnectorBundle = (() => {
         backoffFactor: (_q = (_p = options.reconnect) == null ? void 0 : _p.backoffFactor) != null ? _q : 2,
         maxAttempts: ((_r = options.reconnect) == null ? void 0 : _r.maxAttempts) === void 0 ? 3 : options.reconnect.maxAttempts
       },
-      maxSendPayloadSize: (_s = options.maxSendPayloadSize) != null ? _s : ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES,
-      maxReceivePayloadSize: (_t = options.maxReceivePayloadSize) != null ? _t : ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES,
+      maxSendPayloadSize: (_s = options.maxSendPayloadSize) != null ? _s : ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES,
+      maxReceivePayloadSize: (_t = options.maxReceivePayloadSize) != null ? _t : ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES,
       dispatchMode: (_u = options.dispatchMode) != null ? _u : "manual" /* Manual */,
       compression: (_v = options.compression) != null ? _v : "lz4" /* Lz4 */,
       compressionCodec: options.compressionCodec,
@@ -1495,7 +1483,7 @@ var ZlinkStreamConnectorBundle = (() => {
 
   // packages/stream-connector/src/Runtime/Protocol/ZlinkStreamFrameCodec.ts
   var ZlinkStreamFrameCodec = class {
-    static encode(header, payload, maxPayloadSize = ZLINK_STREAM_DEFAULT_SEND_PAYLOAD_BYTES) {
+    static encode(header, payload, maxPayloadSize = ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES) {
       validatePayload(payload.length, maxPayloadSize);
       try {
         return encodeStreamWireFrame(header, payload);
@@ -1562,6 +1550,7 @@ var ZlinkStreamConnectorBundle = (() => {
     static encode(header) {
       const reply = isReplyKind2(header.kind);
       if (!reply) validateName(header.name, header.kind === 5 /* Control */);
+      validateEncodeFlags(header.flags);
       validateHeaderSemantics(header);
       ZlinkStreamMetadataCodec.size(header.metadata);
       try {
@@ -1645,7 +1634,7 @@ var ZlinkStreamConnectorBundle = (() => {
     };
   }
   function validateHeaderSemantics(header) {
-    validateEnum(header.kind, header.codec, header.flags);
+    validateEnum(header.kind, header.codec);
     const hasRequestSeq = header.requestSeq !== void 0 || (header.flags & 1 /* HasRequestSeq */) !== 0;
     const hasMetadata = header.metadata.count > 0 || (header.flags & 2 /* HasMetadata */) !== 0;
     if (header.kind === 1 /* Send */ && hasRequestSeq) {
@@ -1678,13 +1667,15 @@ var ZlinkStreamConnectorBundle = (() => {
       }
     }
   }
-  function validateEnum(kind, codec, flags) {
+  function validateEnum(kind, codec) {
     if (!isStreamWireMessageKind(kind)) {
       throw connectorError("frameDecodeFailed" /* FrameDecodeFailed */, "Unknown stream message kind.");
     }
     if (!isStreamWireCodec(codec)) {
       throw connectorError("frameDecodeFailed" /* FrameDecodeFailed */, "Unknown stream codec.");
     }
+  }
+  function validateEncodeFlags(flags) {
     const known = 1 /* HasRequestSeq */ | 2 /* HasMetadata */ | 4 /* PayloadCompressed */ | 8 /* HasCorrelationId */ | 16 /* HasFlowId */ | 32 /* HasActorSlot */;
     if ((flags & ~known) !== 0) {
       throw connectorError("frameDecodeFailed" /* FrameDecodeFailed */, "Unknown stream header flag.");
@@ -1850,196 +1841,6 @@ var ZlinkStreamConnectorBundle = (() => {
       }
     }
   };
-
-  // packages/stream-connector/src/Runtime/Transport/BrowserWebSocketConnection.ts
-  var BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
-  function shouldCompactBackingArray(head, length) {
-    return head >= BACKING_ARRAY_COMPACTION_MIN_HEAD && head * 2 >= length;
-  }
-  var BrowserStreamTransportFactory = class {
-    async connect(options, signal) {
-      throwIfAborted(signal);
-      const WebSocketConstructor = globalThis.WebSocket;
-      if (WebSocketConstructor === void 0) {
-        throw connectorError(
-          "configurationError" /* ConfigurationError */,
-          "The browser entrypoint requires the platform WebSocket API."
-        );
-      }
-      const socket = new WebSocketConstructor(options.endpoint);
-      socket.binaryType = "arraybuffer";
-      await waitForOpen(socket, options.connectTimeoutMs, signal);
-      return new BrowserWebSocketConnection(socket);
-    }
-  };
-  var BrowserWebSocketConnection = class {
-    constructor(socket) {
-      this.socket = socket;
-      __publicField(this, "messages", []);
-      __publicField(this, "messageHead", 0);
-      __publicField(this, "closed", false);
-      __publicField(this, "error");
-      __publicField(this, "readWaiter");
-      __publicField(this, "onMessage", (event) => {
-        try {
-          const message = toUint8Array(event.data);
-          this.messages.push(message);
-        } catch (cause) {
-          this.error = cause instanceof Error ? cause : connectorError(
-            "frameDecodeFailed" /* FrameDecodeFailed */,
-            "WebSocket message decode failed.",
-            cause
-          );
-          this.closed = true;
-          this.socket.close();
-        }
-        this.wakeReader();
-      });
-      __publicField(this, "onClose", () => {
-        if (!this.closed) {
-          this.error = connectorError(
-            "disconnected" /* Disconnected */,
-            "Remote stream closed the WebSocket connection."
-          );
-        }
-        this.closed = true;
-        this.wakeReader();
-      });
-      __publicField(this, "onError", () => {
-        this.error = connectorError(
-          "disconnected" /* Disconnected */,
-          "Remote stream closed after a WebSocket error."
-        );
-        this.closed = true;
-        this.wakeReader();
-      });
-      socket.addEventListener("message", this.onMessage);
-      socket.addEventListener("close", this.onClose);
-      socket.addEventListener("error", this.onError);
-    }
-    async write(frame, signal) {
-      throwIfAborted(signal);
-      if (this.closed || this.socket.readyState !== 1) {
-        throw connectorError("disconnected" /* Disconnected */, "Remote stream is not connected.");
-      }
-      this.socket.send(frame);
-    }
-    async read(signal) {
-      throwIfAborted(signal);
-      for (; ; ) {
-        const message = this.takeMessage();
-        if (message !== void 0) {
-          return message;
-        }
-        if (this.error !== void 0) {
-          throw this.error;
-        }
-        if (this.closed) {
-          return void 0;
-        }
-        await this.waitForMessage(signal);
-      }
-    }
-    /**
-     * Spec stream-connector 32 §7: closing does not wait for the peer to read or
-     * answer. `WebSocket.close` sends the close frame after the data already
-     * handed to `send`, so a frame whose write completed is not torn.
-     */
-    async close(signal) {
-      throwIfAborted(signal);
-      this.removeListeners();
-      if (!this.closed) {
-        this.closed = true;
-        this.socket.close();
-      }
-      this.wakeReader();
-    }
-    waitForMessage(signal) {
-      if (this.readWaiter !== void 0) {
-        throw connectorError(
-          "validationFailed" /* ValidationFailed */,
-          "Only one pending stream read is supported."
-        );
-      }
-      return new Promise((resolve, reject) => {
-        const onAbort = () => {
-          this.readWaiter = void 0;
-          reject(connectorError("disconnected" /* Disconnected */, "Operation canceled."));
-        };
-        signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
-        this.readWaiter = () => {
-          signal == null ? void 0 : signal.removeEventListener("abort", onAbort);
-          this.readWaiter = void 0;
-          resolve();
-        };
-      });
-    }
-    wakeReader() {
-      var _a;
-      (_a = this.readWaiter) == null ? void 0 : _a.call(this);
-    }
-    removeListeners() {
-      this.socket.removeEventListener("message", this.onMessage);
-      this.socket.removeEventListener("close", this.onClose);
-      this.socket.removeEventListener("error", this.onError);
-    }
-    hasQueuedMessage() {
-      return this.messageHead < this.messages.length;
-    }
-    takeMessage() {
-      if (!this.hasQueuedMessage()) return void 0;
-      const message = this.messages[this.messageHead];
-      this.messages[this.messageHead] = void 0;
-      this.messageHead += 1;
-      if (shouldCompactBackingArray(this.messageHead, this.messages.length)) {
-        this.messages.splice(0, this.messageHead);
-        this.messageHead = 0;
-      }
-      return message;
-    }
-  };
-  async function waitForOpen(socket, connectTimeoutMs, signal) {
-    throwIfAborted(signal);
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(
-        () => finish(connectorError("connectTimeout" /* ConnectTimeout */, "Connect timed out.")),
-        connectTimeoutMs
-      );
-      const onOpen = () => finish();
-      const onClose = () => finish(connectorError("connectTimeout" /* ConnectTimeout */, "Connect closed before opening."));
-      const onError = () => finish(connectorError("connectTimeout" /* ConnectTimeout */, "Connect failed."));
-      const onAbort = () => finish(connectorError("disconnected" /* Disconnected */, "Connect canceled."));
-      const finish = (error) => {
-        clearTimeout(timeout);
-        socket.removeEventListener("open", onOpen);
-        socket.removeEventListener("close", onClose);
-        socket.removeEventListener("error", onError);
-        signal == null ? void 0 : signal.removeEventListener("abort", onAbort);
-        if (error === void 0) {
-          resolve();
-        } else {
-          socket.close();
-          reject(error);
-        }
-      };
-      socket.addEventListener("open", onOpen, { once: true });
-      socket.addEventListener("close", onClose, { once: true });
-      socket.addEventListener("error", onError, { once: true });
-      signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
-    });
-  }
-  function toUint8Array(data) {
-    if (data instanceof ArrayBuffer) {
-      return new Uint8Array(data);
-    }
-    if (ArrayBuffer.isView(data)) {
-      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    }
-    throw connectorError(
-      "frameDecodeFailed" /* FrameDecodeFailed */,
-      "WebSocket text messages are not supported."
-    );
-  }
 
   // packages/stream-connector/src/Runtime/ZlinkStreamActors.ts
   var ACTOR_BOUND = ZlinkStreamControlPacket.ActorBound;
@@ -2552,7 +2353,7 @@ var ZlinkStreamConnectorBundle = (() => {
       this.advance();
     }
     cancel(operation, error) {
-      if (this.queue.has(operation) || this.active === operation) operation.fail(error);
+      if (this.queue.delete(operation) || this.active === operation) operation.fail(error);
     }
     /**
      * Spec stream-connector 32 §7: when the connection ends, frames that have not
@@ -2939,7 +2740,6 @@ var ZlinkStreamConnectorBundle = (() => {
       __publicField(this, "closeRequested", false);
       __publicField(this, "disconnectedPublished", false);
       __publicField(this, "closeReasonValue");
-      __publicField(this, "lateConnectCleanupError");
     }
     get isConnected() {
       return this.currentState === "connected" /* Connected */;
@@ -2983,12 +2783,7 @@ var ZlinkStreamConnectorBundle = (() => {
       try {
         const connection = await this.connectWithReconnect(attempts.signal);
         if (this.closeRequested) {
-          try {
-            await connection.close(signal);
-          } catch (error) {
-            this.lateConnectCleanupError = error;
-            throw error;
-          }
+          await this.closeTransport(connection, void 0, signal);
           throw connectorError(
             "disconnected" /* Disconnected */,
             "Connector closed while connecting."
@@ -3068,23 +2863,10 @@ var ZlinkStreamConnectorBundle = (() => {
       (_a = this.connectAbort) == null ? void 0 : _a.abort();
       await ((_b = this.connectTask) == null ? void 0 : _b.catch(() => void 0));
       await ((_c = this.disconnectTask) == null ? void 0 : _c.catch(() => void 0));
-      const errors = [];
-      if (this.lateConnectCleanupError !== void 0) {
-        errors.push(this.lateConnectCleanupError);
-        this.lateConnectCleanupError = void 0;
-      }
-      try {
-        await this.tearDownConnection(
-          { code: "disconnected" /* Disconnected */, message: "Connector closed." },
-          signal
-        );
-      } catch (error) {
-        errors.push(error);
-      }
-      this.setState("closed" /* Closed */, void 0, signal);
-      this.publishDisconnected(signal);
-      if (errors.length === 1) throw errors[0];
-      if (errors.length > 1) throw new AggregateError(errors, "Stream connector close failed.");
+      await this.tearDownConnection(
+        { code: "disconnected" /* Disconnected */, message: "Connector closed." },
+        signal
+      );
     }
     /**
      * Spec stream-connector 32 §7: `dispatch` runs the callbacks the receive loop
@@ -3293,19 +3075,26 @@ var ZlinkStreamConnectorBundle = (() => {
       if (this.disconnectTask !== void 0) {
         return await this.disconnectTask;
       }
-      this.disconnectTask = this.tearDownConnection(error).catch(() => {
-      }).finally(() => {
-        this.disconnectTask = void 0;
+      let resolve;
+      let reject;
+      const pending = new Promise((complete, fail) => {
+        resolve = complete;
+        reject = fail;
       });
-      await this.disconnectTask;
-      await this.announceDisconnect(error);
+      const task = pending.finally(() => {
+        if (this.disconnectTask === task) this.disconnectTask = void 0;
+      });
+      this.disconnectTask = task;
+      void this.tearDownConnection(error).then(resolve, reject);
+      await task;
+      this.announceDisconnect();
     }
     isCurrentConnection(connection, generation) {
       return !this.closeRequested && this.currentConnection === connection && this.connectionGeneration === generation;
     }
     /**
      * Ends the current connection, for close and for transport loss alike. No
-     * application callback runs from here. Spec stream-connector 32 §7 and §9:
+     * application callback runs before terminal operations settle. Spec stream-connector 32 §7 and §9:
      * every operation the ending connection fails (the frames it has not
      * written, the one it is writing and the pending requests) fails with
      * `Disconnected`, whatever ended it; the cause stays in the close reason.
@@ -3326,7 +3115,31 @@ var ZlinkStreamConnectorBundle = (() => {
       this.pendingRequests.failAll(disconnected);
       this.receivedMessages.connectionEnded();
       this.actors.closeAll(signal);
-      await (connection == null ? void 0 : connection.close(signal));
+      await this.closeTransport(connection, error, signal);
+    }
+    async closeTransport(connection, error, signal) {
+      try {
+        try {
+          await (connection == null ? void 0 : connection.close(signal));
+        } finally {
+          this.setState(
+            this.closeRequested ? "closed" /* Closed */ : "disconnected" /* Disconnected */,
+            this.closeRequested ? void 0 : error,
+            signal
+          );
+        }
+      } catch (cause) {
+        this.events.publishError(
+          {
+            code: "disconnected" /* Disconnected */,
+            message: `Transport close failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            cause
+          },
+          signal
+        );
+      } finally {
+        this.publishDisconnected(signal);
+      }
     }
     /**
      * Runs once the teardown promise has settled, so a handler reached from here
@@ -3336,10 +3149,7 @@ var ZlinkStreamConnectorBundle = (() => {
      * handler that is slow — or whose promise never settles at all — must not
      * cost the connector the attempt.
      */
-    async announceDisconnect(error) {
-      if (this.closeRequested) return;
-      this.setState("disconnected" /* Disconnected */, error);
-      this.publishDisconnected();
+    announceDisconnect() {
       if (this.shouldReconnect()) {
         queueMicrotask(() => {
           void this.connect().catch(() => void 0);
@@ -3446,7 +3256,8 @@ var ZlinkStreamConnectorBundle = (() => {
         (candidate) => !attempted.has(candidate)
       );
       if (remaining.length === 0) return;
-      const nextAttempted = new Set(Array.from(attempted).concat(remaining));
+      const nextAttempted = new Set(attempted);
+      for (const handler of remaining) nextAttempted.add(handler);
       this.enqueueCallback(
         () => {
           for (const handler of currentRegistrations(this.errorHandlers, remaining)) {
@@ -3458,7 +3269,7 @@ var ZlinkStreamConnectorBundle = (() => {
         () => {
           let count = 0;
           const registrations = currentRegistrations(this.errorHandlers, remaining);
-          while (registrations.next().done === false) count += 1;
+          while (registrations.next().done !== true) count += 1;
           return count;
         }
       );
@@ -3471,6 +3282,192 @@ var ZlinkStreamConnectorBundle = (() => {
       }
     }
   };
+
+  // packages/stream-connector/src/Runtime/Transport/BrowserWebSocketConnection.ts
+  var BrowserStreamTransportFactory = class {
+    async connect(options, signal) {
+      throwIfAborted(signal);
+      const WebSocketConstructor = globalThis.WebSocket;
+      if (WebSocketConstructor === void 0) {
+        throw connectorError(
+          "configurationError" /* ConfigurationError */,
+          "The browser entrypoint requires the platform WebSocket API."
+        );
+      }
+      const socket = new WebSocketConstructor(options.endpoint);
+      socket.binaryType = "arraybuffer";
+      await waitForOpen(socket, options.connectTimeoutMs, signal);
+      return new BrowserWebSocketConnection(socket);
+    }
+  };
+  var BrowserWebSocketConnection = class {
+    constructor(socket) {
+      this.socket = socket;
+      __publicField(this, "messages", []);
+      __publicField(this, "messageHead", 0);
+      __publicField(this, "closed", false);
+      __publicField(this, "error");
+      __publicField(this, "readWaiter");
+      __publicField(this, "onMessage", (event) => {
+        try {
+          const message = toUint8Array(event.data);
+          this.messages.push(message);
+        } catch (cause) {
+          this.error = cause instanceof Error ? cause : connectorError(
+            "frameDecodeFailed" /* FrameDecodeFailed */,
+            "WebSocket message decode failed.",
+            cause
+          );
+          this.closed = true;
+          this.socket.close();
+        }
+        this.wakeReader();
+      });
+      __publicField(this, "onClose", () => {
+        if (!this.closed) {
+          this.error = connectorError(
+            "disconnected" /* Disconnected */,
+            "Remote stream closed the WebSocket connection."
+          );
+        }
+        this.closed = true;
+        this.wakeReader();
+      });
+      __publicField(this, "onError", () => {
+        this.error = connectorError(
+          "disconnected" /* Disconnected */,
+          "Remote stream closed after a WebSocket error."
+        );
+        this.closed = true;
+        this.wakeReader();
+      });
+      socket.addEventListener("message", this.onMessage);
+      socket.addEventListener("close", this.onClose);
+      socket.addEventListener("error", this.onError);
+    }
+    async write(frame, signal) {
+      throwIfAborted(signal);
+      if (this.closed || this.socket.readyState !== 1) {
+        throw connectorError("disconnected" /* Disconnected */, "Remote stream is not connected.");
+      }
+      this.socket.send(frame);
+    }
+    async read(signal) {
+      throwIfAborted(signal);
+      for (; ; ) {
+        const message = this.takeMessage();
+        if (message !== void 0) {
+          return message;
+        }
+        if (this.error !== void 0) {
+          throw this.error;
+        }
+        if (this.closed) {
+          return void 0;
+        }
+        await this.waitForMessage(signal);
+      }
+    }
+    /**
+     * Spec stream-connector 32 §7: closing does not wait for the peer to read or
+     * answer. `WebSocket.close` sends the close frame after the data already
+     * handed to `send`, so a frame whose write completed is not torn.
+     */
+    async close(signal) {
+      throwIfAborted(signal);
+      this.removeListeners();
+      if (!this.closed) {
+        this.closed = true;
+        this.socket.close();
+      }
+      this.wakeReader();
+    }
+    waitForMessage(signal) {
+      if (this.readWaiter !== void 0) {
+        throw connectorError(
+          "validationFailed" /* ValidationFailed */,
+          "Only one pending stream read is supported."
+        );
+      }
+      return new Promise((resolve, reject) => {
+        const onAbort = () => {
+          this.readWaiter = void 0;
+          reject(connectorError("disconnected" /* Disconnected */, "Operation canceled."));
+        };
+        signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
+        this.readWaiter = () => {
+          signal == null ? void 0 : signal.removeEventListener("abort", onAbort);
+          this.readWaiter = void 0;
+          resolve();
+        };
+      });
+    }
+    wakeReader() {
+      var _a;
+      (_a = this.readWaiter) == null ? void 0 : _a.call(this);
+    }
+    removeListeners() {
+      this.socket.removeEventListener("message", this.onMessage);
+      this.socket.removeEventListener("close", this.onClose);
+      this.socket.removeEventListener("error", this.onError);
+    }
+    hasQueuedMessage() {
+      return this.messageHead < this.messages.length;
+    }
+    takeMessage() {
+      if (!this.hasQueuedMessage()) return void 0;
+      const message = this.messages[this.messageHead];
+      this.messages[this.messageHead] = void 0;
+      this.messageHead += 1;
+      if (shouldCompactBackingArray(this.messageHead, this.messages.length)) {
+        this.messages.splice(0, this.messageHead);
+        this.messageHead = 0;
+      }
+      return message;
+    }
+  };
+  async function waitForOpen(socket, connectTimeoutMs, signal) {
+    throwIfAborted(signal);
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(
+        () => finish(connectorError("connectTimeout" /* ConnectTimeout */, "Connect timed out.")),
+        connectTimeoutMs
+      );
+      const onOpen = () => finish();
+      const onClose = () => finish(connectorError("disconnected" /* Disconnected */, "Connect closed before opening."));
+      const onError = () => finish(connectorError("disconnected" /* Disconnected */, "Connect failed."));
+      const onAbort = () => finish(connectorError("disconnected" /* Disconnected */, "Connect canceled."));
+      const finish = (error) => {
+        clearTimeout(timeout);
+        socket.removeEventListener("open", onOpen);
+        socket.removeEventListener("close", onClose);
+        socket.removeEventListener("error", onError);
+        signal == null ? void 0 : signal.removeEventListener("abort", onAbort);
+        if (error === void 0) {
+          resolve();
+        } else {
+          socket.close();
+          reject(error);
+        }
+      };
+      socket.addEventListener("open", onOpen, { once: true });
+      socket.addEventListener("close", onClose, { once: true });
+      socket.addEventListener("error", onError, { once: true });
+      signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+  function toUint8Array(data) {
+    if (data instanceof ArrayBuffer) {
+      return new Uint8Array(data);
+    }
+    if (ArrayBuffer.isView(data)) {
+      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    }
+    throw connectorError(
+      "frameDecodeFailed" /* FrameDecodeFailed */,
+      "WebSocket text messages are not supported."
+    );
+  }
 
   // packages/stream-connector/src/Runtime/ZlinkStreamConnector.ts
   var DefaultZlinkStreamConnector = class {

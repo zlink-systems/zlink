@@ -62,6 +62,7 @@ public sealed class ConnectionAndConfigContracts
         var dispatch = new DispatchOptions();
 
         Assert.True(socket.Immediate);
+        Assert.True(socket.TcpNoDelay);
         Assert.True(route.RequireKnownPeer);
         Assert.True(outbound.ProbeRouterOnConnect);
         Assert.Equal(32UL, publisher.SendHighWaterMark);
@@ -97,11 +98,11 @@ public sealed class ConnectionAndConfigContracts
 
         public int Weight { get; set; }
 
-        public bool IPv6 { get; set; }
+        public bool? IPv6 { get; set; }
 
-        public bool TcpNoDelay { get; set; }
+        public bool? TcpNoDelay { get; set; }
 
-        public bool Immediate { get; set; }
+        public bool? Immediate { get; set; }
     }
 
     internal sealed class RouteConfig : IZLinkRouteConfig

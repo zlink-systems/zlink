@@ -201,6 +201,7 @@ export class ZLinkRoutedSpotPacketDispatch {
           );
           resolveFirstHandlerTurn?.();
           resolveFirstHandlerTurn = undefined;
+          context.activationRecord?.onHandlerTurnStarted?.();
           releaseApplicationJobPermitBeforeHandler();
           response = await handler.handle(current.spot, payload, {
             channelName: context.channelName,
@@ -285,8 +286,9 @@ export class ZLinkRoutedSpotPacketDispatch {
     returnResponse: boolean,
     error: unknown
   ): void {
-    if (!this.options.dispatchErrors?.captureEnabled()) return;
-    this.options.dispatchErrors?.report({
+    const reporter = this.options.dispatchErrors;
+    if (reporter?.captureEnabled() !== true) return;
+    reporter.report({
       surface:
         context.activationRecord?.activationRecord?.kind === 'instanceSpot'
           ? ZLinkDispatchErrorSurface.InstanceSpot

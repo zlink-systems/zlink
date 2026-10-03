@@ -1833,9 +1833,7 @@ export function decodeStatefulHeader(
             ...common,
             activation: 'ready',
             route: route!,
-            instanceIntent:
-              generatedReadyRoute!.routeKind === 'ready' &&
-              generatedReadyRoute!.instanceIntent === 'true'
+            instanceIntent: generatedReadyRoute!.instanceIntent === 'true'
           }
         : {
             ...common,

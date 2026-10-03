@@ -291,7 +291,10 @@ public final class ZLinkStoreLocationResolvers
             return CompletableFuture.completedFuture(null);
         }
         var authority = spotAuthorityCodec.decode(snapshot.payload()).orElse(null);
+        // Only Ready and Closing authorities route (spot address messaging §9: a direct call
+        // without Instance intent to a Creating Spot is NotFound, as for Missing).
         if (authority == null
+                || authority.state() == ZLinkServiceAuthorityPayloadCodec.State.CREATING
                 || (authority.state() == ZLinkServiceAuthorityPayloadCodec.State.READY
                         && snapshot.allocation().state() != ZLinkPlacementAllocationState.ACTIVE)
                 || !authority.spotId().equals(spotId)

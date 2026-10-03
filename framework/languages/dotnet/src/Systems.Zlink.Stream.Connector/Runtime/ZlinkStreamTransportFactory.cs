@@ -93,6 +93,8 @@ internal static class ZlinkStreamTransportFactory
 
     private const string TcpScheme = "tcp";
     private const string TlsScheme = "tls";
+    private const string WebSocketScheme = "ws";
+    private const string WebSocketSecureScheme = "wss";
 
     private static RemoteCertificateValidationCallback CertificateValidationCallback(bool skip) =>
         skip ? static (_, _, _, _) => true : ValidateServerCertificate;
@@ -118,8 +120,8 @@ internal static class ZlinkStreamTransportFactory
         {
             TcpScheme => ZlinkStreamTransport.Tcp,
             TlsScheme => ZlinkStreamTransport.Tls,
-            var scheme when scheme == Uri.UriSchemeWs => ZlinkStreamTransport.WebSocket,
-            var scheme when scheme == Uri.UriSchemeWss => ZlinkStreamTransport.WebSocketSecure,
+            WebSocketScheme => ZlinkStreamTransport.WebSocket,
+            WebSocketSecureScheme => ZlinkStreamTransport.WebSocketSecure,
             _ => throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ConfigurationError,
                 "Endpoint scheme is not supported."

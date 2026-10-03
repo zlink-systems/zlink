@@ -187,10 +187,6 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                         });
     }
 
-    public CompletionStage<Void> notifyActorLeftSpot(String actorType, String actorId) {
-        return CompletableFuture.completedFuture(null);
-    }
-
     public CompletionStage<Void> notifyActorMovedToEntrySpot(
             String actorType, String actorId, RoutingId nodeRid) {
         return CompletableFuture.completedFuture(null);

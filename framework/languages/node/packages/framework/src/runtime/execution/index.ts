@@ -265,6 +265,8 @@ export class ZLinkExecutionBarrier {
   private generation = 0n;
   private activeClaims = 0;
   private suspendedClaims = 0;
+  /** Claims whose turn has started and yielded at least once, until released. */
+  private yieldedTurnClaims = 0;
   private currentSeal: ZLinkExecutionBarrierSeal | undefined;
   private readonly admissionWaiters: ZLinkExecutionBarrierWaiter[] = [];
   private readonly quiescenceWaiters = new Set<() => void>();
@@ -337,6 +339,29 @@ export class ZLinkExecutionBarrier {
     this.requireCurrent(seal);
   }
 
+  /**
+   * Spot messaging §7 step 1: a Close that keeps admission open still lets every
+   * already-started (yielded) turn finish in its generation before cleanup.
+   */
+  async waitForStartedTurns(signal?: AbortSignal): Promise<void> {
+    if (this.yieldedTurnClaims === 0) return;
+    if (signal?.aborted === true) throw signal.reason;
+    await new Promise<void>((resolve, reject) => {
+      const complete = () => {
+        if (this.yieldedTurnClaims !== 0) return;
+        this.quiescenceWaiters.delete(complete);
+        signal?.removeEventListener('abort', abort);
+        resolve();
+      };
+      const abort = () => {
+        this.quiescenceWaiters.delete(complete);
+        reject(signal?.reason);
+      };
+      this.quiescenceWaiters.add(complete);
+      signal?.addEventListener('abort', abort, { once: true });
+    });
+  }
+
   abort(seal: ZLinkExecutionBarrierSeal): boolean {
     if (!this.isCurrent(seal)) return false;
     this.currentSeal = undefined;
@@ -375,10 +400,12 @@ export class ZLinkExecutionBarrier {
   private createClaim(): ZLinkExecutionBarrierClaim {
     this.activeClaims++;
     let state: 'active' | 'suspended' | 'released' = 'active';
+    let yielded = false;
     const release = () => {
       if (state === 'released') return;
       if (state === 'active') this.activeClaims--;
       else this.suspendedClaims--;
+      if (yielded) this.yieldedTurnClaims--;
       state = 'released';
       this.notifyQuiescence();
     };
@@ -387,6 +414,10 @@ export class ZLinkExecutionBarrier {
       suspend: () => {
         if (state !== 'active') return;
         state = 'suspended';
+        if (!yielded) {
+          yielded = true;
+          this.yieldedTurnClaims++;
+        }
         this.activeClaims--;
         this.suspendedClaims++;
         this.notifyQuiescence();

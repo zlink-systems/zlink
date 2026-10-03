@@ -9,6 +9,7 @@
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 
 #include <gtest/gtest.h>
@@ -517,6 +518,106 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     EXPECT_EQ (1, ready_failures.load ());
     EXPECT_EQ (1, cold_activations.load ());
     EXPECT_EQ (2, resolver.reads.load ());
+}
+
+// Failover policy §4.4: an Instance intent request whose cached Ready route the
+// owner fence refused before admission reads the authority once. Missing continues
+// as cold activation; a present authority or another terminal ends the operation.
+TEST (ZLinkFrameworkInstanceSpotActivation, CachedRouteFenceRefusalReadsAuthorityOnce)
+{
+    namespace messaging = zlink::framework::runtime::messaging;
+    using zlink::framework::framework_error_kind_t;
+    using zlink::framework::runtime::spot_address_t;
+
+    class authority_resolver_t final : public zlink::framework::runtime::spot_address_resolver_t
+    {
+      public:
+        zlink::framework::task_t<std::optional<spot_address_t>>
+        resolve_spot_address (std::string, std::string) override
+        {
+            if (cached)
+                co_return cached;
+            ++authority_reads;
+            co_return authority;
+        }
+
+        void invalidate_spot_address (std::string_view) override { cached.reset (); }
+
+        void invalidate_all_routes_after_store_recovery () override { cached.reset (); }
+
+        std::optional<spot_address_t> cached;
+        std::optional<spot_address_t> authority;
+        int authority_reads = 0;
+    };
+
+    const messaging::request_failure_mapper_t mapper;
+    // The owner's Ready owner-fence refusal, and the Unavailable terminal of a message
+    // the owner accepted (a relocating host ending the Instance intent messages it kept).
+    const auto refusal = *mapper.target_failure_reply (
+      framework_error_kind_t::unavailable,
+      static_cast<std::uint32_t> (
+        zlink::framework::runtime::protocol::framework_error_code::spotMoving));
+    const auto accepted = *mapper.target_failure_reply (framework_error_kind_t::unavailable);
+    struct case_t
+    {
+        messaging::request_wire_failure_t owner_failure;
+        bool authority_present;
+        bool replied;
+        std::vector<bool> cached_routes;
+        int authority_reads;
+    };
+    for (const auto &scenario :
+         {case_t{refusal, false, true, {true, false}, 1}, case_t{refusal, true, false, {true}, 1},
+          case_t{accepted, false, false, {true}, 0}}) {
+        zlink::framework::serializer_registry_t serializers;
+        zlink::framework::zlink_builder_t builder;
+        auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
+        runtime.bind_serializers (serializers);
+        const spot_address_t route{"gamequest", zlink::routing_id_t::from ("quest-mission"),
+                                   "player-alice", 7};
+        authority_resolver_t resolver;
+        resolver.cached = route;
+        if (scenario.authority_present)
+            resolver.authority = route;
+        runtime.bind_spot_address_resolver (resolver);
+        std::vector<bool> cached_routes;
+        runtime.bind_instance_spot_activator (
+          [] (const auto &, const auto &, const auto &, const auto &, auto, auto,
+              const auto &) -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+              co_return zlink::framework::result_t<void>::failure (
+                framework_error_kind_t::internal_failure, "unused one-way activation");
+          },
+          [&] (const auto &, const auto &, const std::optional<spot_address_t> &cached_route,
+               std::string, std::type_index, auto, std::chrono::milliseconds,
+               auto) -> zlink::framework::task_t<zlink::message_t> {
+              cached_routes.push_back (cached_route.has_value ());
+              if (cached_route)
+                  co_return zlink::framework::detail::result_access_t::failure<zlink::message_t> (
+                    mapper.reply_header_exception (scenario.owner_failure.terminal_result,
+                                                   scenario.owner_failure.failure_code,
+                                                   "Instance Spot request"));
+              co_return zlink::framework::result_t<zlink::message_t>::success (
+                zlink::framework::detail::encoded_payload_to_raw (
+                  serializers.get<reply_t> ().serialize (reply_t{9})));
+          });
+
+        const auto reply = builder.route_client (serializers)
+                             .request_to_spot ("player-alice", request_t{1})
+                             .instance_spot ("player-quest")
+                             .async<reply_t> ()
+                             .result ();
+        EXPECT_EQ (scenario.replied, static_cast<bool> (reply));
+        if (reply) {
+            EXPECT_EQ (9, reply.value ().value);
+        } else {
+            EXPECT_EQ (framework_error_kind_t::unavailable, reply.error_kind ());
+            ASSERT_TRUE (reply.error ());
+            EXPECT_EQ (scenario.owner_failure.failure_code,
+                       zlink::framework::detail::failure_code (*reply.error ()));
+        }
+        EXPECT_EQ (scenario.cached_routes, cached_routes);
+        EXPECT_EQ (scenario.authority_reads, resolver.authority_reads);
+    }
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation, RetiredOwnerRequestCompletesWithUnavailableTerminal)

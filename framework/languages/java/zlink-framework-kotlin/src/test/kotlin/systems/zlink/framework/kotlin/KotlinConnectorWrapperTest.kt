@@ -11,7 +11,6 @@ import java.time.Duration.ofMillis
 import java.time.Duration.ofSeconds
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
@@ -1041,10 +1040,16 @@ final class KotlinConnectorWrapperTest {
         ZLinkKotlinStreamAssert.ensure(true, "condition should pass")
         val timeout =
             ZLinkKotlinStreamAssert.expectFailure("REQUEST_TIMEOUT") {
-                throw TimeoutException("request timed out")
+                throw ZLinkStreamException(
+                    ZLinkStreamError(ZLinkStreamErrorCode.REQUEST_TIMEOUT, "request timed out")
+                )
             }
         assertEquals(ZLinkStreamErrorCode.REQUEST_TIMEOUT, timeout.code())
-        ZLinkKotlinStreamAssert.expectTimeout { throw TimeoutException("request timed out") }
+        ZLinkKotlinStreamAssert.expectTimeout {
+            throw ZLinkStreamException(
+                ZLinkStreamError(ZLinkStreamErrorCode.REQUEST_TIMEOUT, "request timed out")
+            )
+        }
     }
 
     private fun options(

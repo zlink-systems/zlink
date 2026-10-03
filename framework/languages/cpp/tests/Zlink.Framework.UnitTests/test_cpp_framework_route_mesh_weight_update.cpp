@@ -9,6 +9,7 @@
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Core/routing_id.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -162,6 +163,86 @@ TEST (CppFrameworkRouteMeshWeightUpdate, SoleTargetStopsAndResumesAfterLiveWeigh
       [&] { return peer_channel_weight (source, target_descriptor.node_routing_id, "X") == 100; }))
       << "peer did not receive the restored positive-weight descriptor update";
     expect_successful_channel_request (source, target);
+
+    source.close ();
+    target_node.stop ();
+}
+
+// A descriptor revision is read, published, and submitted to every admitted
+// route in one owner turn, so a route never receives a lower revision after a
+// higher one (wire-protocol §4 DescriptorRevision ordering).  The first
+// publication pauses after the topology accepted it and before its UPDATE was
+// submitted; a second weight change may not overtake it on the route.
+TEST (CppFrameworkRouteMeshWeightUpdate, ConcurrentWeightChangesReachPeerInRevisionOrder)
+{
+    auto context = std::make_shared<zlink::context_t> ();
+    auto target_state =
+      std::make_shared<zlink::framework::detail::mesh_node_builder_state_t> ("weight-order-mesh");
+    target_state->core_context = context;
+    target_state->listen_endpoint = "inproc://weight-order-target";
+    target_state->routing_id = zlink::routing_id_t::from ("weight-order-target");
+    target_state->channels.emplace (
+      "X", zlink::framework::detail::mesh_channel_registration_t{100, {}, true, true});
+    zlink::framework::detail::mesh_node_runtime_t target_node (target_state);
+    target_node.start ();
+    auto &target = target_node.native_node ().transport ();
+
+    mesh::service_node_descriptor_t source_descriptor;
+    source_descriptor.mesh_name = "weight-order-mesh";
+    source_descriptor.node_routing_id = bytes ("weight-order-source");
+    source_descriptor.lifecycle_generation = 1;
+    source_descriptor.descriptor_revision = 1;
+    source_descriptor.advertised_endpoint = "inproc://weight-order-source";
+    const auto source_routing_id = source_descriptor.node_routing_id;
+    mesh::raw_mesh_node_owner_t source ({std::move (source_descriptor)}, context);
+    source.start ();
+
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    source.expect_peer (target_descriptor);
+    ASSERT_TRUE (source.connect_peer (target.endpoint (), target_descriptor));
+    ASSERT_TRUE (pump_until (source, target, [&] {
+        return source.topology ().peer (target_descriptor.node_routing_id).has_value ()
+               && target.topology ().peer (source_routing_id).has_value ();
+    }));
+
+    std::promise<void> first_published;
+    std::promise<void> second_finished;
+    auto second_finished_signal = second_finished.get_future ().share ();
+    std::atomic<int> publications{0};
+    target.topology ().set_change_handler ([&] {
+        if (publications.fetch_add (1) != 0)
+            return;
+        first_published.set_value ();
+        // Without one owner turn the second change completes here, before
+        // the first UPDATE is submitted.  With it, the second change waits
+        // for this turn, and the bounded wait only ends the pause.
+        (void) second_finished_signal.wait_for (1s);
+    });
+
+    std::thread first ([&] { target_node.set_channel_weight ("X", 50); });
+    first_published.get_future ().wait ();
+    std::thread second ([&] {
+        target_node.set_channel_weight ("X", 100);
+        second_finished.set_value ();
+    });
+    second.join ();
+    first.join ();
+    target.topology ().set_change_handler ({});
+
+    ASSERT_TRUE (pump_until (source, target, [&] {
+        return peer_channel_weight (source, target_descriptor.node_routing_id, "X") == 100;
+    }));
+    // Drain every UPDATE the source received.  A lower revision after the
+    // higher one is stale: the source answers REJECT and the target drops it.
+    const auto drain_deadline = std::chrono::steady_clock::now () + 200ms;
+    while (std::chrono::steady_clock::now () < drain_deadline) {
+        (void) await_task (source.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+        std::this_thread::yield ();
+    }
+    EXPECT_EQ (100, peer_channel_weight (source, target_descriptor.node_routing_id, "X"));
+    expect_successful_channel_request (source, target);
+    EXPECT_TRUE (target.topology ().peer (source_routing_id).has_value ())
+      << "the target dropped the peer after it received descriptor revisions out of order";
 
     source.close ();
     target_node.stop ();

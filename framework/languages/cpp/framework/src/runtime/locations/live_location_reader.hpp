@@ -3,6 +3,7 @@
 
 #include <zlink/framework/contracts/locations/options.hpp>
 #include <runtime/locations/location_repository.hpp>
+#include "runtime/execution/task_result.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include <algorithm>
@@ -28,22 +29,22 @@ class live_location_reader_t final
     {
     }
 
-    std::optional<std::chrono::steady_clock::duration>
-    owner_admission_lifetime (const std::string &owner_id)
+    task_t<std::optional<std::chrono::steady_clock::duration>>
+    owner_admission_lifetime (std::string owner_id)
     {
-        const auto lease = _store->read_owner_lease (owner_id).result ().value ();
+        const auto lease = co_await _store->read_owner_lease (std::move (owner_id));
         const auto *found = std::get_if<owner_lease_found_t> (&lease);
         if (found == nullptr)
-            return std::nullopt;
-        return admission_lifetime (found->token, found);
+            co_return std::nullopt;
+        co_return admission_lifetime (found->token, found);
     }
 
-    std::optional<std::chrono::steady_clock::duration>
-    owner_admission_lifetime (const location_owner_token_t &owner)
+    task_t<std::optional<std::chrono::steady_clock::duration>>
+    owner_admission_lifetime (location_owner_token_t owner)
     {
-        const auto lease = _store->read_owner_lease (owner.owner_id).result ().value ();
+        const auto lease = co_await _store->read_owner_lease (owner.owner_id);
         const auto *found = std::get_if<owner_lease_found_t> (&lease);
-        return admission_lifetime (owner, found);
+        co_return admission_lifetime (owner, found);
     }
 
   private:
@@ -73,15 +74,22 @@ class live_location_reader_t final
     {
         try {
             auto result =
-              _store->list_mesh_nodes (std::move (mesh_name), std::move (page)).result ().value ();
-            filter_live (result.items);
-            return completed (std::move (result));
+              co_await _store->list_mesh_nodes (std::move (mesh_name), std::move (page));
+            co_await filter_live (result.items);
+            co_return std::move (result);
         }
         catch (const std::invalid_argument &error) {
-            return task_t<location_page_t<mesh_node_descriptor_t>> (
-              result_t<location_page_t<mesh_node_descriptor_t>>::failure (
-                framework_error_kind_t::internal_failure, error.what ()));
+            co_return result_t<location_page_t<mesh_node_descriptor_t>>::failure (
+              framework_error_kind_t::internal_failure, error.what ());
         }
+    }
+
+    /* Every stored descriptor, including those whose owner lease is gone.
+     * Location runtime §7.4 service summaries classify these by the lease. */
+    task_t<location_page_t<mesh_node_descriptor_t>>
+    list_stored_mesh_nodes (std::string mesh_name, location_page_request_t page = {})
+    {
+        return _store->list_mesh_nodes (std::move (mesh_name), std::move (page));
     }
 
     task_t<authority_read_result_t> read_authority (authority_key_t key)
@@ -89,15 +97,13 @@ class live_location_reader_t final
         return _store->read_authority (std::move (key));
     }
 
-    task_t<bool> owner_available (const location_owner_token_t &owner)
+    task_t<bool> owner_available (location_owner_token_t owner)
     {
-        auto result = _store->read_owner_lease (owner.owner_id).result ();
-        if (!result.has_value ()) {
-            return task_t<bool> (
-              detail::propagate_failure<bool> (result, "owner lease lookup failed"));
-        }
+        auto result = co_await await_result (_store->read_owner_lease (owner.owner_id));
+        if (!result.has_value ())
+            co_return detail::propagate_failure<bool> (result, "owner lease lookup failed");
         const auto *found = std::get_if<owner_lease_found_t> (&result.value ());
-        return completed (owner_is_available (owner.lease_generation, found));
+        co_return owner_is_available (owner.lease_generation, found);
     }
 
     task_t<authority_scan_result_t> list_authorities (std::string prefix,
@@ -108,18 +114,12 @@ class live_location_reader_t final
     }
 
   private:
-    template <typename T> static task_t<T> completed (T value)
-    {
-        return task_t<T> (result_t<T>::success (std::move (value)));
-    }
-
-    template <typename T> void filter_live (std::vector<T> &rows)
+    template <typename T> task_t<void> filter_live (std::vector<T> &rows)
     {
         std::map<std::string, owner_lease_read_result_t> leases;
         for (const auto &row : rows) {
             if (!leases.contains (row.owner_id))
-                leases.emplace (row.owner_id,
-                                _store->read_owner_lease (row.owner_id).result ().value ());
+                leases.emplace (row.owner_id, co_await _store->read_owner_lease (row.owner_id));
         }
         std::erase_if (rows, [&leases] (const T &row) {
             const auto *found = std::get_if<owner_lease_found_t> (&leases.at (row.owner_id));

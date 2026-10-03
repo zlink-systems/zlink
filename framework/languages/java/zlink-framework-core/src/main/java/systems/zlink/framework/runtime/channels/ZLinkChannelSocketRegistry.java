@@ -93,6 +93,12 @@ final class ZLinkChannelSocketRegistry {
     private boolean unmanagedBackendClientMode;
     private static final long CLIENT_SERVER_PROBE_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(5);
     private static final long CLIENT_SERVER_DEADLINE_NANOS = TimeUnit.SECONDS.toNanos(15);
+    // The public Poller has no wake-up call, and a DEALER may close only after its receive owner
+    // left the poller wait (a Core socket is not thread safe). This interval bounds how long a
+    // close waits for that owner; data and completions end the wait at once. Same value and
+    // reason as the .NET ClientServer client ControlReceivePollInterval.
+    private static final Duration CLIENT_SERVER_CONTROL_RECEIVE_WAIT = Duration.ofMillis(100);
+    private volatile BiConsumer<String, Throwable> clientServerReceiveFailures = (channel, f) -> {};
 
     ZLinkChannelSocketRegistry() {
         this(null);
@@ -1149,8 +1155,7 @@ final class ZLinkChannelSocketRegistry {
         return true;
     }
 
-    void tickClientServerLiveness(
-            long nowNanos, BiConsumer<String, Throwable> reportReceiveFailure) {
+    void tickClientServerLiveness(long nowNanos) {
         LivenessSnapshot snapshot =
                 inStateLane(
                         () -> {
@@ -1179,11 +1184,6 @@ final class ZLinkChannelSocketRegistry {
                         clientServerControlCursor = nextCursor;
                         return null;
                     });
-            try {
-                drainClientServerControls(connection);
-            } catch (systems.zlink.contracts.errors.ZlinkRecvException failure) {
-                reportReceiveFailure.accept(connection.descriptor.channelName(), failure);
-            }
             flushClientServerLivenessAck(connection);
             ClientLivenessAction action =
                     inStateLane(
@@ -1270,6 +1270,73 @@ final class ZLinkChannelSocketRegistry {
                     // deadline and connection lifecycle perform cleanup.
                 }
             }
+        }
+    }
+
+    void reportClientServerReceiveFailuresTo(BiConsumer<String, Throwable> sink) {
+        clientServerReceiveFailures = java.util.Objects.requireNonNull(sink, "sink");
+    }
+
+    /**
+     * Starts the one receive owner of a ClientServer DEALER. Its poller wait is also where the
+     * binding completes the DEALER's requests (the public {@code POLLCOMPLETION} owner), so a reply
+     * completes as soon as Core delivers it. The owner is the only poller waiter of the DEALER and
+     * closes it when it ends.
+     */
+    void startClientServerControlReceive(String connectionId) {
+        inStateLane(
+                () -> {
+                    ClientServerConnection connection = clientServerConnections.get(connectionId);
+                    if (connection != null
+                            && !connection.physicalClosed
+                            && connection.receiveOwner == null) {
+                        // Started inside the lane: a close that reads this owner finds it
+                        // running or ended, never not yet started.
+                        connection.receiveOwner =
+                                Thread.ofVirtual()
+                                        .name("zlink-client-server-control")
+                                        .start(() -> runClientServerControlReceive(connection));
+                    }
+                    return null;
+                });
+    }
+
+    private void runClientServerControlReceive(ClientServerConnection connection) {
+        try {
+            while (!connection.receiveStopped) {
+                try {
+                    receiveClientServerControls(connection, CLIENT_SERVER_CONTROL_RECEIVE_WAIT);
+                } catch (RuntimeException failure) {
+                    clientServerReceiveFailures.accept(
+                            connection.descriptor.channelName(), failure);
+                }
+            }
+        } finally {
+            try {
+                connection.dealer.close();
+            } catch (RuntimeException failure) {
+                LOGGER.log(Level.WARNING, "ClientServer dealer cleanup failed", failure);
+            }
+        }
+    }
+
+    /** Receives the controls the connection's DEALER has ready now, without a poller wait. */
+    void receiveClientServerControls(String connectionId) {
+        ClientServerConnection connection =
+                inStateLane(() -> clientServerConnections.get(connectionId));
+        if (connection == null) {
+            return;
+        }
+        try {
+            receiveClientServerControls(connection, Duration.ZERO);
+        } catch (RuntimeException failure) {
+            clientServerReceiveFailures.accept(connection.descriptor.channelName(), failure);
+        }
+    }
+
+    private void receiveClientServerControls(ClientServerConnection connection, Duration wait) {
+        if (connection.dealer.waitForReadable(wait)) {
+            drainClientServerControls(connection);
         }
     }
 
@@ -1462,7 +1529,8 @@ final class ZLinkChannelSocketRegistry {
                             ownedSockets.removeIf(candidate -> candidate == connection.dealer);
                             return new ClientServerClose(
                                     registeredMonitor,
-                                    receiveFlowRegistrations.remove(connection.dealer));
+                                    receiveFlowRegistrations.remove(connection.dealer),
+                                    connection.receiveOwner);
                         });
         if (close == null) {
             return;
@@ -1477,10 +1545,33 @@ final class ZLinkChannelSocketRegistry {
                 LOGGER.log(Level.WARNING, "ClientServer monitor cleanup failed", failure);
             }
         }
-        try {
-            connection.dealer.close();
-        } catch (RuntimeException failure) {
-            LOGGER.log(Level.WARNING, "ClientServer dealer cleanup failed", failure);
+        connection.receiveStopped = true;
+        Thread owner = close.receiveOwner();
+        if (owner == null) {
+            try {
+                connection.dealer.close();
+            } catch (RuntimeException failure) {
+                LOGGER.log(Level.WARNING, "ClientServer dealer cleanup failed", failure);
+            }
+        } else if (owner != Thread.currentThread()) {
+            // The receive owner closes the DEALER when it ends. A close that runs on the owner
+            // itself (in a completion it dispatched) returns here, and the owner closes the
+            // DEALER once that completion returns and it sees receiveStopped.
+            awaitReceiveOwner(owner);
+        }
+    }
+
+    private static void awaitReceiveOwner(Thread owner) {
+        boolean interrupted = false;
+        while (owner.isAlive()) {
+            try {
+                owner.join();
+            } catch (InterruptedException interruption) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -1988,7 +2079,8 @@ final class ZLinkChannelSocketRegistry {
 
     private record ClientServerClose(
             ZLinkBackendSocketMonitor monitor,
-            ZLinkApplicationJobReceiveFlowController.Registration receiveFlow) {}
+            ZLinkApplicationJobReceiveFlowController.Registration receiveFlow,
+            Thread receiveOwner) {}
 
     private record ListenerKey(ZLinkListenerKind kind, String name) {}
 
@@ -2020,6 +2112,11 @@ final class ZLinkChannelSocketRegistry {
         private ZLinkBackendSocketMonitor monitor;
         private boolean ready;
         private boolean physicalClosed;
+        // Set by the close path after the monitor closed (spec 55 section 6: the monitor never
+        // outlives the DEALER it observes). The receive owner stops on it and closes the DEALER.
+        private volatile boolean receiveStopped;
+        // Set once in the state lane; the only poller waiter of the DEALER, and its closer.
+        private Thread receiveOwner;
         private long pendingLivenessAckId;
         private long physicalGeneration = 1;
         private long admissionGeneration = 1;

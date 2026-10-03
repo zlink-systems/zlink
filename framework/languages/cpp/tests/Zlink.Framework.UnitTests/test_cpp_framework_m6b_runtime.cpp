@@ -9,6 +9,7 @@
 #include "runtime/actors/actor_client.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
+#include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
@@ -84,6 +85,21 @@ void await_task (zlink::framework::task_t<void> task)
 }
 
 mesh::service_node_descriptor_t descriptor (std::string rid);
+
+// The public Instance call payload of the Spot Close ready-route cases.
+struct quest_probe_t
+{
+    static constexpr const char *packet_name = "quest.start";
+};
+
+void to_json (nlohmann::json &json, const quest_probe_t &)
+{
+    json = nlohmann::json::object ();
+}
+
+void from_json (const nlohmann::json &, quest_probe_t &)
+{
+}
 
 zlink::framework::task_t<std::vector<zlink::message_t>>
 await_native_reply (zlink::async_result_t<std::vector<zlink::message_t>> pending)
@@ -188,8 +204,9 @@ void verify_message_follow_invalidation_subscriptions_are_lifetime_safe ()
       std::make_shared<detail::mesh_node_builder_state_t> ("message-follow-subscription-mesh");
     auto runtime = std::make_shared<detail::mesh_node_runtime_t> (state);
     runtime->configure_actor_route_resolver (
-      [] (const actor_ref_t &) -> std::optional<zlink::framework::runtime::spot_address_t> {
-          return std::nullopt;
+      [] (actor_ref_t)
+        -> zlink::framework::task_t<std::optional<zlink::framework::runtime::spot_address_t>> {
+          co_return std::nullopt;
       },
       [] (const auto &) { throw std::runtime_error ("expected invalidator failure"); });
     const auto route =
@@ -309,9 +326,10 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     (void) source_state;
     (void) new_state;
     old_target->configure_spot_route_fence_resolver (
-      [] (const zlink::routing_id_t &, std::string_view, std::uint64_t)
-        -> std::optional<host::route_fence_t> { return host::route_fence_t{1, 1}; },
-      1min);
+      [] (zlink::routing_id_t, std::string,
+          std::uint64_t) -> zlink::framework::task_t<std::optional<host::route_fence_t>> {
+          co_return host::route_fence_t{1, 1};
+      });
     new_target->configure_stateful_dispatch (
       [] (const stateful::accepted_record_authority_query_t &query)
         -> std::optional<stateful::accepted_record_authority_t> {
@@ -360,7 +378,9 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     std::mutex invalidated_route_mutex;
     std::optional<protocol::actor_route_fence_t> invalidated_route;
     source->configure_actor_route_resolver (
-      [] (const actor_ref_t &) -> std::optional<runtime::spot_address_t> { return std::nullopt; },
+      [] (actor_ref_t) -> task_t<std::optional<runtime::spot_address_t>> {
+          co_return std::nullopt;
+      },
       [&] (const protocol::actor_route_fence_t &route) {
           {
               std::lock_guard lock (invalidated_route_mutex);
@@ -1086,9 +1106,9 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
     std::optional<protocol::actor_route_fence_t> invalidated;
     detail::mesh_node_runtime_t source (state);
     source.configure_actor_route_resolver (
-      [&] (const actor_ref_t &) -> std::optional<runtime::spot_address_t> {
+      [&] (actor_ref_t) -> task_t<std::optional<runtime::spot_address_t>> {
           ++route_resolutions;
-          return std::nullopt;
+          co_return std::nullopt;
       },
       [&] (const protocol::actor_route_fence_t &route) {
           ++invalidations;
@@ -1770,7 +1790,7 @@ void verify_spot_route_fence_admission_precedes_body_decode ()
       valid, std::optional<zlink::framework::location_owner_token_t>{}));
 }
 
-void verify_public_host_route_cache_stops_at_owner_admission_deadline ()
+void verify_public_host_route_fence_reads_store_without_second_cache (bool release_lease)
 {
     using namespace zlink::framework;
     auto store = std::make_shared<runtime::in_memory_location_repository_t> ();
@@ -1815,7 +1835,6 @@ void verify_public_host_route_cache_stops_at_owner_admission_deadline ()
       host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("route-cache-source")},
                            "entry",
                            {"framework.spot"},
-                           10s,
                            3s});
     auto target = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("route-cache-target")}});
@@ -1849,7 +1868,13 @@ void verify_public_host_route_cache_stops_at_owner_admission_deadline ()
           .value ();
     };
     assert (send () == zlink::submit_result_t::ok);
-    std::this_thread::sleep_for (3s);
+    if (release_lease) {
+        // The Location Store owns the fence. A lease released after the first
+        // send must reach the next send, not be hidden by a host-side copy.
+        assert (std::holds_alternative<owner_lease_released_t> (
+          store->release_owner_lease (owner).result ().value ()));
+    } else
+        std::this_thread::sleep_for (3s);
     assert (send () == zlink::submit_result_t::not_found);
 
     source->close ();
@@ -5978,6 +6003,75 @@ void verify_remote_user_spot_create_close_terminal_once ()
     assert (close_fixture_input);
     const auto close_fixture = nlohmann::json::parse (close_fixture_input);
     std::uint64_t ready_case_operation = 1000;
+    // The public Instance call path: a Store resolver whose route cache keeps the
+    // Ready route it resolved before Close, and the source host as the activator.
+    location_options_t route_cache_options;
+    route_cache_options.route_cache_max_age = 30s;
+    runtime::store_location_resolvers_t route_resolver (*store, route_cache_options);
+    serializer_registry_t serializers;
+    zlink_builder_t builder;
+    auto channels = detail::channel_runtime_t::from (builder.message_bus ());
+    channels.bind_serializers (serializers);
+    channels.bind_spot_address_resolver (route_resolver);
+    channels.bind_instance_spot_activator (
+      [] (const spot_id_t &, const detail::spot_activation_intent_t &,
+          const std::optional<runtime::spot_address_t> &, const std::string &, std::type_index,
+          std::function<serialized_payload_t (serializer_registry_t &)>,
+          const std::map<std::string, std::string> &) -> task_t<result_t<void>> {
+          co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                             "unused one-way activation");
+      },
+      [&] (const spot_id_t &spot_id, const detail::spot_activation_intent_t &intent,
+           const std::optional<runtime::spot_address_t> &cached_route, std::string, std::type_index,
+           std::function<serialized_payload_t (serializer_registry_t &)>,
+           std::chrono::milliseconds timeout,
+           std::map<std::string, std::string>) -> task_t<zlink::message_t> {
+          // The same activation header the app builds for a cached or a cold route.
+          auto header = replay_instance_request;
+          header.operation = {123, ready_case_operation++};
+          header.target.spot_id = std::string (spot_id);
+          header.target.deadline_unix_ms = static_cast<std::uint64_t> (
+            std::chrono::duration_cast<std::chrono::milliseconds> (
+              std::chrono::system_clock::now ().time_since_epoch () + timeout)
+              .count ());
+          if (cached_route) {
+              header.target.object_generation = cached_route->object_generation;
+              header.target.authority_owner_generation = cached_route->authority_owner_generation;
+              header.target.owner_id = cached_route->owner.owner_id;
+              header.target.owner_lease_generation =
+                static_cast<std::uint64_t> (cached_route->owner.lease_generation);
+              header.target.store_version = cached_route->store_version;
+              header.target.instance_intent = intent.instance;
+              header.target.deadline_unix_ms = 0;
+          }
+          auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
+          auto output = completion->task ();
+          const auto submitted = co_await source->activate_instance_spot_remote (
+            target->status ().routing_id (), std::move (header),
+            std::vector<std::uint8_t>{1, 1, 5, 't', 'r', 'a', 'c', 'e', 0, 3, 'a', 'b', 'c'},
+            {"quest.start", "application/json", {'{', '}'}}, timeout,
+            [completion] (foundation::operation_terminal_t terminal, protocol::reply_header_t reply,
+                          std::optional<protocol::application_payload_t> payload) {
+                if (terminal != foundation::operation_terminal_t::completed) {
+                    completion->complete (result_t<zlink::message_t>::failure (
+                      framework_error_kind_t::unavailable, "activation transport failed"));
+                } else if (reply.terminal_result != 0) {
+                    completion->complete (detail::result_access_t::failure<zlink::message_t> (
+                      runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
+                        reply.terminal_result, reply.failure_code, "Instance Spot request")));
+                } else {
+                    assert (payload);
+                    completion->complete (result_t<zlink::message_t>::success (
+                      zlink::message_t::from (std::move (payload->payload_bytes ()))));
+                }
+            });
+          if (!submitted)
+              completion->complete (result_t<zlink::message_t>::failure (
+                framework_error_kind_t::unavailable, "activation was not admitted"));
+          co_return co_await output;
+      });
+    auto instance_route = builder.route_client (serializers);
+    std::size_t ready_route_cold_activations = 0;
     const auto verify_ready_route_cases = [&] (const std::string &authority,
                                                const authority_snapshot_t &ready) {
         for (const auto &scenario : close_fixture.at ("readyRouteCases")) {
@@ -6012,7 +6106,20 @@ void verify_remote_user_spot_create_close_terminal_once ()
                     instance_dispatch_diagnostics.clear ();
                 }
                 std::size_t terminal_count = 0;
-                if (request.request) {
+                // Failover policy §4.4: the public Instance intent call still uses
+                // the Ready route its resolver cached before Close released authority.
+                const bool public_call =
+                  request.request && request.target.instance_intent && authority == "Missing";
+                std::optional<task_t<quest_probe_t>> public_reply;
+                if (public_call) {
+                    public_reply.emplace (
+                      instance_route
+                        .request_to_spot (spot_id_t (replay_instance_request.target.spot_id),
+                                          quest_probe_t{})
+                        .instance_spot ("quest")
+                        .timeout (5s)
+                        .async<quest_probe_t> ());
+                } else if (request.request) {
                     assert (source
                               ->activate_instance_spot_remote (
                                 target->status ().routing_id (), request, std::nullopt,
@@ -6037,8 +6144,9 @@ void verify_remote_user_spot_create_close_terminal_once ()
                               .value ());
                 }
                 deadline = std::chrono::steady_clock::now () + 5s;
-                while ((request.request ? !instance_reply_header
-                                        : dispatch_diagnostic_snapshot ().empty ())
+                while ((public_call       ? !public_reply->await_ready ()
+                        : request.request ? !instance_reply_header
+                                          : dispatch_diagnostic_snapshot ().empty ())
                        && std::chrono::steady_clock::now () < deadline) {
                     (void) target->dispatch_ready (dispatch);
                     (void) source->dispatch_ready (dispatch);
@@ -6072,7 +6180,17 @@ void verify_remote_user_spot_create_close_terminal_once ()
                     }
                     continue;
                 }
-                if (request.request) {
+                if (public_call) {
+                    // The cached route reached the owner, whose Ready owner fence
+                    // refused it before admission; the request then cold-activated.
+                    assert (public_reply->await_ready () && public_reply->result ());
+                    assert (expected.at ("messageTerminal") == "reply");
+                    assert (expected.at ("messageTerminalCount") == 1);
+                    const auto diagnostics = dispatch_diagnostic_snapshot ();
+                    assert (diagnostics.size () == 1);
+                    assert (diagnostics.front ().reason == dispatch_error_reason_t::stale_target);
+                    ++ready_route_cold_activations;
+                } else if (request.request) {
                     assert (instance_reply_header);
                     const auto kind = runtime::messaging::request_failure_mapper_t{}
                                         .reply_header_exception (
@@ -6094,9 +6212,12 @@ void verify_remote_user_spot_create_close_terminal_once ()
                     std::vector<std::string> expected_diagnostics;
                     for (const auto &expected_kind : expected.at ("diagnostics")) {
                         assert (expected_kind == "Unavailable");
+                        // The owner refuses a stale Ready owner fence before admission.
                         const auto wire =
                           runtime::messaging::request_failure_mapper_t{}.target_failure_reply (
-                            framework_error_kind_t::unavailable);
+                            framework_error_kind_t::unavailable,
+                            static_cast<std::uint32_t> (
+                              protocol::framework_error_code::spotMoving));
                         assert (wire);
                         expected_diagnostics.emplace_back (
                           runtime::messaging::request_failure_mapper_t{}
@@ -6315,6 +6436,14 @@ void verify_remote_user_spot_create_close_terminal_once ()
         .value ();
     const auto *released = std::get_if<authority_snapshot_t> (&released_read);
     assert (released);
+    // The source resolves the Ready route now; its route cache keeps it across the Close.
+    const auto cached_ready_route =
+      route_resolver.resolve_spot_address ({}, replay_instance_request.target.spot_id)
+        .result ()
+        .value ();
+    assert (cached_ready_route
+            && cached_ready_route->authority_owner_generation
+                 == released->authority_owner_generation);
 
     auto closing_instance_request = replay_instance_request;
     closing_instance_request.operation = {123, 458};
@@ -6353,10 +6482,13 @@ void verify_remote_user_spot_create_close_terminal_once ()
     close_during_instance_turn = false;
 
     verify_ready_route_cases ("Missing", *released);
-    assert (std::holds_alternative<authority_missing_t> (
-      store->read_authority (runtime::spot_authority_key (replay_instance_request.target.spot_id))
-        .result ()
-        .value ()));
+    // Only a cold activation through the public Instance call publishes a new authority.
+    assert (
+      std::holds_alternative<authority_missing_t> (
+        store->read_authority (runtime::spot_authority_key (replay_instance_request.target.spot_id))
+          .result ()
+          .value ())
+      == (ready_route_cold_activations == 0));
 
     // Inject the materializer results from missing activation, sealed admission,
     // and handler failure at the terminal owner's existing request/send route.
@@ -7099,7 +7231,8 @@ int main (int argc, char **argv)
     verify_bound_session_push_source_does_not_prejudge_current_binding ();
     verify_spot_id_contract ();
     verify_spot_route_fence_admission_precedes_body_decode ();
-    verify_public_host_route_cache_stops_at_owner_admission_deadline ();
+    verify_public_host_route_fence_reads_store_without_second_cache (false);
+    verify_public_host_route_fence_reads_store_without_second_cache (true);
     verify_entry_spot_identity_claim_is_global_and_fenced ();
     verify_user_spot_execution_mode_registration ();
     verify_self_actor_request_rejected_before_submission ();

@@ -1135,8 +1135,12 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         }
         else
             Assert.Equal("Ready", await host.AuthorityAsync(spotId));
-        var handlersBefore = host.State.HandlerCalls;
-        var factoriesBefore = host.State.InitializedGenerations.Count;
+        // A cold activation may land on either node; count both.
+        int Handlers() => host.State.HandlerCalls + source.State.HandlerCalls;
+        int Factories() =>
+            host.State.InitializedGenerations.Count + source.State.InitializedGenerations.Count;
+        var handlersBefore = Handlers();
+        var factoriesBefore = Factories();
         var placementCalls = 0;
         var target = new ZLinkResolvedSpotHandle(
             stale,
@@ -1152,7 +1156,22 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         string? terminal = null;
         SendDiagnosticObservation? sendDiagnostic = null;
         var terminalCount = 0;
-        if (given.GetProperty("messageKind").GetString() == "request")
+        if (
+            given.GetProperty("messageKind").GetString() == "request"
+            && instanceIntent
+            && given.GetProperty("authority").GetString() == "Missing"
+        )
+        {
+            // The source still caches the Ready route it resolved before Close
+            // released authority; the public Instance intent call uses it.
+            host.Store.ObserveMissingPlacementFor = spotId;
+            var reply = await source.RequestInstanceAsync(spotId, "stale");
+            Assert.Equal("stale", reply.Marker);
+            terminal = "reply";
+            terminalCount++;
+            placementCalls = host.Store.MissingPlacementCalls;
+        }
+        else if (given.GetProperty("messageKind").GetString() == "request")
         {
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
                 new ZLinkRouteSpotRequestCall<SpotCloseProbeRequest>(
@@ -1209,13 +1228,10 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                     Assert.Equal(field.Value.GetString(), sendDiagnostic!.Reason);
                     break;
                 case "handlerCalls":
-                    Assert.Equal(field.Value.GetInt32(), host.State.HandlerCalls - handlersBefore);
+                    Assert.Equal(field.Value.GetInt32(), Handlers() - handlersBefore);
                     break;
                 case "factoryCalls":
-                    Assert.Equal(
-                        field.Value.GetInt32(),
-                        host.State.InitializedGenerations.Count - factoriesBefore
-                    );
+                    Assert.Equal(field.Value.GetInt32(), Factories() - factoriesBefore);
                     break;
                 case "missingPlacementCalls":
                     Assert.Equal(field.Value.GetInt32(), placementCalls);
@@ -1275,6 +1291,64 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         host.State.ReleaseOnClosing.TrySetResult();
         Assert.True(await close.WaitAsync(Wait));
         Assert.Equal("Missing", await host.AuthorityAsync(spot.SpotId));
+    }
+
+    // Failover policy §4.4: once Close has released authority, the next
+    // Instance intent request cold-activates a new incarnation even when the
+    // caller still holds the Ready route it cached before the Close.
+    [Fact]
+    public async Task Instance_intent_request_on_a_route_cached_before_Close_cold_activates()
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"cached-close-{Guid.NewGuid():N}";
+        var first = await host.RequestInstanceAsync(spotId);
+        await using var source = await StartPeerAsync(host);
+        Assert.NotNull(await source.Runtime.ResolveSpotHandleAsync(spotId, CancellationToken.None));
+        host.State.HandlerMode = "closeAndReturn";
+        await host.RequestInstanceAsync(spotId, "close");
+        Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
+        Assert.Equal("Missing", await host.AuthorityAsync(spotId));
+        host.State.HandlerMode = null;
+
+        var reply = await source.RequestInstanceAsync(spotId, "after-close").WaitAsync(Wait);
+
+        Assert.Equal("after-close", reply.Marker);
+        Assert.NotEqual(first.Generation, reply.Generation);
+        Assert.Equal("Ready", await host.AuthorityAsync(spotId));
+    }
+
+    // Spot messaging §4 step 12 and §7 step 1: a Close the first handler
+    // requests is the next lifecycle item, so it starts only after the first
+    // terminal is durably recorded. Holding that record proves the order: the
+    // Close must not commit Closing while the record is held.
+    [Fact]
+    public async Task Cold_activation_records_its_first_terminal_before_a_handler_requested_close()
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"activation-close-{Guid.NewGuid():N}";
+        host.Store.HoldReplayCursorFor = spotId;
+        host.State.HandlerMode = "closeAndReturn";
+
+        var request = host.RequestInstanceAsync(spotId);
+        try
+        {
+            await host.Store.ReplayCursorHeld.Task.WaitAsync(Wait);
+            var closedWhileHeld = await Task.WhenAny(
+                host.State.OnClosingEntered.Task,
+                Task.Delay(TimeSpan.FromMilliseconds(500))
+            );
+            Assert.NotSame(host.State.OnClosingEntered.Task, closedWhileHeld);
+        }
+        finally
+        {
+            host.Store.ReleaseReplayCursor.TrySetResult();
+        }
+
+        var reply = await request.WaitAsync(Wait);
+        Assert.Equal("initial", reply.Marker);
+        var close = Assert.IsAssignableFrom<Task<bool>>(host.State.ContextCloseTask);
+        Assert.True(await close.WaitAsync(Wait));
+        Assert.Equal("Missing", await host.AuthorityAsync(spotId));
     }
 
     [Fact]
@@ -2203,6 +2277,14 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
     internal string? ObserveMissingPlacementFor { get; set; }
     internal string? ObserveAuthorityReleaseFor { get; set; }
     internal Action? OnAuthorityReleased { get; set; }
+
+    // Holds the cold-activation replay cursor write (spot messaging §4 step 12)
+    // for one Spot until the test releases it.
+    internal string? HoldReplayCursorFor { get; set; }
+    internal TaskCompletionSource ReplayCursorHeld { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal TaskCompletionSource ReleaseReplayCursor { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _missingPlacementCalls;
     internal int MissingPlacementCalls => Volatile.Read(ref _missingPlacementCalls);
 
@@ -2216,6 +2298,19 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
         CancellationToken cancellationToken = default
     )
     {
+        if (
+            HoldReplayCursorFor is { } heldSpot
+            && request.Mutations.Any(mutation =>
+                mutation is ZLinkStoreMutation.Put put
+                && put.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                && put.Key.Value.EndsWith("\0" + heldSpot, StringComparison.Ordinal)
+                && WritesCompletedReplayCursor(put.Bytes.Span)
+            )
+        )
+        {
+            ReplayCursorHeld.TrySetResult();
+            await ReleaseReplayCursor.Task.WaitAsync(cancellationToken);
+        }
         if (
             ObserveMissingPlacementFor is { } observedSpot
             && request.Conditions.Any(condition =>
@@ -2254,6 +2349,35 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
         )
             OnAuthorityReleased?.Invoke();
         return written;
+    }
+
+    // The provider authority record is JSON whose payload field is base64;
+    // any string field that decodes as an Instance authority payload is it.
+    private static bool WritesCompletedReplayCursor(ReadOnlySpan<byte> record)
+    {
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(record.ToArray());
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        using (document)
+            return document
+                .RootElement.EnumerateObject()
+                .Any(static property =>
+                    property.Value.ValueKind == JsonValueKind.String
+                    && property.Value.TryGetBytesFromBase64(out var bytes)
+                    && ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(bytes, out var payload)
+                    && payload
+                        is {
+                            State: ZLinkInstanceSpotAuthorityState.Ready,
+                            ActivationRecovery: { InboxSequence: > 0 } recovery,
+                        }
+                    && recovery.ReplayCursor == recovery.InboxSequence
+                );
     }
 
     public ValueTask<ZLinkStoreScanResult> ScanAsync(

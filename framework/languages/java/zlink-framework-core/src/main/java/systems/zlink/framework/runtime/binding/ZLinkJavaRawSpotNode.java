@@ -10,9 +10,6 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEvent;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEventKind;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleInfo;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
@@ -547,31 +544,6 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                         actorMembershipEpochs.getOrDefault(actor.actorId(), 0L),
                         0,
                         List.of()));
-    }
-
-    @Override
-    public CompletionStage<List<Message>> leaveActor(
-            ZLinkBackendActorRef actor, String currentSpotId, Duration timeout) {
-        ZLinkJavaRawSpot current = spots.get(currentSpotId);
-        if (current == null || !actors.containsKey(actor.actorId())) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("actor membership is stale"));
-        }
-        long nextEpoch = actorMembershipEpochs.getOrDefault(actor.actorId(), 1L);
-        nextEpoch = nextEpoch == Long.MAX_VALUE ? Long.MAX_VALUE : nextEpoch + 1;
-        actorSpots.put(actor.actorId(), entrySpot().spotId());
-        actorMembershipEpochs.put(actor.actorId(), nextEpoch);
-        ZLinkBackendActorLifecycleEvent left =
-                new ZLinkBackendActorLifecycleEvent(
-                        ZLinkBackendActorLifecycleEventKind.LEFT,
-                        new ZLinkBackendActorLifecycleInfo(
-                                actor,
-                                actor,
-                                Optional.of(currentSpotId),
-                                Optional.of(entrySpot().spotId()),
-                                nextEpoch,
-                                0));
-        return current.enqueueLifecycle(left).thenApply(ignored -> List.of());
     }
 
     @Override
@@ -2381,10 +2353,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                                     contentType,
                                     reply,
                                     failure)) {
+                                // The release ended after the admission read: this node no longer
+                                // holds the route's owner fence, so the message was never accepted.
                                 closeRemoteInstancePayload(parts);
                                 failure.accept(
-                                        new IllegalStateException(
-                                                "Instance Spot target rejected admission"));
+                                        systems.zlink.framework.runtime.messaging
+                                                .ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
+                                                "Spot owner fence has changed: "
+                                                        + header.route().targetSpotId()));
                             }
                         });
         return true;

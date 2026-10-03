@@ -42,6 +42,10 @@ task_scheduler_t capture_runtime_native_continuation_scheduler ();
 void ensure_blocking_submit_allowed ();
 std::stop_token current_wait_owner ();
 std::stop_token exchange_wait_owner (std::stop_token token);
+// True while this thread runs a Location Store chain for an infrastructure
+// wait. Its continuations stay off the handler executor (execution gate §13).
+bool current_infrastructure_wait () noexcept;
+bool exchange_infrastructure_wait (bool value) noexcept;
 
 struct runtime_execution_hooks_t
 {
@@ -185,6 +189,7 @@ struct ambient_context_snapshot_t
     std::shared_ptr<void> state;
     const void *application_job = nullptr;
     std::stop_token wait_owner;
+    bool infrastructure_wait = false;
 };
 
 // Extend the existing resume guard with the application job context. The
@@ -195,12 +200,13 @@ class ambient_context_scope_t
     ambient_context_scope_t (std::shared_ptr<void> state,
                              const void *application_job,
                              std::stop_token wait_owner = {},
-                             bool inherit_invocation = true) :
+                             bool inherit_invocation = true,
+                             bool infrastructure_wait = false) :
         _state (std::move (state)),
         _previous_application_job (application_job_context_t::current ()),
         _previous_wait_owner (exchange_wait_owner (
-          inherit_invocation && !wait_owner.stop_possible () ? current_wait_owner () : wait_owner))
-
+          inherit_invocation && !wait_owner.stop_possible () ? current_wait_owner () : wait_owner)),
+        _previous_infrastructure_wait (exchange_infrastructure_wait (infrastructure_wait))
     {
         // A callback captured outside a job may run inline inside a handler.
         // An absent captured context must not erase that physical invocation.
@@ -213,6 +219,7 @@ class ambient_context_scope_t
     {
         application_job_context_t::exchange (_previous_application_job);
         exchange_wait_owner (std::move (_previous_wait_owner));
+        exchange_infrastructure_wait (_previous_infrastructure_wait);
     }
 
     ambient_context_scope_t (const ambient_context_scope_t &) = delete;
@@ -222,13 +229,14 @@ class ambient_context_scope_t
     std::shared_ptr<void> _state;
     const void *_previous_application_job;
     std::stop_token _previous_wait_owner;
+    bool _previous_infrastructure_wait;
 };
 
 inline ambient_context_snapshot_t capture_ambient_context ()
 {
     const auto *hooks = current_ambient_context_hooks ();
     return {hooks != nullptr ? hooks->capture () : nullptr, application_job_context_t::current (),
-            current_wait_owner ()};
+            current_wait_owner (), current_infrastructure_wait ()};
 }
 
 inline ambient_context_scope_t enter_ambient_context (const ambient_context_snapshot_t &snapshot,
@@ -236,7 +244,8 @@ inline ambient_context_scope_t enter_ambient_context (const ambient_context_snap
 {
     const auto *hooks = current_ambient_context_hooks ();
     return {hooks != nullptr && snapshot.state ? hooks->enter (snapshot.state) : nullptr,
-            snapshot.application_job, snapshot.wait_owner, inherit_invocation};
+            snapshot.application_job, snapshot.wait_owner, inherit_invocation,
+            snapshot.infrastructure_wait};
 }
 
 // Native binding awaitables can ask the active Framework promise for this
@@ -250,7 +259,7 @@ inline task_scheduler_t capture_native_continuation_scheduler ()
     task_scheduler_t runtime_scheduler = capture_runtime_native_continuation_scheduler ();
     auto ambient = capture_ambient_context ();
     if (!turn_scheduler && !runtime_scheduler && !ambient.state && !ambient.application_job
-        && !ambient.wait_owner.stop_possible ())
+        && !ambient.wait_owner.stop_possible () && !ambient.infrastructure_wait)
         return [] (std::function<void ()> work) {
             if (work)
                 work ();
@@ -304,11 +313,17 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
         _turn (capture_current_serial_turn ()),
         _ambient (capture_ambient_context ())
     {
-        if (_turn && _turn->released ())
+        // After a Yield released the turn, the Spot queue places the
+        // continuation: its resume record, or its closed-queue failure path,
+        // delivers the result (handler turn and execution gate §3·§4). A
+        // second runtime hop would resume the handler outside that turn.
+        const bool turn_released = _turn && _turn->released ();
+        if (turn_released)
             _turn.reset ();
         if (_turn)
             _ambient.wait_owner = _turn->wait_cancellation ();
-        _scheduler = capture_runtime_native_continuation_scheduler ();
+        if (!turn_released)
+            _scheduler = capture_runtime_native_continuation_scheduler ();
         if (explicit_scheduler) {
             _scheduler = [explicit_scheduler = std::move (explicit_scheduler),
                           runtime = std::move (_scheduler)] (std::function<void ()> work) {

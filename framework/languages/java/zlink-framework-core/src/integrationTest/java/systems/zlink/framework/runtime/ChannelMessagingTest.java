@@ -147,6 +147,87 @@ final class ChannelMessagingTest {
     }
 
     @Test
+    void manualClientServer_replyCompletesWithoutWaitingForTheLivenessTick() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        var channel = options.addClientServerChannel("profile").server().listen();
+        options.addClientServerChannel("profile").client();
+        channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
+
+        try (ZLinkFrameworkRuntime runtime =
+                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+            var client = runtime.client();
+            assertEquals(
+                    "warmup",
+                    client.requestToChannel("profile", new EchoRequest("warmup"))
+                            .submit(String.class)
+                            .toCompletableFuture()
+                            .join());
+            int requests = 20;
+            long started = System.nanoTime();
+            for (int index = 0; index < requests; index++) {
+                assertEquals(
+                        "r" + index,
+                        client.requestToChannel("profile", new EchoRequest("r" + index))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .join());
+            }
+            long meanMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) / requests;
+            // The ClientServer liveness tick runs every 100 ms. A reply whose completion
+            // waits for that tick costs about 100 ms per request.
+            assertTrue(meanMillis < 20, "mean ClientServer round trip " + meanMillis + " ms");
+        }
+    }
+
+    @Test
+    void manualClientServer_closeDuringRequestEndsTheReceiveOwnerBeforeTheDealerCloses()
+            throws Exception {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        var channel = listenClientServer(options, "profile", "tcp://127.0.0.1:0");
+        channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
+        channel.addRequestHandler(HeldHandler.class, HeldRequest.class, String.class);
+
+        try (ZLinkFrameworkRuntime server =
+                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+            String endpoint =
+                    server.listenerStatus(ZLinkListenerKind.CLIENT_SERVER, "profile").endpoint();
+            for (int round = 0; round < 20; round++) {
+                HeldHandler.RECEIVED.set(new CountDownLatch(1));
+                DefaultZLinkFrameworkOptions clientOptions = new DefaultZLinkFrameworkOptions();
+                clientOptions.addClientServerChannel("profile").client().connect(endpoint);
+                ZLinkFrameworkRuntime client =
+                        RuntimeTestSupport.startFramework(
+                                clientOptions, new ZLinkJavaBackendAdapterFactory());
+                CompletableFuture<String> held;
+                try {
+                    assertEquals(
+                            "ready",
+                            client.client()
+                                    .requestToChannel("profile", new EchoRequest("ready"))
+                                    .submit(String.class)
+                                    .toCompletableFuture()
+                                    .join());
+                    held =
+                            client.client()
+                                    .requestToChannel("profile", new HeldRequest("held"))
+                                    .submit(String.class)
+                                    .toCompletableFuture();
+                    assertTrue(HeldHandler.RECEIVED.get().await(10, TimeUnit.SECONDS));
+                } finally {
+                    // The DEALER's receive owner is waiting on its poller with this request in
+                    // flight. Close must end that owner before the DEALER closes.
+                    CompletableFuture<Void> closed = CompletableFuture.runAsync(client::close);
+                    closed.get(10, TimeUnit.SECONDS);
+                }
+                assertThrows(
+                        java.util.concurrent.ExecutionException.class,
+                        () -> held.get(10, TimeUnit.SECONDS));
+                HeldHandler.release();
+            }
+        }
+    }
+
+    @Test
     void processLocalClientServer_requestReplySucceedsWithoutStoreOrManualClientEndpoint() {
         String endpoint = "inproc://zlink-java-local-profile-" + UUID.randomUUID();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
@@ -188,9 +269,11 @@ final class ChannelMessagingTest {
                                             .toCompletableFuture()
                                             .join());
 
+            // 00-foundation/06-framework-api.ko.md#no-eligible-select-one-member: weight 0
+            // removes the only member, so the call ends with Unavailable, not NotFound.
             assertTrue(failure.getCause() instanceof ZLinkFrameworkException);
             assertEquals(
-                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
                     ((ZLinkFrameworkException) failure.getCause()).kind());
         }
     }
@@ -1951,6 +2034,26 @@ final class ChannelMessagingTest {
         }
     }
 
+    public static final class HeldHandler implements ZLinkRequestHandler<HeldRequest, String> {
+        static final AtomicReference<CountDownLatch> RECEIVED =
+                new AtomicReference<>(new CountDownLatch(1));
+        private static final CopyOnWriteArrayList<CompletableFuture<String>> PENDING =
+                new CopyOnWriteArrayList<>();
+
+        @Override
+        public CompletionStage<String> handle(HeldRequest request, ZLinkMessageContext context) {
+            CompletableFuture<String> reply = new CompletableFuture<>();
+            PENDING.add(reply);
+            RECEIVED.get().countDown();
+            return reply;
+        }
+
+        static void release() {
+            PENDING.forEach(reply -> reply.complete("released"));
+            PENDING.clear();
+        }
+    }
+
     public static final class OutboundChannelSpot implements ZLinkSpot<ZLinkActor> {
         static final AtomicReference<ZLinkSpotContext> CONTEXT = new AtomicReference<>();
         static final AtomicReference<SpotHandleResolver> HANDLES = new AtomicReference<>();
@@ -2037,6 +2140,9 @@ final class ChannelMessagingTest {
 
     @ZLinkPacket("Echo")
     public record EchoRequest(String value) {}
+
+    @ZLinkPacket("Held")
+    public record HeldRequest(String value) {}
 
     @ZLinkPacket("ThrowReq")
     public record ThrowRequest(String value) {}

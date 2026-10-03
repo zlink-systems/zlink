@@ -915,8 +915,8 @@ final class ZLinkJavaRawMeshNode
         for (long staleIntentId : staleIntentIds) {
             if (!peerIntentIsClosed(staleIntentId)) {
                 requestPeerIntentClose(staleIntentId);
-                throw new IllegalStateException(
-                        "previous peer connection has not completed liveness close");
+                throw new systems.zlink.framework.runtime.internal.backend
+                        .ZLinkPeerIntentClosePendingException();
             }
         }
         // requestPeerIntentClose already terminated the shared endpoint. Do
@@ -6800,12 +6800,8 @@ final class ZLinkJavaRawMeshNode
                 admissionControlReadyConnections.remove(inbound.source());
                 boolean becameNotRequired = notRequiredPeers.add(inbound.source());
                 if (command == ServiceWireConstants.COMMAND_HELLO) {
-                    trySendAdmissionControl(
-                            inbound.source(),
-                            List.of(
-                                    wire.encodeAdmission(
-                                            ServiceWireConstants.COMMAND_ADMIT, localDescriptor)),
-                            "admit-response");
+                    sendLocalDescriptor(
+                            inbound.source(), ServiceWireConstants.COMMAND_ADMIT, "admit-response");
                 } else if (command == ServiceWireConstants.COMMAND_ADMIT) {
                     disconnectNotRequiredTransport(inbound.source());
                 }
@@ -6860,20 +6856,14 @@ final class ZLinkJavaRawMeshNode
                 // to the then-known peers. Re-publish the current descriptor
                 // at the terminal admission boundary so the new peer cannot
                 // retain that stale lifecycle state indefinitely.
-                trySendAdmissionControl(
+                sendLocalDescriptor(
                         inbound.source(),
-                        List.of(
-                                wire.encodeAdmission(
-                                        ServiceWireConstants.COMMAND_UPDATE, localDescriptor)),
+                        ServiceWireConstants.COMMAND_UPDATE,
                         "post-admit-descriptor-sync");
             }
             if (command == ServiceWireConstants.COMMAND_HELLO) {
-                trySendAdmissionControl(
-                        inbound.source(),
-                        List.of(
-                                wire.encodeAdmission(
-                                        ServiceWireConstants.COMMAND_ADMIT, localDescriptor)),
-                        "admit-response");
+                sendLocalDescriptor(
+                        inbound.source(), ServiceWireConstants.COMMAND_ADMIT, "admit-response");
             }
             if (previousPeer.isEmpty()
                     || !previousPeer.get().descriptor().equals(descriptor)
@@ -6888,6 +6878,20 @@ final class ZLinkJavaRawMeshNode
                                     ZLinkServiceM6AWireCodec.IDENTITY_MISMATCH_REJECT_REASON)),
                     "invalid-admission");
         }
+    }
+
+    /**
+     * Submits the current local descriptor in a descriptor lane turn. publishLocalDescriptor reads
+     * and submits a new revision in the same lane, so a route never receives a lower revision after
+     * a higher one (wire-protocol §4 DescriptorRevision ordering).
+     */
+    private void sendLocalDescriptor(RoutingId target, int command, String reason) {
+        inDescriptorStateLane(
+                () ->
+                        trySendAdmissionControl(
+                                target,
+                                List.of(wire.encodeAdmission(command, localDescriptor)),
+                                reason));
     }
 
     private boolean trySendAdmissionControl(RoutingId target, List<byte[]> frames, String reason) {

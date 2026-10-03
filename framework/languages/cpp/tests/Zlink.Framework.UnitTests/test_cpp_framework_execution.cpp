@@ -1229,7 +1229,11 @@ run_request_turn_probe (std::shared_ptr<zlink::framework::task_completion_source
     }
     zlink::framework::request_call_t<int> call (
       "TurnProbe", [reply] (const auto &, auto, const auto &) { return reply->task (); });
-    const auto value = release_turn ? co_await call.yield () : co_await call.async ();
+    int value = 0;
+    if (release_turn)
+        value = co_await call.yield ();
+    else
+        value = co_await call.async ();
     if (value != 7) {
         throw std::runtime_error ("turn probe reply mismatch");
     }
@@ -2879,6 +2883,56 @@ bool verify_released_spot_turn_does_not_inline_lifecycle_task ()
            && lifecycle_had_fresh_turn.load (std::memory_order_acquire)
            && lifecycle_allowed_yield.load (std::memory_order_acquire)
            && lifecycle_succeeded.load (std::memory_order_acquire);
+}
+
+zlink::framework::task_t<void> await_lifecycle_terminal (
+  std::shared_ptr<zlink::framework::task_completion_source_t<void>> terminal)
+{
+    co_await terminal->task ();
+}
+
+/* A lifecycle callback such as OnLeaveActor receives raw Spot and Actor
+ * references. The work object that owns them must live until the callback
+ * terminal, not only until its first suspension. */
+bool verify_spot_serial_task_async_retains_work_until_terminal ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    auto executor = std::make_shared<runtime::offload_executor_t> (1, "spot-serial-retain");
+    auto owner = std::make_shared<spot_context_state_t> ();
+    owner->serial_executor = executor;
+    owner->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    auto terminal = std::make_shared<task_completion_source_t<void>> ();
+    auto actor_instance = std::make_shared<int> (7);
+    const std::weak_ptr<int> weak_actor = actor_instance;
+    std::promise<void> entered;
+    std::promise<result_t<void>> settled;
+    owner->run_serial_task_async (
+      "retained-spot-lifecycle-leave",
+      [actor_instance = std::move (actor_instance), terminal, &entered] {
+          entered.set_value ();
+          return await_lifecycle_terminal (terminal);
+      },
+      [&settled] (result_t<void> value) { settled.set_value (std::move (value)); });
+    if (entered.get_future ().wait_for (std::chrono::seconds (5)) != std::future_status::ready)
+        return false;
+    auto settled_result = settled.get_future ();
+    const bool retained_while_suspended = !weak_actor.expired ();
+    terminal->complete (result_t<void>::success ());
+    if (settled_result.wait_for (std::chrono::seconds (5)) != std::future_status::ready)
+        return false;
+    const bool succeeded = static_cast<bool> (settled_result.get ());
+    owner->serial_queue->drain ();
+    const bool released_after_terminal = weak_actor.expired ();
+    if (!retained_while_suspended || !succeeded || !released_after_terminal)
+        std::cerr << "lifecycle work lifetime: retained=" << retained_while_suspended
+                  << " succeeded=" << succeeded << " released=" << released_after_terminal << '\n';
+    return retained_while_suspended && succeeded && released_after_terminal;
 }
 
 bool verify_spot_serial_task_async_shutdown_settlement ()
@@ -6457,20 +6511,20 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
         runtime::host::route_fence_t fence;
     };
     std::map<std::string, spot_route_fixture_t> spot_routes;
-    const auto resolve_spot_route =
-      [&spot_routes] (const zlink::routing_id_t &node, std::string_view spot_id,
-                      std::uint64_t generation) -> std::optional<runtime::host::route_fence_t> {
-        const auto found = spot_routes.find (std::string (spot_id));
+    const auto resolve_spot_route = [&spot_routes] (zlink::routing_id_t node, std::string spot_id,
+                                                    std::uint64_t generation)
+      -> zlink::framework::task_t<std::optional<runtime::host::route_fence_t>> {
+        const auto found = spot_routes.find (spot_id);
         if (found == spot_routes.end () || found->second.node != node
             || found->second.generation != generation) {
-            return std::nullopt;
+            co_return std::nullopt;
         }
-        return found->second.fence;
+        co_return found->second.fence;
     };
     source.bind_serializers (serializers);
     target.bind_serializers (serializers);
-    source.configure_spot_route_fence_resolver (resolve_spot_route, 0ms, 0ms);
-    target.configure_spot_route_fence_resolver (resolve_spot_route, 0ms, 0ms);
+    source.configure_spot_route_fence_resolver (resolve_spot_route, 0ms);
+    target.configure_spot_route_fence_resolver (resolve_spot_route, 0ms);
     source.configure_user_spot_operations (
       locations,
       [] (const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &) {
@@ -7588,6 +7642,9 @@ int main (int argc, char **argv)
     }
     if (!verify_spot_serial_task_async_shutdown_settlement ()) {
         return 93;
+    }
+    if (!verify_spot_serial_task_async_retains_work_until_terminal ()) {
+        return 96;
     }
     if (!verify_common_dispatch_limits ()) {
         return 55;

@@ -2,6 +2,7 @@ package systems.zlink.framework.spring;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -29,6 +30,7 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 
 import java.net.ServerSocket;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
@@ -176,16 +178,21 @@ final class ZLinkClientServerReadinessTest {
             assertTrue(runtime.clientServerRuntime().isReady("work"));
             var send = runtime.client().sendToChannel("work", new Probe("send"));
             var request = runtime.client().requestToChannel("work", new Probe("request"));
+            // 01-execution/01-submit-and-completion.ko.md:48: submit reports the failure by
+            // completing its stage exceptionally.
+            assertEquals(
+                    ZLinkFrameworkErrorKind.NOT_CONFIGURED, submitFailure(send.submit()).kind());
             assertEquals(
                     ZLinkFrameworkErrorKind.NOT_CONFIGURED,
-                    assertThrows(ZLinkConfigurationException.class, send::submit).kind());
-            assertEquals(
-                    ZLinkFrameworkErrorKind.NOT_CONFIGURED,
-                    assertThrows(
-                                    ZLinkConfigurationException.class,
-                                    () -> request.submit(Probe.class))
-                            .kind());
+                    submitFailure(request.submit(Probe.class)).kind());
         }
+    }
+
+    private static ZLinkConfigurationException submitFailure(CompletionStage<?> submitted) {
+        CompletionException failure =
+                assertThrows(
+                        CompletionException.class, () -> submitted.toCompletableFuture().join());
+        return assertInstanceOf(ZLinkConfigurationException.class, failure.getCause());
     }
 
     private static AnnotationConfigApplicationContext start(ZLinkFrameworkConfigurer configure) {

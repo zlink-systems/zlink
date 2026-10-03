@@ -16,8 +16,6 @@ internal sealed class WebSocketConnection(ClientWebSocket webSocket, int maxRece
     private byte[]? _pendingMessage;
     private int _pendingOffset;
 
-    public bool CanWriteSegments => false;
-
     public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
     {
         while (_pendingMessage is null)
