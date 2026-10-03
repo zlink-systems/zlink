@@ -57,27 +57,23 @@ TEST (ZLinkFrameworkLocationRuntime, RejectsLeaseRenewalWindowOverflow)
 class timed_renew_repository_t final : public in_memory_location_repository_t
 {
   public:
-    std::future<std::chrono::steady_clock::duration> renew_spacing ()
+    std::future<std::chrono::steady_clock::time_point> second_renew_called ()
     {
-        return _spacing.get_future ();
+        return _second_renew_called.get_future ();
     }
 
     zlink::framework::task_t<zlink::framework::owner_lease_renew_result_t>
     renew_owner_lease (zlink::framework::location_owner_token_t token,
                        std::chrono::milliseconds ttl) override
     {
-        const auto now = std::chrono::steady_clock::now ();
-        if (_calls++ == 0)
-            _first_started = now;
-        else if (_calls == 2)
-            _spacing.set_value (now - _first_started);
+        if (++_calls == 2)
+            _second_renew_called.set_value (std::chrono::steady_clock::now ());
         return in_memory_location_repository_t::renew_owner_lease (std::move (token), ttl);
     }
 
   private:
     int _calls = 0;
-    std::chrono::steady_clock::time_point _first_started;
-    std::promise<std::chrono::steady_clock::duration> _spacing;
+    std::promise<std::chrono::steady_clock::time_point> _second_renew_called;
 };
 
 TEST (ZLinkFrameworkLocationRuntime, CompletedHeartbeatWaitsUntilPreviousStartPlusInterval)
@@ -88,10 +84,16 @@ TEST (ZLinkFrameworkLocationRuntime, CompletedHeartbeatWaitsUntilPreviousStartPl
                                 location_options_t{.owner_lease_renew_interval = interval,
                                                    .owner_lease_renew_timeout = interval / 4},
                                 "owner-spacing");
-    auto spacing = store.renew_spacing ();
+    auto second_renew_called = store.second_renew_called ();
+    // The runtime starts a renewal before its state lane hands the request to the store, so a
+    // store call time is later than the runtime's start time by a scheduling delay that differs
+    // per renewal. Only a time taken before startup bounds the runtime's start times from below:
+    // the first heartbeat starts one interval after startup, and the second starts one interval
+    // after the first started.
+    const auto start_requested_at = std::chrono::steady_clock::now ();
     runtime.start (zlink::routing_id_t::from ("node-spacing"));
-    ASSERT_EQ (std::future_status::ready, spacing.wait_for (std::chrono::seconds (5)));
-    EXPECT_GE (spacing.get (), interval);
+    ASSERT_EQ (std::future_status::ready, second_renew_called.wait_for (std::chrono::seconds (5)));
+    EXPECT_GE (second_renew_called.get () - start_requested_at, 2 * interval);
     runtime.stop ();
 }
 
