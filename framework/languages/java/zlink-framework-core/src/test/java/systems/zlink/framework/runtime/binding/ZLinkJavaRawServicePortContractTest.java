@@ -28,6 +28,81 @@ import java.util.concurrent.TimeUnit;
 
 final class ZLinkJavaRawServicePortContractTest {
     @Test
+    void failedPollerCloseCanBeRetriedByItsOwner() throws Exception {
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        var failure =
+                new systems.zlink.contracts.errors.ZlinkCloseException(
+                        systems.zlink.contracts.errors.CloseResult.BUSY, 16);
+        try (var context = systems.zlink.contracts.core.Zlink.createContext();
+                var router = context.createRouterSocket()) {
+            var owner = new ZLinkJavaSocketReceivePoller(router);
+            var field = ZLinkJavaSocketReceivePoller.class.getDeclaredField("poller");
+            field.setAccessible(true);
+            ((systems.zlink.contracts.eventing.Poller) field.get(owner)).close();
+            field.set(
+                    owner,
+                    java.lang.reflect.Proxy.newProxyInstance(
+                            systems.zlink.contracts.eventing.Poller.class.getClassLoader(),
+                            new Class<?>[] {systems.zlink.contracts.eventing.Poller.class},
+                            (proxy, method, args) -> {
+                                assertEquals("close", method.getName());
+                                if (attempts.incrementAndGet() == 1) {
+                                    throw failure;
+                                }
+                                return null;
+                            }));
+            assertSame(failure, assertThrows(failure.getClass(), owner::close));
+            owner.close();
+            owner.close();
+            assertEquals(2, attempts.get());
+        }
+    }
+
+    @Test
+    void failedSocketCloseRetainsOwnershipUntilLaterCleanupSucceeds() throws Exception {
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        var failure =
+                new systems.zlink.contracts.errors.ZlinkCloseException(
+                        systems.zlink.contracts.errors.CloseResult.BUSY, 16);
+        RouterSocket router =
+                (RouterSocket)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                RouterSocket.class.getClassLoader(),
+                                new Class<?>[] {RouterSocket.class},
+                                (proxy, method, args) -> {
+                                    return switch (method.getName()) {
+                                        case "hashCode" -> System.identityHashCode(proxy);
+                                        case "equals" -> proxy == args[0];
+                                        case "setRoutingId" -> null;
+                                        case "close" -> {
+                                            if (attempts.incrementAndGet() == 1) {
+                                                throw failure;
+                                            }
+                                            yield null;
+                                        }
+                                        default -> throw new AssertionError(method.getName());
+                                    };
+                                });
+        var context =
+                (systems.zlink.contracts.core.Context)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                systems.zlink.contracts.core.Context.class.getClassLoader(),
+                                new Class<?>[] {systems.zlink.contracts.core.Context.class},
+                                (proxy, method, args) -> {
+                                    assertEquals("createRouterSocket", method.getName());
+                                    return router;
+                                });
+        try (var port = new ZLinkJavaRawServicePort(context)) {
+            port.openRouter(RoutingId.from("close-busy"));
+            assertSame(failure, assertThrows(failure.getClass(), port::close));
+            port.close();
+            assertEquals(2, attempts.get());
+            port.close();
+            assertEquals(2, attempts.get());
+        }
+    }
+
+    @Test
     void oneOrderedRegistryOwnsSocketsAndRejectsForeignSockets() throws Exception {
         try (ZLinkJavaRawServicePort owner = new ZLinkJavaRawServicePort();
                 ZLinkJavaRawServicePort foreign = new ZLinkJavaRawServicePort()) {

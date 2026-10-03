@@ -128,7 +128,7 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
         if (closed) {
             return;
         }
-        closed = true;
         poller.close();
+        closed = true;
     }
 }
