@@ -34,7 +34,6 @@ import systems.zlink.framework.spots.ZLinkSpotClosingContext;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -265,13 +264,6 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
         String spotId = "release-failure-" + suffix;
-        String sourceEndpoint;
-        String targetEndpoint;
-        try (ServerSocket sourcePort = new ServerSocket(0);
-                ServerSocket targetPort = new ServerSocket(0)) {
-            sourceEndpoint = "tcp://127.0.0.1:" + sourcePort.getLocalPort();
-            targetEndpoint = "tcp://127.0.0.1:" + targetPort.getLocalPort();
-        }
         var store =
                 new GatedDeleteStore(
                         new ZLinkInMemoryLocationStore(),
@@ -318,7 +310,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
         targetOptions
                 .addRouteMesh("game")
-                .listen(targetEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("release-failure-target-" + suffix))
                 .objects()
                 .server()
@@ -331,7 +323,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var sourceNode = sourceOptions.addRouteMesh("game");
         sourceNode
-                .listen(sourceEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("release-failure-source-" + suffix));
         sourceNode.objects().client();
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
@@ -573,6 +565,27 @@ final class InstanceSpotRuntimeIntegrationTest {
                                                         .READY);
     }
 
+    /** Waits until the target's route scan has dropped the Closing Instance authority. */
+    private static void awaitClosingRouteDropped(Object spots, String spotId) throws Exception {
+        var meshes = spots.getClass().getDeclaredField("routeMeshNodesByName");
+        meshes.setAccessible(true);
+        var mesh =
+                (systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode)
+                        ((java.util.Map<?, ?>) meshes.get(spots)).get("game");
+        Object spotNode = mesh.spotNode();
+        var authorities = spotNode.getClass().getDeclaredField("instanceAuthorities");
+        authorities.setAccessible(true);
+        var registered = (java.util.Map<?, ?>) authorities.get(spotNode);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (registered.containsKey(spotId)) {
+            if (System.nanoTime() > deadline) {
+                throw new java.util.concurrent.TimeoutException(
+                        "route scan kept the Closing Instance authority");
+            }
+            Thread.sleep(2);
+        }
+    }
+
     /** Waits until the Instance Spot owner queue holds an accepted message behind Close. */
     private static void awaitPendingMessage(Object spots, String spotId) throws Exception {
         var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
@@ -657,18 +670,12 @@ final class InstanceSpotRuntimeIntegrationTest {
         EchoInstanceSpot.closingEntered = new CompletableFuture<>();
         EchoInstanceSpot.closingRelease = new CompletableFuture<>();
         SourceEntrySpot.reset();
+        SourceEntrySpot.closeStart = new CompletableFuture<>();
         SourceEntrySpot.probeStart = new CompletableFuture<>();
         SourceEntrySpot.probeFailure = new CompletableFuture<>();
         SourceEntrySpot.afterCloseStart = new CompletableFuture<>();
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
         String spotId = "closing-verdict-" + suffix;
-        String targetEndpoint;
-        String sourceEndpoint;
-        try (ServerSocket targetPort = new ServerSocket(0);
-                ServerSocket sourcePort = new ServerSocket(0)) {
-            targetEndpoint = "tcp://127.0.0.1:" + targetPort.getLocalPort();
-            sourceEndpoint = "tcp://127.0.0.1:" + sourcePort.getLocalPort();
-        }
         var store = new ZLinkInMemoryLocationStore();
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
@@ -676,7 +683,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         targetOptions
                 .addRouteMesh("game")
-                .listen(targetEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("closing-verdict-target-" + suffix))
                 .objects()
                 .server()
@@ -690,7 +697,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var sourceNode = sourceOptions.addRouteMesh("game");
         sourceNode
-                .listen(sourceEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("closing-verdict-source-" + suffix));
         sourceNode.objects().client();
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
@@ -709,6 +716,17 @@ final class InstanceSpotRuntimeIntegrationTest {
                         "closing-verdict-source-" + suffix,
                         "closing-verdict-target-" + suffix);
                 SourceEntrySpot.start.complete(null);
+                SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
+                // Establish the scan-owned Ready projection before testing its Closing removal.
+                var routesField =
+                        ZLinkFrameworkRuntime.class.getDeclaredField("authorityRouteRuntime");
+                routesField.setAccessible(true);
+                ((systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime)
+                                routesField.get(target))
+                        .reconcile()
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+                SourceEntrySpot.closeStart.complete(null);
                 EchoInstanceSpot.closingEntered.get(5, TimeUnit.SECONDS);
                 if (drain) {
                     var field = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
@@ -717,6 +735,13 @@ final class InstanceSpotRuntimeIntegrationTest {
                             .beginDrain()
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
+                }
+                if (expectedKind == null) {
+                    // The target's background route scan drops the Closing authority before the
+                    // probe arrives, so the probe's admission cannot rely on that scan.
+                    var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
+                    spotsField.setAccessible(true);
+                    awaitClosingRouteDropped(spotsField.get(target), spotId);
                 }
                 SourceEntrySpot.probeStart.complete(null);
                 if (expectedKind == null) {
@@ -735,6 +760,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     assertEquals(expectedKind, ((ZLinkFrameworkException) failure).kind());
                 }
             } finally {
+                SourceEntrySpot.closeStart.complete(null);
                 EchoInstanceSpot.closingRelease.complete(null);
                 SourceEntrySpot.afterCloseStart.complete(null);
             }

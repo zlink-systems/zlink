@@ -1261,6 +1261,10 @@ export class DefaultZLinkSpotManager {
       if (context?.replay !== undefined) intentRecords.push(record);
     });
     const hasIntent = intentRecords.length > 0;
+    // Spot messaging §7 step 3: with no Instance intent message waiting, the
+    // release decision also ends this Instance incarnation's admission in this turn.
+    if (!hasIntent && operation.activation.domain.kind === 'instance')
+      operation.activation.serial.closeAdmission();
     const hostState = this.options.statefulExecution?.hostState();
     const intentFailure = !hasIntent
       ? undefined
@@ -1793,6 +1797,20 @@ export class DefaultZLinkSpotManager {
               zlinkMetadataByteLength(envelope.header.metadata)
           )
         };
+        // Spot messaging §7 step 3: an Instance intent request that reaches an
+        // incarnation whose Close ended admission is refused before admission
+        // with the owner fence terminal, so its caller re-reads authority.
+        const instanceIntent =
+          record.activationRecord?.activation === 'missing' ||
+          (record.activationRecord?.activation === 'ready' &&
+            record.activationRecord.instanceIntent);
+        const refusal = activation.serial.applicationAdmissionRefusal(instanceIntent === true);
+        if (request && refusal !== undefined && record.replyFailure !== undefined) {
+          this.reportInstanceDispatchFailure(meshName, spotId, record, envelope, request, refusal);
+          const terminal = internalFrameworkWireReply(refusal);
+          requireMeshSpotReply(record.replyFailure(terminal.terminalResult, terminal.failureCode));
+          return;
+        }
         this.traceInstanceMessage(
           ZLinkMessageFlowOutcome.Admitted,
           meshName,

@@ -54,6 +54,16 @@ public final class ZLinkJavaReadyRouteTestAccess {
             ZLinkServiceM6BWireCodec.InstanceRouteFence route,
             boolean intent,
             AtomicInteger terminalCount) {
+        return rejectReadyRequest(node, route, intent, List.of(), terminalCount);
+    }
+
+    /** Sends a Ready request with its encoded route parts; the result is its first terminal. */
+    public static CompletableFuture<Throwable> rejectReadyRequest(
+            ZLinkInternalMeshNode node,
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+            boolean intent,
+            List<Message> parts,
+            AtomicInteger terminalCount) {
         CompletableFuture<Throwable> terminal = new CompletableFuture<>();
         var header =
                 new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
@@ -75,11 +85,12 @@ public final class ZLinkJavaReadyRouteTestAccess {
                                 node.routingId(),
                                 header,
                                 new byte[0],
-                                List.of(),
+                                parts,
                                 null,
-                                parts -> {
+                                replyParts -> {
                                     terminalCount.incrementAndGet();
-                                    parts.forEach(systems.zlink.contracts.messaging.Message::close);
+                                    replyParts.forEach(
+                                            systems.zlink.contracts.messaging.Message::close);
                                     terminal.complete(
                                             new AssertionError(
                                                     "stale Ready ingress reached reply"));

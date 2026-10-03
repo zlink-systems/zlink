@@ -846,6 +846,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
                                                     "Spot owner fence has changed: " + spotId));
                                 }
+                                if (instanceIntent && authority.get().instance().isPresent()) {
+                                    //  The target takes the Instance route fence from the
+                                    //  authority it has just read, Ready or Closing, so the
+                                    //  admitted message does not depend on the background
+                                    //  route scan, which drops a Closing authority.
+                                    ZLinkInternalMeshNode routeNode =
+                                            routeMeshNodesByName.get(authority.get().meshName());
+                                    if (routeNode != null) {
+                                        routeNode.registerInstanceIntent(
+                                                authority.get().stableType(),
+                                                instanceRoute(authority.get(), snapshot));
+                                    }
+                                    return CompletableFuture.completedFuture(null);
+                                }
                                 if (authority.get().state()
                                         == systems.zlink.framework.runtime.locations
                                                 .ZLinkServiceAuthorityPayloadCodec.State.CLOSING) {
@@ -901,22 +915,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             ZLinkFrameworkErrorOrigin.framework(
                                                     ZLinkFrameworkErrorKind.NOT_FOUND,
                                                     "Spot is still creating: " + spotId));
-                                }
-                                if (activationPresent) {
-                                    return CompletableFuture.completedFuture(null);
-                                }
-                                if (instanceIntent && authority.get().instance().isPresent()) {
-                                    //  The target takes the Instance route fence from the
-                                    //  authority it has just read, so the admitted message
-                                    //  does not depend on the background route scan.
-                                    ZLinkInternalMeshNode routeNode =
-                                            routeMeshNodesByName.get(authority.get().meshName());
-                                    if (routeNode != null) {
-                                        routeNode.registerInstanceIntent(
-                                                authority.get().stableType(),
-                                                instanceRoute(authority.get(), snapshot));
-                                    }
-                                    return CompletableFuture.completedFuture(null);
                                 }
                                 return CompletableFuture.completedFuture(
                                         ZLinkFrameworkErrorOrigin.framework(
@@ -4925,10 +4923,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     @Override
     CompletionStage<Boolean> completeInstanceSpotClose(ZLinkInstanceSpotActivation activation) {
-        boolean hasIntent =
-                activation.context.ownerQueue().pendingMessages().stream()
-                        .map(ZLinkBackendReceived.class::cast)
-                        .anyMatch(received -> received.activationMessage().isPresent());
+        boolean hasIntent = activation.context.ownerQueue().retainsPendingOrSealClosingAdmission();
         if (!hasIntent || instanceCloseReleaseFailure() != null) {
             return releaseInstanceSpotAuthority(activation)
                     .thenApply(

@@ -72,18 +72,41 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     /**
+     * Close step 3 (spec 03-spot-actor/06-spot-address-messaging §7) under this queue's admission
+     * lock: a retained message already waiting behind the Close keeps retained admission open for
+     * the next incarnation; otherwise the Closing seal ends it in the same decision, so a retained
+     * message arriving later is refused before admission.
+     *
+     * @return whether a retained message waits behind the Close
+     */
+    public synchronized boolean retainsPendingOrSealClosingAdmission() {
+        LifecycleTransition transition = lifecycleTransitionLocked();
+        if (transition != null
+                && applicationPending.stream()
+                        .anyMatch(
+                                entry ->
+                                        entry.message != null
+                                                && transition.retains.test(entry.message))) {
+            return true;
+        }
+        sealClosingAdmission();
+        return false;
+    }
+
+    /**
      * The one admission decision of this queue (spec 03-spot-actor/06-spot-address-messaging §7): a
      * Closing seal rejects new work, a relocated owner reports the post-cut arrival, and otherwise
      * the queue accepts. A relocation seal is not a rejection; the caller holds the work.
      */
     private CompletionStage<Void> admissionFailureLocked() {
         LifecycleTransition transition = lifecycleTransitionLocked();
-        if (closingAdmissionSealed || (transition != null && transition.committed.getAsBoolean())) {
+        boolean closing = transition != null && transition.committed.getAsBoolean();
+        if (closingAdmissionSealed || closing) {
             return CompletableFuture.failedFuture(
                     ZLinkFrameworkErrorOrigin.framework(
-                            closingAdmissionSealed
-                                    ? ZLinkFrameworkErrorKind.REJECTED
-                                    : ZLinkFrameworkErrorKind.NOT_FOUND,
+                            closing
+                                    ? ZLinkFrameworkErrorKind.NOT_FOUND
+                                    : ZLinkFrameworkErrorKind.REJECTED,
                             "Spot incarnation is closing"));
         }
         return relocated ? CompletableFuture.failedFuture(new RelocatedOwnerException()) : null;
@@ -120,10 +143,18 @@ public final class ZLinkSerialExecutionQueue {
         synchronized (this) {
             Objects.requireNonNull(message, "message");
             LifecycleTransition transition = lifecycleTransitionLocked();
+            boolean retained = transition != null && transition.retains.test(message);
             if (transition != null
                     && transition.committed.getAsBoolean()
-                    && !transition.retains.test(message)) {
-                CompletionStage<Void> rejected = admissionFailureLocked();
+                    && (!retained || closingAdmissionSealed)) {
+                //  A retained message after the Closing seal has no next incarnation here: it
+                //  is refused before admission, as a released owner fence.
+                CompletionStage<Void> rejected =
+                        retained
+                                ? CompletableFuture.failedFuture(
+                                        ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
+                                                "Spot incarnation released its authority"))
+                                : admissionFailureLocked();
                 if (admission != null)
                     rejected.whenComplete(
                             (ignored, failure) -> admission.completeExceptionally(failure));

@@ -2326,7 +2326,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         var store =
             frameworkRegistration.Locations.ResolveStore()
             ?? throw new InvalidOperationException("Spot authority store is unavailable.");
-        var pendingIntent = activation.HasPendingCreationIntent;
+        var pendingIntent = activation.HasPendingCreationIntentOrSealAdmission();
         var drainOwner = runtime.DrainAdmission.DrainOwner;
         if (pendingIntent && drainOwner == ZLinkDrainOwner.None)
         {

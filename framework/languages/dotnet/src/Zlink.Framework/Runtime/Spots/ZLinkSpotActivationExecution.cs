@@ -741,14 +741,32 @@ internal abstract partial class ZLinkSpotActivation
                         acceptedJournalFactory,
                         false,
                         operationAdmission,
-                        _ =>
+                        admission =>
                         {
                             received.Dispose();
                             completion.TrySetException(
-                                new ZLinkFrameworkException(
-                                    ZLinkFrameworkErrorKind.ShuttingDown,
-                                    "The Instance Spot activation queue stopped before admission."
-                                )
+                                admission == ZLinkAcceptedWorkAdmission.Closing
+                                    // Close released this incarnation's authority: the
+                                    // owner fence refusal is made before admission.
+                                    ? new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.Unavailable,
+                                        "The Instance Spot incarnation released its authority."
+                                    )
+                                    {
+                                        FrameworkFailureCode = (int)
+                                            Systems
+                                                .Zlink
+                                                .Framework
+                                                .Runtime
+                                                .Protocol
+                                                .ServiceWireConstants
+                                                .FrameworkErrorCode
+                                                .SpotMoving,
+                                    }
+                                    : new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.ShuttingDown,
+                                        "The Instance Spot activation queue stopped before admission."
+                                    )
                             );
                         },
                         state.ReleaseForRelocation,
@@ -956,16 +974,20 @@ internal abstract partial class ZLinkSpotActivation
             );
     }
 
-    internal bool HasPendingCreationIntent
+    internal bool HasPendingCreationIntent =>
+        _serial.HasPendingAcceptedState(PendingCreationIntent());
+
+    // Spot messaging §7 step 3: the Reincarnate decision and the end of
+    // retained admission for this incarnation are one decision of its queue.
+    internal bool HasPendingCreationIntentOrSealAdmission() =>
+        _serial.HasPendingAcceptedStateOrCloseApplicationAdmission(PendingCreationIntent());
+
+    private static Func<object, bool> PendingCreationIntent()
     {
-        get
-        {
-            var now = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            return _serial.HasPendingAcceptedState(state =>
-                state is DurableActivationDispatch pending
-                && (pending.Operation is null || pending.Operation.Value.DeadlineUnixMs > now)
-            );
-        }
+        var now = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        return state =>
+            state is DurableActivationDispatch pending
+            && (pending.Operation is null || pending.Operation.Value.DeadlineUnixMs > now);
     }
 
     internal Task PendingApplicationCompletion => _serial.PendingApplicationCompletion;

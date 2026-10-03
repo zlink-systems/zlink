@@ -428,9 +428,9 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     CompletionStage<Void> closingStage(ZLinkSpotCloseReason reason, Instant deadline) {
-        return closingCallback(
+        return context.runClosing(
                 () ->
-                        context.runClosing(
+                        closingCallback(
                                 () ->
                                         spot.onClosing(
                                                 new ZLinkSpotClosingContext(reason, deadline))));
@@ -519,17 +519,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                     .completedFuture(null);
                                                         }),
                                                 ZLinkSpotCloseCoordinator.Step.onClosing(
-                                                        () ->
-                                                                closingCallback(
-                                                                        () ->
-                                                                                context.runClosing(
-                                                                                        () ->
-                                                                                                spot
-                                                                                                        .onClosing(
-                                                                                                                new ZLinkSpotClosingContext(
-                                                                                                                        reason,
-                                                                                                                        Instant
-                                                                                                                                .now()))))),
+                                                        () -> closingStage(reason, Instant.now())),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         () -> {
                                                             backendSpot.closeInstanceSpot();
