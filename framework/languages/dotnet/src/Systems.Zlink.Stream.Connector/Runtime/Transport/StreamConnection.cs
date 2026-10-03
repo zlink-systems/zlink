@@ -5,8 +5,6 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Transport;
 internal sealed class StreamConnection(TcpClient tcpClient, System.IO.Stream stream)
     : IZlinkStreamConnection
 {
-    public bool CanWriteSegments => true;
-
     public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
     {
         return await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
