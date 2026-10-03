@@ -2,6 +2,7 @@
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
@@ -136,6 +137,44 @@ int relay_dispatch_scope_restores_nested_and_exception_state ()
         }
     }
     return current_stream_relay_dispatch () ? 3 : 0;
+}
+
+// A session handler that relays after an await which resumed outside the
+// dispatch scope still sees the header of the frame it is handling.
+int relay_dispatch_header_follows_handler_await ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    runtime::install_host_context_hooks ();
+    auto pending = std::make_shared<task_completion_source_t<void>> ();
+    auto observed = std::make_shared<std::optional<std::string>> ();
+    auto handler = [] (std::shared_ptr<task_completion_source_t<void>> pending,
+                       std::shared_ptr<std::optional<std::string>> observed) -> task_t<void> {
+        co_await pending->task ();
+        if (const auto header = current_stream_relay_dispatch ())
+            *observed = std::string (header->packet_name ());
+        co_return;
+    };
+    task_t<void> running = [&] {
+        const stream_relay_dispatch_scope_t scope (
+          stream_header_t (stream_message_kind_t::request, stream_codec_t::json,
+                           stream_header_flags_t::none, std::nullopt, "dispatched"));
+        return handler (pending, observed);
+    }();
+    if (current_stream_relay_dispatch ())
+        return 1;
+    bool resumer_leaked = true;
+    std::thread resumer ([&] {
+        pending->complete (result_t<void>::success ());
+        resumer_leaked = current_stream_relay_dispatch ().has_value ();
+    });
+    resumer.join ();
+    if (!running.result ())
+        return 2;
+    if (*observed != std::optional<std::string> ("dispatched"))
+        return 3;
+    return resumer_leaked ? 4 : 0;
 }
 
 int actor_identity_validation_is_bounded_and_utf8_exact ()
@@ -6146,6 +6185,9 @@ int main (int argc, char **argv)
     if (const auto relay_scope = relay_dispatch_scope_restores_nested_and_exception_state ();
         relay_scope != 0) {
         return 110 + relay_scope;
+    }
+    if (const auto relay_await = relay_dispatch_header_follows_handler_await (); relay_await != 0) {
+        return 465 + relay_await;
     }
     if (const auto route_fence = bound_session_route_preserves_private_fences ();
         route_fence != 0) {
