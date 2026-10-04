@@ -6,6 +6,7 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 
 import java.time.Duration;
 import java.util.List;
@@ -89,13 +90,15 @@ final class ZLinkJavaDurableRequest {
                                 "durable request observer cleanup failed",
                                 cleanupFailure);
                     }
-                    if (request.completion.isCancelled())
+                });
+        ZLinkCompletionBridge.forwardCancellation(
+                request.completion,
+                () ->
                         request.post(
                                 () -> {
                                     if (request.pending != null)
                                         request.pending.toCompletableFuture().cancel(false);
-                                });
-                });
+                                }));
         return request.completion;
     }
 

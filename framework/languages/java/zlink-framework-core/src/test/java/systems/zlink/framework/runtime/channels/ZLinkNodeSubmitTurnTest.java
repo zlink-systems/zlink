@@ -241,7 +241,8 @@ final class ZLinkNodeSubmitTurnTest {
                                                     ? f.request().submit(String.class)
                                                     : f.send().submit());
                     awaitQueued(f.lane);
-                    assertFalse(submission.isDone(), "submit must wait for its first binding attempt");
+                    assertFalse(
+                            submission.isDone(), "submit must wait for its first binding attempt");
                     assertEquals(0, node.nodeCalls());
                     releaseTurn.countDown();
                     CompletionStage<?> completion = submission.get(5, TimeUnit.SECONDS);
@@ -278,7 +279,9 @@ final class ZLinkNodeSubmitTurnTest {
             assertSame(rejection, callbackFailure.get());
             assertSame(
                     rejection,
-                    assertThrows(CompletionException.class, () -> result.toCompletableFuture().join())
+                    assertThrows(
+                                    CompletionException.class,
+                                    () -> result.toCompletableFuture().join())
                             .getCause());
         }
     }

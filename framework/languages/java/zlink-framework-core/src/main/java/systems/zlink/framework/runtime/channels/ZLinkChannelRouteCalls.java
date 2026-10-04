@@ -8,6 +8,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -403,7 +404,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
         try {
             CompletionStage<ZLinkBackendReceived> operation =
                     runtime.requestRoute(operationId, router, target, requestParts, timeout);
-            ZLinkChannelCallRuntime.forwardRequestCancellation(result, operation);
+            ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {
                         requestParts.forEach(Message::close);
@@ -469,7 +470,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
             CompletionStage<ZLinkBackendReceived> operation =
                     runtime.requestNode(
                             operationId, node, target, metadata.encode(), requestParts, timeout);
-            ZLinkChannelCallRuntime.forwardRequestCancellation(result, operation);
+            ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {
                         if (failure != null) {
@@ -966,7 +967,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             }
             CompletionStage<ZLinkBackendReceived> operation =
                     runtime.requestClient(target, requestParts, remaining);
-            ZLinkChannelCallRuntime.forwardRequestCancellation(result, operation);
+            ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {
                         if (failure != null) {
@@ -1016,7 +1017,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             CompletionStage<ZLinkBackendReceived> operation =
                     runtime.requestChannel(
                             operationId, node, channelName, metadata.encode(), parts, timeout);
-            ZLinkChannelCallRuntime.forwardRequestCancellation(result, operation);
+            ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {
                         parts.forEach(Message::close);

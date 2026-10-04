@@ -361,10 +361,7 @@ final class ZLinkServiceOperationRegistryTest {
                     });
             CompletableFuture<String> caller =
                     registry.submit(
-                            UUID.randomUUID(),
-                            Duration.ofSeconds(1),
-                            () -> binding,
-                            ignored -> {});
+                            UUID.randomUUID(), Duration.ofSeconds(1), () -> binding, ignored -> {});
             assertTrue(caller.cancel(false));
             assertTrue(bindingCancelled.await(1, TimeUnit.SECONDS));
             registry.close();

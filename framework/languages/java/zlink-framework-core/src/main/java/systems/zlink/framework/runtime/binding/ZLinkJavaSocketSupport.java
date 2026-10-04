@@ -16,6 +16,7 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -78,11 +79,9 @@ final class ZLinkJavaSocketSupport {
         bindingReply.whenComplete(
                 (parts, failure) -> {
                     if (failure != null) result.completeExceptionally(failure);
-                    else
-                        ZLinkJavaRequestCompletion.completeOrDiscard(
-                                result, parts, Message::closeAll);
+                    else ZLinkCompletionBridge.completeOrDiscard(result, parts, Message::closeAll);
                 });
-        ZLinkJavaRequestCompletion.forwardCancellation(result, admitted, bindingReply);
+        ZLinkCompletionBridge.forwardCancellation(result, admitted, bindingReply);
         return result;
     }
 
@@ -152,7 +151,7 @@ final class ZLinkJavaSocketSupport {
                                             Optional.empty(),
                                             Optional.empty(),
                                             replyParts.stream().map(Message::from).toList());
-                            ZLinkJavaRequestCompletion.completeOrDiscard(
+                            ZLinkCompletionBridge.completeOrDiscard(
                                     result, received, ZLinkBackendReceived::close);
                         } catch (RuntimeException | Error error) {
                             result.completeExceptionally(error);
@@ -160,7 +159,7 @@ final class ZLinkJavaSocketSupport {
                             replyParts.forEach(Message::close);
                         }
                     });
-            ZLinkJavaRequestCompletion.forwardCancellation(result, bindingReply);
+            ZLinkCompletionBridge.forwardCancellation(result, bindingReply);
             return result;
         } catch (RuntimeException failure) {
             RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(failure, true);

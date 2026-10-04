@@ -6,6 +6,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -31,14 +32,6 @@ import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 final class ZLinkChannelCallRuntime {
-    static void forwardRequestCancellation(
-            CompletableFuture<?> caller, CompletionStage<?> operation) {
-        caller.whenComplete(
-                (ignored, failure) -> {
-                    if (caller.isCancelled()) operation.toCompletableFuture().cancel(false);
-                });
-    }
-
     @FunctionalInterface
     interface SpotSend {
         CompletionStage<Void> send(
@@ -221,12 +214,17 @@ final class ZLinkChannelCallRuntime {
             return request;
         }
         CompletableFuture<ZLinkBackendReceived> contextual = new CompletableFuture<>();
-        forwardRequestCancellation(contextual, request);
+        ZLinkCompletionBridge.forwardCancellation(contextual, request);
         request.whenComplete(
                 (reply, failure) -> {
                     try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(captured)) {
                         if (failure == null) {
-                            if (!contextual.complete(reply) && reply != null) reply.close();
+                            ZLinkCompletionBridge.completeOrDiscard(
+                                    contextual,
+                                    reply,
+                                    late -> {
+                                        if (late != null) late.close();
+                                    });
                         } else {
                             contextual.completeExceptionally(unwrap(failure));
                         }

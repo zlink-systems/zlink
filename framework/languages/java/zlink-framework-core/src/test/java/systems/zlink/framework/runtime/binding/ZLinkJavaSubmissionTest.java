@@ -212,7 +212,8 @@ final class ZLinkJavaSubmissionTest {
     @ParameterizedTest
     @EnumSource(Adapter.class)
     void cancellingPendingRequestCancelsBindingWaiterWithoutResubmission(Adapter adapter) {
-        try (var binding = new BindingProbe(); Message part = Message.from("request")) {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("request")) {
             binding.result = SubmitResult.BACKPRESSURED;
             var completion = requestForCancellation(binding, adapter, List.of(part));
             assertTrue(completion.cancel(false));
@@ -226,10 +227,12 @@ final class ZLinkJavaSubmissionTest {
     @ParameterizedTest
     @EnumSource(Adapter.class)
     void bindingReplyWinningBeforeCancellationKeepsItsResult(Adapter adapter) {
-        try (var binding = new BindingProbe(); Message part = Message.from("request")) {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("request")) {
             var completion = binding.request(adapter, List.of(part)).toCompletableFuture();
             binding.replies.getFirst().complete(List.of(Message.from("reply")));
-            assertArrayEquals("reply".getBytes(java.nio.charset.StandardCharsets.UTF_8), completion.join());
+            assertArrayEquals(
+                    "reply".getBytes(java.nio.charset.StandardCharsets.UTF_8), completion.join());
             assertFalse(completion.cancel(false));
             assertEquals(1, binding.submissions);
         }
@@ -246,7 +249,8 @@ final class ZLinkJavaSubmissionTest {
     @ParameterizedTest
     @EnumSource(Adapter.class)
     void lateBindingReplyAfterCallerCancellationClosesItsPayload(Adapter adapter) {
-        try (var binding = new BindingProbe(); Message part = Message.from("request")) {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("request")) {
             binding.result = SubmitResult.BACKPRESSURED;
             binding.ignoreReplyCancellation = true;
             var completion = requestForCancellation(binding, adapter, List.of(part));
@@ -316,7 +320,8 @@ final class ZLinkJavaSubmissionTest {
     @ParameterizedTest
     @EnumSource(Adapter.class)
     void requestWithoutCapacityWaitTokenFailsUnavailableWithoutQueuing(Adapter adapter) {
-        try (var binding = new BindingProbe(); Message part = Message.from("request")) {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("request")) {
             binding.requestFailure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
             var reply = binding.request(adapter, List.of(part)).toCompletableFuture();
             var failure =

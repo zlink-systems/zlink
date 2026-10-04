@@ -12,6 +12,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSocket;
@@ -378,13 +379,8 @@ final class ZLinkChannelSocketRegistry {
                                                                 result.completeExceptionally(
                                                                         failure);
                                                         });
-                                                result.whenComplete(
-                                                        (value, failure) -> {
-                                                            if (result.isCancelled())
-                                                                operation
-                                                                        .toCompletableFuture()
-                                                                        .cancel(false);
-                                                        });
+                                                ZLinkCompletionBridge.forwardCancellation(
+                                                        result, operation);
                                             }
                                             return null;
                                         })
@@ -413,10 +409,7 @@ final class ZLinkChannelSocketRegistry {
                 });
         long remaining = sendTimeout.toNanos() - (System.nanoTime() - started);
         admission.orTimeout(Math.max(0, remaining), TimeUnit.NANOSECONDS);
-        result.whenComplete(
-                (unused, failure) -> {
-                    if (result.isCancelled()) admission.cancel(false);
-                });
+        ZLinkCompletionBridge.forwardCancellation(result, admission);
         return result;
     }
 
@@ -513,7 +506,8 @@ final class ZLinkChannelSocketRegistry {
         try {
             // Callers hold no external gate that this turn reacquires; selection and first submit
             // run here. ZLinkStateLane publishes pending completion off-lane, so continuations
-            // cannot reenter its current turn. JVM submit must finish the first attempt before return.
+            // cannot reenter its current turn. JVM submit must finish the first attempt before
+            // return.
             return stateLane.runNowOrQueue(work::get).toCompletableFuture().join();
         } catch (RuntimeException | Error failure) {
             Throwable cause =

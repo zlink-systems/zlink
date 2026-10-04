@@ -14,6 +14,7 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterRoute;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
@@ -236,7 +237,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                 completion.completeExceptionally(failure);
                             } else {
                                 T decoded = decodeReply.apply(reply);
-                                ZLinkJavaRequestCompletion.completeOrDiscard(
+                                ZLinkCompletionBridge.completeOrDiscard(
                                         completion, decoded, discardReply);
                             }
                         } catch (RuntimeException | Error error) {
@@ -246,7 +247,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                             Message.closeAll(ownedMessages);
                         }
                     });
-            ZLinkJavaRequestCompletion.forwardCancellation(completion, bindingReply);
+            ZLinkCompletionBridge.forwardCancellation(completion, bindingReply);
             completionOwns = true;
             return completion;
         } catch (RuntimeException failure) {
