@@ -593,7 +593,6 @@ add_zlink_framework_codec_extension(
   extensions/framework-codec-messagepack)
 
 find_package(redis++ CONFIG QUIET)
-find_package(libuv CONFIG QUIET)
 
 # The Redis client (redis-plus-plus, hiredis, libuv) is private to this
 # library: its public header names no third-party type, so the shared package
@@ -614,45 +613,33 @@ target_include_directories(zlink_framework_locations_redis PUBLIC
 target_link_libraries(zlink_framework_locations_redis PUBLIC
   zlink::framework_provider_abstractions
   zlink::framework)
-if(TARGET redis++::redis++)
-  target_link_libraries(zlink_framework_locations_redis PRIVATE
-    redis++::redis++)
-  target_compile_definitions(zlink_framework_locations_redis PRIVATE
-    ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
-elseif(TARGET redis++::redis++_static)
-  target_link_libraries(zlink_framework_locations_redis PRIVATE
-    redis++::redis++_static)
-  target_compile_definitions(zlink_framework_locations_redis PRIVATE
-    ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
-endif()
-if(TARGET libuv::uv_a)
-  target_link_libraries(zlink_framework_locations_redis PRIVATE
-    libuv::uv_a)
-elseif(TARGET libuv::uv)
-  target_link_libraries(zlink_framework_locations_redis PRIVATE
-    libuv::uv)
-endif()
-
 set(ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES "")
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS OFF)
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV OFF)
+set(_zlink_framework_redis_target "")
 if(TARGET redis++::redis++)
-  set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS ON)
-  string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
-    "find_dependency(redis++ CONFIG)\n")
+  set(_zlink_framework_redis_target redis++::redis++)
 elseif(TARGET redis++::redis++_static)
-  set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS ON)
-  string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
-    "find_dependency(redis++ CONFIG)\n")
+  set(_zlink_framework_redis_target redis++::redis++_static)
 endif()
 
-if(TARGET libuv::uv_a)
+if(_zlink_framework_redis_target)
+  find_package(libuv CONFIG REQUIRED)
+  if(TARGET libuv::uv_a)
+    set(_zlink_framework_libuv_target libuv::uv_a)
+  elseif(TARGET libuv::uv)
+    set(_zlink_framework_libuv_target libuv::uv)
+  else()
+    message(FATAL_ERROR "The Redis async client requires libuv::uv_a or libuv::uv")
+  endif()
+  target_link_libraries(zlink_framework_locations_redis PRIVATE
+    ${_zlink_framework_redis_target} ${_zlink_framework_libuv_target})
+  target_compile_definitions(zlink_framework_locations_redis PRIVATE
+    ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
+  set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS ON)
   set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV ON)
   string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
-    "find_dependency(libuv CONFIG)\n")
-elseif(TARGET libuv::uv)
-  set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV ON)
-  string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
+    "find_dependency(redis++ CONFIG)\n"
     "find_dependency(libuv CONFIG)\n")
 endif()
 
