@@ -66,7 +66,8 @@ class role_t
     // The harness correlation table of a send/send role (§13); null on the other roles.
     std::unique_ptr<send_send_correlation_t> correlations;
     std::optional<objects_readiness_t> objects;
-    // Set by `runtime_binding_service_t` when the host starts; the public runtime interfaces of this process.
+    // Set by `runtime_binding_service_t`, the first hosted service, so scenario services always see them set; the admin HTTP
+    // status, which can answer before the host starts, checks for null. The public runtime interfaces of this process.
     std::atomic<fw::framework_runtime_t *> runtime{nullptr};
     std::atomic<fw::route_mesh_runtime_t *> mesh{nullptr};
     std::atomic<fw::client_server_runtime_t *> client_server{nullptr};
@@ -479,8 +480,10 @@ int run_role (std::unique_ptr<role_t> role_owner, TConfigure &&configure)
     auto &options = app.add_zlink_framework ();
     options.services ().add_singleton<role_t> (std::move (role_owner));
     configure_base (options, role);
-    configure (options, app);
+    // The host starts hosted services in registration order, so the runtime binding comes first: every scenario service
+    // reads the bound runtime interfaces.
     app.add_hosted_service (std::make_unique<runtime_binding_service_t> (role));
+    configure (options, app);
     char program[] = "perf";
     char *argv[] = {program, nullptr};
     return app.run (1, argv);
