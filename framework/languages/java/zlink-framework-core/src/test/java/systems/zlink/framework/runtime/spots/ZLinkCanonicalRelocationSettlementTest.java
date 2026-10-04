@@ -2,13 +2,17 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
@@ -16,10 +20,16 @@ import systems.zlink.framework.locations.ZLinkObjectCapability;
 import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
@@ -65,6 +75,95 @@ final class ZLinkCanonicalRelocationSettlementTest {
     private static final ZLinkStoreCancellation OPEN = () -> false;
     private static final byte[] R1 = {11, 1};
     private static final byte[] R2 = {22, 2, 2};
+
+    @Test
+    void shutdownAfterVerifiedCutoverWaitsForCasSettlement() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.endpoint.relayCompletion = new CompletableFuture<>();
+        fixture.stageAndRelay(R1);
+        var runtime = fixture.startTargetHost();
+        var publication =
+                fixture.source
+                        .publish(fixture.targetRid, fixture.request.fence(), Duration.ofSeconds(2))
+                        .toCompletableFuture();
+        assertEquals(1, fixture.endpoint.relayed().size());
+        assertEquals(0, fixture.commits.get(), "verification precedes the CAS");
+        var shutdown = runtime.shutdown(Duration.ofSeconds(1)).toCompletableFuture();
+        assertEquals(0, fixture.endpoint.aborted.get());
+        assertFalse(shutdown.isDone());
+        fixture.endpoint.relayCompletion.complete(null);
+        publication.get(3, TimeUnit.SECONDS);
+        assertEquals(
+                ZLinkFrameworkTerminationOutcome.STOPPED,
+                shutdown.get(3, TimeUnit.SECONDS).outcome());
+        assertEquals(1, fixture.commits.get());
+        assertEquals(1, fixture.endpoint.published.get());
+        assertEquals(0, fixture.endpoint.aborted.get());
+        assertEquals(fixture.targetOwner.ownerId(), fixture.authority().ownerId());
+    }
+
+    @Test
+    void shutdownAfterIndeterminateCasWaitsForAuthorityReconciliation() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.ambiguousCommit.set(true);
+        fixture.stageAndRelay(R1);
+        var runtime = fixture.startTargetHost();
+        var publication =
+                fixture.source
+                        .publish(fixture.targetRid, fixture.request.fence(), Duration.ofSeconds(2))
+                        .toCompletableFuture();
+        fixture.reconciliationEntered.get(3, TimeUnit.SECONDS);
+        assertEquals(1, fixture.commits.get());
+        assertEquals(
+                fixture.targetOwner.ownerId(),
+                fixture.authority().ownerId(),
+                "the CAS succeeded but its response was lost");
+        var shutdown = runtime.shutdown(Duration.ofSeconds(1)).toCompletableFuture();
+        assertEquals(0, fixture.endpoint.aborted.get());
+        assertFalse(shutdown.isDone());
+        fixture.reconciliationRelease.complete(null);
+        publication.get(3, TimeUnit.SECONDS);
+        assertEquals(
+                ZLinkFrameworkTerminationOutcome.STOPPED,
+                shutdown.get(3, TimeUnit.SECONDS).outcome());
+        assertEquals(1, fixture.endpoint.published.get());
+        assertEquals(0, fixture.endpoint.aborted.get());
+    }
+
+    @Test
+    void shutdownTerminatesAcceptedTargetBeforeCutover() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.dropCutover.set(true);
+        fixture.stageAndRelay(R1);
+        assertThrows(CompletionException.class, fixture::publish);
+        var terminal = fixture.target.awaitAcceptedTargetRelocations().toCompletableFuture();
+        var runtime = fixture.startTargetHost();
+        try {
+            var result =
+                    runtime.shutdown(Duration.ofSeconds(1))
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            assertTrue(
+                    terminal.isDone(),
+                    "shutdown left the accepted target attempt nonterminal: " + result);
+            assertEquals(ZLinkFrameworkTerminationOutcome.STOPPED, result.outcome());
+            assertEquals(1, fixture.endpoint.aborted.get());
+            fixture.target
+                    .apply(
+                            fixture.sourceRid,
+                            ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
+                            fixture.cutover.get())
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            assertEquals(0, fixture.commits.get(), "seal prevents a late CUTOVER CAS");
+            assertEquals(0, fixture.endpoint.published.get());
+            assertEquals(fixture.sourceOwner.ownerId(), fixture.authority().ownerId());
+        } finally {
+            fixture.locations.releaseOwnerLease(fixture.targetOwner).toCompletableFuture().join();
+            fixture.cutoverWarning.get().run();
+            terminal.get(3, TimeUnit.SECONDS);
+        }
+    }
 
     @Test
     void cutoverWaitIsAWarningOnlyAndNeverStartsTheTargetCas() throws Exception {
@@ -204,6 +303,10 @@ final class ZLinkCanonicalRelocationSettlementTest {
         final ZLinkCanonicalRelocationStateMachine source;
         final ZLinkCanonicalRelocationStateMachine target;
 
+        final AtomicBoolean ambiguousCommit = new AtomicBoolean();
+        final CompletableFuture<Void> reconciliationEntered = new CompletableFuture<>();
+        final CompletableFuture<Void> reconciliationRelease = new CompletableFuture<>();
+
         Fixture() {
             String actorId = "actor-settlement";
             authorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
@@ -272,6 +375,27 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                     (proxy, method, args) -> {
                                         if (method.getName().equals("commitAggregate")) {
                                             commits.incrementAndGet();
+                                            if (ambiguousCommit.get()) {
+                                                return ((CompletionStage<?>)
+                                                                method.invoke(locations, args))
+                                                        .thenCompose(
+                                                                ignored ->
+                                                                        CompletableFuture
+                                                                                .failedFuture(
+                                                                                        new IllegalStateException(
+                                                                                                "CAS response lost")));
+                                            }
+                                        }
+                                        if (method.getName().equals("readAggregateProgress")
+                                                && ambiguousCommit.get()
+                                                && commits.get() != 0) {
+                                            reconciliationEntered.complete(null);
+                                            return reconciliationRelease.thenCompose(
+                                                    ignored ->
+                                                            locations.readAggregateProgress(
+                                                                    (ZLinkAggregateFence) args[0],
+                                                                    (ZLinkStoreCancellation)
+                                                                            args[1]));
                                         }
                                         try {
                                             return method.invoke(locations, args);
@@ -364,6 +488,30 @@ final class ZLinkCanonicalRelocationSettlementTest {
 
         void stage() {
             source.stage(targetRid, request, Duration.ofSeconds(2)).toCompletableFuture().join();
+        }
+
+        ZLinkFrameworkRuntime startTargetHost() throws Exception {
+            var options = new DefaultZLinkFrameworkOptions();
+            options.addLocationStore(new ZLinkInMemoryLocationStore());
+            options.addRelocationStore(new InMemoryRelocationStore());
+            var mesh =
+                    options.addRouteMesh("shutdown-target")
+                            .listen("inproc://shutdown-target-" + UUID.randomUUID());
+            mesh.channelName("shutdown-target").server();
+            mesh.objects().server();
+            var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            runtime.setMessageFlowModeAsync(ZLinkMessageFlowLogMode.NORMAL).join();
+            var bridgeField = runtime.getClass().getDeclaredField("spotRetire");
+            bridgeField.setAccessible(true);
+            Object bridge = bridgeField.get(runtime);
+            assertNotNull(bridge);
+            var machinesField = bridge.getClass().getDeclaredField("stateMachines");
+            machinesField.setAccessible(true);
+            machinesField.set(bridge, List.of(target));
+            return runtime;
         }
 
         void relay(byte[]... records) {
@@ -517,6 +665,7 @@ final class ZLinkCanonicalRelocationSettlementTest {
         final AtomicInteger published = new AtomicInteger();
         final CompletableFuture<Void> abortedEvent = new CompletableFuture<>();
         final CompletableFuture<Void> publishedEvent = new CompletableFuture<>();
+        CompletableFuture<Void> relayCompletion = CompletableFuture.completedFuture(null);
         private final List<byte[]> relayed = new CopyOnWriteArrayList<>();
 
         List<byte[]> relayed() {
@@ -532,7 +681,7 @@ final class ZLinkCanonicalRelocationSettlementTest {
         public CompletionStage<Void> stageRelayedRecord(
                 ZLinkSpotRetireControl.StageRequest request, byte[] frozenRecord) {
             relayed.add(frozenRecord.clone());
-            return CompletableFuture.completedFuture(null);
+            return relayCompletion;
         }
 
         @Override

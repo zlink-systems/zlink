@@ -542,12 +542,18 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 () -> {
                     if (reentered.compareAndSet(false, true)) {
                         try {
-                            invokeCanonicalPublication(
-                                    fixture.target,
-                                    "publishTarget",
-                                    targetFence(fixture.target),
-                                    targetAttempt(fixture.target, request.fence()),
-                                    List.of());
+                            fixture.target
+                                    .apply(
+                                            request.sourceNodeRid(),
+                                            ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
+                                            (byte[])
+                                                    attemptMember(
+                                                            targetAttempt(
+                                                                    fixture.target,
+                                                                    request.fence()),
+                                                            "receivedCutover"))
+                                    .toCompletableFuture()
+                                    .join();
                         } catch (Exception failure) {
                             throw new AssertionError(failure);
                         }
