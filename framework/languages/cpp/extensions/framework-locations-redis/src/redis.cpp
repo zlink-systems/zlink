@@ -6,6 +6,7 @@
 
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
 #include <sw/redis++/redis++.h>
+#include <sw/redis++/async_redis.h>
 #endif
 
 namespace zlink::framework::redis
@@ -35,14 +36,51 @@ namespace detail
 namespace
 {
 
-inline std::unique_ptr<sw::redis::Redis> make_redis (const std::string &connection_string,
-                                                     std::chrono::milliseconds operation_timeout)
+template <typename TClient = sw::redis::Redis>
+inline std::unique_ptr<TClient> make_redis (const std::string &connection_string,
+                                            std::chrono::milliseconds operation_timeout)
 {
     const sw::redis::Uri uri (normalize_connection_string (connection_string));
     auto options = uri.connection_options ();
     options.connect_timeout = operation_timeout;
     options.socket_timeout = operation_timeout;
-    return std::make_unique<sw::redis::Redis> (options, uri.connection_pool_options ());
+    return std::make_unique<TClient> (options, uri.connection_pool_options ());
+}
+
+template <typename T> result_t<T> redis_failure (const std::exception &error)
+{
+    const auto *framework_error = dynamic_cast<const framework_exception_t *> (&error);
+    return result_t<T>::failure (framework_error ? framework_error->kind ()
+                                                 : framework_error_kind_t::internal_failure,
+                                 error.what ());
+}
+
+template <typename T, typename TDecode>
+task_t<T> eval_location (sw::redis::AsyncRedis &redis,
+                         std::string_view script,
+                         const std::vector<std::string> &keys,
+                         const std::vector<std::string> &args,
+                         TDecode decode)
+{
+    auto completion = std::make_shared<task_completion_source_t<T>> ();
+    auto task = completion->task ();
+    try {
+        redis.eval<std::vector<std::string>> (
+          std::string (script), keys.begin (), keys.end (), args.begin (), args.end (),
+          [completion, decode = std::move (decode)] (
+            sw::redis::Future<std::vector<std::string>> result) mutable {
+              try {
+                  completion->complete (result_t<T>::success (decode (result.get ())));
+              }
+              catch (const std::exception &error) {
+                  completion->complete (redis_failure<T> (error));
+              }
+          });
+    }
+    catch (const std::exception &error) {
+        completion->complete (redis_failure<T> (error));
+    }
+    return task;
 }
 
 class redis_location_worker_t
@@ -80,12 +118,8 @@ class redis_location_worker_t
                         completion->complete (result_t<T>::success (func ()));
                     }
                 }
-                catch (const framework_exception_t &error) {
-                    completion->complete (result_t<T>::failure (error.kind (), error.what ()));
-                }
                 catch (const std::exception &error) {
-                    completion->complete (result_t<T>::failure (
-                      framework_error_kind_t::internal_failure, error.what ()));
+                    completion->complete (redis_failure<T> (error));
                 }
                 catch (...) {
                     completion->complete (result_t<T>::failure (
@@ -146,7 +180,8 @@ class location_store_backend_t final : public location_store_t
         if (_options.operation_timeout <= std::chrono::milliseconds::zero ())
             throw std::invalid_argument ("Redis location operation timeout must be positive");
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
-        _redis = detail::make_redis (_options.connection_string, _options.operation_timeout);
+        _redis = detail::make_redis<sw::redis::AsyncRedis> (_options.connection_string,
+                                                            _options.operation_timeout);
 #endif
     }
 
@@ -157,29 +192,28 @@ class location_store_backend_t final : public location_store_t
     {
         validate_key (key.value);
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
-        return _worker.submit<store_read_result_t> ([this, key = std::move (key)] {
-            auto &redis = *_redis;
-            const std::vector<std::string> keys{record_key (key.value)};
-            const std::vector<std::string> args{};
-            const auto result = redis.eval<std::vector<std::string>> (
-              std::string (read_script), keys.begin (), keys.end (), args.begin (), args.end ());
-            if (result.size () < 2)
-                throw sw::redis::Error ("invalid opaque location read result");
-            const auto now = from_unix_ms (std::stoll (result[1]));
-            if (result[0] == "missing")
-                return store_read_result_t{store_missing_t { now }};
-            if (result[0] != "found" || result.size () != 5)
-                throw sw::redis::Error ("unknown opaque location read result");
-            const auto expires_at_ms = std::stoll (result[4]);
-            return store_read_result_t{store_found_t {
-                store_value_t {
-                    string_to_bytes (result[2]),
-                    store_version_t{result[3]},
-                    expires_at_ms > 0 ? std::optional{from_unix_ms (expires_at_ms)} : std::nullopt,
-                    now
-                }
-            }};
-        });
+        const std::vector<std::string> keys{record_key (key.value)};
+        const std::vector<std::string> args{};
+        return detail::eval_location<store_read_result_t> (
+          *_redis, read_script, keys, args, [] (const std::vector<std::string> &result) {
+              if (result.size () < 2)
+                  throw sw::redis::Error ("invalid opaque location read result");
+              const auto now = from_unix_ms (std::stoll (result[1]));
+              if (result[0] == "missing")
+                  return store_read_result_t{store_missing_t { now }};
+              if (result[0] != "found" || result.size () != 5)
+                  throw sw::redis::Error ("unknown opaque location read result");
+              const auto expires_at_ms = std::stoll (result[4]);
+              return store_read_result_t{store_found_t {
+                  store_value_t {
+                      string_to_bytes (result[2]),
+                      store_version_t{result[3]},
+                      expires_at_ms > 0 ? std::optional{from_unix_ms (expires_at_ms)}
+                                        : std::nullopt,
+                      now
+                  }
+              }};
+          });
 #else
         (void) key;
         return unavailable<store_read_result_t> ();
@@ -190,90 +224,89 @@ class location_store_backend_t final : public location_store_t
     {
         validate_write (request);
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
-        return _worker.submit<store_write_result_t> ([this, request = std::move (request)] {
-            std::vector<std::string> logical_keys;
-            std::map<std::string, std::size_t> key_indexes;
-            const auto add_key = [&] (const std::string &key) {
-                if (key_indexes.contains (key))
-                    return;
-                key_indexes.emplace (key, logical_keys.size () + 1);
-                logical_keys.push_back (key);
-            };
-            for (const auto &condition : request.conditions)
-                std::visit ([&] (const auto &value) { add_key (value.key.value); }, condition);
-            for (const auto &mutation : request.mutations)
-                std::visit ([&] (const auto &value) { add_key (value.key.value); }, mutation);
 
-            std::vector<std::string> keys;
-            keys.reserve (logical_keys.size () + 3);
-            for (const auto &key : logical_keys)
-                keys.push_back (record_key (key));
-            keys.push_back (index_key ());
-            keys.push_back (map_key ());
-            keys.push_back (sequence_key ());
+        std::vector<std::string> logical_keys;
+        std::map<std::string, std::size_t> key_indexes;
+        const auto add_key = [&] (const std::string &key) {
+            if (key_indexes.contains (key))
+                return;
+            key_indexes.emplace (key, logical_keys.size () + 1);
+            logical_keys.push_back (key);
+        };
+        for (const auto &condition : request.conditions)
+            std::visit ([&] (const auto &value) { add_key (value.key.value); }, condition);
+        for (const auto &mutation : request.mutations)
+            std::visit ([&] (const auto &value) { add_key (value.key.value); }, mutation);
 
-            std::vector<std::string> args;
-            args.push_back (std::to_string (request.conditions.size ()));
-            for (const auto &condition : request.conditions) {
-                const auto &key = std::visit (
-                  [] (const auto &value) -> const store_key_t & { return value.key; }, condition);
-                args.push_back (std::to_string (key_indexes.at (key.value)));
-                if (const auto *version = std::get_if<store_version_condition_t> (&condition)) {
-                    args.push_back ("version");
-                    args.push_back (version->expected.value);
-                } else if (const auto *value = std::get_if<store_value_condition_t> (&condition)) {
-                    args.push_back ("value");
-                    args.push_back (bytes_to_string (value->expected));
-                } else {
-                    args.push_back ("missing");
-                    args.push_back ({});
-                }
-            }
-            args.push_back (std::to_string (request.mutations.size ()));
-            for (const auto &mutation : request.mutations) {
-                std::visit (
-                  [&] (const auto &value) {
-                      args.push_back (std::to_string (key_indexes.at (value.key.value)));
-                      using value_t = std::decay_t<decltype (value)>;
-                      args.push_back (value.key.value);
-                      if constexpr (std::is_same_v<value_t, store_put_t>) {
-                          args.push_back ("put");
-                          args.push_back (bytes_to_string (value.bytes));
-                          args.push_back (value.retention
-                                            ? std::to_string (value.retention->count ())
-                                            : std::string{"-1"});
-                      } else {
-                          args.push_back ("delete");
-                          args.push_back ({});
-                          args.push_back ({"-1"});
-                      }
-                  },
-                  mutation);
-            }
+        std::vector<std::string> keys;
+        keys.reserve (logical_keys.size () + 3);
+        for (const auto &key : logical_keys)
+            keys.push_back (record_key (key));
+        keys.push_back (index_key ());
+        keys.push_back (map_key ());
+        keys.push_back (sequence_key ());
 
-            auto &redis = *_redis;
-            const auto result = redis.eval<std::vector<std::string>> (
-              std::string (write_script), keys.begin (), keys.end (), args.begin (), args.end ());
-            if (result.size () < 2)
-                throw sw::redis::Error ("invalid opaque location write result");
-            const auto now = from_unix_ms (std::stoll (result[1]));
-            if (result[0] == "conflict")
-                return store_write_result_t{store_write_conflict_t { now }};
-            if (result[0] != "applied" || (result.size () - 2) % 2 != 0)
-                throw sw::redis::Error ("unknown opaque location write result");
-            store_write_applied_t applied;
-            applied.store_now = now;
-            for (std::size_t index = 2; index < result.size (); index += 2) {
-                const auto logical_index = static_cast<std::size_t> (std::stoull (result[index]));
-                if (logical_index == 0 || logical_index > logical_keys.size ())
-                    throw sw::redis::Error ("invalid opaque location key index");
-                applied.put_versions.push_back (
-                  {{logical_keys[logical_index - 1]}, store_version_t {
-                       result[index + 1]
-                   }});
+        std::vector<std::string> args;
+        args.push_back (std::to_string (request.conditions.size ()));
+        for (const auto &condition : request.conditions) {
+            const auto &key = std::visit (
+              [] (const auto &value) -> const store_key_t & { return value.key; }, condition);
+            args.push_back (std::to_string (key_indexes.at (key.value)));
+            if (const auto *version = std::get_if<store_version_condition_t> (&condition)) {
+                args.push_back ("version");
+                args.push_back (version->expected.value);
+            } else if (const auto *value = std::get_if<store_value_condition_t> (&condition)) {
+                args.push_back ("value");
+                args.push_back (bytes_to_string (value->expected));
+            } else {
+                args.push_back ("missing");
+                args.push_back ({});
             }
-            return store_write_result_t{std::move (applied)};
-        });
+        }
+        args.push_back (std::to_string (request.mutations.size ()));
+        for (const auto &mutation : request.mutations) {
+            std::visit (
+              [&] (const auto &value) {
+                  args.push_back (std::to_string (key_indexes.at (value.key.value)));
+                  using value_t = std::decay_t<decltype (value)>;
+                  args.push_back (value.key.value);
+                  if constexpr (std::is_same_v<value_t, store_put_t>) {
+                      args.push_back ("put");
+                      args.push_back (bytes_to_string (value.bytes));
+                      args.push_back (value.retention ? std::to_string (value.retention->count ())
+                                                      : std::string{"-1"});
+                  } else {
+                      args.push_back ("delete");
+                      args.push_back ({});
+                      args.push_back ({"-1"});
+                  }
+              },
+              mutation);
+        }
+
+        return detail::eval_location<store_write_result_t> (
+          *_redis, write_script, keys, args,
+          [logical_keys = std::move (logical_keys)] (const std::vector<std::string> &result) {
+              if (result.size () < 2)
+                  throw sw::redis::Error ("invalid opaque location write result");
+              const auto now = from_unix_ms (std::stoll (result[1]));
+              if (result[0] == "conflict")
+                  return store_write_result_t{store_write_conflict_t { now }};
+              if (result[0] != "applied" || (result.size () - 2) % 2 != 0)
+                  throw sw::redis::Error ("unknown opaque location write result");
+              store_write_applied_t applied;
+              applied.store_now = now;
+              for (std::size_t index = 2; index < result.size (); index += 2) {
+                  const auto logical_index = static_cast<std::size_t> (std::stoull (result[index]));
+                  if (logical_index == 0 || logical_index > logical_keys.size ())
+                      throw sw::redis::Error ("invalid opaque location key index");
+                  applied.put_versions.push_back (
+                    {{logical_keys[logical_index - 1]}, store_version_t {
+                         result[index + 1]
+                     }});
+              }
+              return store_write_result_t{std::move (applied)};
+          });
 #else
         (void) request;
         return unavailable<store_write_result_t> ();
@@ -330,9 +363,11 @@ class location_store_backend_t final : public location_store_t
                 // This worker alone owns the snapshot map.
                 const std::vector<std::string> scan_keys{index_key (), map_key ()};
                 const std::vector<std::string> scan_args{request.prefix};
-                const auto scanned = redis.eval<std::vector<std::string>> (
-                  std::string (scan_script), scan_keys.begin (), scan_keys.end (),
-                  scan_args.begin (), scan_args.end ());
+                const auto scanned = redis
+                                       .eval<std::vector<std::string>> (
+                                         std::string (scan_script), scan_keys.begin (),
+                                         scan_keys.end (), scan_args.begin (), scan_args.end ())
+                                       .get ();
                 if (scanned.size () % 2 != 0)
                     throw sw::redis::Error ("invalid opaque location scan result");
                 for (std::size_t index = 0; index + 1 < scanned.size (); index += 2) {
@@ -645,7 +680,7 @@ return result
     std::uint64_t _scan_epoch = detail::next_scan_epoch ();
     std::uint64_t _next_snapshot = 0;
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
-    std::unique_ptr<sw::redis::Redis> _redis;
+    std::unique_ptr<sw::redis::AsyncRedis> _redis;
     detail::redis_location_worker_t _worker;
 #endif
 };
