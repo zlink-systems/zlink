@@ -287,7 +287,6 @@ class location_store_backend_t final : public location_store_t
             throw std::invalid_argument ("location scan limit must be 1..1000");
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
         return _worker.submit<store_scan_result_t> ([this, request = std::move (request)] {
-            std::lock_guard lock (_scan_gate);
             const auto now = std::chrono::system_clock::now ();
             const auto steady_now = std::chrono::steady_clock::now ();
             for (auto item = _scan_snapshots.begin (); item != _scan_snapshots.end ();) {
@@ -326,18 +325,9 @@ class location_store_backend_t final : public location_store_t
                 auto &snapshot = _scan_snapshots[snapshot_id];
                 snapshot.expires_at = steady_now + scan_snapshot_retention;
                 auto &redis = *_redis;
-                // The physical opaque key is sha256(logical key), so it
-                // carries no prefix relationship to the logical key
-                // (22-location-store-redis.md#7's clean-break scheme).
-                // The index ZSET below is this provider's private
-                // secondary index -- it exists purely to answer prefix
-                // scans and is not part of the cross-language contract.
-                // One round trip, not one per key. Walking the index in C++
-                // cost an HGET plus a ZREVRANGE per matching key, so a snapshot
-                // paid 2N sequential round trips on this provider's single
-                // worker thread and every other location-store caller queued
-                // behind it. That is invisible where a round trip is ~0.3 ms
-                // and dominant where it is not.
+                // Hashed record keys have a separate logical-key index.
+                // The lexicographic query fixes one snapshot in one Redis round trip.
+                // This worker alone owns the snapshot map.
                 const std::vector<std::string> scan_keys{index_key (), map_key ()};
                 const std::vector<std::string> scan_args{request.prefix};
                 const auto scanned = redis.eval<std::vector<std::string>> (
@@ -364,10 +354,6 @@ class location_store_backend_t final : public location_store_t
                            : std::nullopt,
                          now }});
                 }
-                std::sort (snapshot.items.begin (), snapshot.items.end (),
-                           [] (const auto &left, const auto &right) {
-                               return left.key.value < right.key.value;
-                           });
             }
 
             const auto snapshot = _scan_snapshots.find (snapshot_id);
@@ -410,20 +396,19 @@ class location_store_backend_t final : public location_store_t
     // and expiry filtering stay in the caller, which already owns the opaque
     // value format.
     static constexpr std::string_view scan_script = R"(
-local originals = redis.call('ZRANGE', KEYS[1], 0, -1)
-local prefixLength = string.len(ARGV[1])
+-- Valid UTF-8 suffixes sort below 0xff, including an empty suffix.
+local utf8PrefixUpperBoundByte = 255
+local originals = redis.call('ZRANGEBYLEX', KEYS[1],
+  '[' .. ARGV[1], '[' .. ARGV[1] .. string.char(utf8PrefixUpperBoundByte))
 local out = {}
 for index = 1, #originals do
   local originalKey = originals[index]
-  if prefixLength == 0
-    or string.sub(originalKey, 1, prefixLength) == ARGV[1] then
-    local mapped = redis.call('HGET', KEYS[2], originalKey)
-    if mapped then
-      local members = redis.call('ZREVRANGE', mapped, 0, 0)
-      if #members > 0 then
-        out[#out + 1] = originalKey
-        out[#out + 1] = members[1]
-      end
+  local mapped = redis.call('HGET', KEYS[2], originalKey)
+  if mapped then
+    local members = redis.call('ZREVRANGE', mapped, 0, 0)
+    if #members > 0 then
+      out[#out + 1] = originalKey
+      out[#out + 1] = members[1]
     end
   end
 end
@@ -655,7 +640,7 @@ return result
     static constexpr std::size_t max_scan_snapshots = 128;
     static constexpr std::size_t max_scan_page_bytes = 4u * 1024u * 1024u;
     static constexpr auto scan_snapshot_retention = std::chrono::minutes (5);
-    std::mutex _scan_gate;
+
     std::map<std::uint64_t, scan_snapshot_t> _scan_snapshots;
     std::uint64_t _scan_epoch = detail::next_scan_epoch ();
     std::uint64_t _next_snapshot = 0;
