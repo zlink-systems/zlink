@@ -54,7 +54,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly ZLinkStateLane _remoteUserSpotLane = new();
     private readonly ZLinkStateLane _remoteActorCreateLane = new();
     private readonly object _socketGate = new();
-    private readonly object _disposeGate = new();
     private readonly ConcurrentExclusiveSchedulerPair _routedSubmitScheduler;
     private readonly Func<ISocketMonitor, ISocketMonitor>? _decorateSocketMonitor;
     private readonly Dictionary<ZLinkChannelName, uint> _channels = new();
@@ -3285,31 +3284,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        Task disposal;
-        lock (_disposeGate)
-        {
-            if (_disposeTask?.IsFaulted == true)
-                _disposeTask = null;
-            disposal = _disposeTask ??= DisposeWithDefaultBoundAsync();
-        }
-        await disposal.ConfigureAwait(false);
-    }
+    public ValueTask DisposeAsync() =>
+        new(ZLinkRuntimeTaskRunner.RunDisposal(ref _disposeTask, DisposeWithDefaultBoundAsync));
 
-    public async ValueTask ForceStopAsync(CancellationToken cancellationToken)
-    {
-        Task disposal;
-        lock (_disposeGate)
-        {
-            if (_disposeTask?.IsFaulted == true)
-                _disposeTask = null;
-            disposal = _disposeTask ??= cancellationToken.CanBeCanceled
-                ? DisposeCoreAsync(cancellationToken)
-                : DisposeWithDefaultBoundAsync();
-        }
-        await disposal.ConfigureAwait(false);
-    }
+    public ValueTask ForceStopAsync(CancellationToken cancellationToken) =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                () =>
+                    cancellationToken.CanBeCanceled
+                        ? DisposeCoreAsync(cancellationToken)
+                        : DisposeWithDefaultBoundAsync()
+            )
+        );
 
     private async Task DisposeWithDefaultBoundAsync()
     {

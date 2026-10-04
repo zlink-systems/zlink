@@ -6,7 +6,6 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 {
-    private readonly object _disposeGate = new();
     private readonly ZLinkStateLane _stateLane = new();
     private readonly IDisposable _pressureMetricRegistration;
     private Task? _disposeTask;
@@ -107,6 +106,8 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
     public Dictionary<ZLinkStreamNodeName, ZLinkStreamNodeRuntime> StreamNodes { get; } = [];
 
+    internal ZLinkStreamRuntimeManager? StreamRuntimeManager { get; set; }
+
     // Bound listener records of this runtime generation, owned by the runtime.
     internal ZLinkListenerRecords ListenerRecords { get; }
 
@@ -185,17 +186,13 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         return BeginDispose(cancellationToken);
     }
 
-    private ValueTask BeginDispose(CancellationToken forceStopToken)
-    {
-        lock (_disposeGate)
-        {
-            // The gate only elects the single disposal task; the lane snapshot is awaited
-            // inside that task, outside the gate.
-            if (_disposeTask?.IsFaulted == true)
-                _disposeTask = null;
-            return new ValueTask(_disposeTask ??= DisposeCoreAsync(forceStopToken));
-        }
-    }
+    private ValueTask BeginDispose(CancellationToken forceStopToken) =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                () => DisposeCoreAsync(forceStopToken)
+            )
+        );
 
     private async Task DisposeCoreAsync(CancellationToken forceStopToken)
     {
@@ -271,6 +268,9 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
         await CaptureAsync(TimerScheduler.DisposeAsync).ConfigureAwait(false);
         Capture(_pressureMetricRegistration.Dispose);
+        if (StreamRuntimeManager is { } streamManager)
+            await CaptureAsync(streamManager.DisposeAsync).ConfigureAwait(false);
+
         if (failures.Count == 0)
             await CaptureAsync(Context.DisposeAsync).ConfigureAwait(false);
 

@@ -799,42 +799,21 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         await activation.CloseAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
-    public ValueTask DisposeAsync()
-    {
-        return new ValueTask(
-            AwaitStateLane(
-                _lane.RunAsync(() =>
-                {
-                    if (_disposeTask?.IsFaulted == true)
-                        _disposeTask = null;
-                    return _disposeTask ??= StartDisposeCore(CancellationToken.None);
-                })
+    public ValueTask DisposeAsync() =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                () => DisposeCoreAsync(CancellationToken.None)
             )
         );
-    }
 
-    internal ValueTask ForceStopAsync(CancellationToken cancellationToken)
-    {
-        return new ValueTask(
-            AwaitStateLane(
-                _lane.RunAsync(() =>
-                {
-                    if (_disposeTask?.IsFaulted == true)
-                        _disposeTask = null;
-                    return _disposeTask ??= StartDisposeCore(cancellationToken);
-                })
+    internal ValueTask ForceStopAsync(CancellationToken cancellationToken) =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                () => DisposeCoreAsync(cancellationToken)
             )
         );
-    }
-
-    private Task StartDisposeCore(CancellationToken forceStopToken)
-    {
-        if (ExecutionContext.IsFlowSuppressed())
-            return Task.Run(() => DisposeCoreAsync(forceStopToken), CancellationToken.None);
-
-        using (ExecutionContext.SuppressFlow())
-            return Task.Run(() => DisposeCoreAsync(forceStopToken), CancellationToken.None);
-    }
 
     private async Task DisposeCoreAsync(CancellationToken forceStopToken)
     {

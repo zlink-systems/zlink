@@ -28,7 +28,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private ZLinkWeightedSelectionPlan<ReadyTarget, string>? _readySelectionPlan;
     private long _readySelectionPlanBuildCount;
     private int _pendingRequests;
-    private bool _disposed;
+    private bool IsDisposing => Volatile.Read(ref _disposeTask) is not null;
     private IDisposable? _manualConnectionAttachment;
     private Task? _disposeTask;
     private readonly ZLinkMessageFlowTracer? _flow;
@@ -389,33 +389,23 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         );
     }
 
-    public ValueTask DisposeAsync()
-    {
-        if (Volatile.Read(ref _disposed))
-            return ValueTask.CompletedTask;
-        Task task = Task.CompletedTask;
-        TaskCompletionSource? start = null;
-        IDisposable? attachment = null;
-        RunState(() =>
-        {
-            if (_disposeTask?.IsFaulted == true)
-                _disposeTask = null;
-            if (_disposeTask is null)
-            {
-                attachment = _manualConnectionAttachment;
-                _manualConnectionAttachment = null;
-                start = new TaskCompletionSource(
-                    TaskCreationOptions.RunContinuationsAsynchronously
-                );
-                using (ExecutionContext.SuppressFlow())
-                    _disposeTask = DisposeCoreAsync(start.Task);
-            }
-            task = _disposeTask;
-        });
-        attachment?.Dispose();
-        start?.TrySetResult();
-        return new ValueTask(task);
-    }
+    public ValueTask DisposeAsync() =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                async () =>
+                {
+                    var attachment = RunState(() =>
+                    {
+                        var value = _manualConnectionAttachment;
+                        _manualConnectionAttachment = null;
+                        return value;
+                    });
+                    attachment?.Dispose();
+                    await DisposeCoreAsync().ConfigureAwait(false);
+                }
+            )
+        );
 
     internal void OwnManualConnectionAttachment(IDisposable attachment)
     {
@@ -424,7 +414,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         IDisposable? previous = null;
         RunState(() =>
         {
-            if (_disposed || _disposeTask is not null)
+            if (IsDisposing)
                 dispose = true;
             else
             {
@@ -440,9 +430,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         }
     }
 
-    private async Task DisposeCoreAsync(Task started)
+    private async Task DisposeCoreAsync()
     {
-        await started.ConfigureAwait(false);
         Connection[] values = [];
         Task[] retired = [];
         RunState(() =>
@@ -476,7 +465,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             _connections.Clear();
             _retired.Clear();
-            _disposed = true;
         });
         await _lane.DisposeAsync().ConfigureAwait(false);
     }
@@ -492,7 +480,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         TaskCompletionSource? inFlight = null;
         RunState(() =>
         {
-            if (_disposed || _disposeTask is not null)
+            if (IsDisposing)
                 return;
             if (
                 _connections.TryGetValue(key, out var existing)
@@ -532,7 +520,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 {
                     committed = RunState(() =>
                     {
-                        if (_disposed || _disposeTask is not null)
+                        if (IsDisposing)
                             return false;
                         _connections.TryGetValue(key, out var current);
                         if (!ReferenceEquals(current, previous))
@@ -624,7 +612,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         Connection? removed;
         RunState(() =>
         {
-            if (_disposed || _disposeTask is not null)
+            if (IsDisposing)
                 return;
             if (!_connections.Remove(key, out removed))
                 return;
@@ -662,7 +650,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         ZLinkUnawaitedSubmit.Observe(
             _lane.RunAsync(() =>
             {
-                if (!_disposed && _disposeTask is null && selectionChanged)
+                if (!IsDisposing && selectionChanged)
                     RebuildReadySelectionPlanUnderLock();
                 SignalStateChanged();
                 return ValueTask.CompletedTask;
@@ -714,7 +702,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         Connection? duplicate = null;
         RunState(() =>
         {
-            if (_disposed || _disposeTask is not null)
+            if (IsDisposing)
                 return;
             if (!IsReferenced(admitted))
                 return;
@@ -810,7 +798,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private IZLinkBackendSocketMonitor _monitor = null!;
         private IZLinkBackendSocketPoller _receivePoller = null!;
         private ZLinkClientServerServerDescriptor? _expected;
-        private bool _disposed;
+        private bool IsDisposing => Volatile.Read(ref _disposeTask) is not null;
         private Task? _disposeTask;
         private bool _admissionStarted;
         private bool _admissionCompleted;
@@ -868,7 +856,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             _admissionCompleted && !_rejected ? _admittedDescriptor : null;
         internal bool AdmittedButIneligible =>
             RunState(() =>
-                !_disposed
+                !IsDisposing
                 && CurrentAdmission
                     is {
                         State: ZLinkFrameworkRuntimeState.Serving
@@ -1043,7 +1031,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             RunState(() =>
             {
-                ObjectDisposedException.ThrowIf(_disposed, this);
+                ObjectDisposedException.ThrowIf(IsDisposing, this);
                 if (_monitorTask is null)
                 {
                     using (ExecutionContext.SuppressFlow())
@@ -1071,41 +1059,30 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             });
             lock (_socketLifecycleGate)
             {
-                if (RunState(() => _disposed || _disposeTask is not null))
+                if (RunState(() => IsDisposing))
                     return;
                 Socket.Connect(_endpoint);
             }
         }
 
-        public ValueTask DisposeAsync()
-        {
-            if (Volatile.Read(ref _disposed))
-                return ValueTask.CompletedTask;
-            Task task = Task.CompletedTask;
-            TaskCompletionSource? start = null;
-            RunState(() =>
-            {
-                if (_disposeTask?.IsFaulted == true)
-                    _disposeTask = null;
-                if (_disposeTask is null)
-                {
-                    _ready = false;
-                    PublishReadyTargetUnderLock();
-                    start = new TaskCompletionSource(
-                        TaskCreationOptions.RunContinuationsAsynchronously
-                    );
-                    using (ExecutionContext.SuppressFlow())
-                        _disposeTask = DisposeCoreAsync(start.Task);
-                }
-                task = _disposeTask;
-            });
-            start?.TrySetResult();
-            return new ValueTask(task);
-        }
+        public ValueTask DisposeAsync() =>
+            new(
+                ZLinkRuntimeTaskRunner.RunDisposal(
+                    ref _disposeTask,
+                    async () =>
+                    {
+                        RunState(() =>
+                        {
+                            _ready = false;
+                            PublishReadyTargetUnderLock();
+                        });
+                        await DisposeCoreAsync().ConfigureAwait(false);
+                    }
+                )
+            );
 
-        private async Task DisposeCoreAsync(Task started)
+        private async Task DisposeCoreAsync()
         {
-            await started.ConfigureAwait(false);
             var failures = new ZLinkFailureCollector();
             if (_admissionStop is not null)
                 await failures
@@ -1144,7 +1121,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             failures.ThrowIfAny();
             if (_admissionStop is not null)
                 _admissionStop.Dispose();
-            RunState(() => _disposed = true);
             await _lane.DisposeAsync().ConfigureAwait(false);
         }
 
@@ -1174,7 +1150,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         return;
                     var shouldStartAdmission = RunState(() =>
                     {
-                        if (_disposed || _disposeTask is not null)
+                        if (IsDisposing)
                             return false;
                         if (
                             _expected is { } expected
@@ -1198,7 +1174,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     // the connect intent stays and the next READY re-admits.
                     RunState(() =>
                     {
-                        if (!_disposed && _disposeTask is null)
+                        if (!IsDisposing)
                             FencePhysicalConnection("transport:disconnected");
                     });
                     break;
@@ -1207,7 +1183,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 case ZLinkSocketNativeEventType.HandshakeFailedAuth:
                     RunState(() =>
                     {
-                        if (!_disposed && _disposeTask is null)
+                        if (!IsDisposing)
                             FencePhysicalConnection("transport:handshake-failed");
                     });
                     break;
@@ -1242,12 +1218,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             RunState(() =>
             {
-                if (
-                    _disposed
-                    || _disposeTask is not null
-                    || _admissionStarted
-                    || _admissionCompleted
-                )
+                if (IsDisposing || _admissionStarted || _admissionCompleted)
                     return;
                 _admissionStarted = true;
                 var physicalGeneration = _physicalGeneration;
@@ -1477,7 +1448,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 {
                     var readiness = _receivePoller.Wait(ControlReceivePollInterval);
                     var admissionEstablished = RunState(() =>
-                        !_disposed && _disposeTask is null && CurrentAdmission is not null
+                        !IsDisposing && CurrentAdmission is not null
                     );
                     if (!admissionEstablished)
                         continue;
@@ -1562,7 +1533,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     .ConfigureAwait(false);
                 var timedOut = RunState(() =>
                 {
-                    if (_disposed || _disposeTask is not null || CurrentAdmission is null)
+                    if (IsDisposing || CurrentAdmission is null)
                         return false;
                     if (_time.GetElapsedTime(_lastPeerActivity) >= ZLinkServiceLiveness.PeerTimeout)
                         return true;
@@ -1639,7 +1610,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             var accepted = RunState(() =>
             {
                 if (
-                    _disposed
+                    IsDisposing
                     || physicalGeneration is { } generation && _physicalGeneration != generation
                     || _outstandingProbeId != ackId
                 )
@@ -1659,7 +1630,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private void PublishReadyTargetUnderLock()
         {
             var current = Volatile.Read(ref _readyTarget);
-            if (!_ready || _disposed || _disposeTask is not null || _weight <= 0)
+            if (!_ready || IsDisposing || _weight <= 0)
             {
                 if (current is null)
                 {
@@ -1700,8 +1671,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         }
 
         private bool IsCurrentAttempt(ulong physicalGeneration, ulong attempt) =>
-            !_disposed
-            && _disposeTask is null
+            !IsDisposing
             && _physicalGeneration == physicalGeneration
             && _admissionAttempt == attempt;
 
@@ -1726,7 +1696,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             var restart = RunState(() =>
             {
-                if (_disposed || _disposeTask is not null || CurrentAdmission is null)
+                if (IsDisposing || CurrentAdmission is null)
                     return false;
                 FencePhysicalConnection(diagnostics);
                 return true;

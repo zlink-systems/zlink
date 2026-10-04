@@ -12,6 +12,68 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RawPortCloseFailureTests
 {
     [Fact]
+    public async Task BackendContext_Rejects_Work_And_Shares_Concurrent_Disposal()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        var wrapped = DispatchProxy.Create<IContext, CloseFailureProxy>();
+        var proxy = (CloseFailureProxy)(object)wrapped;
+        proxy.Inner = context;
+        proxy.BlockClose = true;
+        var backend = new ZLinkDotNetBackendRuntimeContext();
+        var field = typeof(ZLinkDotNetBackendRuntimeContext).GetField(
+            "_context",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        )!;
+        ((IContext)field.GetValue(backend)!).Dispose();
+        field.SetValue(backend, wrapped);
+        var first = backend.DisposeAsync().AsTask();
+        await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = backend.DisposeAsync().AsTask();
+        try
+        {
+            Assert.Equal(1, proxy.CloseAttempts);
+            Assert.Throws<ObjectDisposedException>(() => backend.CreateDealerSocket());
+        }
+        finally
+        {
+            proxy.ReleaseClose.TrySetResult();
+        }
+        await Task.WhenAll(first, second);
+    }
+
+    [Fact]
+    public async Task RawRouterPort_Rejects_Work_And_Shares_Concurrent_Disposal()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var socket = context.CreateRouterSocket();
+        var router = DispatchProxy.Create<IRouterSocket, CloseFailureProxy>();
+        var proxy = (CloseFailureProxy)(object)router;
+        proxy.Inner = socket;
+        proxy.BlockClose = true;
+        var wrapped = DispatchProxy.Create<IContext, CloseFailureProxy>();
+        ((CloseFailureProxy)(object)wrapped).Inner = context;
+        ((CloseFailureProxy)(object)wrapped).Router = router;
+        var port = new ZLinkRawRouterServicePort(
+            wrapped,
+            RoutingId.From("blocked"),
+            "inproc://blocked"
+        );
+        var first = port.DisposeAsync().AsTask();
+        await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = port.DisposeAsync().AsTask();
+        try
+        {
+            Assert.Equal(1, proxy.CloseAttempts);
+            Assert.Throws<ObjectDisposedException>(port.Start);
+        }
+        finally
+        {
+            proxy.ReleaseClose.TrySetResult();
+        }
+        await Task.WhenAll(first, second);
+    }
+
+    [Fact]
     public async Task ClientRuntime_Preserves_Connection_After_Failed_Close()
     {
         using var context = Systems.Zlink.Zlink.CreateContext();
@@ -132,6 +194,93 @@ public sealed class RawPortCloseFailureTests
     }
 
     [Fact]
+    public async Task AutomaticFanout_Rejects_Work_And_Shares_Concurrent_Disposal()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var socket = context.CreateSubSocket();
+        var subscriber = DispatchProxy.Create<ISubSocket, CloseFailureProxy>();
+        var proxy = (CloseFailureProxy)(object)subscriber;
+        proxy.Inner = socket;
+        proxy.BlockClose = true;
+        var backend = DispatchProxy.Create<IZLinkBackendRuntimeContext, CloseFailureProxy>();
+        ((CloseFailureProxy)(object)backend).Subscriber = subscriber;
+        using var errors = new ZLinkRuntimeErrorSink();
+        var lifecycle = new ZLinkFrameworkHostLifecycleState();
+        var registration = new ZLinkFrameworkRegistration();
+        registration.Channels.Add(
+            "events",
+            new ZLinkChannelRegistration
+            {
+                ChannelName = "events",
+                AutoConnectType = ZLinkLocationAutoConnectType.Fanout,
+                Subscriber = new ZLinkChannelSubscriberCapabilityRegistration
+                {
+                    AutomaticDiscoveryEnabled = true,
+                },
+            }
+        );
+        var runtime = new ZLinkAutomaticFanoutSubscriberRuntime(
+            "events",
+            backend,
+            new ZLinkSocketConfig(),
+            new HashSet<string>(),
+            new ZLinkChannelReceiveLoop(null!, null!),
+            new ZLinkFanoutRuntimeService(registration, lifecycle),
+            errors,
+            CancellationToken.None
+        );
+        var descriptor = new ZLinkFanoutPublisherDescriptor(
+            "events",
+            RoutingId.From("publisher"),
+            1,
+            1,
+            "tcp://127.0.0.1:1",
+            ZLinkFrameworkRuntimeState.Serving,
+            "plaintext",
+            "owner",
+            1,
+            default
+        );
+        var type = typeof(ZLinkAutomaticFanoutSubscriberRuntime).GetNestedType(
+            "Connection",
+            BindingFlags.NonPublic
+        )!;
+        var connection = Activator.CreateInstance(
+            type,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            null,
+            [runtime, descriptor],
+            null
+        )!;
+        type.GetField("_socket", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(connection, subscriber);
+        var connections = (System.Collections.IDictionary)
+            typeof(ZLinkAutomaticFanoutSubscriberRuntime)
+                .GetField("_connections", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(runtime)!;
+        connections.Add((descriptor.PublisherRid, descriptor.LifecycleGeneration), connection);
+        var first = runtime.DisposeAsync().AsTask();
+        await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = runtime.DisposeAsync().AsTask();
+        try
+        {
+            Assert.Same(first, second);
+            Assert.Equal(1, proxy.CloseAttempts);
+            await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+                await runtime.ReplaceAsync(
+                    [],
+                    new ZLinkLocationRuntimeSnapshot("healthy", null, null)
+                )
+            );
+        }
+        finally
+        {
+            proxy.ReleaseClose.TrySetResult();
+        }
+        await Task.WhenAll(first, second);
+    }
+
+    [Fact]
     public async Task ChannelBundle_Preserves_Socket_After_Failed_Disposal()
     {
         using var context = Systems.Zlink.Zlink.CreateContext();
@@ -245,6 +394,9 @@ public sealed class RawPortCloseFailureTests
         public ISubSocket? Subscriber { get; set; }
         public TaskCompletionSource CloseAttempted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool BlockClose { get; set; }
+        public TaskCompletionSource ReleaseClose { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool FailClose { get; set; }
         public int CloseAttempts { get; private set; }
         public Exception Failure { get; } = new InvalidOperationException("First close failed.");
@@ -256,6 +408,12 @@ public sealed class RawPortCloseFailureTests
                 return Router;
             if (method.Name == nameof(IZLinkBackendRuntimeContext.CreateSubscriberSocket))
                 return Subscriber;
+            if (BlockClose && method.Name == "DisposeAsync")
+            {
+                ++CloseAttempts;
+                CloseAttempted.TrySetResult();
+                return new ValueTask(ReleaseClose.Task);
+            }
             if ((FailClose || Inner is IRouterSocket) && method.Name is "Dispose" or "DisposeAsync")
             {
                 if (++CloseAttempts == 1)

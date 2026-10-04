@@ -170,15 +170,17 @@ public sealed class CoverageCriticalRuntimeTests
     ///     the node fails, startup disposes the socket, so the runtime context does not wait
     ///     for a socket nobody owns.
     /// </summary>
-    [Fact]
-    public async Task StreamNodeCreationFailureDisposesTheSocketItWasGiven()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StreamNodeCreationFailureDisposesTheSocketItWasGiven(bool failClose)
     {
         var registration = new ZLinkFrameworkRegistration();
         registration.StreamNodes.Add(
             "stream-a",
             new ZLinkStreamNodeRegistration { StreamNodeName = "stream-a" }
         );
-        var socket = new DisposalRecordingStreamSocket();
+        var socket = new DisposalRecordingStreamSocket { FailClose = failClose };
         // No ZLinkFrameworkRuntime is registered, so creating the node fails after the
         // socket exists.
         using var services = new ServiceCollection().BuildServiceProvider();
@@ -202,12 +204,13 @@ public sealed class CoverageCriticalRuntimeTests
             registration
         );
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        await Assert.ThrowsAnyAsync<Exception>(async () =>
             await manager.InitializeStreamNodesAsync(state)
         );
-
         Assert.Equal(1, socket.DisposeCount);
         Assert.Empty(state.StreamNodes);
+        await state.DisposeAsync();
+        Assert.Equal(failClose ? 2 : 1, socket.DisposeCount);
     }
 
     private sealed class MonitorlessBackendAdapterFactory : IZLinkBackendAdapterFactory
@@ -256,6 +259,7 @@ public sealed class CoverageCriticalRuntimeTests
     private sealed class DisposalRecordingStreamSocket : IZLinkBackendStreamSocket
     {
         public int DisposeCount { get; private set; }
+        public bool FailClose { get; init; }
 
         public void Bind(string endpoint) => throw new NotSupportedException();
 
@@ -299,6 +303,10 @@ public sealed class CoverageCriticalRuntimeTests
         public ValueTask DisposeAsync()
         {
             DisposeCount++;
+            if (FailClose && DisposeCount == 1)
+                return ValueTask.FromException(
+                    new InvalidOperationException("First close failed.")
+                );
             return ValueTask.CompletedTask;
         }
     }

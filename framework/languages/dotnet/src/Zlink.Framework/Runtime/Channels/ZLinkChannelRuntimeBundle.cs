@@ -47,61 +47,26 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
 
     public SemaphoreSlim ReceiveGate { get; } = new(1, 1);
 
-    public ValueTask DisposeAsync()
-    {
-        var previous = Volatile.Read(ref _disposeTask);
-        if (previous is not null && !previous.IsFaulted)
-            return new ValueTask(previous);
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        var task = Interlocked.CompareExchange(ref _disposeTask, completion.Task, previous);
-        if (task != previous)
-            return new ValueTask(task!);
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        StartDisposeCore(started.Task, completion);
-        started.TrySetResult();
-        return new ValueTask(completion.Task);
-    }
+    public ValueTask DisposeAsync() =>
+        new(ZLinkRuntimeTaskRunner.RunDisposal(ref _disposeTask, DisposeCoreAsync));
 
-    private void StartDisposeCore(Task started, TaskCompletionSource completion)
+    private async Task DisposeCoreAsync()
     {
-        if (ExecutionContext.IsFlowSuppressed())
-        {
-            _ = DisposeCoreAsync(started, completion);
-            return;
-        }
-
-        using (ExecutionContext.SuppressFlow())
-            _ = DisposeCoreAsync(started, completion);
-    }
-
-    private async Task DisposeCoreAsync(Task started, TaskCompletionSource completion)
-    {
-        try
-        {
-            await started.ConfigureAwait(false);
-            var failures = new ZLinkFailureCollector();
-            IDisposable? attachment = null;
-            await failures
-                .CaptureAsync(async () =>
-                {
-                    attachment = await _lane
-                        .RunAsync(DetachManualConnectionsCore)
-                        .ConfigureAwait(false);
-                })
-                .ConfigureAwait(false);
-            failures.Capture(() => attachment?.Dispose());
-            await failures.CaptureAsync(DetachReceiveFlowAsync).ConfigureAwait(false);
-            await failures.CaptureAsync(Socket.DisposeAsync).ConfigureAwait(false);
-            failures.ThrowIfAny();
-            ReceiveGate.Dispose();
-            completion.TrySetResult();
-        }
-        catch (Exception error)
-        {
-            completion.TrySetException(error);
-        }
+        var failures = new ZLinkFailureCollector();
+        IDisposable? attachment = null;
+        await failures
+            .CaptureAsync(async () =>
+            {
+                attachment = await _lane
+                    .RunAsync(DetachManualConnectionsCore)
+                    .ConfigureAwait(false);
+            })
+            .ConfigureAwait(false);
+        failures.Capture(() => attachment?.Dispose());
+        await failures.CaptureAsync(DetachReceiveFlowAsync).ConfigureAwait(false);
+        await failures.CaptureAsync(Socket.DisposeAsync).ConfigureAwait(false);
+        failures.ThrowIfAny();
+        ReceiveGate.Dispose();
     }
 
     internal void OwnManualConnectionAttachment(IDisposable attachment)

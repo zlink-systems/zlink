@@ -37,7 +37,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     // (Spot logical multicast uses the router plane).
     private bool _bound;
     private bool _started;
-    private bool _disposed;
+    private Task? _disposeTask;
 
     public ZLinkBackendSpotNodeWrapper(
         ZLinkManagedMeshNode node,
@@ -1022,7 +1022,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
 
     private void EnsureStartedCore()
     {
-        if (!_started && !_disposed)
+        if (!_started && Volatile.Read(ref _disposeTask) is null)
         {
             _started = true;
             _node.Start();
@@ -1510,31 +1510,21 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _pump.SetNodeRouteHandler(handler, taskRunner);
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (!TryBeginDispose())
-            return;
-        await DisposeCoreAsync(forceStop: false, CancellationToken.None).ConfigureAwait(false);
-    }
-
-    public async ValueTask ForceStopAsync(CancellationToken cancellationToken)
-    {
-        if (!TryBeginDispose())
-            return;
-        await DisposeCoreAsync(forceStop: true, cancellationToken).ConfigureAwait(false);
-    }
-
-    private bool TryBeginDispose()
-    {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_disposed)
-                    return false;
-                return true;
-            })
+    public ValueTask DisposeAsync() =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                () => DisposeCoreAsync(false, CancellationToken.None)
+            )
         );
-    }
+
+    public ValueTask ForceStopAsync(CancellationToken cancellationToken) =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                () => DisposeCoreAsync(true, cancellationToken)
+            )
+        );
 
     private async Task DisposeCoreAsync(bool forceStop, CancellationToken cancellationToken)
     {
@@ -1553,7 +1543,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             await _node.ForceStopAsync(cancellationToken).ConfigureAwait(false);
         else
             await _node.DisposeAsync().ConfigureAwait(false);
-        AwaitStateLane(_lane.RunAsync(() => _disposed = true));
     }
 
     internal sealed class ActorMessageFollowIngressAdapter(ZLinkMeshDispatchPump pump)
