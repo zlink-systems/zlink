@@ -1,11 +1,6 @@
 package systems.zlink.stream.connector;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.StandardSocketOptions;
 import java.net.http.HttpClient;
-import java.nio.channels.AsynchronousSocketChannel;
-import java.nio.channels.CompletionHandler;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.security.cert.CertPathValidatorException;
@@ -291,14 +286,14 @@ final class ZLinkStreamConnectionLifecycle {
             CompletionStage<? extends ZLinkStreamTransportConnection> opening =
                     switch (configuration.transport().kind()) {
                         case WEB_SOCKET, WEB_SOCKET_SECURE -> connectWebSocketStage();
-                        case TLS ->
-                                ZLinkTlsTransportConnection.connectStage(
+                        case TCP, TLS ->
+                                ZLinkNettyTransportConnection.connectStage(
                                         configuration.endpoint(),
+                                        configuration.transport().kind(),
                                         configuration.limits().receivePayload(),
                                         configuration
                                                 .transport()
                                                 .skipServerCertificateValidation());
-                        case TCP -> connectTcpStage();
                     };
             attempt.whenComplete(
                     (transport, failure) -> {
@@ -344,62 +339,6 @@ final class ZLinkStreamConnectionLifecycle {
                     ZLinkStreamErrorCode.CONNECT_TIMEOUT, "Connect timed out.", cause);
         }
         return ZLinkStreamException.of(ZLinkStreamErrorCode.DISCONNECTED, "Connect failed.", cause);
-    }
-
-    private CompletionStage<ZLinkStreamTransportConnection> connectTcpStage() {
-        CompletableFuture<ZLinkStreamTransportConnection> result = new CompletableFuture<>();
-        AsynchronousSocketChannel channel;
-        try {
-            channel = AsynchronousSocketChannel.open();
-            channel.setOption(StandardSocketOptions.SO_KEEPALIVE, true);
-        } catch (IOException ex) {
-            return CompletableFuture.failedFuture(ex);
-        }
-
-        InetSocketAddress address =
-                new InetSocketAddress(
-                        configuration.endpoint().getHost(),
-                        DefaultZLinkStreamConnector.resolvePort(configuration.endpoint()));
-        DefaultZLinkStreamConnector.trace(
-                () ->
-                        "connector connect-start endpoint="
-                                + configuration.endpoint()
-                                + " address="
-                                + address);
-        channel.connect(
-                address,
-                null,
-                new CompletionHandler<Void, Void>() {
-                    @Override
-                    public void completed(Void ignored, Void attachment) {
-                        ZLinkTcpTransportConnection tcp =
-                                new ZLinkTcpTransportConnection(
-                                        channel, configuration.limits().receivePayload());
-                        DefaultZLinkStreamConnector.trace(
-                                () ->
-                                        "connector connect-complete endpoint="
-                                                + configuration.endpoint());
-                        if (!result.complete(tcp)) publishCloseFailure(closeQuietly(tcp));
-                    }
-
-                    @Override
-                    public void failed(Throwable exc, Void attachment) {
-                        DefaultZLinkStreamConnector.trace(
-                                () ->
-                                        "connector connect-failed endpoint="
-                                                + configuration.endpoint()
-                                                + " error="
-                                                + exc);
-                        result.completeExceptionally(exc);
-                    }
-                });
-        result.whenComplete(
-                (ignored, ex) -> {
-                    if (ex != null) {
-                        publishCloseFailure(closeQuietly(channel));
-                    }
-                });
-        return result;
     }
 
     private CompletionStage<ZLinkWebSocketTransportConnection> connectWebSocketStage() {

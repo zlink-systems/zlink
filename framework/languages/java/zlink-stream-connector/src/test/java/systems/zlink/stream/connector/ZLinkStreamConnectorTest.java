@@ -1358,7 +1358,7 @@ final class ZLinkStreamConnectorTest {
                     assertThrows(
                             ZLinkStreamException.class,
                             () -> ConnectorTestAwait.await(connector.connect()));
-            assertEquals(ZLinkStreamErrorCode.DISCONNECTED, failure.errorCode());
+            assertEquals(ZLinkStreamErrorCode.DISCONNECTED, failure.errorCode(), scheme);
             assertTrue(failure.getCause() != null);
             assertEquals(ZLinkStreamConnectionState.DISCONNECTED, connector.state());
         }
@@ -1488,7 +1488,7 @@ final class ZLinkStreamConnectorTest {
                         .build();
 
         SslHandler verified =
-                ZLinkTlsTransportConnection.createSslHandler(
+                ZLinkNettyTransportConnection.createSslHandler(
                         sslContext, UnpooledByteBufAllocator.DEFAULT, "localhost", 443, false);
         try {
             assertEquals(
@@ -1499,7 +1499,7 @@ final class ZLinkStreamConnectorTest {
         }
 
         SslHandler skipped =
-                ZLinkTlsTransportConnection.createSslHandler(
+                ZLinkNettyTransportConnection.createSslHandler(
                         sslContext, UnpooledByteBufAllocator.DEFAULT, "localhost", 443, true);
         try {
             assertNull(skipped.engine().getSSLParameters().getEndpointIdentificationAlgorithm());
