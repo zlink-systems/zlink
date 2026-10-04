@@ -41,11 +41,17 @@ public final class ZLinkApplicationJobContext {
      * for each job.
      */
     public static QueuedOwnership transferToQueuedJob() {
+        QueuedOwnership ownership = transferQueuedOwnership();
+        if (ownership != null) ownership.markQueued();
+        return ownership;
+    }
+
+    /** Transfers queued ownership without entering the host permit owner. */
+    public static QueuedOwnership transferQueuedOwnership() {
         State state = CURRENT.get();
         if (state == null || !state.ownership.handoff()) {
             return null;
         }
-        state.permit.queued();
         return new QueuedOwnership(state.permit);
     }
 
@@ -104,6 +110,11 @@ public final class ZLinkApplicationJobContext {
 
         private synchronized boolean canHandoff() {
             return !handedOff;
+        }
+
+        /** Accounts an accepted queued job on its host permit owner. */
+        public void markQueued() {
+            permit.queued();
         }
 
         @Override
