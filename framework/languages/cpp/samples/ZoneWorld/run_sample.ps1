@@ -8,6 +8,13 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 . "$PSScriptRoot/../redis-common.ps1"
+if ($IsWindows) {
+    $windowsProcessHelper = Join-Path $PSScriptRoot "../windows-process-common.ps1"
+    if (-not (Test-Path -LiteralPath $windowsProcessHelper)) {
+        $windowsProcessHelper = Join-Path $PSScriptRoot "../../../dotnet/samples/windows-process-common.ps1"
+    }
+    . $windowsProcessHelper
+}
 
 $CppRoot = Get-ZlinkCppSampleTreeRoot
 $BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
@@ -71,8 +78,12 @@ function Start-Role([string]$Name, [string]$Binary, [string[]]$Arguments) {
     $RoleStartCount[$Name] = $generation
     $stdout = Join-Path $LogDir "$Name-$generation.stdout.log"
     $stderr = Join-Path $LogDir "$Name-$generation.stderr.log"
-    $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -NoNewWindow -PassThru `
-        -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $process = if ($IsWindows) {
+        [Zlink.SampleWindowsProcessGroup]::Start($Binary, $Arguments, $CppRoot, $stdout, $stderr)
+    } else {
+        Start-Process -FilePath $Binary -ArgumentList $Arguments -NoNewWindow -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    }
     [void]$process.Handle
     [void]$Processes.Add($process)
     $RoleProcesses[$Name] = $process
@@ -84,12 +95,26 @@ function Remove-TrackedProcess([System.Diagnostics.Process]$Process) {
     [void]$Processes.Remove($Process)
 }
 
-function Stop-Role([string]$Name) {
+function Stop-Role([string]$Name, [string]$Signal = "KILL") {
     if (-not $RoleProcesses.ContainsKey($Name)) { return }
     $process = [System.Diagnostics.Process]$RoleProcesses[$Name]
     if (-not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        [void]$process.WaitForExit(5000)
+        if ($Signal -eq "TERM") {
+            if ($IsWindows) {
+                [Zlink.SampleWindowsProcessGroup]::SendBreak($process.Id)
+            } else {
+                & kill -TERM $process.Id
+            }
+            if (-not $process.WaitForExit(5000)) {
+                throw "$Name did not exit after graceful shutdown."
+            }
+            if ($process.ExitCode -ne 0) {
+                throw "$Name graceful shutdown failed with exit code $($process.ExitCode)."
+            }
+        } else {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            [void]$process.WaitForExit(5000)
+        }
     }
     Remove-TrackedProcess $process
     [void]$RoleProcesses.Remove($Name)
@@ -468,7 +493,7 @@ try {
     $g3Node = "zone-node-1"
     $g3OldRid = Get-RoutingId $g3Node
     if ($g3OldRid) {
-        Stop-Role $g3Node
+        Stop-Role $g3Node "TERM"
         Start-ZoneNode $g3Node "$g3Node-replacement"
         $g3NewRid = Wait-NewRoutingId $g3Node $g3OldRid
         if ($g3NewRid) {
@@ -487,7 +512,7 @@ try {
         "--game-endpoint", $GameStream, "--ops-endpoint", $OpsStream,
         "--scenario", "C2", "--target-node-id", "zone-node-2"))
     if (Wait-RoleLog "client-c2" "scenario ZW-C2 armed node=" 60) {
-        Stop-Role "zone-node-2"
+        Stop-Role "zone-node-2" "TERM"
         [void](Wait-RoleExit "client-c2" 180000)
         Start-ZoneNode "zone-node-2" "zone-node-2-replacement"
     }
