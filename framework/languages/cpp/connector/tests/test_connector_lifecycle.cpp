@@ -10,6 +10,7 @@
 
 #ifdef ZLINK_CONNECTOR_LIFECYCLE_TLS
 #include <boost/asio/ssl.hpp>
+#include <openssl/crypto.h>
 #endif
 #ifdef ZLINK_CONNECTOR_LIFECYCLE_GODOT
 #include <zlink_godot_stream_connector.hpp>
@@ -177,6 +178,12 @@ int main (int argc, char **argv)
     }
 #ifdef ZLINK_CONNECTOR_LIFECYCLE_TLS
     if (mode == "tls") {
+        // Process cleanup must be safe after the last connector and TLS
+        // fixture have been destroyed, including the connector's workers.
+        struct openssl_cleanup_t
+        {
+            ~openssl_cleanup_t () { OPENSSL_cleanup (); }
+        } cleanup;
         boost::asio::io_context io;
         boost::asio::ssl::context context (boost::asio::ssl::context::tls_server);
         context.use_certificate_chain_file (ZLINK_STREAM_CONNECTOR_TEST_CERT);
