@@ -727,10 +727,14 @@ void run_delivery_defect (delivery_defect_t defect)
 {
     using namespace zlink::framework;
     std::set_terminate ([] { std::_Exit (delivery_defect_exit); });
+    const auto terminate_handler = std::get_terminate ();
     if (defect == delivery_defect_t::native_continuation) {
         runtime::coroutine_executor_t executor (1);
-        executor.post_native_continuation (
-          [] { throw std::logic_error ("native continuation delivery defect"); });
+        executor.post_native_continuation ([terminate_handler] {
+            // MSVC keeps the terminate handler per thread.
+            std::set_terminate (terminate_handler);
+            throw std::logic_error ("native continuation delivery defect");
+        });
         executor.drain ();
         return;
     }
