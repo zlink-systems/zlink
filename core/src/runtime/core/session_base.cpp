@@ -678,6 +678,7 @@ void zlink::session_base_t::engine_error (bool handshaked_, zlink::i_engine::err
                     _pipe->terminate (false);
             } else {
                 terminate ();
+                return;
             }
             break;
         }

@@ -38,14 +38,6 @@ inline boost::asio::ip::tcp protocol_for_fd (fd_t fd_)
     return boost::asio::ip::tcp::v4 ();
 }
 
-inline size_t write_buffer_bytes ()
-{
-    static const size_t value =
-      env::positive_size ("ZLINK_WS_WRITE_BUFFER_BYTES",
-                          ws_batch_policy::zmp_send_batch_max_size ());
-    return std::min (value, ws_batch_policy::write_buffer_initial_size ());
-}
-
 inline size_t write_buffer_bytes_for_payload (size_t payload_bytes_)
 {
     static const size_t maximum =
@@ -109,8 +101,13 @@ inline void configure_stream (connection_t *connection_)
 {
     connection_->stream.binary (true);
     connection_->stream.auto_fragment (false);
-    connection_->stream.write_buffer_bytes (write_buffer_bytes ());
     connection_->stream.read_message_max (read_message_max ());
+}
+
+template <typename connection_t>
+inline void prepare_write (connection_t *connection_, size_t payload_size_)
+{
+    connection_->stream.write_buffer_bytes (write_buffer_bytes_for_payload (payload_size_));
 }
 
 template <typename connection_t>
@@ -220,8 +217,7 @@ void async_write_some (std::shared_ptr<connection_t> connection_,
         return;
     }
 
-    connection_->stream.write_buffer_bytes (
-      write_buffer_bytes_for_payload (buffer_size_));
+    prepare_write (connection_.get (), buffer_size_);
     connection_->stream.async_write (
       boost::asio::buffer (buffer_, buffer_size_),
       [connection = std::move (connection_), handler = std::move (handler_),
@@ -252,8 +248,7 @@ void async_writev (std::shared_ptr<connection_t> connection_,
     std::size_t payload_size = 0;
     for (std::size_t i = 0; i != buffer_count_; ++i)
         payload_size += buffers_[i].size ();
-    connection_->stream.write_buffer_bytes (
-      write_buffer_bytes_for_payload (payload_size));
+    prepare_write (connection_.get (), payload_size);
     connection_->stream.async_write (
       buffers,
       [connection = std::move (connection_), handler = std::move (handler_),
@@ -285,8 +280,7 @@ std::size_t write_some (connection_t *connection_,
         return 0;
     }
 
-    connection_->stream.write_buffer_bytes (
-      write_buffer_bytes_for_payload (len_));
+    prepare_write (connection_, len_);
     boost::system::error_code ec;
     const std::size_t bytes_written =
       connection_->stream.write (boost::asio::buffer (data_, len_), ec);

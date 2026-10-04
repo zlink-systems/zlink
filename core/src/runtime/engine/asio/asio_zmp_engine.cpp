@@ -167,6 +167,11 @@ void zlink::asio_zmp_engine_t::set_last_error (uint8_t code_, const char *reason
 
 void zlink::asio_zmp_engine_t::send_error_frame (uint8_t code_, const char *reason_)
 {
+    // The connection writes ERROR after the previous write completes. A
+    // failed output cannot carry an ERROR and closes through engine_error().
+    if (!write_turn_available ())
+        return;
+
     i_asio_transport *tr = transport ();
     if (!tr || !tr->is_open ())
         return;
@@ -206,22 +211,30 @@ void zlink::asio_zmp_engine_t::send_error_frame (uint8_t code_, const char *reas
 void zlink::asio_zmp_engine_t::error (error_reason_t reason_,
                                     const boost::system::error_code &handshake_error_)
 {
-    if (reason_ == timeout_error) {
-        if (is_handshaking ())
-            set_last_error (zmp_error_handshake_timeout, NULL);
-        else if (_last_error_code == 0)
-            set_last_error (zmp_error_internal, NULL);
-    } else if (reason_ == protocol_error && _last_error_code == 0) {
-        zmp_decoder_t *decoder = dynamic_cast<zmp_decoder_t *> (_decoder);
-        if (decoder && decoder->error_code () != 0)
-            set_last_error (decoder->error_code (), NULL);
-        else
-            set_last_error (zmp_error_internal, NULL);
-    }
+    const bool pending_terminal_error = terminal_error_pending ();
+    if (pending_terminal_error && reason_ == protocol_error)
+        return;
 
-    if (reason_ == timeout_error || reason_ == protocol_error) {
-        const uint8_t code = _last_error_code ? _last_error_code : zmp_error_internal;
-        send_error_frame (code, _last_error_reason.c_str ());
+    if (!pending_terminal_error) {
+        if (reason_ == timeout_error) {
+            if (is_handshaking ())
+                set_last_error (zmp_error_handshake_timeout, NULL);
+            else if (_last_error_code == 0)
+                set_last_error (zmp_error_internal, NULL);
+        } else if (reason_ == protocol_error && _last_error_code == 0) {
+            zmp_decoder_t *decoder = dynamic_cast<zmp_decoder_t *> (_decoder);
+            if (decoder && decoder->error_code () != 0)
+                set_last_error (decoder->error_code (), NULL);
+            else
+                set_last_error (zmp_error_internal, NULL);
+        }
+
+        if (reason_ == timeout_error || reason_ == protocol_error) {
+            if (defer_terminal_error (reason_))
+                return;
+            const uint8_t code = _last_error_code ? _last_error_code : zmp_error_internal;
+            send_error_frame (code, _last_error_reason.c_str ());
+        }
     }
 
     if (paired_transport () && !_options.transport_pair_initiator

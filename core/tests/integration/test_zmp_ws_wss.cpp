@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "testutil.hpp"
+#include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
 #include "testutil_zmp_wire.hpp"
 #include "zmp_request_reply_fixture.hpp"
@@ -18,7 +19,9 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -157,6 +160,37 @@ void wait_for_ws_disconnect (websocket_stream_t *client_,
     TEST_ASSERT_FALSE_MESSAGE (timed_out,
                                "WS peer did not close invalid record");
     TEST_ASSERT_TRUE (disconnected);
+}
+
+template <typename websocket_stream_t>
+void reject_malformed_frame_during_output (void *server_,
+                                           websocket_stream_t *client_,
+                                           net::io_context *client_io_)
+{
+    // The peer does not read while the server fills its output queue. This
+    // leaves a Beast write in progress when input reports a malformed frame.
+    int accepted = 0;
+    for (int i = 0; i != 32; ++i) {
+        zlink_msg_t part;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&part, 65536));
+        memset (zlink_msg_data (&part), 0x41, 65536);
+        const zlink_submit_result_t result =
+          zlink_send (server_, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL);
+        if (result != ZLINK_SUBMIT_OK) {
+            TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, result);
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+            break;
+        }
+        ++accepted;
+    }
+    TEST_ASSERT_TRUE (accepted > 0);
+
+    std::vector<unsigned char> malformed = make_zmp_data_frame ("bad");
+    malformed[0] = 0;
+    boost::system::error_code ec;
+    TEST_ASSERT_EQUAL_UINT64 (malformed.size (), client_->write (net::buffer (malformed), ec));
+    TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
+    wait_for_ws_disconnect (client_, client_io_);
 }
 
 template <typename websocket_stream_t>
@@ -382,6 +416,125 @@ void test_zmp_ws_rejects_text_hello_data_and_fragmented_data ()
         test_context_socket_close (server);
     }
 }
+
+void test_zmp_ws_malformed_frame_during_output ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (server);
+    const int zero = 0;
+    const int small_send_buffer = 4096;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_SNDBUF, &small_send_buffer, sizeof (small_send_buffer)));
+    test_monitor_probe_t probe;
+    void *monitor = open_test_monitor_probe (
+      server, ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_DISCONNECTED, &probe);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "ws://127.0.0.1:*"));
+    char endpoint[256];
+    size_t endpoint_len = sizeof (endpoint);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (server, ZLINK_OPT_LAST_ENDPOINT, endpoint, &endpoint_len));
+    unsigned int port = 0;
+    TEST_ASSERT_EQUAL_INT (1, sscanf (endpoint, "ws://127.0.0.1:%u", &port));
+
+    net::io_context client_io;
+    raw_ws_tcp_t::resolver resolver (client_io);
+    websocket::stream<raw_ws_tcp_t::socket> client (client_io);
+    const std::string port_text = std::to_string (port);
+    net::connect (client.next_layer (), resolver.resolve ("127.0.0.1", port_text));
+    client.binary (true);
+    client.handshake ("127.0.0.1:" + port_text, "/");
+    raw_ws_zmp_handshake (&client);
+    int ready_index = -1;
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_event_after (&probe, ZLINK_EVENT_CONNECTION_READY, 0,
+                                                           5000, &ready_index));
+    reject_malformed_frame_during_output (server, &client, &client_io);
+    int disconnected_index = -1;
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_event_after (
+      &probe, ZLINK_EVENT_DISCONNECTED, ready_index + 1, 5000, &disconnected_index));
+    TEST_ASSERT_EQUAL_UINT64 (ZLINK_DISCONNECT_HANDSHAKE_FAILED,
+                              test_monitor_probe_record_at (&probe, disconnected_index).value);
+
+    boost::system::error_code ignored;
+    client.next_layer ().close (ignored);
+    close_test_monitor_probe (&monitor, &probe);
+    test_context_socket_close (server);
+}
+
+void test_zmp_ws_close_during_peer_send_has_no_protocol_error ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *client = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (server);
+    TEST_ASSERT_NOT_NULL (client);
+    const int zero = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (client, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    test_monitor_probe_t probe;
+    void *monitor = open_test_monitor_probe (
+      client, ZLINK_EVENT_DISCONNECTED | ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL, &probe);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "ws://127.0.0.1:*"));
+    char endpoint[256];
+    size_t endpoint_len = sizeof (endpoint);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (server, ZLINK_OPT_LAST_ENDPOINT, endpoint, &endpoint_len));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
+    send_string_expect_success (client, "ready", 0);
+    recv_string_expect_success (server, "ready", 0);
+
+    const int event_start = test_monitor_probe_count (&probe);
+    std::mutex sync;
+    std::condition_variable changed;
+    bool first_sent = false;
+    bool close_started = false;
+    int accepted = 0;
+    std::thread sender ([&] {
+        for (int i = 0; i != 1000; ++i) {
+            {
+                std::unique_lock<std::mutex> lock (sync);
+                if (first_sent)
+                    changed.wait (lock, [&] { return close_started; });
+            }
+            zlink_msg_t part;
+            zlink_msg_init_size (&part, 4096);
+            memset (zlink_msg_data (&part), 0x42, 4096);
+            const zlink_submit_result_t result =
+              zlink_send (client, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL);
+            if (result == ZLINK_SUBMIT_OK)
+                ++accepted;
+            else
+                zlink_msg_close (&part);
+            if (!first_sent) {
+                std::lock_guard<std::mutex> lock (sync);
+                first_sent = true;
+                changed.notify_one ();
+            }
+            if (result != ZLINK_SUBMIT_OK)
+                break;
+        }
+    });
+    {
+        std::unique_lock<std::mutex> lock (sync);
+        changed.wait (lock, [&] { return first_sent; });
+        close_started = true;
+    }
+    changed.notify_one ();
+    test_context_socket_close (server);
+    sender.join ();
+    TEST_ASSERT_TRUE (accepted > 0);
+
+    int disconnected_index = -1;
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_event_after (&probe, ZLINK_EVENT_DISCONNECTED,
+                                                           event_start, 5000, &disconnected_index));
+    const zlink_monitor_event_t disconnected =
+      test_monitor_probe_record_at (&probe, disconnected_index);
+    TEST_ASSERT_NOT_EQUAL (ZLINK_DISCONNECT_HANDSHAKE_FAILED, disconnected.value);
+    for (int index = event_start; index < disconnected_index; ++index)
+        TEST_ASSERT_NOT_EQUAL (ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL,
+                               test_monitor_probe_event_at (&probe, index));
+    close_test_monitor_probe (&monitor, &probe);
+    test_context_socket_close (client);
+}
 #endif
 
 #if defined ZLINK_HAVE_WSS
@@ -529,6 +682,59 @@ void test_zmp_wss_rejects_text_hello_data_and_fragmented_data ()
     }
     cleanup_tls_test_files (files);
 }
+
+void test_zmp_wss_malformed_frame_during_output ()
+{
+    const tls_test_files_t files = make_tls_test_files ();
+    void *server = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (server);
+    const int zero = 0;
+    const int small_send_buffer = 4096;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_SNDBUF, &small_send_buffer, sizeof (small_send_buffer)));
+    test_monitor_probe_t probe;
+    void *monitor = open_test_monitor_probe (
+      server, ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_DISCONNECTED, &probe);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      server, ZLINK_OPT_TLS_CERT, files.server_cert.c_str (), files.server_cert.size ()));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      server, ZLINK_OPT_TLS_KEY, files.server_key.c_str (), files.server_key.size ()));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "wss://127.0.0.1:*"));
+    char endpoint[256];
+    size_t endpoint_len = sizeof (endpoint);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (server, ZLINK_OPT_LAST_ENDPOINT, endpoint, &endpoint_len));
+    unsigned int port = 0;
+    TEST_ASSERT_EQUAL_INT (1, sscanf (endpoint, "wss://127.0.0.1:%u", &port));
+
+    net::io_context client_io;
+    net::ssl::context client_tls (net::ssl::context::tls_client);
+    client_tls.set_verify_mode (net::ssl::verify_none);
+    raw_ws_tcp_t::resolver resolver (client_io);
+    raw_wss_stream_t client (client_io, client_tls);
+    const std::string port_text = std::to_string (port);
+    net::connect (beast::get_lowest_layer (client), resolver.resolve ("127.0.0.1", port_text));
+    client.next_layer ().handshake (net::ssl::stream_base::client);
+    client.binary (true);
+    client.handshake ("127.0.0.1:" + port_text, "/");
+    raw_ws_zmp_handshake (&client);
+    int ready_index = -1;
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_event_after (&probe, ZLINK_EVENT_CONNECTION_READY, 0,
+                                                           5000, &ready_index));
+    reject_malformed_frame_during_output (server, &client, &client_io);
+    int disconnected_index = -1;
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_event_after (
+      &probe, ZLINK_EVENT_DISCONNECTED, ready_index + 1, 5000, &disconnected_index));
+    TEST_ASSERT_EQUAL_UINT64 (ZLINK_DISCONNECT_HANDSHAKE_FAILED,
+                              test_monitor_probe_record_at (&probe, disconnected_index).value);
+
+    boost::system::error_code ignored;
+    beast::get_lowest_layer (client).close (ignored);
+    close_test_monitor_probe (&monitor, &probe);
+    test_context_socket_close (server);
+    cleanup_tls_test_files (files);
+}
 #endif
 #endif // ZLINK_HAVE_WSS
 #endif // ZLINK_HAVE_WS
@@ -545,12 +751,15 @@ int main (void)
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO
     RUN_TEST (test_zmp_ws_binary_record_is_a_byte_carrier);
     RUN_TEST (test_zmp_ws_rejects_text_hello_data_and_fragmented_data);
+    RUN_TEST (test_zmp_ws_malformed_frame_during_output);
+    RUN_TEST (test_zmp_ws_close_during_peer_send_has_no_protocol_error);
 #endif
 #if defined ZLINK_HAVE_WSS
     RUN_TEST (test_zmp_wss_pair_message);
     RUN_TEST (test_zmp_wss_request_reply);
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO
     RUN_TEST (test_zmp_wss_rejects_text_hello_data_and_fragmented_data);
+    RUN_TEST (test_zmp_wss_malformed_frame_during_output);
 #endif
 #endif
 #else

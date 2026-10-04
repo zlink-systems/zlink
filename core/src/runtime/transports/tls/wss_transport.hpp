@@ -23,11 +23,6 @@
 namespace zlink
 {
 
-#ifdef ZLINK_BUILD_TESTS
-size_t test_wss_write_buffer_bytes ();
-size_t test_wss_read_message_max ();
-#endif
-
 //  Secure WebSocket (WSS) transport implementation using Boost.Beast
 //
 //  This transport wraps a TCP socket with SSL and then WebSocket framing.

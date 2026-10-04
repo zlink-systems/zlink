@@ -82,12 +82,14 @@ struct contract_zmp_transport_state_t
         messages (messages_),
         encrypted (encrypted_),
         hold_writes (false),
+        sync_write_attempts (0),
         read_buffer (NULL),
         read_capacity (0)
     {
     }
     boost::asio::io_context *io;
     bool opened, messages, encrypted, hold_writes;
+    size_t sync_write_attempts;
     unsigned char *read_buffer;
     size_t read_capacity;
     zlink::i_asio_transport::completion_handler_t read_handler;
@@ -234,6 +236,7 @@ class contract_zmp_transport_t : public zlink::i_asio_transport
     }
     size_t write_some (const unsigned char *, size_t) ZLINK_OVERRIDE
     {
+        ++state->sync_write_attempts;
         errno = EAGAIN;
         return 0;
     }
@@ -298,7 +301,8 @@ struct contract_zmp_engine_t
     contract_zmp_engine_t (void *socket_,
                            bool messages_ = false,
                            bool encrypted_ = false,
-                           size_t out_batch_size_ = 0) :
+                           size_t out_batch_size_ = 0,
+                           bool hold_initial_writes_ = false) :
         core (as_socket_handle (socket_).socket),
         io (core->get_ctx (), core->get_tid ()),
         state (new contract_zmp_transport_state_t (messages_, encrypted_)),
@@ -307,6 +311,7 @@ struct contract_zmp_engine_t
         descriptor (zlink::open_socket (AF_INET, SOCK_STREAM, IPPROTO_TCP))
     {
         TEST_ASSERT_NOT_EQUAL (zlink::retired_fd, descriptor);
+        state->hold_writes = hold_initial_writes_;
         zlink::options_t options = zlink::session_termination_test_access_t::options_for (core);
         if (out_batch_size_ != 0)
             options.out_batch_size = static_cast<int> (out_batch_size_);

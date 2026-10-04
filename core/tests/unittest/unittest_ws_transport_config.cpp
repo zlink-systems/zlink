@@ -3,12 +3,8 @@
 #include "testutil_unity.hpp"
 #include <boost/beast/websocket/detail/mask.hpp>
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_ASIO_WS && defined ZLINK_HAVE_WS
-#include "transports/ws/ws_transport.hpp"
 #include "transports/ws/ws_batch_policy.hpp"
 #include "transports/ws/ws_transport_common_internal.hpp"
-#if defined ZLINK_HAVE_WSS
-#include "transports/tls/wss_transport.hpp"
-#endif
 #endif
 #if defined ZLINK_HAVE_ASIO_SSL
 #include "transports/tls/ssl_context_helper.hpp"
@@ -159,12 +155,12 @@ void test_ws_mask_inplace_matches_byte_reference ()
 }
 
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_ASIO_WS && defined ZLINK_HAVE_WS
-void test_ws_transport_config_initialization_is_thread_safe ()
+void test_ws_common_config_initialization_is_thread_safe ()
 {
     const size_t worker_count = 16;
     std::atomic<size_t> ready (0);
     std::atomic<bool> start (false);
-    std::vector<std::array<size_t, 4> > values (worker_count);
+    std::vector<std::array<size_t, 2>> values (worker_count);
     std::vector<std::thread> workers;
     workers.reserve (worker_count);
 
@@ -174,15 +170,8 @@ void test_ws_transport_config_initialization_is_thread_safe ()
             while (!start.load (std::memory_order_acquire))
                 std::this_thread::yield ();
 
-            values[i][0] = zlink::test_ws_write_buffer_bytes ();
-            values[i][1] = zlink::test_ws_read_message_max ();
-#if defined ZLINK_HAVE_WSS
-            values[i][2] = zlink::test_wss_write_buffer_bytes ();
-            values[i][3] = zlink::test_wss_read_message_max ();
-#else
-            values[i][2] = 0;
-            values[i][3] = 0;
-#endif
+            values[i][0] = zlink::ws_transport_common_internal::write_buffer_bytes_for_payload (0);
+            values[i][1] = zlink::ws_transport_common_internal::read_message_max ();
         }));
     }
 
@@ -198,10 +187,6 @@ void test_ws_transport_config_initialization_is_thread_safe ()
     for (size_t i = 1; i != worker_count; ++i) {
         TEST_ASSERT_EQUAL_UINT64 (values[0][0], values[i][0]);
         TEST_ASSERT_EQUAL_UINT64 (values[0][1], values[i][1]);
-#if defined ZLINK_HAVE_WSS
-        TEST_ASSERT_EQUAL_UINT64 (values[0][2], values[i][2]);
-        TEST_ASSERT_EQUAL_UINT64 (values[0][3], values[i][3]);
-#endif
     }
 }
 
@@ -212,8 +197,7 @@ void test_ws_buffers_keep_small_initial_sizes_and_grow_for_large_payload ()
     TEST_ASSERT_EQUAL_UINT64 (
       128 * 1024, zlink::ws_batch_policy::zmp_send_batch_max_size ());
     TEST_ASSERT_EQUAL_UINT64 (
-      64 * 1024,
-      zlink::ws_transport_common_internal::write_buffer_bytes ());
+      64 * 1024, zlink::ws_transport_common_internal::write_buffer_bytes_for_payload (0));
     TEST_ASSERT_EQUAL_UINT64 (
       64 * 1024,
       zlink::ws_transport_common_internal::write_buffer_bytes_for_payload (
@@ -254,7 +238,7 @@ int main ()
 #endif
     RUN_TEST (test_ws_mask_inplace_matches_byte_reference);
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_ASIO_WS && defined ZLINK_HAVE_WS
-    RUN_TEST (test_ws_transport_config_initialization_is_thread_safe);
+    RUN_TEST (test_ws_common_config_initialization_is_thread_safe);
     RUN_TEST (test_ws_buffers_keep_small_initial_sizes_and_grow_for_large_payload);
 #endif
     return UNITY_END ();

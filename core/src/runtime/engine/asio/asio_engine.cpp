@@ -453,10 +453,9 @@ void zlink::asio_engine_t::start_async_read ()
     const bool message_transport =
       _transport_adapter.transport
       && _transport_adapter.transport->has_message_boundaries ();
-    if (_pipeline.read_pending || _pipeline.io_error
+    if (_pipeline.read_pending || _pipeline.io_error || _deferred_terminal_error
         || (_input_stop_reason != input_running
-            && (_options.type != ZLINK_CORE_SOCKET_STREAM
-                || message_transport)))
+            && (_options.type != ZLINK_CORE_SOCKET_STREAM || message_transport)))
         return;
 
     ENGINE_DBG ("start_async_read: insize=%zu", _insize);
@@ -659,9 +658,23 @@ bool zlink::asio_engine_t::buffer_stream_backpressure_read (size_t bytes_transfe
     return true;
 }
 
+bool zlink::asio_engine_t::write_turn_available () const
+{
+    return !_connection_facade.terminating && !_pipeline.write_pending && !_pipeline.io_error
+           && !_deferred_terminal_error;
+}
+
+bool zlink::asio_engine_t::defer_terminal_error (error_reason_t reason_)
+{
+    if (!_pipeline.write_pending || _connection_facade.terminating || _pipeline.io_error)
+        return false;
+    _deferred_terminal_error = reason_;
+    return true;
+}
+
 void zlink::asio_engine_t::start_async_write ()
 {
-    if (_connection_facade.terminating || _pipeline.write_pending || _pipeline.io_error)
+    if (!write_turn_available ())
         return;
 
     ENGINE_DBG ("start_async_write: outsize=%zu", _outsize);
@@ -673,7 +686,7 @@ void zlink::asio_engine_t::start_async_write ()
         process_output ();
     }
 
-    if (_pipeline.write_pending)
+    if (!write_turn_available ())
         return;
 
     if (_outsize == 0 || _outpos == NULL) {
@@ -928,8 +941,8 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
                 ec.message ().c_str (), bytes_transferred, _connection_facade.terminating,
                 _input_stop_reason != input_running);
 
-    //  If terminating, just return - terminate() is draining handlers
-    if (_connection_facade.terminating)
+    //  A terminal error waits for the current output before closing input.
+    if (_connection_facade.terminating || _deferred_terminal_error)
         return;
 
     if (!_connection_facade.plugged)
@@ -1116,11 +1129,12 @@ void zlink::asio_engine_t::on_write_complete (const boost::system::error_code &e
         return;
 
     if (ec) {
-        if (ec == boost::asio::error::operation_aborted)
+        if (ec == boost::asio::error::operation_aborted && !_deferred_terminal_error)
             return;
         //  A failed transport write is already a terminal connection result.
         //  Merely suppressing later reads can strand the engine without a
         //  session error or DISCONNECTED edge, especially while READY drains.
+        _deferred_terminal_error.reset ();
         errno = ec.value ();
         finish_gather_output ();
         error (connection_error);
@@ -1171,6 +1185,13 @@ void zlink::asio_engine_t::on_write_complete (const boost::system::error_code &e
         }
 
         _pipeline.async_zero_copy = false;
+    }
+
+    if (_deferred_terminal_error) {
+        const error_reason_t reason = *_deferred_terminal_error;
+        _deferred_terminal_error.reset ();
+        error (reason);
+        return;
     }
 
     if (_outsize == 0)
@@ -1278,15 +1299,8 @@ bool zlink::asio_engine_t::process_input ()
             break;
     }
 
-    //  Tear down the connection if we have failed to decode input data
-    //  or the session has rejected the message.
-    if (rc == -1) {
-        if (errno != EAGAIN) {
-            error (protocol_error);
-            return false;
-        }
-        stop_input_for_current_backpressure ();
-    }
+    if (rc == -1)
+        return classify_input_result (rc) != drain_failed;
 
     _connection_facade.session->flush ();
     return true;
@@ -1447,13 +1461,8 @@ void zlink::asio_engine_t::speculative_write ()
     ENGINE_DBG ("speculative_write: write_pending=%d, output_stopped=%d", _pipeline.write_pending,
                 _output_stopped);
 
-    //  Guard: If async write is already in progress, skip.
-    //  This ensures single write-in-flight invariant.
-    if (_pipeline.write_pending)
-        return;
-
-    //  Guard: Don't write during I/O errors
-    if (_pipeline.io_error)
+    //  A prepared output may already have started a gather write.
+    if (!write_turn_available ())
         return;
 
     //  Handshake completion can depend on observing the final control write
@@ -1475,7 +1484,7 @@ void zlink::asio_engine_t::speculative_write ()
         return;
     }
 
-    if (_pipeline.write_pending)
+    if (!write_turn_available ())
         return;
 
     if (_pipeline.async_gather) {
@@ -1551,7 +1560,7 @@ void zlink::asio_engine_t::speculative_write ()
         //  Try to prepare and write more data speculatively.
         //  This loop enables efficient burst writes without async overhead.
         while (prepare_output_buffer ()) {
-            if (_pipeline.write_pending)
+            if (!write_turn_available ())
                 return;
             const std::size_t more_bytes = _transport_adapter.transport->write_some (
               reinterpret_cast<const std::uint8_t *> (_outpos), _outsize);
@@ -1627,11 +1636,8 @@ bool zlink::asio_engine_t::restart_input ()
     return restart_input_internal ();
 }
 
-//  The three drain steps below all end the same way: EAGAIN means the session
-//  pipe is full and input stays stopped, a transport error is a connection
-//  error, any other -1 is a protocol error. Stating it once here is what lets
-//  the steps share one shape.
-zlink::asio_engine_t::drain_result_t zlink::asio_engine_t::classify_drain_stop (int rc_)
+//  Decoder validation and session/pipe rejection share this input stop rule.
+zlink::asio_engine_t::drain_result_t zlink::asio_engine_t::classify_input_result (int rc_)
 {
     if (rc_ == -1 && errno == EAGAIN) {
         stop_input_for_current_backpressure ();
@@ -1644,6 +1650,13 @@ zlink::asio_engine_t::drain_result_t zlink::asio_engine_t::classify_drain_stop (
         return drain_failed;
     }
     if (rc_ == -1) {
+        if (errno == ETERM) {
+            // The pipe has already entered termination. There is no malformed
+            // wire frame to report. engine_error() releases the session's
+            // engine ownership before the pending pipe-term command arrives.
+            error (connection_error);
+            return drain_failed;
+        }
         error (protocol_error);
         return drain_failed;
     }
@@ -1666,7 +1679,7 @@ zlink::asio_engine_t::drain_result_t zlink::asio_engine_t::retry_stopped_message
         rc = (this->*_process_msg) (_decoder->msg ());
     }
 
-    return classify_drain_stop (rc);
+    return classify_input_result (rc);
 }
 
 //  Finish the read buffer the engine was in the middle of when it stopped.
@@ -1696,7 +1709,7 @@ zlink::asio_engine_t::drain_result_t zlink::asio_engine_t::drain_current_input (
             break;
     }
 
-    return classify_drain_stop (rc);
+    return classify_input_result (rc);
 }
 
 //  Drain the reads that were buffered while input was stopped. Every queued
@@ -1740,7 +1753,7 @@ zlink::asio_engine_t::drain_result_t zlink::asio_engine_t::drain_pending_chunks 
             _pipeline.total_pending_bytes -= chunk_pos;
         }
 
-        const drain_result_t result = classify_drain_stop (rc);
+        const drain_result_t result = classify_input_result (rc);
         if (result != drain_done)
             return result;
 
@@ -1820,7 +1833,7 @@ int zlink::asio_engine_t::retry_decoder_allocation ()
     if (rc == -1) {
         if (errno == EAGAIN)
             return -1;
-        error (protocol_error);
+        classify_input_result (rc);
         return -1;
     }
     return rc;
@@ -1888,10 +1901,12 @@ void zlink::asio_engine_t::error (error_reason_t reason_,
     //  Mark as terminating to prevent callbacks from processing
     if (_connection_facade.terminating)
         return;
+    _deferred_terminal_error.reset ();
     _connection_facade.terminating = true;
     _connection_facade.callback_guard.reset ();
 
     zlink_assert (_connection_facade.session);
+    session_base_t *const session = _connection_facade.session;
 
     // protocol errors have been signaled already at the point where they occurred
     if (reason_ != protocol_error && _connection_facade.handshaking) {
@@ -1916,9 +1931,9 @@ void zlink::asio_engine_t::error (error_reason_t reason_,
     }
 
     emit_disconnected (disconnect_reason);
-    _connection_facade.session->flush ();
-    _connection_facade.session->engine_error (!_connection_facade.handshaking, reason_);
+    session->flush ();
     unplug ();
+    session->engine_error (!_connection_facade.handshaking, reason_);
 
     destroy_after_callbacks ();
 }
