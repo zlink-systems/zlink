@@ -99,6 +99,25 @@ final class ZLinkCanonicalRelocationStateMachine
                                         .toArray(CompletableFuture[]::new)));
     }
 
+    CompletionStage<Void> sealAcceptedTargetRelocations() {
+        var accepted =
+                inStateLane(
+                        () ->
+                                targets.entrySet().stream()
+                                        .map(entry -> Map.entry(entry.getKey(), entry.getValue()))
+                                        .toList());
+        for (var entry : accepted) {
+            discardTarget(
+                    entry.getKey(),
+                    entry.getValue(),
+                    new IllegalStateException("relocation target admission is sealed"));
+        }
+        return CompletableFuture.allOf(
+                accepted.stream()
+                        .map(entry -> entry.getValue().terminal())
+                        .toArray(CompletableFuture[]::new));
+    }
+
     ZLinkCanonicalRelocationStateMachine(
             ZLinkInternalMeshNode node,
             String meshName,
@@ -1017,26 +1036,13 @@ final class ZLinkCanonicalRelocationStateMachine
             return failed(
                     new IllegalArgumentException("canonical relocation cutover fence differs"));
         }
-        if (attempt.receivedCutover() != null) {
+        CompletableFuture<Void> publication = new CompletableFuture<>();
+        PublicationClaim claim = attempt.claimPublication(publication, cutover);
+        if (!claim.owner()) {
             LOGGER.warning("Late or duplicate canonical CUTOVER is a no-op: " + fence.id());
             return CompletableFuture.completedFuture(null);
         }
-        Optional<List<byte[]>> batch =
-                attempt.boundary()
-                        .verifiedBatch(
-                                cutover.boundaryRecordCount(), cutover.boundaryChecksumCrc32c());
-        if (batch.isEmpty()) {
-            //  On an ordered connection a mismatch is a defect signal. The target
-            //  keeps waiting for a resent whole batch and never opens without it.
-            LOGGER.severe(
-                    "Canonical CUTOVER boundary record count or checksum differs"
-                            + " from the received relay section: "
-                            + fence.id());
-            return failed(
-                    new IllegalStateException("canonical relocation cutover boundary differs"));
-        }
-        attempt.receivedCutover(ZLinkCanonicalRelocationProtocol.encodeCutover(cutover));
-        return publishTarget(fence, attempt, batch.get());
+        return publishTarget(fence, attempt, claim.verifiedBatch(), publication);
     }
 
     /**
@@ -1088,7 +1094,7 @@ final class ZLinkCanonicalRelocationStateMachine
 
     private void discardTarget(Fence fence, TargetAttempt attempt, Throwable cause) {
         CompletableFuture<Void> created = new CompletableFuture<>();
-        if (!attempt.claimPublication(created).owner()) {
+        if (!attempt.claimPublication(created, null).owner()) {
             return;
         }
         settleTargetTerminal(fence, attempt, created);
@@ -1104,10 +1110,10 @@ final class ZLinkCanonicalRelocationStateMachine
                                 .thenCompose(target::abort)
                                 .whenComplete(
                                         (discarded, discardFailure) -> {
-                                            inStateLane(() -> targets.remove(fence, attempt));
                                             if (discardFailure == null) {
-                                                attempt.terminal().complete(null);
+                                                retainTerminalTarget(fence, attempt);
                                             } else {
+                                                inStateLane(() -> targets.remove(fence, attempt));
                                                 attempt.terminal()
                                                         .completeExceptionally(
                                                                 unwrap(discardFailure));
@@ -1120,13 +1126,10 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private CompletionStage<Void> publishTarget(
-            Fence fence, TargetAttempt attempt, List<byte[]> verifiedBatch) {
-        CompletableFuture<Void> created = new CompletableFuture<>();
-        PublicationClaim claim = attempt.claimPublication(created);
-        if (!claim.owner()) {
-            return claim.publication();
-        }
-        CompletableFuture<Void> publication = created;
+            Fence fence,
+            TargetAttempt attempt,
+            List<byte[]> verifiedBatch,
+            CompletableFuture<Void> publication) {
         settleTargetTerminal(fence, attempt, publication);
         //  Publish the claim before completed prepare/commit stages can run
         //  inline and make the target attempt observable again.
@@ -2010,7 +2013,12 @@ final class ZLinkCanonicalRelocationStateMachine
         return awaitStateLane(stateLane, work);
     }
 
-    private record PublicationClaim(CompletionStage<Void> publication, boolean owner) {}
+    private record PublicationClaim(
+            CompletionStage<Void> publication, boolean owner, List<byte[]> verifiedBatch) {
+        PublicationClaim(CompletionStage<Void> publication, boolean owner) {
+            this(publication, owner, List.of());
+        }
+    }
 
     private record Fence(UUID id, long attempt) {
         static Fence from(ZLinkSpotRetireControl.Fence fence) {
@@ -2174,7 +2182,7 @@ final class ZLinkCanonicalRelocationStateMachine
         private boolean relayReadyAccepted;
         private boolean committed;
         private volatile long committedNanos;
-        private volatile byte[] receivedCutover;
+        private byte[] receivedCutover;
 
         TargetAttempt(ZLinkCanonicalRelocationProtocol.Prepare prepare) {
             this.prepare = prepare;
@@ -2213,14 +2221,6 @@ final class ZLinkCanonicalRelocationStateMachine
                     });
         }
 
-        void receivedCutover(byte[] value) {
-            inStateLane(
-                    () -> {
-                        receivedCutover = value.clone();
-                        return null;
-                    });
-        }
-
         CompletableFuture<ZLinkSpotRetireControl.StageRequest> request() {
             return request;
         }
@@ -2241,24 +2241,8 @@ final class ZLinkCanonicalRelocationStateMachine
             return inStateLane(() -> publication);
         }
 
-        void publication(CompletionStage<Void> value) {
-            inStateLane(
-                    () -> {
-                        publication = value;
-                        return null;
-                    });
-        }
-
         CompletionStage<Void> readyPublication() {
             return inStateLane(() -> readyPublication);
-        }
-
-        void readyPublication(CompletionStage<Void> value) {
-            inStateLane(
-                    () -> {
-                        readyPublication = value;
-                        return null;
-                    });
         }
 
         PublicationClaim claimReadyPublication(CompletableFuture<Void> created) {
@@ -2282,14 +2266,34 @@ final class ZLinkCanonicalRelocationStateMachine
                     });
         }
 
-        PublicationClaim claimPublication(CompletableFuture<Void> created) {
+        PublicationClaim claimPublication(
+                CompletableFuture<Void> created, ZLinkCanonicalRelocationProtocol.Cutover cutover) {
             return inStateLane(
                     () -> {
                         if (publication != null) {
                             return new PublicationClaim(publication, false);
                         }
+                        List<byte[]> verifiedBatch = List.of();
+                        if (cutover != null) {
+                            Optional<List<byte[]>> batch =
+                                    boundary.verifiedBatch(
+                                            cutover.boundaryRecordCount(),
+                                            cutover.boundaryChecksumCrc32c());
+                            if (batch.isEmpty()) {
+                                LOGGER.severe(
+                                        "Canonical CUTOVER boundary record count or checksum differs"
+                                                + " from the received relay section: "
+                                                + prepare.id());
+                                throw new IllegalStateException(
+                                        "canonical relocation cutover boundary differs");
+                            }
+                            verifiedBatch = batch.get();
+                            receivedCutover =
+                                    ZLinkCanonicalRelocationProtocol.encodeCutover(cutover);
+                        }
+                        // Verification and staging termination share this attempt owner turn.
                         publication = created;
-                        return new PublicationClaim(created, true);
+                        return new PublicationClaim(created, true, verifiedBatch);
                     });
         }
 

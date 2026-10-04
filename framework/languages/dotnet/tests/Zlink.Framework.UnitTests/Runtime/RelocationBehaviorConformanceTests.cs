@@ -23,7 +23,7 @@ using Zlink.Framework.Runtime.Streams;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class RelocationBehaviorConformanceTests
+public sealed partial class RelocationBehaviorConformanceTests
 {
     [Fact]
     public async Task Planned_maintenance_relocates_parallel_standalone_actors_before_shutdown()
@@ -2110,7 +2110,8 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         bool registerTargetSpot,
         TimeSpan? pollingInterval = null,
         TimeProvider? timeProvider = null,
-        CanonicalRelocationTransportProbe? canonicalTransportProbe = null
+        CanonicalRelocationTransportProbe? canonicalTransportProbe = null,
+        bool relocateSpots = false
     )
     {
         var services = new ServiceCollection();
@@ -2150,7 +2151,13 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
             if (registerTargetSpot)
                 objects.AddSpotFactory<BehaviorTargetSpot>(
                     SpotType,
-                    factory => factory.DisableRelocation()
+                    factory =>
+                    {
+                        if (relocateSpots)
+                            factory.PreserveStateWith<ShutdownBehaviorSpotAdapter>();
+                        else
+                            factory.DisableRelocation();
+                    }
                 );
         });
         var provider = services.BuildServiceProvider();
@@ -2710,6 +2717,13 @@ internal sealed class CanonicalRelocationTransportProbe
             _cutover ?? throw new InvalidOperationException("No canonical cutover was captured."),
             cancellationToken
         ) ?? throw new InvalidOperationException("No canonical cutover transport was captured.");
+
+    internal ValueTask DeliverCapturedCutoverAsync() =>
+        (_target ?? throw new InvalidOperationException("No target was captured.")).CutoverAsync(
+            _cutover ?? throw new InvalidOperationException("No cutover was captured."),
+            _cutover.Coordinator.NodeRid,
+            CancellationToken.None
+        );
 
     internal void RecordSourceLeaveSubmission()
     {

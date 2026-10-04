@@ -822,7 +822,9 @@ completes within a fixed time, in this order.
    the publication's terminal (success or failure) is awaited; there is no timed wait for
    propagation after publishing.
 3. Processes already-accepted handlers, request completions, relocation units, and
-   session barriers up to the deadline.
+   session barriers up to the deadline. A relocation attempt accepted as target that is
+   still before a verified cutover ends with this seal, per
+   [Common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 4. Doesn't start new object relocation. After following [Cancellation and shutdown §5.1](../01-execution/03-cancellation-and-shutdown.en.md#51-ending-waits-on-an-application-completion-source),
    delivers a `HostShutdown` closing context to every Entry, User, and Instance Spot while Actor
    membership and local instances remain valid. Per-Actor closing callbacks aren't called.

@@ -1386,6 +1386,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         );
                         return;
                     }
+                    if (EndUnverifiedTarget(key, lease.Slot, fenceSettled: false))
+                        return;
                     stage.ValidateCutover(cutover, authenticatedSourceNodeRid);
                     if (stage.AuthorityPublished)
                     {
@@ -1665,6 +1667,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 {
                     if (lease.Slot.Stage is not { } stage || stage.AuthorityPublished)
                         return;
+                    if (EndUnverifiedTarget(key, lease.Slot, fenceSettled: false))
+                        return;
                     var targetOwner = new ZLinkLocationOwnerToken(
                         stage.TargetAuthority.OwnerId,
                         checked((long)stage.TargetAuthority.OwnerLeaseGeneration)
@@ -1690,11 +1694,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         waiting = true;
                         return;
                     }
-                    if (
-                        stage.TryBeginSettledCleanup(() => lease.Slot.TryRemoveStage(stage)) is
-                        { } previousPhase
-                    )
-                        _ = RegisterTargetAbortLocked(key, lease.Slot, stage, previousPhase);
+                    _ = EndUnverifiedTarget(key, lease.Slot, fenceSettled: true);
                 })
                 .ConfigureAwait(false);
         }
@@ -3126,7 +3126,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         if (
             runtime.TryRunDetached(
                 "standalone-actor-target-abort",
-                _ => CompleteTargetAbortAsync(key, abort, forceStopToken)
+                async _ =>
+                {
+                    var cleanup = CompleteTargetAbortAsync(key, abort, forceStopToken).AsTask();
+                    abort.ObserveTerminal(cleanup);
+                    await cleanup.ConfigureAwait(false);
+                }
             )
         )
             return abort;
@@ -3179,6 +3184,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     .RollbackTransferredActorAsync(stage.ActorState.ActorId, cancellationToken)
                     .ConfigureAwait(false);
             }
+            stage.Admission.Release();
             abort.Complete();
             completed = true;
         }
@@ -3193,7 +3199,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         CloseTargetAttemptIfEmpty(key, lease.Slot);
                     }
             }
-            abort.Terminate();
         }
     }
 
@@ -3212,16 +3217,49 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         CloseTargetAttemptIfEmpty(key, slot);
     }
 
+    // Called only on the attempt lane, before cutover verification. The lane
+    // keeps a verified attempt through its whole CAS settlement and activation.
+    private bool EndUnverifiedTarget(AttemptKey key, AttemptSlot slot, bool fenceSettled)
+    {
+        if (slot.Stage is not { } stage)
+            return true;
+        if (stage.AuthorityPublished)
+            return false;
+        if (
+            !fenceSettled
+            && Volatile.Read(ref _targetAttemptAdmissionSealed) == 0
+            && !runtime.DrainAdmission.IsSealedForShutdown
+        )
+            return false;
+        if (stage.TryBeginSettledCleanup(() => slot.TryRemoveStage(stage)) is { } previousPhase)
+            _ = RegisterTargetAbortLocked(key, slot, stage, previousPhase);
+        return true;
+    }
+
     internal async ValueTask SealAndDrainTargetAttemptsAsync(CancellationToken cancellationToken)
     {
         Interlocked.Exchange(ref _targetAttemptAdmissionSealed, 1);
-        var slots = _targetAttempts.Values.Distinct().ToArray();
-        foreach (var slot in slots)
-            slot.MarkClosing();
-        await Task.WhenAll(slots.Select(static slot => slot.Quiesced))
+        var attempts = _targetAttempts.ToArray();
+        foreach (var pair in attempts)
+            pair.Value.MarkClosing();
+        // Accepted prepares must finish installing their stage before the
+        // owner settles the seal. Closing blocks new leases, not existing users.
+        await Task.WhenAll(attempts.Select(static pair => pair.Value.Quiesced))
             .WaitAsync(cancellationToken)
             .ConfigureAwait(false);
-        await Task.WhenAll(slots.Select(static slot => slot.Abort?.Terminal).OfType<Task>())
+        await Task.WhenAll(
+                attempts.Select(pair =>
+                    pair.Value.RunAsync(() =>
+                            EndUnverifiedTarget(pair.Key, pair.Value, fenceSettled: false)
+                        )
+                        .AsTask()
+                )
+            )
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await Task.WhenAll(
+                attempts.Select(static pair => pair.Value.Abort?.Terminal).OfType<Task>()
+            )
             .WaitAsync(cancellationToken)
             .ConfigureAwait(false);
     }
@@ -3538,18 +3576,18 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     private sealed class TargetAbort(TargetStage stage)
     {
         private int _completed;
-        private readonly TaskCompletionSource _terminal = new(
+        private readonly TaskCompletionSource<Task> _terminal = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
 
         internal TargetStage Stage { get; } = stage;
         internal TimeSpan CreatedAt { get; } = Stopwatch.GetElapsedTime(0);
         internal bool IsCompleted => Volatile.Read(ref _completed) != 0;
-        internal Task Terminal => _terminal.Task;
+        internal Task Terminal => _terminal.Task.Unwrap();
 
         internal void Complete() => Volatile.Write(ref _completed, 1);
 
-        internal void Terminate() => _terminal.TrySetResult();
+        internal void ObserveTerminal(Task cleanup) => _terminal.TrySetResult(cleanup);
     }
 
     private sealed class TargetStage(

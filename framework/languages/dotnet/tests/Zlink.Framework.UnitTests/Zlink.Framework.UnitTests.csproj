@@ -203,6 +203,7 @@
         <Compile Include="Runtime/AuditRuntimeFailureReporter.cs"/>
         <Compile Include="Runtime/ActorMembershipOwnershipTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>
+        <Compile Include="Runtime/RelocationTargetShutdownTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.cs"/>
         <Compile Include="Runtime/SpotCloseAdmissionSealTests.cs"/>
         <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>

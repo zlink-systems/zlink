@@ -6001,7 +6001,7 @@ test('concurrent Instance activation CAS loser joins Ready and returns the winne
 
 test('raw backend dispatches Spot requests and Actor sends through M6B owners', async () => {
   const nonce = `${process.pid}-${Date.now()}`;
-  const endpoint = `ipc:///tmp/zlink-m6b-node-${nonce}.sock`;
+  const endpoint = `inproc://zlink-m6b-node-${nonce}`;
   const backend = new ZLinkNodeRawMeshBackend(
     'm6b-mesh',
     'm6b-node',

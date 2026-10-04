@@ -311,10 +311,10 @@ public final class ZLinkUserSpotRetireRuntime {
                 .allMatch(ZLinkCanonicalRelocationStateMachine::sourceQuiescent);
     }
 
-    public CompletionStage<Void> awaitAcceptedTargetRelocations() {
+    public CompletionStage<Void> sealAcceptedTargetRelocations() {
         return CompletableFuture.allOf(
                 stateMachines.stream()
-                        .map(ZLinkCanonicalRelocationStateMachine::awaitAcceptedTargetRelocations)
+                        .map(ZLinkCanonicalRelocationStateMachine::sealAcceptedTargetRelocations)
                         .map(CompletionStage::toCompletableFuture)
                         .toArray(CompletableFuture[]::new));
     }
