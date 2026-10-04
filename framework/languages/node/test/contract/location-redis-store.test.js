@@ -231,6 +231,33 @@ test('redis Store serializes concurrent first-use connection', async (t) => {
   }
 });
 
+test('redis prefix scan excludes unrelated index records from its page work', async t => {
+  const fixture = await redisFixture(t);
+  if (!fixture) return;
+  const prefix = testPrefix('prefix-work');
+  const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+  try {
+    for (let index = 0; index < 130; index++) {
+      await store.write({ conditions: [], mutations: [
+        { kind: 'put', key: key(`authority/${index}`), bytes: Buffer.from('outside') },
+        { kind: 'put', key: key(`terminal/${index}`), bytes: Buffer.from('outside') }
+      ] });
+    }
+    const expected = ['descriptor/', 'descriptor/a', 'descriptor/한글'];
+    for (const value of expected) {
+      await store.write({ conditions: [], mutations: [{ kind: 'put', key: key(value), bytes: Buffer.from(value) }] });
+    }
+    const page = await store.scan({ prefix: 'descriptor/', limit: 3 });
+    assert.equal(page.kind, 'page');
+    assert.deepEqual(page.value.items.map(item => item.key.value), expected);
+    assert.equal(page.value.nextCursor, undefined);
+  } finally {
+    await store.dispose();
+    await cleanup(fixture.client, prefix);
+    await fixture.client.quit();
+  }
+});
+
 test('redis opaque Location Store enforces TTL and fixed scan snapshots', async (t) => {
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;
@@ -1584,6 +1611,7 @@ function userSpotCapacity(count) {
 
 async function redisFixture(t) {
   const candidates = [
+    process.env.ZLINK_REDIS_LOCATION_ENDPOINT,
     process.env.ZLINK_REDIS_TEST_ENDPOINT,
     '127.0.0.1:16379',
     '127.0.0.1:6379'

@@ -11,6 +11,7 @@ const REDIS_CLEANUP_BATCH_SIZE = 32;
 const REDIS_RECORD_RETENTION_MS = 60000;
 const REDIS_SCAN_SNAPSHOT_RETENTION_MS = 60000;
 const REDIS_MAX_SCAN_SNAPSHOTS = 4096;
+const REDIS_UTF8_PREFIX_UPPER_BOUND_BYTE = 0xff;
 
 export const REDIS_STORE_TOKEN = Object.freeze({
   Conflict: 'conflict',
@@ -235,10 +236,11 @@ if not metadata[1] or metadata[3] ~= prefix then
 end
 local snapshotNow = tonumber(metadata[1])
 local boundary = tonumber(metadata[2])
-local lower = '-'
+local lower = '[' .. prefix
+local upper = '[' .. prefix .. string.char(${REDIS_UTF8_PREFIX_UPPER_BOUND_BYTE})
 if string.len(lastKey) > 0 then lower = '(' .. lastKey end
 local workLimit = math.max(limit * ${REDIS_SCAN_WORK_BUDGET_MULTIPLIER}, ${REDIS_SCAN_MINIMUM_WORK_BUDGET})
-local originals = redis.call('ZRANGEBYLEX', KEYS[1], lower, '+', 'LIMIT', 0, workLimit + 1)
+local originals = redis.call('ZRANGEBYLEX', KEYS[1], lower, upper, 'LIMIT', 0, workLimit + 1)
 local emitted = 0
 local encodedBytes = 0
 local examined = 0
@@ -246,27 +248,25 @@ local result = {'${REDIS_STORE_TOKEN.Page}', tostring(snapshotNow), ''}
 while examined < #originals and examined < workLimit and emitted < limit do
     local original = originals[examined + 1]
     examined = examined + 1
-    if string.sub(original, 1, string.len(prefix)) == prefix then
-        local rowKey = redis.call('HGET', KEYS[2], original)
-        if rowKey then
-            local members = redis.call('ZREVRANGEBYSCORE', rowKey, boundary, '-inf', 'LIMIT', 0, 1)
-            if #members > 0 then
-                local record = decodeMember(members[1])
-                local expiresAtMs = tonumber(record[4])
-                if record[1] == original and record[5] ~= true
-                    and (expiresAtMs == 0 or expiresAtMs > snapshotNow) then
-                    local itemBytes = string.len(original) + string.len(record[2]) + string.len(record[3]) + ${REDIS_ENCODED_ITEM_OVERHEAD_BYTES}
-                    if emitted > 0 and encodedBytes + itemBytes > ${ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES} then
-                        examined = examined - 1
-                        break
-                    end
-                    table.insert(result, original)
-                    table.insert(result, record[2])
-                    table.insert(result, record[3])
-                    table.insert(result, tostring(expiresAtMs))
-                    encodedBytes = encodedBytes + itemBytes
-                    emitted = emitted + 1
+    local rowKey = redis.call('HGET', KEYS[2], original)
+    if rowKey then
+        local members = redis.call('ZREVRANGEBYSCORE', rowKey, boundary, '-inf', 'LIMIT', 0, 1)
+        if #members > 0 then
+            local record = decodeMember(members[1])
+            local expiresAtMs = tonumber(record[4])
+            if record[1] == original and record[5] ~= true
+                and (expiresAtMs == 0 or expiresAtMs > snapshotNow) then
+                local itemBytes = string.len(original) + string.len(record[2]) + string.len(record[3]) + ${REDIS_ENCODED_ITEM_OVERHEAD_BYTES}
+                if emitted > 0 and encodedBytes + itemBytes > ${ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES} then
+                    examined = examined - 1
+                    break
                 end
+                table.insert(result, original)
+                table.insert(result, record[2])
+                table.insert(result, record[3])
+                table.insert(result, tostring(expiresAtMs))
+                encodedBytes = encodedBytes + itemBytes
+                emitted = emitted + 1
             end
         end
     end
