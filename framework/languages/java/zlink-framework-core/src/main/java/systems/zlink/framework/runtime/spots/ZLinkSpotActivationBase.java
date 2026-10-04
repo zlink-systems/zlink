@@ -27,10 +27,10 @@ import java.util.function.Supplier;
 
 abstract class SpotActivationBase<C extends SpotDispatchLine> {
     static <T> CompletionStage<T> finishCleanup(Throwable failure, CompletionStage<T> cleanup) {
-        Throwable primary = unwrapCloseFailure(failure);
+        Throwable primary = unwrapCompletion(failure);
         return cleanup.handle(
                 (value, cleanupFailure) -> {
-                    Throwable secondary = unwrapCloseFailure(cleanupFailure);
+                    Throwable secondary = unwrapCompletion(cleanupFailure);
                     if (primary != null) {
                         if (secondary != null && secondary != primary)
                             primary.addSuppressed(secondary);
@@ -42,7 +42,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 });
     }
 
-    private static Throwable unwrapCloseFailure(Throwable failure) {
+    private static Throwable unwrapCompletion(Throwable failure) {
         while (failure instanceof java.util.concurrent.CompletionException
                 && failure.getCause() != null) {
             failure = failure.getCause();
@@ -237,27 +237,17 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                     // for any handler stage. The Spot-wide execution gate is acquired
                     // by the queued turn, so a yielded Actor does not block admission
                     // of another Actor's turn.
-                    var permit = host.reserveApplicationJob();
-                    if (permit == null) {
-                        host.closePendingActorHeader(headerPart, pendingHeader);
-                        continue;
-                    }
-                    try (var ignored =
-                            systems.zlink.framework.runtime.internal.dispatch
-                                    .ZLinkApplicationJobContext.enter(permit)) {
-                        dispatches.add(
-                                admission
-                                        .apply(
-                                                () ->
-                                                        dispatchResolvedActorPacket(
-                                                                actor, packetHeader, read))
-                                        .whenComplete(
-                                                (done, failure) ->
-                                                        host.closePendingActorHeader(
-                                                                headerPart, pendingHeader)));
-                    } finally {
-                        permit.abandonReservation();
-                    }
+                    var dispatched =
+                            host.admitNewApplicationJob(
+                                    () ->
+                                            admission.apply(
+                                                    () ->
+                                                            dispatchResolvedActorPacket(
+                                                                    actor, packetHeader, read)));
+                    dispatched.whenComplete(
+                            (done, failure) ->
+                                    host.closePendingActorHeader(headerPart, pendingHeader));
+                    dispatches.add(dispatched);
                 } catch (RuntimeException | Error failure) {
                     host.closePendingActorHeader(headerPart, pendingHeader);
                     throw failure;
@@ -270,10 +260,27 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             }
             dispatches.add(CompletableFuture.failedFuture(failure));
         }
-        return CompletableFuture.allOf(
+        var futures =
                 dispatches.stream()
                         .map(CompletionStage::toCompletableFuture)
-                        .toArray(CompletableFuture[]::new));
+                        .toArray(CompletableFuture[]::new);
+        CompletableFuture<Void> completion =
+                new CompletableFuture<>() {
+                    @Override
+                    public boolean cancel(boolean mayInterruptIfRunning) {
+                        boolean cancelled = false;
+                        for (var future : futures)
+                            cancelled |= future.cancel(mayInterruptIfRunning);
+                        return cancelled;
+                    }
+                };
+        CompletableFuture.allOf(futures)
+                .whenComplete(
+                        (done, failure) -> {
+                            if (failure == null) completion.complete(null);
+                            else completion.completeExceptionally(unwrapCompletion(failure));
+                        });
+        return completion;
     }
 
     final CompletionStage<Void> dispatchSpotRouteHandler(

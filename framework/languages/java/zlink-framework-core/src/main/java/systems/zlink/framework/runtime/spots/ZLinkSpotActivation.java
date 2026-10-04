@@ -156,65 +156,55 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
 
     CompletionStage<Void> admitRoute(
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
-        var permit = host.reserveApplicationJob();
-        if (permit == null) {
-            received.close();
-            Thread.currentThread().interrupt();
-            var failure = new IllegalStateException("application job reservation was interrupted");
-            if (admission != null) admission.completeExceptionally(failure);
-            return CompletableFuture.failedFuture(failure);
-        }
-        try (var ignored =
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
-                        permit)) {
-            ZLinkFrameworkException hostRejection = host.spotHostAdmissionFailure(context.spotId());
-            if (hostRejection != null) {
-                received.close();
-                if (admission != null) admission.completeExceptionally(hostRejection);
-                return CompletableFuture.failedFuture(hostRejection);
-            }
-            if (host.dispatchSpotRouteBridgePacket(received)) {
-                received.close();
-                if (admission != null) admission.complete(null);
-                return CompletableFuture.completedFuture(null);
-            }
-            var replyRoute =
-                    host.registerRelocationReplyLazy(
-                            () -> ZLinkSpotAcceptedJournal.encode(received),
-                            received,
-                            context.spotId(),
-                            backendSpot.lifecycleGeneration());
-            CompletionStage<Void> admitted;
-            try {
-                admitted =
-                        context.enqueueAcceptedDispatch(
-                                replyRoute::record,
-                                received.acceptedJournalRecordSize(),
-                                () ->
-                                        dispatchRouteAsync(received)
-                                                .whenComplete(
-                                                        (done, failure) ->
-                                                                replyRoute.completeLocal()),
-                                replyRoute::releaseForRelocation,
-                                admission);
-            } catch (RuntimeException | Error failure) {
-                replyRoute.completeLocal();
-                throw failure;
-            }
-            return admitted.whenComplete(
-                    (done, failure) -> {
-                        if (failure != null) {
-                            replyRoute.completeLocal();
-                            received.close();
-                        }
-                    });
-        } catch (RuntimeException | Error failure) {
-            if (admission != null) admission.completeExceptionally(failure);
-            received.close();
-            throw failure;
-        } finally {
-            permit.abandonReservation();
-        }
+        var dispatched =
+                host.admitNewApplicationJob(
+                        () -> {
+                            ZLinkFrameworkException hostRejection =
+                                    host.spotHostAdmissionFailure(context.spotId());
+                            if (hostRejection != null)
+                                return CompletableFuture.failedFuture(hostRejection);
+                            if (host.dispatchSpotRouteBridgePacket(received)) {
+                                received.close();
+                                if (admission != null) admission.complete(null);
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            var replyRoute =
+                                    host.registerRelocationReplyLazy(
+                                            () -> ZLinkSpotAcceptedJournal.encode(received),
+                                            received,
+                                            context.spotId(),
+                                            backendSpot.lifecycleGeneration());
+                            CompletionStage<Void> admitted;
+                            try {
+                                admitted =
+                                        context.enqueueAcceptedDispatch(
+                                                replyRoute::record,
+                                                received.acceptedJournalRecordSize(),
+                                                () ->
+                                                        dispatchRouteAsync(received)
+                                                                .whenComplete(
+                                                                        (done, failure) ->
+                                                                                replyRoute
+                                                                                        .completeLocal()),
+                                                replyRoute::releaseForRelocation,
+                                                admission);
+                            } catch (RuntimeException | Error failure) {
+                                replyRoute.completeLocal();
+                                throw failure;
+                            }
+                            return admitted.whenComplete(
+                                    (done, failure) -> {
+                                        if (failure != null) replyRoute.completeLocal();
+                                    });
+                        });
+        dispatched.whenComplete(
+                (done, failure) -> {
+                    if (failure != null) {
+                        if (admission != null) admission.completeExceptionally(failure);
+                        received.close();
+                    }
+                });
+        return dispatched;
     }
 
     Boolean admitTopic(ZLinkBackendTopicMessage message) {
@@ -300,16 +290,18 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
     }
 
     CompletionStage<Void> admitActor(List<ZLinkBackendActorReceived> messages) {
-        return dispatchActorMessages(
+        var dispatched =
+                dispatchActorMessages(
                         messages,
                         operation -> {
                             var hostRejection = host.spotHostAdmissionFailure(context.spotId());
                             return hostRejection == null
                                     ? context.admitIngress(operation)
                                     : CompletableFuture.failedFuture(hostRejection);
-                        })
-                .whenComplete(
-                        (done, failure) -> messages.forEach(ZLinkBackendActorReceived::close));
+                        });
+        dispatched.whenComplete(
+                (done, failure) -> messages.forEach(ZLinkBackendActorReceived::close));
+        return dispatched;
     }
 
     private CompletionStage<Void> dispatchRoutesAsync(List<ZLinkBackendReceived> routes) {

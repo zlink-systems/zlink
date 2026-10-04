@@ -4394,25 +4394,39 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     <T> CompletionStage<T> admitNewApplicationJob(Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(operation, "operation");
-        ensureOwnerAdmissionOpen();
-        return applicationJobQueue
-                .acquire()
+        try {
+            ensureOwnerAdmissionOpen();
+        } catch (ZLinkFrameworkException rejected) {
+            return CompletableFuture.failedFuture(rejected);
+        }
+        var acquisition = applicationJobQueue.acquire().toCompletableFuture();
+        // Cancellation belongs to admission until the grant is delivered. Once
+        // granted, the queued job retains ownership until its existing terminal.
+        CompletableFuture<T> completion =
+                new CompletableFuture<>() {
+                    @Override
+                    public boolean cancel(boolean mayInterruptIfRunning) {
+                        return acquisition.cancel(mayInterruptIfRunning);
+                    }
+                };
+        acquisition
                 .thenCompose(
                         permit -> {
-                            permit.queued();
-                            CompletionStage<T> result;
                             try (var ignored =
                                     systems.zlink.framework.runtime.internal.dispatch
-                                            .ZLinkApplicationJobContext.enterQueued(permit)) {
-                                result =
-                                        Objects.requireNonNull(
-                                                operation.get(), "application job result");
-                            } catch (RuntimeException failure) {
-                                permit.close();
-                                return CompletableFuture.failedFuture(failure);
+                                            .ZLinkApplicationJobContext.enter(permit)) {
+                                return runQueuedApplicationJob(
+                                        systems.zlink.framework.runtime.internal.dispatch
+                                                .ZLinkApplicationJobContext.transferToQueuedJob(),
+                                        operation);
                             }
-                            return result.whenComplete((ignored, failure) -> permit.close());
+                        })
+                .whenComplete(
+                        (value, failure) -> {
+                            if (failure == null) completion.complete(value);
+                            else completion.completeExceptionally(failure);
                         });
+        return completion;
     }
 
     systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
@@ -4435,7 +4449,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
                         .enterQueued(ownership)) {
             result = Objects.requireNonNull(operation.get(), "application job result");
-        } catch (RuntimeException failure) {
+        } catch (RuntimeException | Error failure) {
             ownership.close();
             return CompletableFuture.failedFuture(failure);
         }

@@ -89,7 +89,7 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void submitSerializesRegistrationAndBindingStartAgainstClose() throws Exception {
+    void closeProgressesWhileSubmissionWaits() throws Exception {
         var closeFailure =
                 new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.SHUTTING_DOWN, "channel runtime is closed");
@@ -126,9 +126,12 @@ final class ZLinkServiceOperationRegistryTest {
                                         closeReturned.countDown();
                                     });
             assertTrue(closeStarted.await(1, TimeUnit.SECONDS));
-            assertFalse(closeReturned.await(20, TimeUnit.MILLISECONDS));
-
-            releaseSubmission.countDown();
+            // Spec 04 §3: Framework admission must not block terminal progress.
+            try {
+                assertTrue(closeReturned.await(1, TimeUnit.SECONDS));
+            } finally {
+                releaseSubmission.countDown();
+            }
             submitter.join();
             closer.join();
 
@@ -177,6 +180,44 @@ final class ZLinkServiceOperationRegistryTest {
             CompletionException failure = assertThrows(CompletionException.class, result::join);
             assertSame(expected, failure.getCause());
             assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void expiryProgressesWhileSubmissionWaits() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var transport = new CompletableFuture<String>();
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+                var workers = Executors.newFixedThreadPool(2);
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler, new IllegalStateException("closed"), () -> 0L)) {
+            var submission =
+                    workers.submit(
+                            () ->
+                                    registry.submit(
+                                            ZLinkServiceOperationIds.next(),
+                                            Duration.ofNanos(1),
+                                            () -> {
+                                                entered.countDown();
+                                                await(release);
+                                                return transport;
+                                            },
+                                            ignored -> {}));
+            try {
+                assertTrue(entered.await(1, TimeUnit.SECONDS));
+                var expiry = workers.submit(() -> registry.expire(1L));
+                assertEquals(1, expiry.get(1, TimeUnit.SECONDS));
+                assertEquals(0, registry.pendingCount());
+            } finally {
+                release.countDown();
+            }
+            var terminal =
+                    assertThrows(
+                            CompletionException.class,
+                            () -> submission.get(1, TimeUnit.SECONDS).join());
+            assertTrue(terminal.getCause() instanceof TimeoutException);
         }
     }
 

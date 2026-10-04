@@ -7329,7 +7329,8 @@ final class ZLinkJavaRawMeshNode
                 () -> targetLifecycleEnded(target),
                 listener -> onPeerStateChanged(target, listener),
                 this::runDurableTurn,
-                timeout);
+                timeout,
+                nanoTime);
     }
 
     private CompletionStage<List<byte[]>> requestApplication(
