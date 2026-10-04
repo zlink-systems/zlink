@@ -11,6 +11,139 @@ namespace Zlink.Framework.Locations.Redis.Tests;
 public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
 {
     [SkippableFact]
+    public async Task Prefix_scan_work_is_limited_to_matching_keys()
+    {
+        Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
+        await using var store = fixture.CreateStore();
+        var mutations = new List<ZLinkStoreMutation>();
+        for (var index = 0; index < 192; index++)
+        {
+            mutations.Add(
+                new ZLinkStoreMutation.Put(
+                    new ZLinkStoreKey($"authority/{index}"),
+                    new byte[] { 1 },
+                    null
+                )
+            );
+            mutations.Add(
+                new ZLinkStoreMutation.Put(
+                    new ZLinkStoreKey($"terminal/{index}"),
+                    new byte[] { 2 },
+                    null
+                )
+            );
+        }
+        var target = new ZLinkStoreKey("descriptor/mesh");
+        mutations.Add(new ZLinkStoreMutation.Put(target, new byte[] { 3 }, null));
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await store.WriteAsync(new ZLinkStoreWriteRequest([], mutations))
+        );
+        var page = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await store.ScanAsync(new ZLinkStoreScanRequest("descriptor/", null, 1))
+        );
+        Assert.Equal(target, Assert.Single(page.Value.Items).Key);
+        Assert.Null(page.Value.NextCursor);
+        var absent = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await store.ScanAsync(new ZLinkStoreScanRequest("missing/", null, 1))
+        );
+        Assert.Empty(absent.Value.Items);
+        Assert.Null(absent.Value.NextCursor);
+    }
+
+    [SkippableFact]
+    public async Task Prefix_scan_includes_exact_and_utf8_keys_across_pages()
+    {
+        Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
+        await using var store = fixture.CreateStore();
+        var exact = new ZLinkStoreKey("é");
+        var suffix = new ZLinkStoreKey("é/😀");
+        var other = new ZLinkStoreKey("ê");
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [],
+                    [
+                        new ZLinkStoreMutation.Put(exact, new byte[] { 1 }, null),
+                        new ZLinkStoreMutation.Put(suffix, new byte[] { 2 }, null),
+                        new ZLinkStoreMutation.Put(other, new byte[] { 3 }, null),
+                    ]
+                )
+            )
+        );
+        var first = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await store.ScanAsync(new ZLinkStoreScanRequest("é", null, 1))
+        );
+        Assert.Equal(exact, Assert.Single(first.Value.Items).Key);
+        Assert.NotNull(first.Value.NextCursor);
+        var last = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await store.ScanAsync(new ZLinkStoreScanRequest("é", first.Value.NextCursor, 1))
+        );
+        Assert.Equal(suffix, Assert.Single(last.Value.Items).Key);
+        Assert.Null(last.Value.NextCursor);
+        var all = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await store.ScanAsync(new ZLinkStoreScanRequest("", null, 1000))
+        );
+        Assert.Equal(3, all.Value.Items.Count);
+        Assert.Null(all.Value.NextCursor);
+    }
+
+    [SkippableFact]
+    public async Task Advancing_snapshot_boundary_reclaims_history_before_backlog_check()
+    {
+        Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
+        await using var store = fixture.CreateStore();
+        var firstKey = new ZLinkStoreKey("history/a");
+        var hotKey = new ZLinkStoreKey("history/b");
+        async Task PutAsync(byte value) =>
+            Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                await store.WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [],
+                        [new ZLinkStoreMutation.Put(hotKey, new[] { value }, null)]
+                    )
+                )
+            );
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [],
+                    [new ZLinkStoreMutation.Put(firstKey, new byte[] { 1 }, null)]
+                )
+            )
+        );
+        await PutAsync(2);
+        var oldSnapshot = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await store.ScanAsync(new ZLinkStoreScanRequest("history/", null, 1))
+        );
+        Assert.NotNull(oldSnapshot.Value.NextCursor);
+        for (var index = 0; index < 127; index++)
+            await PutAsync(3);
+        await Assert.ThrowsAsync<IOException>(() => PutAsync(4));
+        var newerSnapshot = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await store.ScanAsync(new ZLinkStoreScanRequest("history/", null, 1))
+        );
+        Assert.NotNull(newerSnapshot.Value.NextCursor);
+        var oldLast = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await store.ScanAsync(
+                new ZLinkStoreScanRequest("history/", oldSnapshot.Value.NextCursor, 1)
+            )
+        );
+        Assert.Equal(new byte[] { 2 }, Assert.Single(oldLast.Value.Items).Value.Bytes.ToArray());
+        Assert.Null(oldLast.Value.NextCursor);
+        await PutAsync(4);
+        var newerLast = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await store.ScanAsync(
+                new ZLinkStoreScanRequest("history/", newerSnapshot.Value.NextCursor, 1)
+            )
+        );
+        Assert.Equal(new byte[] { 3 }, Assert.Single(newerLast.Value.Items).Value.Bytes.ToArray());
+        Assert.Null(newerLast.Value.NextCursor);
+        await PutAsync(5);
+        var current = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(hotKey));
+        Assert.Equal(new byte[] { 5 }, current.Value.Bytes.ToArray());
+    }
+
+    [SkippableFact]
     public async Task Location_value_condition_checks_bytes_and_expiry_atomically()
     {
         Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);

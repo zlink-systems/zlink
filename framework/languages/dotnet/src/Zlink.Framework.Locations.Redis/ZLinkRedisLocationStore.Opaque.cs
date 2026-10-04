@@ -19,6 +19,7 @@ public sealed partial class ZLinkRedisLocationStore
     private const int ScanWorkMultiplier = 4;
     private const int MinimumScanWork = 128;
     private const int ScanItemOverheadBytes = 128;
+    private const int Utf8PrefixUpperBoundByte = 0xff;
     private const int RecordKeyPosition = 1;
     private const int RecordValuePosition = 2;
     private const int RecordVersionPosition = 3;
@@ -92,348 +93,337 @@ public sealed partial class ZLinkRedisLocationStore
         }
         """;
 
-    private static readonly string OpaqueWriteScript = $$"""
-        if redis.replicate_commands then redis.replicate_commands() end
-        local function unpackTagged(raw)
-            if string.byte(raw, 1) ~= {{OpaqueFormatTag}} then
-                return nil
-            end
-            return cmsgpack.unpack(string.sub(raw, {{OpaqueDataOffset}}))
-        end
-        local conditionCount = tonumber(ARGV[1])
-        local mutationCount = tonumber(ARGV[2])
-        local indexKey = KEYS[#KEYS - 5]
-        local mapKey = KEYS[#KEYS - 4]
-        local cleanupKey = KEYS[#KEYS - 3]
-        local sequenceKey = KEYS[#KEYS - 2]
-        local snapshotExpiryKey = KEYS[#KEYS - 1]
-        local snapshotBoundaryKey = KEYS[#KEYS]
-        local time = redis.call('TIME')
-        local nowMs = tonumber(time[1]) * 1000
-            + math.floor(tonumber(time[2]) / 1000)
-
-        local expiredSnapshots = redis.call(
-            'ZRANGEBYSCORE',
-            snapshotExpiryKey,
-            '-inf',
-            nowMs,
-            'LIMIT',
-            0,
-            {{SnapshotCleanupBatch}})
-        for _, snapshotId in ipairs(expiredSnapshots) do
-            redis.call('ZREM', snapshotExpiryKey, snapshotId)
-            redis.call('ZREM', snapshotBoundaryKey, snapshotId)
-        end
-        local minimumBoundary = nil
-        local boundaryEntry = redis.call(
-            'ZRANGE', snapshotBoundaryKey, 0, 0, 'WITHSCORES')
-        if #boundaryEntry == 2 then
-            minimumBoundary = tonumber(boundaryEntry[2])
-        end
-
-        local due = redis.call(
-            'ZRANGEBYSCORE', cleanupKey, '-inf', nowMs, 'LIMIT', 0, {{RecordCleanupBatch}})
-        for _, original in ipairs(due) do
-            local recordKey = redis.call('HGET', mapKey, original)
-            local members = {}
-            if recordKey then
-                members = redis.call(
-                    'ZREVRANGE', recordKey, 0, 0, 'WITHSCORES')
-            end
-            if #members == 0 then
-                redis.call('ZREM', indexKey, original)
-                redis.call('HDEL', mapKey, original)
-                redis.call('ZREM', cleanupKey, original)
-            elseif minimumBoundary then
+    private const string PruneHistoryHelper = """
+        local function pruneHistory(recordKey, minimumBoundary)
+            if minimumBoundary then
                 local anchor = redis.call(
-                    'ZREVRANGEBYSCORE',
-                    recordKey,
-                    minimumBoundary,
-                    '-inf',
-                    'WITHSCORES',
-                    'LIMIT',
-                    0,
-                    1)
+                    'ZREVRANGEBYSCORE', recordKey,
+                    minimumBoundary, '-inf', 'WITHSCORES', 'LIMIT', 0, 1)
                 if #anchor == 2 then
-                    redis.call(
-                        'ZREMRANGEBYSCORE',
-                        recordKey,
-                        '-inf',
-                        '(' .. anchor[2])
+                    redis.call('ZREMRANGEBYSCORE', recordKey, '-inf', '(' .. anchor[2])
                 end
-                redis.call(
-                    'ZADD', cleanupKey, nowMs + {{CleanupRetryMilliseconds}}, original)
             else
-                local record = unpackTagged(members[1])
-                if not record then
-                    return { '{{FormatErrorToken}}', nowMs }
+                redis.call('ZREMRANGEBYRANK', recordKey, 0, -2)
+            end
+        end
+
+        """;
+
+    private static readonly string OpaqueWriteScript =
+        PruneHistoryHelper
+        + $$"""
+            if redis.replicate_commands then redis.replicate_commands() end
+            local function unpackTagged(raw)
+                if string.byte(raw, 1) ~= {{OpaqueFormatTag}} then
+                    return nil
                 end
-                local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
-                if record[{{RecordTombstonePosition}}] == true
-                    or (expiresAt > 0 and expiresAt + {{ExpiredRecordGraceMilliseconds}} <= nowMs) then
-                    redis.call('DEL', recordKey)
+                return cmsgpack.unpack(string.sub(raw, {{OpaqueDataOffset}}))
+            end
+            local conditionCount = tonumber(ARGV[1])
+            local mutationCount = tonumber(ARGV[2])
+            local indexKey = KEYS[#KEYS - 5]
+            local mapKey = KEYS[#KEYS - 4]
+            local cleanupKey = KEYS[#KEYS - 3]
+            local sequenceKey = KEYS[#KEYS - 2]
+            local snapshotExpiryKey = KEYS[#KEYS - 1]
+            local snapshotBoundaryKey = KEYS[#KEYS]
+            local time = redis.call('TIME')
+            local nowMs = tonumber(time[1]) * 1000
+                + math.floor(tonumber(time[2]) / 1000)
+
+            local expiredSnapshots = redis.call(
+                'ZRANGEBYSCORE',
+                snapshotExpiryKey,
+                '-inf',
+                nowMs,
+                'LIMIT',
+                0,
+                {{SnapshotCleanupBatch}})
+            for _, snapshotId in ipairs(expiredSnapshots) do
+                redis.call('ZREM', snapshotExpiryKey, snapshotId)
+                redis.call('ZREM', snapshotBoundaryKey, snapshotId)
+            end
+            local minimumBoundary = nil
+            local boundaryEntry = redis.call(
+                'ZRANGE', snapshotBoundaryKey, 0, 0, 'WITHSCORES')
+            if #boundaryEntry == 2 then
+                minimumBoundary = tonumber(boundaryEntry[2])
+            end
+
+            local due = redis.call(
+                'ZRANGEBYSCORE', cleanupKey, '-inf', nowMs, 'LIMIT', 0, {{RecordCleanupBatch}})
+            for _, original in ipairs(due) do
+                local recordKey = redis.call('HGET', mapKey, original)
+                local members = {}
+                if recordKey then
+                    members = redis.call(
+                        'ZREVRANGE', recordKey, 0, 0, 'WITHSCORES')
+                end
+                if #members == 0 then
                     redis.call('ZREM', indexKey, original)
                     redis.call('HDEL', mapKey, original)
                     redis.call('ZREM', cleanupKey, original)
+                elseif minimumBoundary then
+                    pruneHistory(recordKey, minimumBoundary)
+                    redis.call(
+                        'ZADD', cleanupKey, nowMs + {{CleanupRetryMilliseconds}}, original)
                 else
-                    redis.call('ZREMRANGEBYRANK', recordKey, 0, -2)
-                    if expiresAt > 0 then
-                        redis.call(
-                            'ZADD',
-                            cleanupKey,
-                            math.max(nowMs + {{CleanupRetryMilliseconds}}, expiresAt + {{ExpiredRecordGraceMilliseconds}}),
-                            original)
-                    else
+                    local record = unpackTagged(members[1])
+                    if not record then
+                        return { '{{FormatErrorToken}}', nowMs }
+                    end
+                    local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
+                    if record[{{RecordTombstonePosition}}] == true
+                        or (expiresAt > 0 and expiresAt + {{ExpiredRecordGraceMilliseconds}} <= nowMs) then
+                        redis.call('DEL', recordKey)
+                        redis.call('ZREM', indexKey, original)
+                        redis.call('HDEL', mapKey, original)
                         redis.call('ZREM', cleanupKey, original)
+                    else
+                        pruneHistory(recordKey, minimumBoundary)
+                        if expiresAt > 0 then
+                            redis.call(
+                                'ZADD',
+                                cleanupKey,
+                                math.max(nowMs + {{CleanupRetryMilliseconds}}, expiresAt + {{ExpiredRecordGraceMilliseconds}}),
+                                original)
+                        else
+                            redis.call('ZREM', cleanupKey, original)
+                        end
                     end
                 end
             end
-        end
 
-        local arg = 3
-        for i = 1, conditionCount do
-            local kind = ARGV[arg]
-            local expected = ARGV[arg + 1]
-            local members = redis.call('ZREVRANGE', KEYS[i], 0, 0)
-            local current = nil
-            local currentValue = nil
-            if #members > 0 then
-                local record = unpackTagged(members[1])
-                if not record then
-                    return { '{{FormatErrorToken}}', nowMs }
+            local arg = 3
+            for i = 1, conditionCount do
+                local kind = ARGV[arg]
+                local expected = ARGV[arg + 1]
+                local members = redis.call('ZREVRANGE', KEYS[i], 0, 0)
+                local current = nil
+                local currentValue = nil
+                if #members > 0 then
+                    local record = unpackTagged(members[1])
+                    if not record then
+                        return { '{{FormatErrorToken}}', nowMs }
+                    end
+                    local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
+                    if record[{{RecordTombstonePosition}}] ~= true
+                        and (expiresAt == 0 or expiresAt > nowMs) then
+                        current = record[{{RecordVersionPosition}}]
+                        currentValue = record[{{RecordValuePosition}}]
+                    end
                 end
-                local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
-                if record[{{RecordTombstonePosition}}] ~= true
-                    and (expiresAt == 0 or expiresAt > nowMs) then
-                    current = record[{{RecordVersionPosition}}]
-                    currentValue = record[{{RecordValuePosition}}]
+                if (kind == '{{MissingToken}}' and current ~= nil)
+                    or (kind == '{{VersionToken}}' and current ~= expected)
+                    or (kind == '{{ValueToken}}' and (current == nil or currentValue ~= expected)) then
+                    return { '{{ConflictToken}}', nowMs }
                 end
+                arg = arg + {{WriteConditionStride}}
             end
-            if (kind == '{{MissingToken}}' and current ~= nil)
-                or (kind == '{{VersionToken}}' and current ~= expected)
-                or (kind == '{{ValueToken}}' and (current == nil or currentValue ~= expected)) then
-                return { '{{ConflictToken}}', nowMs }
+            local checkArg = arg
+            for i = 1, mutationCount do
+                local keyIndex = tonumber(ARGV[checkArg])
+                pruneHistory(KEYS[keyIndex], minimumBoundary)
+                if redis.call('ZCARD', KEYS[keyIndex]) >= {{MaximumVersionBacklog}} then
+                    return { '{{BacklogToken}}', nowMs }
+                end
+                checkArg = checkArg + {{WriteMutationStride}}
             end
-            arg = arg + {{WriteConditionStride}}
-        end
-        local checkArg = arg
-        for i = 1, mutationCount do
-            local keyIndex = tonumber(ARGV[checkArg])
-            if not minimumBoundary then
-                redis.call('ZREMRANGEBYRANK', KEYS[keyIndex], 0, -2)
-            end
-            if redis.call('ZCARD', KEYS[keyIndex]) >= {{MaximumVersionBacklog}} then
-                return { '{{BacklogToken}}', nowMs }
-            end
-            checkArg = checkArg + {{WriteMutationStride}}
-        end
-        local sequence = redis.call('INCR', sequenceKey)
-        local putVersions = {}
-        for i = 1, mutationCount do
-            local keyIndex = tonumber(ARGV[arg])
-            local kind = ARGV[arg + 1]
-            local originalKey = ARGV[arg + 2]
-            local value = ARGV[arg + 3]
-            local version = ARGV[arg + 4]
-            local retention = tonumber(ARGV[arg + 5])
-            local redisKey = KEYS[keyIndex]
-            if kind == '{{PutToken}}' then
-                local expiresAt = 0
-                if retention >= 0 then expiresAt = nowMs + retention end
-                redis.call(
-                    'ZADD',
-                    redisKey,
-                    sequence,
-                    '\{{OpaqueFormatTag}}' .. cmsgpack.pack({
-                        originalKey,
-                        value,
-                        version,
-                        expiresAt,
-                        false
-                    }))
-                redis.call('ZADD', indexKey, 0, originalKey)
-                redis.call('HSET', mapKey, originalKey, redisKey)
-                table.insert(putVersions, originalKey)
-                table.insert(putVersions, version)
-            else
-                redis.call(
-                    'ZADD',
-                    redisKey,
-                    sequence,
-                    '\{{OpaqueFormatTag}}' .. cmsgpack.pack({
-                        originalKey,
-                        '',
-                        version,
-                        0,
-                        true
-                    }))
-                redis.call('ZADD', indexKey, 0, originalKey)
-                redis.call('HSET', mapKey, originalKey, redisKey)
-            end
-            local dueAt = nowMs + {{CleanupRetryMilliseconds}}
-            local scheduled = redis.call(
-                'ZSCORE', cleanupKey, originalKey)
-            if not scheduled or tonumber(scheduled) > dueAt then
-                redis.call('ZADD', cleanupKey, dueAt, originalKey)
-            end
-            arg = arg + {{WriteMutationStride}}
-        end
-
-        local result = { '{{AppliedToken}}', nowMs }
-        for _, item in ipairs(putVersions) do table.insert(result, item) end
-        return result
-        """;
-
-    private static readonly string OpaqueScanScript = $$"""
-        if redis.replicate_commands then redis.replicate_commands() end
-        local function unpackTagged(raw)
-            if string.byte(raw, 1) ~= {{OpaqueFormatTag}} then
-                return nil
-            end
-            return cmsgpack.unpack(string.sub(raw, {{OpaqueDataOffset}}))
-        end
-        local prefix = ARGV[1]
-        local lastKey = ARGV[2]
-        local limit = tonumber(ARGV[3])
-        local create = ARGV[4] == '1'
-        local snapshot = KEYS[3]
-        local cleanupKey = KEYS[4]
-        local sequenceKey = KEYS[5]
-        local snapshotExpiryKey = KEYS[6]
-        local snapshotBoundaryKey = KEYS[7]
-        local snapshotId = ARGV[5]
-        local time = redis.call('TIME')
-        local nowMs = tonumber(time[1]) * 1000
-            + math.floor(tonumber(time[2]) / 1000)
-
-        local expiredSnapshots = redis.call(
-            'ZRANGEBYSCORE',
-            snapshotExpiryKey,
-            '-inf',
-            nowMs,
-            'LIMIT',
-            0,
-            {{SnapshotCleanupBatch}})
-        for _, expiredId in ipairs(expiredSnapshots) do
-            redis.call('ZREM', snapshotExpiryKey, expiredId)
-            redis.call('ZREM', snapshotBoundaryKey, expiredId)
-        end
-        local minimumBoundary = nil
-        local boundaryEntry = redis.call(
-            'ZRANGE', snapshotBoundaryKey, 0, 0, 'WITHSCORES')
-        if #boundaryEntry == 2 then
-            minimumBoundary = tonumber(boundaryEntry[2])
-        end
-
-        local due = redis.call(
-            'ZRANGEBYSCORE', cleanupKey, '-inf', nowMs, 'LIMIT', 0, {{RecordCleanupBatch}})
-        for _, original in ipairs(due) do
-            local recordKey = redis.call('HGET', KEYS[2], original)
-            local members = {}
-            if recordKey then
-                members = redis.call(
-                    'ZREVRANGE', recordKey, 0, 0, 'WITHSCORES')
-            end
-            if #members == 0 then
-                redis.call('ZREM', KEYS[1], original)
-                redis.call('HDEL', KEYS[2], original)
-                redis.call('ZREM', cleanupKey, original)
-            elseif minimumBoundary then
-                local anchor = redis.call(
-                    'ZREVRANGEBYSCORE',
-                    recordKey,
-                    minimumBoundary,
-                    '-inf',
-                    'WITHSCORES',
-                    'LIMIT',
-                    0,
-                    1)
-                if #anchor == 2 then
+            local sequence = redis.call('INCR', sequenceKey)
+            local putVersions = {}
+            for i = 1, mutationCount do
+                local keyIndex = tonumber(ARGV[arg])
+                local kind = ARGV[arg + 1]
+                local originalKey = ARGV[arg + 2]
+                local value = ARGV[arg + 3]
+                local version = ARGV[arg + 4]
+                local retention = tonumber(ARGV[arg + 5])
+                local redisKey = KEYS[keyIndex]
+                if kind == '{{PutToken}}' then
+                    local expiresAt = 0
+                    if retention >= 0 then expiresAt = nowMs + retention end
                     redis.call(
-                        'ZREMRANGEBYSCORE',
-                        recordKey,
-                        '-inf',
-                        '(' .. anchor[2])
+                        'ZADD',
+                        redisKey,
+                        sequence,
+                        '\{{OpaqueFormatTag}}' .. cmsgpack.pack({
+                            originalKey,
+                            value,
+                            version,
+                            expiresAt,
+                            false
+                        }))
+                    redis.call('ZADD', indexKey, 0, originalKey)
+                    redis.call('HSET', mapKey, originalKey, redisKey)
+                    table.insert(putVersions, originalKey)
+                    table.insert(putVersions, version)
+                else
+                    redis.call(
+                        'ZADD',
+                        redisKey,
+                        sequence,
+                        '\{{OpaqueFormatTag}}' .. cmsgpack.pack({
+                            originalKey,
+                            '',
+                            version,
+                            0,
+                            true
+                        }))
+                    redis.call('ZADD', indexKey, 0, originalKey)
+                    redis.call('HSET', mapKey, originalKey, redisKey)
                 end
-                redis.call(
-                    'ZADD', cleanupKey, nowMs + {{CleanupRetryMilliseconds}}, original)
-            else
-                local record = unpackTagged(members[1])
-                if not record then
-                    return { '{{FormatErrorToken}}' }
+                local dueAt = nowMs + {{CleanupRetryMilliseconds}}
+                local scheduled = redis.call(
+                    'ZSCORE', cleanupKey, originalKey)
+                if not scheduled or tonumber(scheduled) > dueAt then
+                    redis.call('ZADD', cleanupKey, dueAt, originalKey)
                 end
-                local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
-                if record[{{RecordTombstonePosition}}] == true
-                    or (expiresAt > 0 and expiresAt + {{ExpiredRecordGraceMilliseconds}} <= nowMs) then
-                    redis.call('DEL', recordKey)
+                arg = arg + {{WriteMutationStride}}
+            end
+
+            local result = { '{{AppliedToken}}', nowMs }
+            for _, item in ipairs(putVersions) do table.insert(result, item) end
+            return result
+            """;
+
+    private static readonly string OpaqueScanScript =
+        PruneHistoryHelper
+        + $$"""
+            if redis.replicate_commands then redis.replicate_commands() end
+            local function unpackTagged(raw)
+                if string.byte(raw, 1) ~= {{OpaqueFormatTag}} then
+                    return nil
+                end
+                return cmsgpack.unpack(string.sub(raw, {{OpaqueDataOffset}}))
+            end
+            local prefix = ARGV[1]
+            local lastKey = ARGV[2]
+            local limit = tonumber(ARGV[3])
+            local create = ARGV[4] == '1'
+            local snapshot = KEYS[3]
+            local cleanupKey = KEYS[4]
+            local sequenceKey = KEYS[5]
+            local snapshotExpiryKey = KEYS[6]
+            local snapshotBoundaryKey = KEYS[7]
+            local snapshotId = ARGV[5]
+            local time = redis.call('TIME')
+            local nowMs = tonumber(time[1]) * 1000
+                + math.floor(tonumber(time[2]) / 1000)
+
+            local expiredSnapshots = redis.call(
+                'ZRANGEBYSCORE',
+                snapshotExpiryKey,
+                '-inf',
+                nowMs,
+                'LIMIT',
+                0,
+                {{SnapshotCleanupBatch}})
+            for _, expiredId in ipairs(expiredSnapshots) do
+                redis.call('ZREM', snapshotExpiryKey, expiredId)
+                redis.call('ZREM', snapshotBoundaryKey, expiredId)
+            end
+            local minimumBoundary = nil
+            local boundaryEntry = redis.call(
+                'ZRANGE', snapshotBoundaryKey, 0, 0, 'WITHSCORES')
+            if #boundaryEntry == 2 then
+                minimumBoundary = tonumber(boundaryEntry[2])
+            end
+
+            local due = redis.call(
+                'ZRANGEBYSCORE', cleanupKey, '-inf', nowMs, 'LIMIT', 0, {{RecordCleanupBatch}})
+            for _, original in ipairs(due) do
+                local recordKey = redis.call('HGET', KEYS[2], original)
+                local members = {}
+                if recordKey then
+                    members = redis.call(
+                        'ZREVRANGE', recordKey, 0, 0, 'WITHSCORES')
+                end
+                if #members == 0 then
                     redis.call('ZREM', KEYS[1], original)
                     redis.call('HDEL', KEYS[2], original)
                     redis.call('ZREM', cleanupKey, original)
+                elseif minimumBoundary then
+                    pruneHistory(recordKey, minimumBoundary)
+                    redis.call(
+                        'ZADD', cleanupKey, nowMs + {{CleanupRetryMilliseconds}}, original)
                 else
-                    redis.call('ZREMRANGEBYRANK', recordKey, 0, -2)
-                    if expiresAt > 0 then
-                        redis.call(
-                            'ZADD',
-                            cleanupKey,
-                            math.max(nowMs + {{CleanupRetryMilliseconds}}, expiresAt + {{ExpiredRecordGraceMilliseconds}}),
-                            original)
-                    else
+                    local record = unpackTagged(members[1])
+                    if not record then
+                        return { '{{FormatErrorToken}}' }
+                    end
+                    local expiresAt = tonumber(record[{{RecordExpiryPosition}}])
+                    if record[{{RecordTombstonePosition}}] == true
+                        or (expiresAt > 0 and expiresAt + {{ExpiredRecordGraceMilliseconds}} <= nowMs) then
+                        redis.call('DEL', recordKey)
+                        redis.call('ZREM', KEYS[1], original)
+                        redis.call('HDEL', KEYS[2], original)
                         redis.call('ZREM', cleanupKey, original)
+                    else
+                        pruneHistory(recordKey, minimumBoundary)
+                        if expiresAt > 0 then
+                            redis.call(
+                                'ZADD',
+                                cleanupKey,
+                                math.max(nowMs + {{CleanupRetryMilliseconds}}, expiresAt + {{ExpiredRecordGraceMilliseconds}}),
+                                original)
+                        else
+                            redis.call('ZREM', cleanupKey, original)
+                        end
                     end
                 end
             end
-        end
 
-        if create then
-            if redis.call('ZCARD', snapshotExpiryKey) >= {{MaximumSnapshots}} then
-                return { '{{CapacityToken}}' }
+            if create then
+                if redis.call('ZCARD', snapshotExpiryKey) >= {{MaximumSnapshots}} then
+                    return { '{{CapacityToken}}' }
+                end
+                redis.call('DEL', snapshot)
+                local boundary = tonumber(redis.call('GET', sequenceKey) or '0')
+                redis.call(
+                    'HSET',
+                    snapshot,
+                    '{{SnapshotNowField}}',
+                    tostring(nowMs),
+                    '{{SnapshotBoundaryField}}',
+                    tostring(boundary),
+                    '{{SnapshotPrefixField}}',
+                    prefix)
+                redis.call('PEXPIRE', snapshot, {{SnapshotLifetimeMilliseconds}})
+                redis.call(
+                    'ZADD', snapshotExpiryKey, nowMs + {{SnapshotLifetimeMilliseconds}}, snapshotId)
+                redis.call(
+                    'ZADD', snapshotBoundaryKey, boundary, snapshotId)
+            elseif redis.call('EXISTS', snapshot) == 0 then
+                redis.call('ZREM', snapshotExpiryKey, snapshotId)
+                redis.call('ZREM', snapshotBoundaryKey, snapshotId)
+                return { '{{ExpiredToken}}' }
             end
-            redis.call('DEL', snapshot)
-            local boundary = tonumber(redis.call('GET', sequenceKey) or '0')
-            redis.call(
-                'HSET',
-                snapshot,
-                '{{SnapshotNowField}}',
-                tostring(nowMs),
-                '{{SnapshotBoundaryField}}',
-                tostring(boundary),
-                '{{SnapshotPrefixField}}',
-                prefix)
-            redis.call('PEXPIRE', snapshot, {{SnapshotLifetimeMilliseconds}})
-            redis.call(
-                'ZADD', snapshotExpiryKey, nowMs + {{SnapshotLifetimeMilliseconds}}, snapshotId)
-            redis.call(
-                'ZADD', snapshotBoundaryKey, boundary, snapshotId)
-        elseif redis.call('EXISTS', snapshot) == 0 then
-            redis.call('ZREM', snapshotExpiryKey, snapshotId)
-            redis.call('ZREM', snapshotBoundaryKey, snapshotId)
-            return { '{{ExpiredToken}}' }
-        end
 
-        local metadata = redis.call(
-            'HMGET', snapshot, '{{SnapshotNowField}}', '{{SnapshotBoundaryField}}', '{{SnapshotPrefixField}}')
-        if not metadata[1] or metadata[3] ~= prefix then
-            redis.call('ZREM', snapshotExpiryKey, snapshotId)
-            redis.call('ZREM', snapshotBoundaryKey, snapshotId)
-            return { '{{ExpiredToken}}' }
-        end
-        local snapshotNow = tonumber(metadata[1])
-        local boundary = tonumber(metadata[2])
-        local lower = '-'
-        if string.len(lastKey) > 0 then lower = '(' .. lastKey end
-        local workLimit = math.max(limit * {{ScanWorkMultiplier}}, {{MinimumScanWork}})
-        local originals = redis.call(
-            'ZRANGEBYLEX', KEYS[1], lower, '+', 'LIMIT', 0, workLimit + 1)
-        local emitted = 0
-        local encodedBytes = 0
-        local examined = 0
-        local result = { '{{PageToken}}', tostring(snapshotNow), '' }
-        while examined < #originals
-            and examined < workLimit
-            and emitted < limit do
-            local original = originals[examined + 1]
-            examined = examined + 1
-            if string.sub(original, 1, string.len(prefix)) == prefix then
+            local metadata = redis.call(
+                'HMGET', snapshot, '{{SnapshotNowField}}', '{{SnapshotBoundaryField}}', '{{SnapshotPrefixField}}')
+            if not metadata[1] or metadata[3] ~= prefix then
+                redis.call('ZREM', snapshotExpiryKey, snapshotId)
+                redis.call('ZREM', snapshotBoundaryKey, snapshotId)
+                return { '{{ExpiredToken}}' }
+            end
+            local snapshotNow = tonumber(metadata[1])
+            local boundary = tonumber(metadata[2])
+            local lower = '[' .. prefix
+            -- Valid UTF-8 key suffixes sort below the range terminator byte.
+            local upper = '[' .. prefix .. string.char({{Utf8PrefixUpperBoundByte}})
+            if string.len(lastKey) > 0 then lower = '(' .. lastKey end
+            local workLimit = math.max(limit * {{ScanWorkMultiplier}}, {{MinimumScanWork}})
+            local originals = redis.call(
+                'ZRANGEBYLEX', KEYS[1], lower, upper, 'LIMIT', 0, workLimit + 1)
+            local emitted = 0
+            local encodedBytes = 0
+            local examined = 0
+            local result = { '{{PageToken}}', tostring(snapshotNow), '' }
+            while examined < #originals
+                and examined < workLimit
+                and emitted < limit do
+                local original = originals[examined + 1]
+                examined = examined + 1
                 local recordKey = redis.call('HGET', KEYS[2], original)
                 if recordKey then
                     local members = redis.call(
@@ -472,20 +462,19 @@ public sealed partial class ZLinkRedisLocationStore
                     end
                 end
             end
-        end
 
-        local hasMore = examined < #originals
-        if not hasMore and #originals > workLimit then hasMore = true end
-        if hasMore then
-            local nextKey = originals[examined]
-            result[3] = nextKey
-        else
-            redis.call('DEL', snapshot)
-            redis.call('ZREM', snapshotExpiryKey, snapshotId)
-            redis.call('ZREM', snapshotBoundaryKey, snapshotId)
-        end
-        return result
-        """;
+            local hasMore = examined < #originals
+            if not hasMore and #originals > workLimit then hasMore = true end
+            if hasMore then
+                local nextKey = originals[examined]
+                result[3] = nextKey
+            else
+                redis.call('DEL', snapshot)
+                redis.call('ZREM', snapshotExpiryKey, snapshotId)
+                redis.call('ZREM', snapshotBoundaryKey, snapshotId)
+            end
+            return result
+            """;
 
     public async ValueTask<ZLinkStoreReadResult> ReadAsync(
         ZLinkStoreKey key,
