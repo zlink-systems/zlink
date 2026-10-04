@@ -16,11 +16,13 @@ namespace Zlink
         private const uint CtrlBreakEvent = 1;
         // Match the JVM sample runner's existing 900 x 100 ms shutdown wait on Linux.
         private const int JvmShutdownWaitMilliseconds = 90000;
+        private const uint GenericRead = 0x80000000;
         private const uint GenericWrite = 0x40000000;
         private const uint FileShareRead = 0x00000001;
         private const uint FileShareWrite = 0x00000002;
         private const uint FileShareDelete = 0x00000004;
         private const uint CreateAlways = 2;
+        private const uint OpenExisting = 3;
         private const uint FileAttributeNormal = 0x00000080;
         private const uint StartfUseStdHandles = 0x00000100;
         private const uint StartfUseShowWindow = 0x00000001;
@@ -160,16 +162,25 @@ namespace Zlink
             };
             IntPtr standardOutput = OpenLog(standardOutputPath, ref security);
             IntPtr standardError = IntPtr.Zero;
+            IntPtr standardInput = IntPtr.Zero;
             ProcessInformation processInformation = new ProcessInformation();
             try
             {
                 standardError = OpenLog(standardErrorPath, ref security);
+                if (separateConsole)
+                {
+                    standardInput = CreateFile("NUL", GenericRead, FileShareRead | FileShareWrite,
+                        ref security, OpenExisting, FileAttributeNormal, IntPtr.Zero);
+                    if (standardInput == InvalidHandleValue)
+                        throw new Win32Exception(Marshal.GetLastWin32Error(),
+                            "Failed to open NUL for the sample console.");
+                }
                 StartupInfo startupInfo = new StartupInfo
                 {
                     Size = Marshal.SizeOf(typeof(StartupInfo)),
                     Flags = (int)(StartfUseStdHandles | (separateConsole ? StartfUseShowWindow : 0)),
                     ShowWindow = 0,
-                    StandardInput = GetStdHandle(StdInputHandle),
+                    StandardInput = separateConsole ? standardInput : GetStdHandle(StdInputHandle),
                     StandardOutput = standardOutput,
                     StandardError = standardError
                 };
@@ -218,6 +229,7 @@ namespace Zlink
             {
                 if (processInformation.Thread != IntPtr.Zero) CloseHandle(processInformation.Thread);
                 if (processInformation.Process != IntPtr.Zero) CloseHandle(processInformation.Process);
+                if (standardInput != IntPtr.Zero && standardInput != InvalidHandleValue) CloseHandle(standardInput);
                 if (standardError != IntPtr.Zero && standardError != InvalidHandleValue) CloseHandle(standardError);
                 if (standardOutput != IntPtr.Zero && standardOutput != InvalidHandleValue) CloseHandle(standardOutput);
             }

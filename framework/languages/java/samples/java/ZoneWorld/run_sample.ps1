@@ -125,13 +125,6 @@ function Start-Role {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
     $dedicatedConsole = $Name -like "zone-node-*"
-    if ($IsWindows -and $dedicatedConsole) {
-        $java = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME "bin/java.exe" } else { (Get-Command java.exe).Source }
-        $classpath = Join-Path (Split-Path $Executable -Parent) "../lib/*"
-        $Arguments = @("--enable-native-access=ALL-UNNAMED", "-classpath", $classpath,
-            "systems.zlink.samples.zoneworld.server.Program") + $Arguments
-        $Executable = $java
-    }
     $process = Start-ManagedProcess $Name $Executable $Arguments -ArchiveExisting `
         -DedicatedConsole:$dedicatedConsole
     $NodeProcesses[$Name] = $process
