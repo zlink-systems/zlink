@@ -1226,7 +1226,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     target_link_libraries(test_cpp_framework_close_failure PRIVATE zlink_framework zlink::cpp Threads::Threads)
     target_link_options(test_cpp_framework_close_failure PRIVATE
       -Wl,--wrap=zlink_poller_destroy -Wl,--wrap=zlink_close -Wl,--wrap=zlink_poller_wait -Wl,--wrap=zlink_socket)
-    foreach(owner native-channel-continue cleanup-continue cleanup-multiple server-close-lane client-close-lane server-close-retry client-close-retry route dealer timer mesh mesh-close-lane fanout-poller fanout-publisher fanout-subscriber channel-publisher channel-poller host-stop host-timer host-runtime-report timer-destructor stream-worker stream-worker-no-monitoring destructor-publisher destructor-mesh)
+    foreach(owner delay-close delay-wait delay-success timer-self-close timer-concurrent-close native-channel-continue cleanup-continue cleanup-multiple server-close-lane client-close-lane server-close-retry client-close-retry route dealer timer mesh mesh-close-lane fanout-poller fanout-publisher fanout-subscriber channel-publisher channel-poller host-stop host-timer host-runtime-report timer-destructor stream-worker stream-worker-no-monitoring destructor-publisher destructor-mesh)
       zlink_framework_cpp_add_test(
         NAME test_cpp_framework_close_failure_${owner}
         COMMAND test_cpp_framework_close_failure ${owner}

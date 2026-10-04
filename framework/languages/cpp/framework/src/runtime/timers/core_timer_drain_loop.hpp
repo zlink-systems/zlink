@@ -25,12 +25,11 @@ namespace zlink::framework::detail
  * boundary explicit at every framework call site. */
 class core_timer_drain_loop_t
 {
+  public:
     static constexpr std::chrono::milliseconds poll_interval{50};
 
-  public:
     explicit core_timer_drain_loop_t (
-      std::shared_ptr<runtime::runtime_failure_collector_t> failures =
-        std::make_shared<runtime::runtime_failure_collector_t> ()) :
+      std::shared_ptr<runtime::runtime_failure_collector_t> failures) :
         _failures (std::move (failures))
     {
     }
@@ -59,44 +58,73 @@ class core_timer_drain_loop_t
                 std::function<void (std::uint64_t)> drain)
     {
         std::lock_guard lock (_lifecycle_mutex);
-        if (_worker.joinable ())
+        if (!_native || _stop.load (std::memory_order_acquire) || _worker.joinable ())
             return;
-        _drain = std::move (drain);
         _native->poller.add (_native->timer, 1);
         _native->timer.start (interval, repeat_count);
         _stop.store (false, std::memory_order_release);
-        _worker = std::thread ([this] { run (); });
+        _worker = std::thread (
+          [this, native = _native, drain = std::move (drain)] { run (*native, drain); });
     }
 
-    bool valid () const noexcept { return _native->timer.valid (); }
+    bool valid () const noexcept
+    {
+        std::lock_guard lock (_lifecycle_mutex);
+        return _native && _native->timer.valid ();
+    }
 
-    void stop () { _native->timer.stop (); }
+    void stop ()
+    {
+        std::lock_guard lock (_lifecycle_mutex);
+        if (_native)
+            _native->timer.stop ();
+    }
 
     void close ()
     {
-        std::lock_guard lock (_lifecycle_mutex);
-        if (_closed)
-            return;
-        _stop.store (true, std::memory_order_release);
-        if (_worker.joinable ())
-            _worker.join ();
-        _native->poller.close ();
-        _native->timer.close ();
-        _drain = {};
-        _closed = true;
+        std::thread worker;
+        std::shared_ptr<native_resources_t> native;
+        {
+            std::lock_guard lock (_lifecycle_mutex);
+            if (!_native)
+                return;
+            _stop.store (true, std::memory_order_release);
+            // The drain callback may request stop, but cannot join itself.
+            if (_worker.get_id () == std::this_thread::get_id ())
+                return;
+            worker = std::move (_worker);
+            native = std::move (_native);
+        }
+        if (worker.joinable ())
+            worker.join ();
+        try {
+            native->poller.close ();
+            native->timer.close ();
+        }
+        catch (const std::exception &) {
+            std::lock_guard lock (_lifecycle_mutex);
+            _native = std::move (native);
+            throw;
+        }
     }
 
   private:
-    void run () noexcept
+    struct native_resources_t
+    {
+        zlink::timer_t timer;
+        zlink::poller_t poller;
+    };
+
+    void run (native_resources_t &native, const std::function<void (std::uint64_t)> &drain) noexcept
     {
         std::array<zlink::poll_event_t, 1> events{};
         while (!_stop.load (std::memory_order_acquire)) {
             try {
-                if (_native->poller.wait (events.data (), events.size (), poll_interval) == 0)
+                if (native.poller.wait (events.data (), events.size (), poll_interval) == 0)
                     continue;
-                const auto fire_count = _native->timer.recv ();
-                if (fire_count && _drain)
-                    _drain (*fire_count);
+                const auto fire_count = native.timer.recv ();
+                if (fire_count && drain)
+                    drain (*fire_count);
             }
             catch (...) {
                 _failures->report (std::current_exception ());
@@ -105,18 +133,11 @@ class core_timer_drain_loop_t
         }
     }
 
-    struct native_resources_t
-    {
-        zlink::timer_t timer;
-        zlink::poller_t poller;
-    };
     std::shared_ptr<native_resources_t> _native = std::make_shared<native_resources_t> ();
     std::shared_ptr<runtime::runtime_failure_collector_t> _failures;
-    std::function<void (std::uint64_t)> _drain;
     std::atomic_bool _stop{false};
     std::thread _worker;
-    std::mutex _lifecycle_mutex;
-    bool _closed = false;
+    mutable std::mutex _lifecycle_mutex;
 };
 
 } // namespace zlink::framework::detail

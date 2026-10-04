@@ -8,6 +8,7 @@
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/timers/core_timer_drain_loop.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/host/hosted_service_lifecycle.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -15,13 +16,15 @@
 #include <zlink.hpp>
 #include <zlink/framework.hpp>
 #include <cassert>
+#include <future>
 #include <string_view>
 
 namespace
 {
 std::atomic_bool fail_wait{false};
+std::atomic_bool fail_timer_wait{false};
 thread_local bool stream_worker = false;
-bool fail_poller = false;
+std::atomic_bool fail_poller{false};
 bool fail_socket = false;
 bool check_close_lane = false;
 bool closed_on_lane = false;
@@ -41,7 +44,7 @@ extern "C" zlink_close_result_t __real_zlink_poller_destroy (void **);
 extern "C" zlink_close_result_t __wrap_zlink_poller_destroy (void **handle)
 {
     ++poller_attempts;
-    if (std::exchange (fail_poller, false))
+    if (fail_poller.exchange (false))
         return ZLINK_CLOSE_BUSY;
     return __real_zlink_poller_destroy (handle);
 }
@@ -64,7 +67,7 @@ extern "C" int __wrap_zlink_poller_wait (void *poller,
                                          long timeout,
                                          zlink_config_result_t *error)
 {
-    if (stream_worker && fail_wait.exchange (false)) {
+    if (fail_timer_wait.exchange (false) || (stream_worker && fail_wait.exchange (false))) {
         fail_wait.notify_all ();
         if (error)
             *error = ZLINK_CONFIG_NOT_FOUND;
@@ -127,6 +130,62 @@ int main (int argc, char **argv)
 {
     assert (argc == 2);
     const std::string_view owner = argv[1];
+    if (owner == "delay-close" || owner == "delay-wait" || owner == "delay-success") {
+        if (owner == "delay-close")
+            fail_poller = true;
+        else if (owner == "delay-wait")
+            fail_timer_wait = true;
+        const auto result = zlink::framework::detail::delay (std::chrono::milliseconds (1))
+                              .result_for (std::chrono::seconds (1));
+        assert (result);
+        if (owner == "delay-success")
+            assert (*result);
+        else
+            assert (!*result && result->exception ());
+        return 0;
+    }
+    if (owner == "timer-self-close") {
+        auto failures = std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+        zlink::framework::detail::core_timer_drain_loop_t timer (failures);
+        std::promise<void> stopped;
+        timer.start (std::chrono::milliseconds (1), 1, [&] (std::uint64_t) {
+            timer.close ();
+            stopped.set_value ();
+        });
+        assert (stopped.get_future ().wait_for (std::chrono::seconds (1))
+                == std::future_status::ready);
+        timer.close ();
+        failures->rethrow_if_failed ();
+        assert (!timer.valid ());
+        return 0;
+    }
+    if (owner == "timer-concurrent-close") {
+        auto failures = std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+        zlink::framework::detail::core_timer_drain_loop_t timer (failures);
+        std::promise<void> entered, release;
+        auto released = release.get_future ();
+        timer.start (std::chrono::milliseconds (1), 1, [&] (std::uint64_t) {
+            entered.set_value ();
+            released.wait ();
+            timer.close ();
+        });
+        entered.get_future ().wait ();
+        auto first = std::async (std::launch::async, [&] { timer.close (); });
+        auto second = std::async (std::launch::async, [&] { timer.close (); });
+        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
+        while (first.wait_for (std::chrono::milliseconds::zero ()) != std::future_status::ready
+               && second.wait_for (std::chrono::milliseconds::zero ()) != std::future_status::ready
+               && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::yield ();
+        assert (first.wait_for (std::chrono::milliseconds::zero ()) == std::future_status::ready
+                || second.wait_for (std::chrono::milliseconds::zero ())
+                     == std::future_status::ready);
+        release.set_value ();
+        first.get ();
+        second.get ();
+        failures->rethrow_if_failed ();
+        return 0;
+    }
     if (owner == "native-channel-continue") {
         zlink::framework::zlink_builder_t builder =
           zlink::framework::test::runtime_failure_builder ();
@@ -413,7 +472,12 @@ int main (int argc, char **argv)
     if (owner == "timer") {
         zlink::framework::detail::core_timer_drain_loop_t timer (
           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
+        std::promise<void> fired;
+        timer.start (std::chrono::milliseconds (1), 1, [&] (std::uint64_t) { fired.set_value (); });
+        assert (fired.get_future ().wait_for (std::chrono::seconds (1))
+                == std::future_status::ready);
         verify_poller_close (timer);
+        assert (!timer.valid ());
         return 0;
     }
     if (owner == "fanout-poller") {
