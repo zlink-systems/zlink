@@ -612,7 +612,7 @@ test('production ClientServer outbound socket selection uses admitted descriptor
   await sockets.dispose();
 });
 
-test('ClientServer rollback retains the Poller and dealer after failed cleanup', async () => {
+test('ClientServer creation cleanup retains only the failed dealer', async () => {
   const registration = internal.createFrameworkRegistration({
     channels: { orders: { client: { manualConnections: [] } } },
     locations: { useInMemoryStores: true }
@@ -626,6 +626,7 @@ test('ClientServer rollback retains the Poller and dealer after failed cleanup',
     dealerDisposed = true;
   };
   let pollerDisposed = 0;
+  const reported = [];
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
@@ -649,7 +650,8 @@ test('ClientServer rollback retains the Poller and dealer after failed cleanup',
       openSocketMonitor() {
         throw new Error('monitor setup failed');
       }
-    }
+    },
+    (error) => reported.push(error)
   );
 
   assert.throws(
@@ -661,13 +663,14 @@ test('ClientServer rollback retains the Poller and dealer after failed cleanup',
     ),
     /monitor setup failed/
   );
-  await assert.rejects(sockets.dispose(), (error) => error === closeFailure);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reported, [closeFailure]);
   assert.equal(dealerDisposed, false);
   assert.equal(pollerDisposed, 1);
   await sockets.dispose();
   assert.equal(dealerDisposed, true);
   assert.equal(dealerCloseAttempts, 2);
-  assert.equal(pollerDisposed, 2);
+  assert.equal(pollerDisposed, 1);
 });
 
 test('automatic and manual ClientServer sources share one physical connection until the last alias closes', async () => {

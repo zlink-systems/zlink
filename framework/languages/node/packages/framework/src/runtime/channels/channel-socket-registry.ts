@@ -1,3 +1,4 @@
+import { RuntimeDisposal } from '../disposal';
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
@@ -167,7 +168,13 @@ export class ZLinkChannelSocketRegistry {
       outstandingProbeId?: bigint;
     }
   >();
-  private readonly ownedMonitors = new Set<ZLinkBackendSocketMonitor>();
+  private readonly disposal = new RuntimeDisposal();
+  private readonly ownedResources = new Set<
+    | ZLinkBackendSocketMonitor
+    | ZLinkBackendReadablePoller
+    | ZLinkBackendDealerSocket
+    | ZLinkBackendSubscriberSocket
+  >();
   private readonly fanoutConnections = new Map<string, FanoutPublisherConnection>();
   private readonly fanoutPublisherNextBeacon = new Map<string, number>();
   private clientServerLivenessTimer?: NodeJS.Timeout;
@@ -196,7 +203,11 @@ export class ZLinkChannelSocketRegistry {
     this.listenerRecords = listenerRecords ?? new ZLinkListenerRecords();
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    return this.disposal.run(() => this.disposeCore());
+  }
+
+  private async disposeCore(): Promise<void> {
     this.clientServerDiscovery.dispose(
       createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
@@ -237,33 +248,31 @@ export class ZLinkChannelSocketRegistry {
       this.clientServerLivenessTimer = undefined;
     }
     this.routeMembers.clear();
-    const monitors = [...this.ownedMonitors];
-    const cleanup = await Promise.allSettled([
-      ...clientServerPollers.map((poller) => poller.dispose()),
-      ...monitors.map(async (monitor) => {
-        await monitor.dispose();
-        this.ownedMonitors.delete(monitor);
-      }),
-      ...sockets.map(async (socket) => {
-        await socket.dispose();
-        for (const owners of [
-          this.clientDealers,
-          this.channelRouters,
-          this.publishers,
-          this.routeRouters
-        ]) {
-          for (const [name, owned] of owners) {
-            if (owned === socket) owners.delete(name);
+    const cleanup = await Promise.allSettled(
+      [...new Set([...clientServerPollers, ...this.ownedResources, ...sockets])].map(
+        async (resource) => {
+          await resource.dispose();
+          this.ownedResources.delete(resource as ZLinkBackendSocketMonitor);
+          for (const owners of [
+            this.clientDealers,
+            this.channelRouters,
+            this.publishers,
+            this.routeRouters
+          ]) {
+            for (const [name, owned] of owners) if (owned === resource) owners.delete(name);
+          }
+          for (const [name, owned] of this.clientServerConnections) {
+            if (owned.dealer === resource) this.clientServerConnections.delete(name);
+            if (owned.readablePoller === resource) owned.readablePoller = undefined;
+            if (owned.monitor === resource) owned.monitor = undefined;
+          }
+          for (const [name, owned] of this.fanoutConnections) {
+            if (owned.subscriber === resource) this.fanoutConnections.delete(name);
+            if (owned.monitor === resource) owned.monitor = undefined;
           }
         }
-        for (const [name, owned] of this.clientServerConnections) {
-          if (owned.dealer === socket) this.clientServerConnections.delete(name);
-        }
-        for (const [name, owned] of this.fanoutConnections) {
-          if (owned.subscriber === socket) this.fanoutConnections.delete(name);
-        }
-      })
-    ]);
+      )
+    );
     const errors = cleanup
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       .map((result) => result.reason);
@@ -330,7 +339,7 @@ export class ZLinkChannelSocketRegistry {
     router.bind(channel.server.bind);
     if (this.monitoringAdapter !== undefined) {
       const monitor = this.monitoringAdapter.openSocketMonitor(router);
-      this.ownedMonitors.add(monitor);
+      this.ownedResources.add(monitor);
       monitor.onEvent((event) => {
         if (event.routingId === undefined) return;
         if (
@@ -433,54 +442,79 @@ export class ZLinkChannelSocketRegistry {
       callbacksByAlias: new Map([[connectionId, callbacks]]),
       physicalConnectionId: Symbol(connectionId)
     };
-    this.clientServerConnections.set(connectionId, connection);
-    this.registerReceiveFlowSocket(dealer);
-    dealer.setChannelName(channelName);
-    dealer.setRoutingId(`cs-client-${randomUUID()}`);
-    applySocketConfig(dealer, {
-      ...client,
-      sendTimeoutMs: configuredSendTimeoutMs(client.sendTimeoutMs)
-    });
-    connection.readablePoller = this.adapter.createReadablePoller(dealer);
-    const monitor = this.monitoringAdapter.openSocketMonitor(dealer);
-    connection.monitor = monitor;
-    this.ownedMonitors.add(monitor);
-    this.ensureClientServerLivenessTimer();
-    monitor.onEvent((event) => {
-      if (
-        ![...connection.aliases].some(
-          (alias) => this.clientServerConnections.get(alias) === connection
+    this.ownedResources.add(dealer);
+    const created: (
+      | ZLinkBackendSocketMonitor
+      | ZLinkBackendReadablePoller
+      | ZLinkBackendDealerSocket
+      | ZLinkBackendSubscriberSocket
+    )[] = [dealer];
+    try {
+      this.clientServerConnections.set(connectionId, connection);
+      this.registerReceiveFlowSocket(dealer);
+      dealer.setChannelName(channelName);
+      dealer.setRoutingId(`cs-client-${randomUUID()}`);
+      applySocketConfig(dealer, {
+        ...client,
+        sendTimeoutMs: configuredSendTimeoutMs(client.sendTimeoutMs)
+      });
+      connection.readablePoller = this.adapter.createReadablePoller(dealer);
+      created.push(connection.readablePoller);
+      this.ownedResources.add(connection.readablePoller);
+      const monitor = this.monitoringAdapter.openSocketMonitor(dealer);
+      connection.monitor = monitor;
+      created.push(monitor);
+      this.ownedResources.add(monitor);
+      this.ensureClientServerLivenessTimer();
+      monitor.onEvent((event) => {
+        if (
+          ![...connection.aliases].some(
+            (alias) => this.clientServerConnections.get(alias) === connection
+          )
         )
-      )
-        return;
-      for (const handler of this.clientServerMonitorHandlers.get(channelName) ?? []) {
-        handler(event);
-      }
-      const routingId = event.routingId === undefined ? undefined : String(event.routingId);
-      if (event.nativeEvent === ZLinkSocketNativeEventType.ConnectionReady) {
-        // This single-endpoint DEALER also receives its disconnected ready-count snapshot.
-        if (event.value === 0n) return;
-        connection.physicalConnectionId = Symbol(connectionId);
-        connection.admissionAttempt = undefined;
-        for (const currentCallbacks of [...connection.callbacksByAlias.values()]) {
-          currentCallbacks.onTransportReady(routingId ?? '', event.remoteAddr);
+          return;
+        for (const handler of this.clientServerMonitorHandlers.get(channelName) ?? []) {
+          handler(event);
         }
-        return;
-      }
-      if (
-        event.nativeEvent === ZLinkSocketNativeEventType.Disconnected ||
-        event.nativeEvent === ZLinkSocketNativeEventType.Closed ||
-        event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedNoDetail ||
-        event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedProtocol ||
-        event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedAuth
-      ) {
-        // Core owns the endpoint reconnect (transport liveness §6); the
-        // connect intent stays and the next READY starts a new admission.
-        this.endClientServerAdmission(connectionId, connection, routingId, event.remoteAddr);
-      }
-    });
-    dealer.connect(endpoint);
-    return dealer;
+        const routingId = event.routingId === undefined ? undefined : String(event.routingId);
+        if (event.nativeEvent === ZLinkSocketNativeEventType.ConnectionReady) {
+          // This single-endpoint DEALER also receives its disconnected ready-count snapshot.
+          if (event.value === 0n) return;
+          connection.physicalConnectionId = Symbol(connectionId);
+          connection.admissionAttempt = undefined;
+          for (const currentCallbacks of [...connection.callbacksByAlias.values()]) {
+            currentCallbacks.onTransportReady(routingId ?? '', event.remoteAddr);
+          }
+          return;
+        }
+        if (
+          event.nativeEvent === ZLinkSocketNativeEventType.Disconnected ||
+          event.nativeEvent === ZLinkSocketNativeEventType.Closed ||
+          event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedNoDetail ||
+          event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedProtocol ||
+          event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedAuth
+        ) {
+          // Core owns the endpoint reconnect (transport liveness §6); the
+          // connect intent stays and the next READY starts a new admission.
+          this.endClientServerAdmission(connectionId, connection, routingId, event.remoteAddr);
+        }
+      });
+      dealer.connect(endpoint);
+      return dealer;
+    } catch (error) {
+      this.clientServerConnections.delete(connectionId);
+      this.unregisterReceiveFlowSocket(dealer);
+      void Promise.allSettled(
+        created.map(async (resource) => {
+          await resource.dispose();
+          this.ownedResources.delete(resource);
+        })
+      ).then((results) => {
+        for (const result of results)
+          if (result.status === 'rejected') this.oneWayFailureSink?.(result.reason);
+      });
+      throw error;
+    }
   }
 
   async closeClientServerConnection(connectionId: string): Promise<void> {
@@ -530,10 +564,17 @@ export class ZLinkChannelSocketRegistry {
       // The socket close below releases an endpoint that is already disconnected.
     }
     this.unregisterReceiveFlowSocket(current.dealer);
-    current.readablePoller?.dispose();
+    if (current.readablePoller !== undefined) {
+      current.readablePoller.dispose();
+      this.ownedResources.delete(current.readablePoller);
+      current.readablePoller = undefined;
+    }
     const results = await Promise.allSettled([
       current.monitor?.dispose(),
-      current.dealer.dispose()
+      (async () => {
+        await current.dealer.dispose();
+        this.ownedResources.delete(current.dealer);
+      })()
     ]);
     const errors = results
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
@@ -542,7 +583,7 @@ export class ZLinkChannelSocketRegistry {
     if (errors.length > 1) {
       throw new AggregateError(errors, `ClientServer connection '${connectionId}' cleanup failed.`);
     }
-    if (current.monitor !== undefined) this.ownedMonitors.delete(current.monitor);
+    if (current.monitor !== undefined) this.ownedResources.delete(current.monitor);
   }
 
   admitClientServerConnection(
@@ -1018,37 +1059,59 @@ export class ZLinkChannelSocketRegistry {
       transportReady: false,
       ready: false
     };
-    this.fanoutConnections.set(connectionId, connection);
-    subscriber.setChannelName(channelName);
-    setFanoutSubscriptions(subscriber, channel.subscriptions);
-    const monitor = this.monitoringAdapter.openSocketMonitor(subscriber);
-    connection.monitor = monitor;
-    this.ownedMonitors.add(monitor);
-    this.ensureClientServerLivenessTimer();
-    monitor.onEvent((event) => {
-      if (this.fanoutConnections.get(connectionId) !== connection) return;
-      for (const handler of this.fanoutMonitorHandlers.get(channelName) ?? []) {
-        handler(event);
-      }
-      if (event.nativeEvent === ZLinkSocketNativeEventType.ConnectionReady) {
-        connection.transportReady = true;
-        return;
-      }
-      if (
-        event.nativeEvent === ZLinkSocketNativeEventType.Disconnected ||
-        event.nativeEvent === ZLinkSocketNativeEventType.Closed ||
-        event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedNoDetail ||
-        event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedProtocol ||
-        event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedAuth
-      ) {
-        connection.transportReady = false;
-        connection.ready = false;
-        connection.deadlineAt = undefined;
-        callbacks.onTerminated('disconnect');
-      }
-    });
-    subscriber.connect(endpoint);
-    return subscriber;
+    this.ownedResources.add(subscriber);
+    const created: (
+      | ZLinkBackendSocketMonitor
+      | ZLinkBackendReadablePoller
+      | ZLinkBackendDealerSocket
+      | ZLinkBackendSubscriberSocket
+    )[] = [subscriber];
+    try {
+      this.fanoutConnections.set(connectionId, connection);
+      subscriber.setChannelName(channelName);
+      setFanoutSubscriptions(subscriber, channel.subscriptions);
+      const monitor = this.monitoringAdapter.openSocketMonitor(subscriber);
+      connection.monitor = monitor;
+      created.push(monitor);
+      this.ownedResources.add(monitor);
+      this.ensureClientServerLivenessTimer();
+      monitor.onEvent((event) => {
+        if (this.fanoutConnections.get(connectionId) !== connection) return;
+        for (const handler of this.fanoutMonitorHandlers.get(channelName) ?? []) {
+          handler(event);
+        }
+        if (event.nativeEvent === ZLinkSocketNativeEventType.ConnectionReady) {
+          connection.transportReady = true;
+          return;
+        }
+        if (
+          event.nativeEvent === ZLinkSocketNativeEventType.Disconnected ||
+          event.nativeEvent === ZLinkSocketNativeEventType.Closed ||
+          event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedNoDetail ||
+          event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedProtocol ||
+          event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedAuth
+        ) {
+          connection.transportReady = false;
+          connection.ready = false;
+          connection.deadlineAt = undefined;
+          callbacks.onTerminated('disconnect');
+        }
+      });
+      subscriber.connect(endpoint);
+      return subscriber;
+    } catch (error) {
+      this.fanoutConnections.delete(connectionId);
+      void Promise.allSettled(
+        created.map(async (resource) => {
+          await resource.dispose();
+          this.ownedResources.delete(resource);
+        })
+      ).then((results) => {
+        for (const result of results)
+          if (result.status === 'rejected') this.oneWayFailureSink?.(result.reason);
+      });
+      throw error;
+    }
   }
 
   async closeFanoutSubscriberConnection(connectionId: string): Promise<void> {
@@ -1061,7 +1124,10 @@ export class ZLinkChannelSocketRegistry {
     }
     const results = await Promise.allSettled([
       connection.monitor?.dispose(),
-      connection.subscriber.dispose()
+      (async () => {
+        await connection.subscriber.dispose();
+        this.ownedResources.delete(connection.subscriber);
+      })()
     ]);
     const errors = results
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
@@ -1071,7 +1137,7 @@ export class ZLinkChannelSocketRegistry {
       throw new AggregateError(errors, `Fanout connection '${connectionId}' cleanup failed.`);
     }
     this.fanoutConnections.delete(connectionId);
-    if (connection.monitor !== undefined) this.ownedMonitors.delete(connection.monitor);
+    if (connection.monitor !== undefined) this.ownedResources.delete(connection.monitor);
   }
 
   handleFanoutInbound(
@@ -1461,7 +1527,7 @@ export class ZLinkChannelSocketRegistry {
   }
 
   private drainSocketMonitors(): void {
-    for (const monitor of this.ownedMonitors) monitor.drain();
+    for (const monitor of this.ownedResources) if ('drain' in monitor) monitor.drain();
   }
 
   private removeReadyConnection(connectionId: string): void {
@@ -1757,7 +1823,7 @@ export class ZLinkChannelSocketRegistry {
       return;
     }
     const monitor = this.monitoringAdapter.openSocketMonitor(socket);
-    this.ownedMonitors.add(monitor);
+    this.ownedResources.add(monitor);
     monitor.onEvent((event) => {
       if (
         event.nativeEvent === ZLinkSocketNativeEventType.Disconnected &&
@@ -1773,7 +1839,7 @@ export class ZLinkChannelSocketRegistry {
       return;
     }
     const monitor = this.monitoringAdapter.openSocketMonitor(router);
-    this.ownedMonitors.add(monitor);
+    this.ownedResources.add(monitor);
     monitor.onEvent((event) => {
       const routingId = event.routingId === undefined ? undefined : String(event.routingId);
       if (

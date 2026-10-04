@@ -94,7 +94,7 @@ test('fanout registry retains a failed subscriber for subsequent close', async (
       }
     }
   });
-  registry.ownedMonitors.add(monitor);
+  registry.ownedResources.add(monitor);
   await assert.rejects(
     registry.closeFanoutSubscriberConnection('publisher'),
     (error) => error === failure
@@ -352,3 +352,64 @@ test('event loop poller retries a failed close on subsequent disposal', (t) => {
   poller.dispose();
   assert.equal(attempts, 2);
 });
+
+const { ZLinkSpotNodeRuntimeManager } = require('../../packages/framework/dist/runtime/spots/spot-node-runtime-manager');
+
+test('channel disposal rejects new manual work and shares its in-flight close', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let attempts = 0;
+  const lifecycle = new ZLinkChannelRuntimeLifecycle({ spotRouteBridges: new Map(), sockets: { async dispose() { ++attempts; await gate; } } });
+  const first = lifecycle.dispose();
+  const second = lifecycle.dispose();
+  try {
+    lifecycle.requestManualFanoutConnect('work', 'tcp://127.0.0.1:1', {}, {});
+    assert.equal(lifecycle.manualFanoutSubscribers.size, 0);
+  } finally { release(); }
+  await Promise.all([first, second]);
+  assert.equal(attempts, 1);
+});
+
+test('spot disposal rejects work while close is pending and shares close', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let attempts = 0;
+  const manager = new ZLinkSpotNodeRuntimeManager({ detachedTaskRunner: {} });
+  manager.publishers.set('mesh', { async close() { ++attempts; await gate; } });
+  const first = manager.dispose();
+  const second = manager.dispose();
+  try {
+    await assert.rejects(manager.publish('mesh', 'work', 'topic', undefined, {}));
+  } finally { release(); }
+  await Promise.all([first, second]);
+  assert.equal(attempts, 1);
+});
+
+for (const kind of ['client', 'fanout']) {
+  for (const stage of (kind === 'client' ? ['poller', 'monitor'] : ['monitor'])) {
+    test(`${kind} creation failure at ${stage} removes live connection and retains failed cleanup`, async () => {
+      const registration = framework.createFrameworkRegistration({});
+      registration.channels.set('work', { client: {}, subscriber: {}, subscriptions: [] });
+      const failure = new Error('creation failed');
+      const closeFailure = new Error('first cleanup failed');
+      let attempts = 0;
+      const reported = [];
+      const socket = { setChannelName() {}, setRoutingId() {}, setSubscription() {}, async dispose() { if (++attempts === 1) throw closeFailure; } };
+      const poller = { dispose() {} };
+      const registry = new ZLinkChannelSocketRegistry(registration, {
+        createDealerSocket() { return socket; }, createSubscriberSocket() { return socket; },
+        createReadablePoller() { if (stage === 'poller') throw failure; return poller; }
+      }, {}, { openSocketMonitor() { throw failure; } }, (error) => reported.push(error));
+      assert.throws(() => kind === 'client'
+        ? registry.openClientServerConnection('work', 'broken', 'tcp://127.0.0.1:1', {})
+        : registry.openFanoutSubscriberConnection('work', 'broken', 'tcp://127.0.0.1:1', {}), (error) => error === failure);
+      assert.equal(registry.clientServerConnections.size, 0);
+      assert.equal(registry.fanoutConnections.size, 0);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(attempts, 1);
+      assert.ok(reported.includes(closeFailure));
+      await registry.dispose();
+      assert.equal(attempts, 2);
+    });
+  }
+}

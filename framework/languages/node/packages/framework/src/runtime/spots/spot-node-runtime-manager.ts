@@ -1,3 +1,4 @@
+import { RuntimeDisposal } from '../disposal';
 import { randomUUID } from 'node:crypto';
 import {
   type ActorRef,
@@ -161,7 +162,7 @@ export class ZLinkSpotNodeRuntimeManager {
     string,
     ReturnType<ZLinkBackendMeshNode['createPublisher']>
   >();
-  private disposed = false;
+  private readonly disposal = new RuntimeDisposal();
   private readonly autoConnectLoops: ZLinkAutoConnectLoop[] = [];
   private readonly publishedMeshNodeDescriptors = new Map<string, ZLinkMeshNodeDescriptor>();
   // Keep the revision source separate from the cached Store row. A new owner
@@ -814,7 +815,11 @@ export class ZLinkSpotNodeRuntimeManager {
     ).filter(([, channel]) => channel.server === true);
   }
 
-  async dispose(signal?: AbortSignal, deadline?: Date): Promise<void> {
+  dispose(signal?: AbortSignal, deadline?: Date): Promise<void> {
+    return this.disposal.run(() => this.disposeCore(signal, deadline));
+  }
+
+  private async disposeCore(signal?: AbortSignal, deadline?: Date): Promise<void> {
     const autoConnectLoops = [...this.autoConnectLoops];
     const entryActivations = [...this.entryActivations.values()];
     const meshPumps = [...this.meshPumps.values()];
@@ -852,7 +857,6 @@ export class ZLinkSpotNodeRuntimeManager {
     this.publishers.clear();
     this.meshNodes.clear();
     this.meshCompletions.clear();
-    this.disposed = true;
   }
 
   private async dispatchMeshRecord(
@@ -1123,7 +1127,7 @@ export class ZLinkSpotNodeRuntimeManager {
     signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_SPOT_METADATA
   ): Promise<ZLinkSubmitResult> {
-    if (this.disposed) {
+    if (this.disposal.started) {
       return Promise.reject(runtimeShutdownError());
     }
     if (signal?.aborted === true) {
@@ -1190,7 +1194,7 @@ export class ZLinkSpotNodeRuntimeManager {
     flags: number,
     metadata: ReadonlyMap<string, string>
   ): ZLinkSubmitResult {
-    if (this.disposed) {
+    if (this.disposal.started) {
       throw runtimeShutdownError();
     }
     const publisher = this.publishers.get(meshName);

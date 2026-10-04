@@ -1,3 +1,4 @@
+import { RuntimeDisposal } from '../disposal';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkRequestHandler, ZLinkSendHandler } from '../../contracts/Handlers';
 import { ZLinkConfigurationException } from '../configuration';
@@ -111,7 +112,7 @@ export class ZLinkChannelRuntimeLifecycle {
   private readonly meshChannelDispatchers = new Map<string, ZLinkChannelRequestDispatcher>();
   private readonly meshRouteDispatchers = new Map<string, ZLinkRoutePacketDispatcher>();
   private nextManualFanoutIndex = 0;
-  private disposed = false;
+  private readonly disposal = new RuntimeDisposal();
   private locationAutoConnect?: ZLinkChannelLocationAutoConnectContext;
   private clientServerLocation?: ZLinkClientServerLocationRuntime;
   private fanoutLocation?: ZLinkFanoutLocationRuntime;
@@ -388,7 +389,11 @@ export class ZLinkChannelRuntimeLifecycle {
     return this.meshRouteDispatchers.has(meshName);
   }
 
-  async dispose(signal?: AbortSignal): Promise<void> {
+  dispose(signal?: AbortSignal): Promise<void> {
+    return this.disposal.run(() => this.disposeCore(signal));
+  }
+
+  private async disposeCore(signal?: AbortSignal): Promise<void> {
     const work = await this.lane.run(() => this.beginDisposeCore());
     const transportStopped = await startOutsideStateLane(() =>
       Promise.allSettled([
@@ -438,7 +443,6 @@ export class ZLinkChannelRuntimeLifecycle {
       this.meshChannelDispatchers.clear();
       this.meshRouteDispatchers.clear();
       this.options.spotRouteBridges.clear();
-      this.disposed = true;
     });
   }
 
@@ -628,7 +632,7 @@ export class ZLinkChannelRuntimeLifecycle {
     taskRunner: ZLinkRuntimeTaskRunner,
     dispatcher: ZLinkChannelPublishDispatcher
   ): void {
-    if (this.disposed) return;
+    if (this.disposal.started) return;
     const state = this.getOrCreateManualFanoutSubscriber(
       channelName,
       endpoint,
@@ -684,7 +688,7 @@ export class ZLinkChannelRuntimeLifecycle {
 
   private openManualFanoutSubscriber(state: ManualFanoutSubscriberState): Promise<void> {
     const { channelName, endpoint, connectionId, taskRunner, dispatcher } = state;
-    if (this.disposed || !state.desired || this.taskRunner !== taskRunner) {
+    if (this.disposal.started || !state.desired || this.taskRunner !== taskRunner) {
       return Promise.resolve();
     }
     const token = Symbol(`manual-fanout:${channelName}:${endpoint}`);
@@ -700,7 +704,7 @@ export class ZLinkChannelRuntimeLifecycle {
           onReady() {},
           onTerminated: () => {
             if (
-              this.disposed ||
+              this.disposal.started ||
               (state.active?.token !== token && state.openingToken !== token) ||
               reconnecting
             )
@@ -708,7 +712,7 @@ export class ZLinkChannelRuntimeLifecycle {
             reconnecting = true;
             setImmediate(() => {
               if (
-                this.disposed ||
+                this.disposal.started ||
                 (state.active?.token !== token && state.openingToken !== token)
               ) {
                 reconnecting = false;
@@ -716,7 +720,7 @@ export class ZLinkChannelRuntimeLifecycle {
               }
               this.enqueueManualFanoutTransition(state, async () => {
                 reconnecting = false;
-                if (this.disposed || state.active?.token !== token) return;
+                if (this.disposal.started || state.active?.token !== token) return;
                 try {
                   await this.closeManualFanoutSubscriber(state, token);
                 } catch (error) {
@@ -802,7 +806,7 @@ export class ZLinkChannelRuntimeLifecycle {
   }
 
   private shouldReconnectManualFanoutSubscriber(state: ManualFanoutSubscriberState): boolean {
-    return !this.disposed && state.desired;
+    return !this.disposal.started && state.desired;
   }
 
   private beginCloseManualFanoutSubscriberCore(
