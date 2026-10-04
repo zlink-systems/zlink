@@ -334,6 +334,9 @@ disconnection, and doesn't replay it after reconnecting.
   publisher for the same ChannelName and doesn't connect to a different
   ChannelName or a different [descriptor](02-glossary.en.md#descriptor) kind.
   A manual subscriber only connects to the specified endpoint.
+- **The publisher binds its endpoint during host startup.** It doesn't wait for
+  the first publish. If the bind fails, startup fails. So a subscriber can
+  connect to a started publisher before its first publish.
 
 Logical Multicast and classic fanout both offer a publish/subscribe usage
 experience, but since their delivery targets and guarantees differ, they're
