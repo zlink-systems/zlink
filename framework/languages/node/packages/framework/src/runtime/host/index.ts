@@ -1,3 +1,4 @@
+import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
@@ -2217,7 +2218,7 @@ export class ZLinkFrameworkRuntimeHost
           );
         }
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = (await locationStore.listMeshNodes(meshName, undefined, signal)).items;
+        const descriptors = await listAllMeshNodeDescriptors(locationStore, meshName, signal);
         const selected = await selectReadyLocationPlacementDescriptor(
           descriptors,
           meshNode,
@@ -2327,7 +2328,7 @@ export class ZLinkFrameworkRuntimeHost
           );
         }
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = (await locationStore.listMeshNodes(meshName, undefined, signal)).items;
+        const descriptors = await listAllMeshNodeDescriptors(locationStore, meshName, signal);
         const selected = await selectReadyLocationPlacementDescriptor(
           descriptors,
           meshNode,
@@ -3200,8 +3201,8 @@ export class ZLinkFrameworkRuntimeHost
             undefined,
             async (meshName, nodeRid, expectedLifecycleGeneration, signal) => {
               const descriptor = (
-                await authority.listMeshNodes(meshName, undefined, signal)
-              ).items.find(
+                await listAllMeshNodeDescriptors(authority, meshName, signal)
+              ).find(
                 (candidate) =>
                   routingIdsEqual(candidate.rid, nodeRid) &&
                   candidate.lifecycleGeneration === expectedLifecycleGeneration

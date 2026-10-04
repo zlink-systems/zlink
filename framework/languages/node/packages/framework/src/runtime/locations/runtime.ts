@@ -1,3 +1,4 @@
+import { listAllMeshNodeDescriptors } from './location-store-pages';
 import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import {
@@ -929,7 +930,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     meshName: string,
     signal?: AbortSignal
   ): Promise<readonly ZLinkMeshNodeDescriptor[]> {
-    const rows = (await this.stores.locationStore.listMeshNodes(meshName, undefined, signal)).items;
+    const rows = await listAllMeshNodeDescriptors(this.stores.locationStore, meshName, signal);
     const live = await this.liveRows.filter(
       rows,
       (row, signal) => this.leaseTracker.isOwnerTokenLive(row, signal),
@@ -1150,7 +1151,12 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   ): Promise<ZLinkLocationPage<ZLinkLocationTopologyEntry>> {
     const entries: ZLinkLocationTopologyEntry[] = [];
     for (const meshName of this.meshNamesOf(filter.meshName)) {
-      for (const descriptor of await this.listAllMeshNodeDescriptors(meshName, signal)) {
+      for (const descriptor of await listAllMeshNodeDescriptors(
+        this.stores.locationStore,
+        meshName,
+        signal,
+        this.options.listPageSize
+      )) {
         const live = await this.leaseTracker.isOwnerTokenLive(descriptor, signal);
         const entry: ZLinkLocationTopologyEntry = {
           meshName: descriptor.meshName,
@@ -1193,7 +1199,12 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   ): Promise<ZLinkLocationPage<ZLinkLocationServiceSummary>> {
     const summaries: ZLinkLocationServiceSummary[] = [];
     for (const meshName of this.meshNamesOf(filter.meshName)) {
-      const descriptors = await this.listAllMeshNodeDescriptors(meshName, signal);
+      const descriptors = await listAllMeshNodeDescriptors(
+        this.stores.locationStore,
+        meshName,
+        signal,
+        this.options.listPageSize
+      );
       if (descriptors.length === 0) continue;
       const live = await this.liveRows.filter(
         descriptors,
@@ -1217,24 +1228,6 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   private meshNamesOf(meshName: string | undefined): readonly string[] {
     return meshName === undefined ? this.meshNames : [meshName];
-  }
-
-  private async listAllMeshNodeDescriptors(
-    meshName: string,
-    signal?: AbortSignal
-  ): Promise<readonly ZLinkMeshNodeDescriptor[]> {
-    const rows: ZLinkMeshNodeDescriptor[] = [];
-    let continuationToken: string | undefined;
-    do {
-      const result = await this.stores.locationStore.listMeshNodes(
-        meshName,
-        { pageSize: this.options.listPageSize, continuationToken },
-        signal
-      );
-      rows.push(...result.items);
-      continuationToken = result.continuationToken;
-    } while (continuationToken !== undefined);
-    return rows;
   }
 
   private pageInMemory<T>(

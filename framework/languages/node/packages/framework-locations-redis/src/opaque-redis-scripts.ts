@@ -11,6 +11,7 @@ const REDIS_CLEANUP_BATCH_SIZE = 32;
 const REDIS_RECORD_RETENTION_MS = 60000;
 const REDIS_SCAN_SNAPSHOT_RETENTION_MS = 60000;
 const REDIS_MAX_SCAN_SNAPSHOTS = 4096;
+const REDIS_UTF8_PREFIX_UPPER_BOUND_BYTE = 0xff;
 
 export const REDIS_STORE_TOKEN = Object.freeze({
   Conflict: 'conflict',
@@ -89,7 +90,22 @@ return {1, nowMs, record[1], record[2], record[3], tostring(tonumber(record[4]))
 //           | ['delete', keyIndex, originalKey]
 // ARGV[3..] = raw expected bytes for 'value' conditions, then raw bytes for
 //             'put' mutations, each in request order.
-const CLEANUP_AND_BOUNDARY = `
+const PRUNE_HISTORY_HELPER = `
+local function pruneHistory(rowKey, minimumBoundary)
+    if minimumBoundary then
+        local anchor = redis.call('ZREVRANGEBYSCORE', rowKey, minimumBoundary, '-inf', 'WITHSCORES', 'LIMIT', 0, 1)
+        if #anchor == 2 then
+            redis.call('ZREMRANGEBYSCORE', rowKey, '-inf', '(' .. anchor[2])
+        end
+    else
+        redis.call('ZREMRANGEBYRANK', rowKey, 0, -2)
+    end
+end
+`;
+
+const CLEANUP_AND_BOUNDARY =
+  PRUNE_HISTORY_HELPER +
+  `
 local expiredSnapshots = redis.call('ZRANGEBYSCORE', snapshotExpiryKey, '-inf', nowMs, 'LIMIT', 0, ${REDIS_EXPIRED_SNAPSHOT_BATCH_SIZE})
 for _, snapshotId in ipairs(expiredSnapshots) do
     redis.call('ZREM', snapshotExpiryKey, snapshotId)
@@ -111,10 +127,7 @@ for _, original in ipairs(due) do
         redis.call('HDEL', mapKey, original)
         redis.call('ZREM', cleanupKey, original)
     elseif minimumBoundary then
-        local anchor = redis.call('ZREVRANGEBYSCORE', rowKey, minimumBoundary, '-inf', 'WITHSCORES', 'LIMIT', 0, 1)
-        if #anchor == 2 then
-            redis.call('ZREMRANGEBYSCORE', rowKey, '-inf', '(' .. anchor[2])
-        end
+        pruneHistory(rowKey, minimumBoundary)
         redis.call('ZADD', cleanupKey, nowMs + ${REDIS_CLEANUP_RETRY_DELAY_MS}, original)
     else
         local record = decodeMember(members[1])
@@ -125,7 +138,7 @@ for _, original in ipairs(due) do
             redis.call('HDEL', mapKey, original)
             redis.call('ZREM', cleanupKey, original)
         else
-            redis.call('ZREMRANGEBYRANK', rowKey, 0, -2)
+            pruneHistory(rowKey, minimumBoundary)
             if expiresAtMs > 0 then
                 redis.call('ZADD', cleanupKey, math.max(nowMs + ${REDIS_CLEANUP_RETRY_DELAY_MS}, expiresAtMs + ${REDIS_RECORD_RETENTION_MS}), original)
             else
@@ -170,9 +183,7 @@ end
 
 for _, mutation in ipairs(mutations) do
     local rowKey = KEYS[mutation[2] + 6]
-    if not minimumBoundary then
-        redis.call('ZREMRANGEBYRANK', rowKey, 0, -2)
-    end
+    pruneHistory(rowKey, minimumBoundary)
     if redis.call('ZCARD', rowKey) >= ${REDIS_ROW_COMPACTION_ENTRY_LIMIT} then
         return {'${REDIS_STORE_TOKEN.Backlog}', nowMs}
     end
@@ -235,10 +246,11 @@ if not metadata[1] or metadata[3] ~= prefix then
 end
 local snapshotNow = tonumber(metadata[1])
 local boundary = tonumber(metadata[2])
-local lower = '-'
+local lower = '[' .. prefix
+local upper = '[' .. prefix .. string.char(${REDIS_UTF8_PREFIX_UPPER_BOUND_BYTE})
 if string.len(lastKey) > 0 then lower = '(' .. lastKey end
 local workLimit = math.max(limit * ${REDIS_SCAN_WORK_BUDGET_MULTIPLIER}, ${REDIS_SCAN_MINIMUM_WORK_BUDGET})
-local originals = redis.call('ZRANGEBYLEX', KEYS[1], lower, '+', 'LIMIT', 0, workLimit + 1)
+local originals = redis.call('ZRANGEBYLEX', KEYS[1], lower, upper, 'LIMIT', 0, workLimit + 1)
 local emitted = 0
 local encodedBytes = 0
 local examined = 0
@@ -246,27 +258,25 @@ local result = {'${REDIS_STORE_TOKEN.Page}', tostring(snapshotNow), ''}
 while examined < #originals and examined < workLimit and emitted < limit do
     local original = originals[examined + 1]
     examined = examined + 1
-    if string.sub(original, 1, string.len(prefix)) == prefix then
-        local rowKey = redis.call('HGET', KEYS[2], original)
-        if rowKey then
-            local members = redis.call('ZREVRANGEBYSCORE', rowKey, boundary, '-inf', 'LIMIT', 0, 1)
-            if #members > 0 then
-                local record = decodeMember(members[1])
-                local expiresAtMs = tonumber(record[4])
-                if record[1] == original and record[5] ~= true
-                    and (expiresAtMs == 0 or expiresAtMs > snapshotNow) then
-                    local itemBytes = string.len(original) + string.len(record[2]) + string.len(record[3]) + ${REDIS_ENCODED_ITEM_OVERHEAD_BYTES}
-                    if emitted > 0 and encodedBytes + itemBytes > ${ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES} then
-                        examined = examined - 1
-                        break
-                    end
-                    table.insert(result, original)
-                    table.insert(result, record[2])
-                    table.insert(result, record[3])
-                    table.insert(result, tostring(expiresAtMs))
-                    encodedBytes = encodedBytes + itemBytes
-                    emitted = emitted + 1
+    local rowKey = redis.call('HGET', KEYS[2], original)
+    if rowKey then
+        local members = redis.call('ZREVRANGEBYSCORE', rowKey, boundary, '-inf', 'LIMIT', 0, 1)
+        if #members > 0 then
+            local record = decodeMember(members[1])
+            local expiresAtMs = tonumber(record[4])
+            if record[1] == original and record[5] ~= true
+                and (expiresAtMs == 0 or expiresAtMs > snapshotNow) then
+                local itemBytes = string.len(original) + string.len(record[2]) + string.len(record[3]) + ${REDIS_ENCODED_ITEM_OVERHEAD_BYTES}
+                if emitted > 0 and encodedBytes + itemBytes > ${ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES} then
+                    examined = examined - 1
+                    break
                 end
+                table.insert(result, original)
+                table.insert(result, record[2])
+                table.insert(result, record[3])
+                table.insert(result, tostring(expiresAtMs))
+                encodedBytes = encodedBytes + itemBytes
+                emitted = emitted + 1
             end
         end
     end
