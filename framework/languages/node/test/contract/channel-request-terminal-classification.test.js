@@ -266,6 +266,74 @@ test('raw router and dealer requests preserve the binding failure phase', async 
   }
 });
 
+test('raw router and dealer requests consume the binding admission stage once', async (t) => {
+  const zlink = require('@zlink-systems/zlink');
+  const { constants: { errno: { EAGAIN } } } = require('node:os');
+  const { ZLinkNodeRawBindingPort } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
+  const originalCreateRouter = zlink.createRouterSocket;
+  const originalCreateDealer = zlink.createDealerSocket;
+  let admitted;
+  let submissions = 0;
+  let admissionReads = 0;
+  let replyReads = 0;
+  const withControlledRequest = (socket) => {
+    t.mock.method(socket, 'request', () => ({
+      message() { return this; },
+      timeout() { return this; },
+      submit() {
+        submissions += 1;
+        return {
+          result: zlink.SubmitResult.Backpressured,
+          get admitted() {
+            admissionReads += 1;
+            return admitted.promise;
+          },
+          get reply() {
+            replyReads += 1;
+            return admitted.reply;
+          }
+        };
+      }
+    }));
+    return socket;
+  };
+  t.mock.method(zlink, 'createRouterSocket', context => withControlledRequest(originalCreateRouter(context)));
+  t.mock.method(zlink, 'createDealerSocket', context => withControlledRequest(originalCreateDealer(context)));
+  const context = zlink.createContext();
+  const host = new ZLinkNodeRawBindingPort(context).createHost();
+  const ports = [
+    () => host.createRouter().request('target', [Buffer.from('request')], 1000),
+    () => host.createDealer().request([Buffer.from('request')], 1000)
+  ];
+  t.after(() => { host.close(); context.close(); });
+
+  for (const request of ports) {
+    for (const failure of [false, true]) {
+      let accept;
+      admitted = {
+        promise: new Promise((resolve, reject) => { accept = { resolve, reject }; }),
+        reply: failure
+          ? Promise.reject(new zlink.SubmitError(zlink.SubmitResult.Backpressured, EAGAIN))
+          : Promise.resolve([])
+      };
+      let settled = false;
+      const call = request().finally(() => { settled = true; });
+      await Promise.resolve();
+      assert.equal(settled, false, 'reply cannot finish before admission');
+      if (failure) {
+        accept.reject(new zlink.SubmitError(zlink.SubmitResult.Backpressured, EAGAIN));
+        await assert.rejects(call);
+      } else {
+        accept.resolve();
+        assert.deepEqual(await call, []);
+      }
+    }
+  }
+  assert.equal(submissions, 4);
+  assert.equal(admissionReads, 4);
+  assert.equal(replyReads, 4);
+});
+
 test('Logical Multicast preserves source refusal and zero-recipient statuses', () => {
   const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
   const {
