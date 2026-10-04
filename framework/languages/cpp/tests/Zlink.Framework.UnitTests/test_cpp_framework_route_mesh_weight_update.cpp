@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -115,8 +116,8 @@ void expect_successful_channel_request (mesh::raw_mesh_node_owner_t &source,
 TEST (CppFrameworkRouteMeshWeightUpdate, SoleTargetStopsAndResumesAfterLiveWeightChanges)
 {
     auto context = std::make_shared<zlink::context_t> ();
-    auto target_state =
-      std::make_shared<zlink::framework::detail::mesh_node_builder_state_t> ("weight-update-mesh");
+    auto target_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("weight-update-mesh");
     target_state->core_context = context;
     target_state->listen_endpoint = "inproc://weight-update-target";
     target_state->routing_id = zlink::routing_id_t::from ("weight-update-target");
@@ -176,8 +177,8 @@ TEST (CppFrameworkRouteMeshWeightUpdate, SoleTargetStopsAndResumesAfterLiveWeigh
 TEST (CppFrameworkRouteMeshWeightUpdate, ConcurrentWeightChangesReachPeerInRevisionOrder)
 {
     auto context = std::make_shared<zlink::context_t> ();
-    auto target_state =
-      std::make_shared<zlink::framework::detail::mesh_node_builder_state_t> ("weight-order-mesh");
+    auto target_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("weight-order-mesh");
     target_state->core_context = context;
     target_state->listen_endpoint = "inproc://weight-order-target";
     target_state->routing_id = zlink::routing_id_t::from ("weight-order-target");

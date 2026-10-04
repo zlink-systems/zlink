@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 // ClientServer channel admission belongs to Core (#1087 FW02-FW04):
 // - the client submits to Core and maps Core's typed terminal; it does not
@@ -177,7 +178,7 @@ TEST (ChannelCoreAdmission, WeightZeroServerStillRunsRequestsItAlreadyReceived)
     const std::string endpoint = unique_inproc_endpoint ();
     const auto server_rid = zlink::routing_id_t::from ("framework-core-admission-server");
 
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.channel (channel).enable_server ().set_routing_id (server_rid).bind (endpoint);
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_core_context (context);
@@ -201,6 +202,7 @@ TEST (ChannelCoreAdmission, WeightZeroServerStillRunsRequestsItAlreadyReceived)
       zlink::framework::runtime::application_job_queue_configuration_t{
         zlink::framework::application_job_queue_profile_t::balanced, std::nullopt, 1, 1});
     zlink::framework::runtime::channel_host_service_t host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       builder.message_bus (), runtime.channel_snapshots (), handlers, serializers, {}, jobs);
     host.start (provider);
 
@@ -260,7 +262,7 @@ TEST (ChannelCoreAdmission, ServerDeliversRepliesWhileItWaitsForAPermit)
     const std::string endpoint = unique_inproc_endpoint ();
     const auto server_rid = zlink::routing_id_t::from ("framework-permit-wait-server");
 
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.channel (channel).enable_server ().set_routing_id (server_rid).bind (endpoint);
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_core_context (context);
@@ -281,6 +283,7 @@ TEST (ChannelCoreAdmission, ServerDeliversRepliesWhileItWaitsForAPermit)
       zlink::framework::runtime::application_job_queue_configuration_t{
         zlink::framework::application_job_queue_profile_t::balanced, std::nullopt, 1, 1});
     zlink::framework::runtime::channel_host_service_t host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       builder.message_bus (), runtime.channel_snapshots (), handlers, serializers, {}, jobs);
     host.start (provider);
 
@@ -356,22 +359,25 @@ TEST (ChannelCoreAdmission, ClientRequestWaitsOnCoreAdmissionNotFrameworkReadine
       channel, "request", &gated_request_handler_t::handle,
       {.packet_name = request_t::packet_name});
 
-    zlink::framework::zlink_builder_t client_builder;
+    zlink::framework::zlink_builder_t client_builder =
+      zlink::framework::test::runtime_failure_builder ();
     client_builder.channel (channel).enable_client ().send_timeout (10s).connect (endpoint);
     auto client_runtime =
       zlink::framework::detail::channel_runtime_t::from (client_builder.message_bus ());
     client_runtime.bind_core_context (context);
     client_runtime.bind_serializers (serializers);
 
-    zlink::framework::zlink_builder_t server_builder;
+    zlink::framework::zlink_builder_t server_builder =
+      zlink::framework::test::runtime_failure_builder ();
     server_builder.channel (channel).enable_server ().bind (endpoint);
     auto server_runtime =
       zlink::framework::detail::channel_runtime_t::from (server_builder.message_bus ());
     server_runtime.bind_core_context (context);
     server_runtime.bind_serializers (serializers);
-    zlink::framework::runtime::channel_host_service_t host (server_builder.message_bus (),
-                                                            server_runtime.channel_snapshots (),
-                                                            handlers, serializers, {});
+    zlink::framework::runtime::channel_host_service_t host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
+      server_builder.message_bus (), server_runtime.channel_snapshots (), handlers, serializers,
+      {});
     std::thread late_server ([&] {
         std::this_thread::sleep_for (5500ms);
         host.start (provider);
@@ -421,17 +427,18 @@ TEST (ChannelCoreAdmission, RequestTimeoutStartsAfterCoreAdmission)
     handlers.on_request<gated_request_handler_t, request_t, reply_t> (
       channel, "request", &gated_request_handler_t::handle,
       {.packet_name = request_t::packet_name});
-    zlink::framework::zlink_builder_t client;
+    zlink::framework::zlink_builder_t client = zlink::framework::test::runtime_failure_builder ();
     client.channel (channel).enable_client ().connect (endpoint);
     auto client_runtime = zlink::framework::detail::channel_runtime_t::from (client.message_bus ());
     client_runtime.bind_core_context (context);
     client_runtime.bind_serializers (serializers);
-    zlink::framework::zlink_builder_t server;
+    zlink::framework::zlink_builder_t server = zlink::framework::test::runtime_failure_builder ();
     server.channel (channel).enable_server ().bind (endpoint);
     auto server_runtime = zlink::framework::detail::channel_runtime_t::from (server.message_bus ());
     server_runtime.bind_core_context (context);
     server_runtime.bind_serializers (serializers);
     zlink::framework::runtime::channel_host_service_t host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       server.message_bus (), server_runtime.channel_snapshots (), handlers, serializers, {});
     auto pending = client.request_client (channel)
                      .request (request_t{1})
@@ -458,7 +465,7 @@ TEST (ChannelCoreAdmission, MissingServerExpiresAtDefaultAdmissionTimeout)
     auto context = std::make_shared<zlink::context_t> ();
     zlink::framework::serializer_registry_t serializers;
     add_serializers (serializers);
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     const std::string channel = "core-admission-missing";
     builder.channel (channel).enable_client ().connect (unique_inproc_endpoint ());
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
@@ -482,7 +489,7 @@ TEST (ChannelCoreAdmission, SendAdmissionDefaultIsIndependentOfRequestTimeout)
     auto context = std::make_shared<zlink::context_t> ();
     zlink::framework::serializer_registry_t serializers;
     add_serializers (serializers);
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     const std::string channel = "core-send-admission-missing";
     auto configured = builder.channel (channel);
     configured.default_request_timeout (10s);
@@ -501,7 +508,7 @@ TEST (ChannelCoreAdmission, SendAdmissionDefaultIsIndependentOfRequestTimeout)
 
 TEST (ChannelCoreAdmission, SendTimeoutConfigurationRoundsUpAndRejectsInvalidValues)
 {
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto client = builder.channel ("send-timeout-values").enable_client ();
     EXPECT_FALSE (client.snapshot ().send_timeout);
     client.send_timeout (1us);

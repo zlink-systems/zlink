@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
@@ -577,7 +578,8 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
       *state->serial_executor, runtime::serial_execution_queue_options_t{},
       runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
-    state->node = std::make_shared<detail::spot_node_builder_state_t> ("relocation-ready-node");
+    state->node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("relocation-ready-node");
     state->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
     state->spot_instance = std::make_shared<int> (1);
     std::atomic_int completions{0};
@@ -681,7 +683,8 @@ void test_relocation_ready_defer_rejects_only_its_own_turn (test_context_t &test
       *state->serial_executor, runtime::serial_execution_queue_options_t{},
       runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
-    state->node = std::make_shared<detail::spot_node_builder_state_t> ("relocation-own-turn-node");
+    state->node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("relocation-own-turn-node");
     state->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
     state->spot_instance = std::make_shared<int> (1);
     auto context = detail::spot_context_access_t::create (state);
@@ -737,8 +740,8 @@ void test_relocation_ready_defer_holds_queued_timer_turn (test_context_t &test)
       *state->serial_executor, runtime::serial_execution_queue_options_t{},
       runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
-    state->node =
-      std::make_shared<detail::spot_node_builder_state_t> ("relocation-ready-timer-node");
+    state->node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("relocation-ready-timer-node");
     state->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
     zlink::framework::serializer_registry_t serializers;
     state->channel_runtime->serializers = &serializers;
@@ -811,7 +814,8 @@ void test_remote_actor_leave_commits_before_source_callback (test_context_t &tes
         zlink::framework::actor_context_t state;
         std::optional<zlink::framework::actor_ref_t> committed_ref;
     } actor (gateway.actor_context (actor_ref));
-    auto node = std::make_shared<detail::spot_node_builder_state_t> ("remote-leave-source");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("remote-leave-source");
     node->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::normal);
     zlink::framework::logging_builder_t logging;
     logging.use_provider ("remote-leave-test", [] (const zlink::framework::log_record_t &record) {
@@ -931,8 +935,8 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
         zlink::framework::actor_context_t &context () noexcept { return *state; }
     } actor;
 
-    const auto node =
-      std::make_shared<detail::spot_node_builder_state_t> ("actor-leave-after-defer-node");
+    const auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-leave-after-defer-node");
     const auto node_rid = node_rid_t::from_string ("actor-leave-after-defer-node");
     const auto source_id = spot_id_t ("source-spot");
     const auto entry_id = spot_id_t ("entry-spot");
@@ -1075,8 +1079,8 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
                                bool cleanup_before_cancel = false) {
         std::atomic_int failed_leave_diagnostics{0};
         const std::string case_name = remote ? "remote" : "same-node";
-        const auto node =
-          std::make_shared<detail::spot_node_builder_state_t> ("entry-return-" + case_name);
+        const auto node = zlink::framework::test::runtime_failure_fixture<
+          zlink::framework::detail::spot_node_builder_state_t> ("entry-return-" + case_name);
         const auto local_node_name = "entry-return-target-" + case_name;
         const auto local_node_rid = node_rid_t::from_string (local_node_name);
         const auto source_id = spot_id_t ("source-spot-" + case_name);
@@ -1313,8 +1317,8 @@ void test_temporary_channel_request_yield_owns_call_state (test_context_t &test)
       [] (const encoded_payload_t &payload) { return reply_t{std::stoi (payload.to_string ())}; });
 
     auto state = std::make_shared<detail::spot_context_state_t> ();
-    state->node =
-      std::make_shared<detail::spot_node_builder_state_t> ("temporary-channel-call-node");
+    state->node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("temporary-channel-call-node");
     state->serial_executor =
       std::make_shared<runtime::offload_executor_t> (2, "temporary-channel-call");
     state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
@@ -1492,7 +1496,7 @@ void test_accepted_message_payload_is_deserialized_once (test_context_t &test)
     other_payload_deserializations = 0;
     failed_payload_deserializations = 0;
 
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto mesh = builder.add_route_mesh ("decode-cache-mesh");
     mesh.add_spot_factory<payload_decode_spot_t> (
       "decode-cache",
@@ -3239,7 +3243,8 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
     };
 
     const auto core_context = std::make_shared<zlink::context_t> ();
-    auto state = std::make_shared<detail::mesh_node_builder_state_t> ("production-relocation-mesh");
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("production-relocation-mesh");
     state->core_context = core_context;
     state->listen_endpoint = "tcp://127.0.0.1:0";
     state->routing_id = zlink::routing_id_t::from ("settlement-target");
@@ -3255,14 +3260,16 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
     target.configure_session_route_owner (
       [] { return std::optional<framework::location_owner_token_t>{{"target-owner", 9}}; });
     target.start ();
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{{"production-relocation-mesh",
-                                     text_bytes ("settlement-source"),
-                                     1,
-                                     1,
-                                     "tcp://127.0.0.1:0",
-                                     {},
-                                     mesh::service_node_state_t::preparing}});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = {"production-relocation-mesh",
+                     text_bytes ("settlement-source"),
+                     1,
+                     1,
+                     "tcp://127.0.0.1:0",
+                     {},
+                     mesh::service_node_state_t::preparing},
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
     const auto target_descriptor =
@@ -3619,8 +3626,14 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
                                                {},
                                                mesh::service_node_state_t::preparing};
     };
-    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{descriptor ("late-source")});
-    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{descriptor ("late-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("late-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("late-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto src = source.topology ().local_descriptor ();
@@ -4039,8 +4052,8 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     const auto core_context = std::make_shared<zlink::context_t> ();
     std::vector<framework::message_flow_event_t> resolver_failures;
     const auto make_state = [core_context] (const std::string &rid) {
-        auto state =
-          std::make_shared<detail::mesh_node_builder_state_t> ("production-relocation-mesh");
+        auto state = zlink::framework::test::runtime_failure_fixture<
+          zlink::framework::detail::mesh_node_builder_state_t> ("production-relocation-mesh");
         state->core_context = core_context;
         state->listen_endpoint = "tcp://127.0.0.1:0";
         state->routing_id = zlink::routing_id_t::from (rid);
@@ -4558,8 +4571,8 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
 
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_state = [core_context] (const std::string &rid) {
-        auto state =
-          std::make_shared<detail::mesh_node_builder_state_t> ("production-aggregate-mesh");
+        auto state = zlink::framework::test::runtime_failure_fixture<
+          zlink::framework::detail::mesh_node_builder_state_t> ("production-aggregate-mesh");
         state->core_context = core_context;
         state->listen_endpoint = "tcp://127.0.0.1:0";
         state->routing_id = zlink::routing_id_t::from (rid);
@@ -5164,7 +5177,7 @@ void test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (test_co
     entry_relocation_test_entry_spot_t::joined_spot = nullptr;
     entry_relocation_test_entry_spot_t::joined_actor = nullptr;
 
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto mesh = builder.add_route_mesh ("entry-relocation-restore-mesh");
     mesh.add_entry_spot<entry_relocation_test_entry_spot_t> (
       [] (zlink::framework::entry_spot_context_t context) {
@@ -5255,7 +5268,7 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
     entry_relocation_test_entry_spot_t::joined_spot = nullptr;
     entry_relocation_test_entry_spot_t::joined_actor = nullptr;
 
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto mesh = builder.add_route_mesh ("return-relocation-remnant-mesh");
     mesh.add_entry_spot<entry_relocation_test_entry_spot_t> (
       [source_leave_fails] (zlink::framework::entry_spot_context_t context)
@@ -6391,7 +6404,8 @@ void test_actor_join_wire_gate_records_target_authority (test_context_t &test)
     namespace detail = zlink::framework::detail;
 
     const auto core_context = std::make_shared<zlink::context_t> ();
-    auto state = std::make_shared<detail::mesh_node_builder_state_t> ("actor-join-gate-mesh");
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("actor-join-gate-mesh");
     state->core_context = core_context;
     state->listen_endpoint = "tcp://127.0.0.1:0";
     state->routing_id = zlink::routing_id_t::from ("gate-node");

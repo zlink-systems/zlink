@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -169,7 +170,7 @@ class close_after_reply_instance_spot_t final : public zlink::framework::instanc
 TEST (ZLinkFrameworkInstanceSpotActivation, CloseFromRequestReturnsReplyBeforeCloseCompletes)
 {
     zlink::framework::serializer_registry_t serializers;
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto close_result = std::make_shared<std::optional<zlink::framework::task_t<bool>>> ();
     builder.add_route_mesh ("instance-close-after-reply")
       .add_instance_spot_factory<close_after_reply_instance_spot_t> (
@@ -227,7 +228,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
 {
     zlink::framework::serializer_registry_t serializers;
 
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
     resolver_t resolver;
@@ -317,7 +318,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
 TEST (ZLinkFrameworkInstanceSpotActivation, MissingWithoutIntentDoesNotActivate)
 {
     zlink::framework::serializer_registry_t serializers;
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
     resolver_t resolver;
@@ -348,7 +349,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingRequestUsesDefaultTimeoutForC
 {
     zlink::framework::serializer_registry_t serializers;
 
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
     resolver_t resolver;
@@ -386,7 +387,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       MissingIsNotCachedAndEachOperationAttemptsActivationOnce)
 {
     zlink::framework::serializer_registry_t serializers;
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
     resolver_t resolver;
@@ -421,7 +422,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     namespace messaging = zlink::framework::runtime::messaging;
 
     zlink::framework::serializer_registry_t serializers;
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
     resolver_t resolver;
@@ -570,7 +571,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CachedRouteFenceRefusalReadsAuthorit
          {case_t{refusal, false, true, {true, false}, 1}, case_t{refusal, true, false, {true}, 1},
           case_t{accepted, false, false, {true}, 0}}) {
         zlink::framework::serializer_registry_t serializers;
-        zlink::framework::zlink_builder_t builder;
+        zlink::framework::zlink_builder_t builder =
+          zlink::framework::test::runtime_failure_builder ();
         auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
         runtime.bind_serializers (serializers);
         const spot_address_t route{"gamequest", zlink::routing_id_t::from ("quest-mission"),
@@ -626,7 +628,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, RetiredOwnerRequestCompletesWithUnav
     namespace messaging = zlink::framework::runtime::messaging;
 
     zlink::framework::serializer_registry_t serializers;
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto mesh = builder.add_route_mesh ("retired-owner");
     auto runtime = zlink::framework::detail::spot_node_runtime_t::from (builder, "retired-owner");
     ASSERT_TRUE (runtime);
@@ -755,7 +757,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
           events_changed.notify_all ();
       });
 
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     zlink::framework::detail::apply_dispatch_options (builder, dispatch);
     auto mesh = builder.add_route_mesh ("instance-trace");
     mesh.add_instance_spot_factory<traced_instance_spot_t> (

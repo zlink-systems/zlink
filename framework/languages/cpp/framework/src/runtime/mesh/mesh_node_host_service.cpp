@@ -576,12 +576,14 @@ handler_registry_t &empty_handler_filters ()
 } // namespace
 
 mesh_node_host_service_t::mesh_node_host_service_t (
+  std::shared_ptr<runtime_failure_collector_t> failures,
   std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> registrations,
   serializer_registry_t &serializers,
   dispatch_options_t dispatch_options,
   std::shared_ptr<listener_status_registry_t> listener_statuses,
   std::shared_ptr<application_job_queue_t> application_jobs) :
-    mesh_node_host_service_t (std::move (registrations),
+    mesh_node_host_service_t (std::move (failures),
+                              std::move (registrations),
                               serializers,
                               empty_handler_filters (),
                               std::move (dispatch_options),
@@ -591,12 +593,14 @@ mesh_node_host_service_t::mesh_node_host_service_t (
 }
 
 mesh_node_host_service_t::mesh_node_host_service_t (
+  std::shared_ptr<runtime_failure_collector_t> failures,
   std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> registrations,
   serializer_registry_t &serializers,
   handler_registry_t &filters,
   dispatch_options_t dispatch_options,
   std::shared_ptr<listener_status_registry_t> listener_statuses,
   std::shared_ptr<application_job_queue_t> application_jobs) :
+    hosted_service_lifecycle_t (std::move (failures)),
     _registrations (std::move (registrations)),
     _serializers (&serializers),
     _filters (&filters),
@@ -2849,51 +2853,44 @@ bool mesh_node_host_service_t::republish_after_store_recovery ()
 
 void mesh_node_host_service_t::stop () noexcept
 {
-    _runtime_failures->capture ([&] {
-        if (_actor_destroy_gate)
+    if (_actor_destroy_gate)
+        _runtime_failures->capture ([&] {
             _actor_destroy_gate->stop_and_wait ();
-        request_stop ();
-        if (_application_dispatch)
-            _application_dispatch->drain ();
-        trace_mesh_host_stop ("application-drained");
-        _stop.store (true, std::memory_order_release);
-        for (const auto &node : _nodes)
-            node->signal_dispatch_activity ();
-        trace_mesh_host_stop ("pump-join-begin");
-        for (auto &thread : _threads) {
-            if (thread.joinable ())
-                thread.join ();
-        }
-        trace_mesh_host_stop ("pump-join-end");
-        _threads.clear ();
-        for (auto &node : _nodes) {
-            node->bind_descriptor_publisher ({});
-        }
-        const auto owner = current_location_owner ();
-        if (_location_store && owner) {
-            for (const auto &key : _published_mesh_nodes) {
-                const auto removed = infrastructure_result ([&] {
-                                         return _location_store->remove_mesh_node (key, *owner);
-                                     }).value ();
-                const char *trace = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
-                if (trace != nullptr && *trace != '\0' && std::string_view (trace) != "0")
-                    std::cerr << "zlink-cpp-host-stop mesh-descriptor-remove mesh=" << key.mesh_name
-                              << " status=" << static_cast<int> (removed) << std::endl;
-            }
-        }
-        _published_mesh_nodes.clear ();
+            _actor_destroy_gate.reset ();
+        });
+    request_stop ();
+    if (_application_dispatch)
+        _runtime_failures->capture ([&] { _application_dispatch->drain (); });
+    _stop.store (true, std::memory_order_release);
+    for (const auto &node : _nodes)
+        node->signal_dispatch_activity ();
+    for (auto &thread : _threads)
+        if (thread.joinable ())
+            _runtime_failures->capture ([&] { thread.join (); });
+    std::erase_if (_threads, [] (auto &thread) { return !thread.joinable (); });
+    for (auto &node : _nodes)
+        _runtime_failures->capture ([&] { node->bind_descriptor_publisher ({}); });
+    const auto owner = current_location_owner ();
+    if (_location_store && owner)
+        std::erase_if (_published_mesh_nodes, [&] (const auto &key) {
+            return _runtime_failures->capture ([&] {
+                infrastructure_result ([&] {
+                    return _location_store->remove_mesh_node (key, *owner);
+                }).value ();
+            });
+        });
+    if (_published_mesh_nodes.empty ()) {
         _published_mesh_descriptors.clear ();
         _location_owner.reset ();
         _location_runtime = nullptr;
-        for (auto &node : _nodes) {
-            trace_mesh_host_stop ("node-stop-begin");
-            node->stop ();
-            if (_listener_statuses)
+    }
+    for (auto &node : _nodes) {
+        _runtime_failures->capture ([&] { node->stop (); });
+        if (_listener_statuses)
+            _runtime_failures->capture ([&] {
                 _listener_statuses->remove (listener_kind_t::route_mesh, node->mesh_name ());
-            trace_mesh_host_stop ("node-stop-end");
-        }
-        _actor_destroy_gate.reset ();
-    });
+            });
+    }
 }
 
 std::optional<location_owner_token_t> mesh_node_host_service_t::current_location_owner () const

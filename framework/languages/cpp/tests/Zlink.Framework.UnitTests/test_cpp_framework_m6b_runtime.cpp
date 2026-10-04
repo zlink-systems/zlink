@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "metric_test_reader.hpp"
 #include "test_completion_poller_driver.hpp"
@@ -200,8 +201,8 @@ void verify_message_follow_invalidation_subscriptions_are_lifetime_safe ()
 {
     using namespace zlink::framework;
 
-    auto state =
-      std::make_shared<detail::mesh_node_builder_state_t> ("message-follow-subscription-mesh");
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("message-follow-subscription-mesh");
     auto runtime = std::make_shared<detail::mesh_node_runtime_t> (state);
     runtime->configure_actor_route_resolver (
       [] (actor_ref_t)
@@ -282,7 +283,8 @@ void verify_message_follow_invalidation_subscriptions_are_lifetime_safe ()
     runtime->dispatch_message_follow (notice);
     assert (self_calls.load (std::memory_order_relaxed) == 1);
 
-    auto second_state = std::make_shared<detail::mesh_node_builder_state_t> (
+    auto second_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> (
       "message-follow-subscription-second-mesh");
     auto second_runtime = std::make_shared<detail::mesh_node_runtime_t> (second_state);
     std::atomic<std::size_t> multi_mesh_calls{0};
@@ -314,7 +316,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
 
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_runtime = [core_context] (std::string rid) {
-        auto state = std::make_shared<detail::mesh_node_builder_state_t> ("actor-send-route-mesh");
+        auto state = zlink::framework::test::runtime_failure_fixture<
+          zlink::framework::detail::mesh_node_builder_state_t> ("actor-send-route-mesh");
         state->listen_endpoint = "tcp://127.0.0.1:0";
         state->routing_id = zlink::routing_id_t::from (std::move (rid));
         state->core_context = core_context;
@@ -970,8 +973,8 @@ void verify_session_relocation_gateway_commit_is_atomic ()
 
 void verify_mesh_node_role_is_available_before_local_descriptor_publish ()
 {
-    auto state =
-      std::make_shared<zlink::framework::detail::mesh_node_builder_state_t> ("discovery-role");
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("discovery-role");
     state->object_role = zlink::framework::object_role_t::client;
     state->channels.emplace ("object-channel",
                              zlink::framework::detail::mesh_channel_registration_t{
@@ -992,12 +995,14 @@ void verify_mesh_stop_drains_admitted_request_completion ()
 {
     using namespace zlink::framework;
 
-    auto source_state = std::make_shared<detail::mesh_node_builder_state_t> ("m6b-mesh");
+    auto source_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("m6b-mesh");
     source_state->listen_endpoint = "tcp://127.0.0.1:0";
     source_state->routing_id = zlink::routing_id_t::from ("completion-drain-source");
     const auto core_context = std::make_shared<zlink::context_t> ();
     source_state->core_context = core_context;
-    auto target_state = std::make_shared<detail::mesh_node_builder_state_t> ("m6b-mesh");
+    auto target_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("m6b-mesh");
     target_state->listen_endpoint = "tcp://127.0.0.1:0";
     target_state->routing_id = zlink::routing_id_t::from ("completion-drain-target");
     target_state->core_context = core_context;
@@ -1095,7 +1100,8 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
 {
     using namespace zlink::framework;
 
-    auto state = std::make_shared<detail::mesh_node_builder_state_t> ("m6b-mesh");
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("m6b-mesh");
     state->listen_endpoint = "tcp://127.0.0.1:0";
     state->routing_id = zlink::routing_id_t::from ("bound-session-reply-source");
     const auto core_context = std::make_shared<zlink::context_t> ();
@@ -1115,7 +1121,8 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
           invalidated = route;
       });
 
-    auto target_state = std::make_shared<detail::mesh_node_builder_state_t> ("m6b-mesh");
+    auto target_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("m6b-mesh");
     target_state->listen_endpoint = "tcp://127.0.0.1:0";
     target_state->routing_id = zlink::routing_id_t::from ("bound-session-reply-target");
     target_state->core_context = core_context;
@@ -1390,7 +1397,10 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
     using namespace zlink::framework::detail;
 
     auto session_owner = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("projection-session-owner")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("projection-session-owner"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     const auto source_node = zlink::routing_id_t::from ("projection-actor-owner");
     const stateful::object_ref_t previous{
       stateful::object_kind_t::actor, "projection-actor", 7, 11, "m6b-mesh", "projection-old-node"};
@@ -1500,7 +1510,10 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
 void verify_bound_session_push_admission_uses_only_session_owned_fields ()
 {
     auto session_owner = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("fw06-session-owner")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("fw06-session-owner"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     const auto actor_node = zlink::routing_id_t::from ("fw06-actor-owner");
     const stateful::object_ref_t actor{
       stateful::object_kind_t::actor, "fw06-actor", 7, 11, "m6b-mesh", actor_node.to_string ()};
@@ -1573,7 +1586,10 @@ void verify_bound_session_push_source_does_not_prejudge_current_binding ()
     using namespace zlink::framework;
 
     auto actor_owner = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("fw06-push-source")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("fw06-push-source"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     const auto other_node =
       node_rid_t::from_string (zlink::routing_id_t::from ("fw06-other-node").to_string ());
     const auto actor =
@@ -1831,13 +1847,19 @@ void verify_public_host_route_fence_reads_store_without_second_cache (bool relea
     const auto committed = std::get<object_committed_t> (
       store->commit ({reserve.key, reserved.fence, {std::byte{1}}}).result ().value ());
 
-    auto source = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("route-cache-source")},
-                           "entry",
-                           {"framework.spot"},
-                           3s});
+    auto source = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("route-cache-source"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"framework.spot"},
+      3s});
     auto target = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("route-cache-target")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("route-cache-target"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     source->configure_user_spot_operations (
       store,
       [] (const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &) {
@@ -3301,9 +3323,15 @@ void verify_unbounded_actor_handoff_backlog ()
 void verify_public_host_dispatches_one_application_record_per_turn ()
 {
     auto source = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("hwm-dispatch-source")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("hwm-dispatch-source"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     auto target = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("hwm-dispatch-target")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("hwm-dispatch-target"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     source->start ();
     target->start ();
     const auto target_status = target->status ();
@@ -3373,7 +3401,10 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
 void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
 {
     auto target = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("owner-batch-target")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("owner-batch-target"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     target->start ();
     auto &mailbox = target->transport ().mailbox ();
     const auto enqueue = [&mailbox] (std::string value) {
@@ -3421,10 +3452,16 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
 
 void verify_public_host_batches_with_finite_permits ()
 {
-    auto source = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
-      mesh::raw_mesh_node_options_t{descriptor ("finite-permit-liveness-source")}});
-    auto target = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
-      mesh::raw_mesh_node_options_t{descriptor ("finite-permit-liveness-target")}});
+    auto source = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("finite-permit-liveness-source"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("finite-permit-liveness-target"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     source->start ();
     target->start ();
     const auto target_status = target->status ();
@@ -3538,9 +3575,15 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
           0ms, std::chrono::ceil<std::chrono::milliseconds> (deadline - clock_t::now ())));
     };
     auto source = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("fifo-liveness-source")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("fifo-liveness-source"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     auto target = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("fifo-liveness-target")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("fifo-liveness-target"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     source->start ();
     target->start ();
     const auto target_status = target->status ();
@@ -3680,11 +3723,19 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
 void verify_logical_multicast_continues_after_one_target_failure ()
 {
     auto source = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
-      mesh::raw_mesh_node_options_t{descriptor ("multicast-source")}, "entry", {"framework.spot"}});
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("multicast-source"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"framework.spot"}});
     auto target_descriptor = descriptor ("z-multicast-target");
     target_descriptor.channels = {{"framework.spot", 100}};
     auto target = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{std::move (target_descriptor)}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = std::move (target_descriptor),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     source->start ();
     target->start ();
 
@@ -3714,8 +3765,8 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     assert (fanout_targets.size () >= 2);
     assert (fanout_targets.front ().descriptor.node_routing_id == bytes ("a-unavailable-target"));
 
-    auto publisher_state =
-      std::make_shared<zlink::framework::detail::spot_node_builder_state_t> ("m6b-mesh");
+    auto publisher_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("m6b-mesh");
     std::atomic_bool observed_failure{false};
     std::atomic_int dispatch_error_count{0};
     std::atomic_int empty_target_count{0};
@@ -3788,7 +3839,10 @@ void verify_logical_multicast_continues_after_one_target_failure ()
 void verify_pending_relocation_management_bounds_dispatch_wait ()
 {
     auto host = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("management-deadline")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("management-deadline"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     host->start ();
     const auto local = host->transport ().topology ().local_descriptor ();
     const protocol::relocation_coordinator_fence_t coordinator{
@@ -3819,7 +3873,10 @@ void verify_failed_relay_persistence_rearms_dispatch_wait ()
 {
     for (const bool source_lease_expiry : {false, true}) {
         auto host = std::make_shared<host::public_host_runtime_t> (
-          host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("relay-persist-wake")}});
+          host::host_options_t{mesh::raw_mesh_node_options_t{
+            .descriptor = descriptor ("relay-persist-wake"),
+            .runtime_failures =
+              std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
         host->start ();
         const auto local = host->transport ().topology ().local_descriptor ();
         const protocol::relocation_coordinator_fence_t coordinator{
@@ -3879,10 +3936,13 @@ void verify_failed_relay_persistence_rearms_dispatch_wait ()
 
 void verify_local_application_enqueue_wakes_dispatch_wait ()
 {
-    auto host = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("local-dispatch-wake")},
-                           "entry",
-                           {"framework.spot"}});
+    auto host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("local-dispatch-wake"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"framework.spot"}});
     auto entry = host->entry_spot ();
     host->start ();
 
@@ -3926,7 +3986,12 @@ void verify_root_location_session_seal_timeout_is_startup_snapshot ()
 void verify_same_node_session_seal_waits_for_active_ingress ()
 {
     auto local = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
-      mesh::raw_mesh_node_options_t{descriptor ("same-node-session-seal")}, "entry", {"player"}});
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("same-node-session-seal"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"player"}});
     auto relocation_store = std::make_shared<memory_relocation_repository_t> ();
     local->configure_session_relocation_store (relocation_store);
     local->configure_session_route_owner ([] {
@@ -4040,7 +4105,10 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
 void verify_configured_session_seal_timeout_closes_actual_owner ()
 {
     auto options = host::host_options_t{
-      mesh::raw_mesh_node_options_t{descriptor ("configured-session-seal-timeout")},
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("configured-session-seal-timeout"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
       "entry",
       {"player"}};
     options.session_relocation_seal_timeout = 17ms;
@@ -4277,8 +4345,14 @@ void verify_location_store_accepted_record_authority ()
 
 void verify_raw_spot_and_actor_routing ()
 {
-    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{descriptor ("raw-source")});
-    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{descriptor ("raw-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("raw-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("raw-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -4729,8 +4803,10 @@ void verify_raw_spot_and_actor_routing ()
 
 void verify_relocated_source_reply_failure_keeps_terminal_record ()
 {
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("relocated-reply-target")});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("relocated-reply-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     target.start ();
     const auto target_descriptor = target.topology ().local_descriptor ();
 
@@ -4794,8 +4870,10 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
 
 void verify_atomic_raw_stateful_ingress_commit ()
 {
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("atomic-ingress-target")});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("atomic-ingress-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     target.start ();
     const auto target_descriptor = target.topology ().local_descriptor ();
 
@@ -4917,10 +4995,14 @@ void verify_atomic_raw_stateful_ingress_commit ()
 
 void verify_node_request_requires_remote_admission ()
 {
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("request-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("request-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("request-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("request-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -5010,8 +5092,10 @@ void verify_node_request_requires_remote_admission ()
 
 void verify_unadmitted_request_is_rejected_without_framework_queue ()
 {
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("overflow-target")});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("overflow-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     target.start ();
 
     zlink::context_t context;
@@ -5061,11 +5145,15 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
 {
     auto target_descriptor = descriptor ("owner-capacity-target");
     target_descriptor.channels.push_back ({"independent-channel", 100});
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("owner-capacity-source")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("owner-capacity-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     metric_test::provider_t metric_provider;
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{.descriptor = target_descriptor});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = target_descriptor,
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -5191,8 +5279,14 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
 
 void verify_raw_terminal_reply_relay ()
 {
-    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{descriptor ("relay-source")});
-    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{descriptor ("relay-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("relay-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("relay-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -5248,8 +5342,10 @@ void verify_raw_terminal_reply_relay ()
 
 void verify_relocation_data_duplicates_are_distinct_arrivals ()
 {
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("duplicate-data-target")});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("duplicate-data-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     target.start ();
     const auto target_descriptor = target.topology ().local_descriptor ();
     const auto source_routing_id = bytes ("duplicate-data-source");
@@ -5370,10 +5466,14 @@ void verify_relocation_ingress_boundary_owns_saved_and_follow_only_work ()
 
 void verify_durable_reply_relay_single_winner ()
 {
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("terminal-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("terminal-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("terminal-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("terminal-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -5571,9 +5671,15 @@ void verify_durable_reply_relay_single_winner ()
 void verify_public_host_dispatches_durable_reply_relay ()
 {
     auto source = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("host-terminal-source")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("host-terminal-source"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     auto target = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("host-terminal-target")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("host-terminal-target"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     source->start ();
     target->start ();
     const auto source_status = source->status ();
@@ -5792,16 +5898,23 @@ void verify_remote_user_spot_create_close_terminal_once ()
         .value ()));
 
     auto source = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("user-source")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("user-source"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     std::vector<message_dispatch_error_event_t> instance_dispatch_diagnostics;
     std::mutex instance_dispatch_diagnostics_mutex;
     const auto dispatch_diagnostic_snapshot = [&] {
         const std::lock_guard lock (instance_dispatch_diagnostics_mutex);
         return instance_dispatch_diagnostics;
     };
-    auto target_options =
-      host::host_options_t{.mesh = mesh::raw_mesh_node_options_t{descriptor ("user-target")},
-                           .user_spot_operation_replay_retention = 50ms};
+    auto target_options = host::host_options_t{
+      .mesh =
+        mesh::raw_mesh_node_options_t{
+          .descriptor = descriptor ("user-target"),
+          .runtime_failures =
+            std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      .user_spot_operation_replay_retention = 50ms};
     target_options.mesh.dispatch.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
       target_options.mesh.dispatch, [&] (const message_dispatch_error_event_t &event) {
@@ -6009,7 +6122,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
     route_cache_options.route_cache_max_age = 30s;
     runtime::store_location_resolvers_t route_resolver (*store, route_cache_options);
     serializer_registry_t serializers;
-    zlink_builder_t builder;
+    zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto channels = detail::channel_runtime_t::from (builder.message_bus ());
     channels.bind_serializers (serializers);
     channels.bind_spot_address_resolver (route_resolver);
@@ -7066,9 +7179,15 @@ void verify_relocation_id_generation_retries_collisions ()
 void verify_draining_target_relocation_prepare (bool already_accepted)
 {
     auto source = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("prepare-source")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("prepare-source"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     auto target = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("prepare-target")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("prepare-target"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     int prepares = 0;
     target->configure_actor_join_relocation (
       [&] (const protocol::relocation_prepare_t &) -> std::optional<bool> {

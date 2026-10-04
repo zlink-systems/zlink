@@ -524,14 +524,19 @@ mesh_node_runtime_t::mesh_node_runtime_t (std::shared_ptr<mesh_node_builder_stat
 
 mesh_node_runtime_t::~mesh_node_runtime_t ()
 {
-    auto failures = runtime_failures_for (_state->spot_state->monitoring);
+    if (!_node && _spots.empty ())
+        return;
+    auto failures = _state->spot_state->runtime_failures ();
     if (!failures->capture ([&] { stop (); }))
         failures->retain ([node = std::move (_node), spots = std::move (_spots),
                            state = _state->spot_state] () mutable {
+            runtime::runtime_failure_collector_t failures;
             for (auto &[_, spot] : spots)
-                (void) spot.close ();
+                failures.capture ([&] { (void) spot.close (); });
+            failures.capture (
+              [&] { runtime::runtime_failure_collector_t::close_resources (node); });
+            failures.rethrow_if_failed ();
             spots.clear ();
-            runtime::runtime_failure_collector_t::close_resources (node);
             spot_node_runtime_t runtime (state);
             runtime.detach_native_node ();
             runtime.release_native_handles ();
@@ -797,7 +802,7 @@ void mesh_node_runtime_t::start ()
                 .placement_weight = _state->placement_weight},
               _state->advertise_host, _state->socket.receive_timeout, _state->auto_hwm_profile,
               _state->application_jobs};
-            native_options.runtime_failures = runtime_failures_for (_state->spot_state->monitoring);
+            native_options.runtime_failures = _state->spot_state->runtime_failures ();
             auto options = host::host_options_t{
               std::move (native_options), spot_snapshot.entry_spot_name.value_or ("entry"),
               std::move (stable_types),   _owner_lease_fencing_margin,

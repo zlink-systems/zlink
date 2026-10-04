@@ -63,12 +63,14 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
 {
   public:
     mesh_node_host_service_t (
+      std::shared_ptr<runtime_failure_collector_t> failures,
       std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> registrations,
       serializer_registry_t &serializers,
       dispatch_options_t dispatch_options = {},
       std::shared_ptr<listener_status_registry_t> listener_statuses = {},
       std::shared_ptr<application_job_queue_t> application_jobs = {});
     mesh_node_host_service_t (
+      std::shared_ptr<runtime_failure_collector_t> failures,
       std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> registrations,
       serializer_registry_t &serializers,
       handler_registry_t &filters,

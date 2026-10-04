@@ -166,23 +166,23 @@ class channel_host_service_t::server_loop_t
 
     void stop ()
     {
-        if (_handler_executor) {
-            _handler_executor->drain ();
-        }
-        flush_replies ();
-        _poller.close ();
-        if (_monitor.valid ()) {
-            _monitor.close ();
-        }
-        if (_router) {
-            _router->close ();
-        }
+        runtime_failure_collector_t failures;
+        if (_handler_executor)
+            failures.capture ([&] { _handler_executor->drain (); });
+        failures.capture ([&] { flush_replies (); });
+        failures.capture ([&] { _poller.close (); });
+        if (_monitor.valid ())
+            failures.capture ([&] { _monitor.close (); });
+        if (_router)
+            failures.capture ([&] {
+                _router->close ();
+                _router.reset ();
+            });
         clear_replies ();
-        if (_router) {
-            _router.reset ();
-        }
         if (_listener_statuses)
-            _listener_statuses->remove (listener_kind_t::client_server, _channel_name);
+            failures.capture (
+              [&] { _listener_statuses->remove (listener_kind_t::client_server, _channel_name); });
+        failures.rethrow_if_failed ();
     }
 
   private:
@@ -457,16 +457,16 @@ class channel_host_service_t::subscriber_loop_t
 
     void stop ()
     {
-        if (_handler_executor) {
-            _handler_executor->drain ();
-        }
-        _poller.close ();
-        if (_subscriber) {
-            _subscriber->close ();
-        }
-        if (_subscriber) {
-            _subscriber.reset ();
-        }
+        runtime_failure_collector_t failures;
+        if (_handler_executor)
+            failures.capture ([&] { _handler_executor->drain (); });
+        failures.capture ([&] { _poller.close (); });
+        if (_subscriber)
+            failures.capture ([&] {
+                _subscriber->close ();
+                _subscriber.reset ();
+            });
+        failures.rethrow_if_failed ();
     }
 
   private:
@@ -543,6 +543,7 @@ class channel_host_service_t::subscriber_loop_t
 };
 
 channel_host_service_t::channel_host_service_t (
+  std::shared_ptr<runtime_failure_collector_t> failures,
   message_bus_t bus,
   std::vector<channel_snapshot_t> channels,
   handler_registry_t &handlers,
@@ -550,6 +551,7 @@ channel_host_service_t::channel_host_service_t (
   std::map<std::string, std::string> advertise_hosts,
   std::shared_ptr<application_job_queue_t> application_jobs,
   std::shared_ptr<listener_status_registry_t> listener_statuses) :
+    hosted_service_lifecycle_t (std::move (failures)),
     _bus (std::move (bus)),
     _channels (std::move (channels)),
     _advertise_hosts (std::move (advertise_hosts)),
@@ -626,24 +628,17 @@ void channel_host_service_t::request_stop () noexcept
 
 void channel_host_service_t::stop () noexcept
 {
-    _runtime_failures->capture ([&] {
-        request_stop ();
-        for (auto &thread : _threads) {
-            if (thread.joinable ()) {
-                thread.join ();
-            }
-        }
-        for (auto &loop : _loops) {
-            loop->stop ();
-        }
-        for (auto &loop : _subscriber_loops) {
-            loop->stop ();
-        }
-        _threads.clear ();
-        _loops.clear ();
-        _subscriber_loops.clear ();
-        _services = nullptr;
+    request_stop ();
+    for (auto &thread : _threads)
+        if (thread.joinable ())
+            _runtime_failures->capture ([&] { thread.join (); });
+    std::erase_if (_threads, [] (auto &thread) { return !thread.joinable (); });
+    std::erase_if (
+      _loops, [&] (auto &loop) { return _runtime_failures->capture ([&] { loop->stop (); }); });
+    std::erase_if (_subscriber_loops, [&] (auto &loop) {
+        return _runtime_failures->capture ([&] { loop->stop (); });
     });
+    _services = nullptr;
 }
 
 } // namespace zlink::framework::runtime

@@ -33,8 +33,14 @@ class hosted_service_lifecycle_t
     }
 
   protected:
-    std::shared_ptr<runtime_failure_collector_t> _runtime_failures =
-      std::make_shared<runtime_failure_collector_t> ();
+    hosted_service_lifecycle_t () = default;
+    explicit hosted_service_lifecycle_t (std::shared_ptr<runtime_failure_collector_t> failures) :
+        _runtime_failures (std::move (failures))
+    {
+        if (!_runtime_failures)
+            throw std::invalid_argument ("A host runtime failure collector is required");
+    }
+    std::shared_ptr<runtime_failure_collector_t> _runtime_failures;
 
   public:
     virtual int shutdown_request_priority () const noexcept { return 0; }

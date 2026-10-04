@@ -64,8 +64,7 @@ struct raw_mesh_node_options_t
     dispatch_options_t dispatch;
     std::vector<std::string> metric_channel_names;
     std::string metric_source = "manual";
-    std::shared_ptr<runtime_failure_collector_t> runtime_failures =
-      std::make_shared<runtime_failure_collector_t> ();
+    std::shared_ptr<runtime_failure_collector_t> runtime_failures;
 };
 
 struct raw_mesh_byte_vector_less_t

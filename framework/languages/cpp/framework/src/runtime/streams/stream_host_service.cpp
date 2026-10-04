@@ -3682,6 +3682,7 @@ class stream_host_service_t::listener_t
 };
 
 stream_host_service_t::stream_host_service_t (
+  std::shared_ptr<runtime_failure_collector_t> failures,
   detail::stream_runtime_t runtime,
   std::vector<stream_snapshot_t> streams,
   std::map<std::string, detail::stream_session_factory_t> session_factories,
@@ -3690,6 +3691,7 @@ stream_host_service_t::stream_host_service_t (
   std::map<std::string, std::optional<std::string>> advertise_hosts,
   std::shared_ptr<listener_status_registry_t> listener_statuses,
   std::shared_ptr<application_job_queue_t> application_jobs) :
+    hosted_service_lifecycle_t (std::move (failures)),
     _runtime (std::move (runtime)),
     _streams (std::move (streams)),
     _session_factories (std::move (session_factories)),
@@ -3867,29 +3869,26 @@ void stream_host_service_t::request_stop () noexcept
 
 void stream_host_service_t::stop () noexcept
 {
-    _runtime_failures->capture ([&] {
-        request_stop ();
-        if (_liveness_thread.joinable ()) {
-            _liveness_thread.join ();
-        }
-        for (auto &listener : _listeners) {
-            listener->stop_connections ();
-        }
-        for (auto &thread : _threads) {
-            if (thread.joinable ()) {
-                thread.join ();
-            }
-        }
-        _threads.clear ();
-        for (auto &listener : _listeners) {
-            listener->stop_connections ();
-            listener->close_core_resources ();
-            if (_listener_statuses)
-                _listener_statuses->remove (listener_kind_t::stream, listener->name ());
-        }
-        _listeners.clear ();
-        _services = nullptr;
+    request_stop ();
+    if (_liveness_thread.joinable ())
+        _runtime_failures->capture ([&] { _liveness_thread.join (); });
+    for (auto &listener : _listeners)
+        _runtime_failures->capture ([&] { listener->stop_connections (); });
+    for (auto &thread : _threads)
+        if (thread.joinable ())
+            _runtime_failures->capture ([&] { thread.join (); });
+    std::erase_if (_threads, [] (auto &thread) { return !thread.joinable (); });
+    std::erase_if (_listeners, [&] (auto &listener) {
+        const bool connections_closed =
+          _runtime_failures->capture ([&] { listener->stop_connections (); });
+        const bool resources_closed =
+          _runtime_failures->capture ([&] { listener->close_core_resources (); });
+        if (_listener_statuses)
+            _runtime_failures->capture (
+              [&] { _listener_statuses->remove (listener_kind_t::stream, listener->name ()); });
+        return connections_closed && resources_closed;
     });
+    _services = nullptr;
 }
 
 } // namespace zlink::framework::runtime

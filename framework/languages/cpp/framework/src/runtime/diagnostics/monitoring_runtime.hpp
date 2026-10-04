@@ -122,8 +122,7 @@ class monitoring_runtime_state_t
     runtime::offload_executor_t lane_executor;
     mutable runtime::state_lane_t lane{lane_executor};
     logger_t<> diagnostics_logger;
-    std::shared_ptr<runtime::runtime_failure_collector_t> runtime_failures =
-      std::make_shared<runtime::runtime_failure_collector_t> ();
+    std::shared_ptr<runtime::runtime_failure_collector_t> runtime_failures;
     opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> metric_meter;
     std::mutex metric_mutex;
     std::map<std::string, std::shared_ptr<metric_instrument_t>> metric_instruments;
@@ -134,8 +133,9 @@ class monitoring_runtime_state_t
 inline std::shared_ptr<runtime::runtime_failure_collector_t>
 runtime_failures_for (const std::shared_ptr<monitoring_runtime_state_t> &monitoring)
 {
-    return monitoring ? monitoring->runtime_failures
-                      : std::make_shared<runtime::runtime_failure_collector_t> ();
+    if (!monitoring || !monitoring->runtime_failures)
+        throw std::invalid_argument ("A host runtime failure collector is required");
+    return monitoring->runtime_failures;
 }
 
 class monitoring_runtime_t

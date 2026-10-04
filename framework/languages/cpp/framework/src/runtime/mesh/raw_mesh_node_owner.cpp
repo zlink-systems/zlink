@@ -479,7 +479,8 @@ raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
            port = std::move (_port)] () mutable {
               (void) context;
               (void) socket_mutex;
-              runtime_failure_collector_t::close_resources (port, poller, router);
+              runtime_failure_collector_t::close_resources (port);
+              runtime_failure_collector_t::close_resources (poller, router);
           });
     }
 }
@@ -581,18 +582,34 @@ void raw_mesh_node_owner_t::send_descriptor_update_on_lane (
 
 void raw_mesh_node_owner_t::close ()
 {
+    auto resources =
+      _lane
+        .run ([this] {
+            if (!_closed) {
+                _receive_flow_registration.close ();
+                _mailbox.close ();
+                _operations->shutdown ();
+            }
+            return std::tuple{std::move (_port), std::move (_ingress_poller), std::move (_router)};
+        })
+        .get ();
+    std::exception_ptr failure;
+    try {
+        auto &[port, poller, router] = resources;
+        runtime_failure_collector_t::close_resources (port);
+        runtime_failure_collector_t::close_resources (poller, router);
+    }
+    catch (const std::exception &) {
+        failure = std::current_exception ();
+    }
     _lane
-      .run ([this] {
-          std::lock_guard lifecycle_lock (_lifecycle_mutex);
-          if (_closed)
-              return;
-          _receive_flow_registration.close ();
-          _mailbox.close ();
-          _operations->shutdown ();
-          runtime_failure_collector_t::close_resources (_port, _ingress_poller, _router);
-          _closed = true;
+      .run ([this, &resources, &failure] {
+          std::tie (_port, _ingress_poller, _router) = std::move (resources);
+          _closed = !failure;
       })
       .get ();
+    if (failure)
+        std::rethrow_exception (failure);
 }
 
 bool raw_mesh_node_owner_t::started () const noexcept

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -311,17 +312,19 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
     namespace mesh = zlink::framework::runtime::mesh;
     namespace messaging = zlink::framework::runtime::messaging;
     const auto target_rid = zlink::routing_id_t::from ("seal-wire-target");
-    auto target = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{mesh::service_node_descriptor_t{
-                             "seal-wire-mesh",
-                             target_rid.to_bytes (),
-                             1,
-                             1,
-                             "tcp://127.0.0.1:0",
-                             {},
-                             mesh::service_node_state_t::preparing}},
-                           "entry",
-                           {"player"}});
+    auto target = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      mesh::raw_mesh_node_options_t{
+        .descriptor = mesh::service_node_descriptor_t{"seal-wire-mesh",
+                                                      target_rid.to_bytes (),
+                                                      1,
+                                                      1,
+                                                      "tcp://127.0.0.1:0",
+                                                      {},
+                                                      mesh::service_node_state_t::preparing},
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"player"}});
     target->configure_stateful_dispatch (
       [] (const stateful::accepted_record_authority_query_t &query)
         -> std::optional<stateful::accepted_record_authority_t> {
@@ -335,7 +338,8 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
     auto target_actor = target->create_actor ("player", "seal-wire-actor");
     const auto object = target->resolve_actor (target_actor.ref ());
     ASSERT_TRUE (object);
-    auto source_state = std::make_shared<mesh_node_builder_state_t> ("seal-wire-mesh");
+    auto source_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("seal-wire-mesh");
     source_state->core_context = std::make_shared<zlink::context_t> ();
     source_state->listen_endpoint = "tcp://127.0.0.1:0";
     source_state->routing_id = zlink::routing_id_t::from ("seal-wire-source");
@@ -432,14 +436,16 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
 
 TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_same_correlation)
 {
-    auto source_state = std::make_shared<mesh_node_builder_state_t> ("seal-dedup-mesh");
+    auto source_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("seal-dedup-mesh");
     source_state->core_context = std::make_shared<zlink::context_t> ();
     source_state->listen_endpoint = "tcp://127.0.0.1:0";
     source_state->routing_id = zlink::routing_id_t::from ("seal-dedup-owner");
     auto node = source_state->spot_state;
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "seal-dedup-worker");
     serializer_registry_t serializers;
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
     auto spot = std::make_shared<spot_context_state_t> ();
     spot->node = node;
@@ -495,7 +501,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
         return source.relay_application_actor (target, header, payload, timeout, true,
                                                std::move (relay_source));
     });
-    zlink_builder_t builder;
+    zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.stream ("seal-dedup-stream").bind ("tcp://127.0.0.1:0");
     auto streams = stream_runtime_t::from (builder);
     auto first_stream = streams.open_session ("seal-dedup-stream");

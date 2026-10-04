@@ -359,14 +359,14 @@ client_server_location_runtime_t::~client_server_location_runtime_t () noexcept
         failures->retain ([poller = std::move (_transport_poller), servers = std::move (_servers),
                            clients = std::move (_clients),
                            supply = std::move (_application_supply)] () mutable {
-            runtime_failure_collector_t::close_resources (supply);
+            runtime_failure_collector_t failures;
+            failures.capture ([&] { runtime_failure_collector_t::close_resources (supply); });
             for (auto &[_, channel] : clients)
                 for (auto &[__, connection] : channel->connections)
-                    connection.owner->close ();
+                    failures.capture ([&] { connection.owner->close (); });
             for (auto &[_, server] : servers)
-                server->owner->close ();
-            clients.clear ();
-            servers.clear ();
+                failures.capture ([&] { server->owner->close (); });
+            failures.rethrow_if_failed ();
             runtime_failure_collector_t::close_resources (poller);
         });
     }
@@ -1234,7 +1234,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
             std::optional<framework_exception_t> pending_failure_reply;
             try {
                 /* ClientServer application records ride the channel
-                 * envelope: [JSON header, payload]. flow-correlation 짠4: at
+                 * envelope: [JSON header, payload]. flow-correlation §4: at
                  * Off the wire flow pair is neither validated nor
                  * materialized at this ingress. */
                 auto envelope_header = runtime::messaging::envelope_codec_t{}.decode_header (
@@ -1609,6 +1609,7 @@ task_t<void> client_server_location_runtime_t::complete_ready_waiters ()
 
 void client_server_location_runtime_t::stop ()
 {
+    runtime_failure_collector_t failures;
     const bool was_stopped = _stop.exchange (true, std::memory_order_acq_rel);
     {
         std::lock_guard lock (_descriptor_publish_mutex);
@@ -1617,14 +1618,13 @@ void client_server_location_runtime_t::stop ()
     }
     _descriptor_publish_changed.notify_all ();
     _wake_timer->signal ();
-    complete_ready_waiters ().result ().value ();
+    failures.capture ([&] { complete_ready_waiters ().result ().value (); });
     if (_thread.joinable ())
-        runtime::infrastructure_wait_guard::join (_thread, "client-server-location/worker");
-    if (_application_supply) {
-        _application_supply->close ();
-        _application_supply.reset ();
-    }
-    _wake_timer->detach ();
+        failures.capture ([&] {
+            runtime::infrastructure_wait_guard::join (_thread, "client-server-location/worker");
+        });
+    failures.capture ([&] { runtime_failure_collector_t::close_resources (_application_supply); });
+    failures.capture ([&] { _wake_timer->detach (); });
     std::vector<std::string> client_channels;
     bool has_servers = false;
     bool has_clients = false;
@@ -1638,21 +1638,24 @@ void client_server_location_runtime_t::stop ()
       })
       .get ();
     if (!was_stopped || has_servers || has_clients) {
-        stop_clients ();
-        stop_servers ();
+        has_clients = !failures.capture ([&] { stop_clients (); });
+        has_servers = !failures.capture ([&] { stop_servers (); });
     }
     for (const auto &channel_name : client_channels)
-        _channel_runtime.unbind_client_server_transport (channel_name);
-    if (_transport_poller) {
-        _transport_poller->close ();
-    }
-    _lane.run_checked ([this] { _transport_poller.reset (); }).get ();
+        failures.capture ([&] { _channel_runtime.unbind_client_server_transport (channel_name); });
+    if (!has_clients && !has_servers && failures.capture ([&] {
+            if (_transport_poller)
+                _transport_poller->close ();
+        }))
+        _lane.run_checked ([this] { _transport_poller.reset (); }).get ();
     if (!was_stopped || has_servers || has_clients)
-        publish_snapshot_changes ().result ().value ();
+        failures.capture ([&] { publish_snapshot_changes ().result ().value (); });
+    failures.rethrow_if_failed ();
 }
 
 void client_server_location_runtime_t::stop_clients ()
 {
+    runtime_failure_collector_t failures;
     std::vector<std::shared_ptr<raw_client_server_client_t>> clients;
     _lane
       .run_checked ([this, &clients] {
@@ -1663,7 +1666,8 @@ void client_server_location_runtime_t::stop_clients ()
       })
       .get ();
     for (auto &client : clients)
-        client->close ();
+        failures.capture ([&] { client->close (); });
+    failures.rethrow_if_failed ();
     _lane
       .run_checked ([this] {
           _clients.clear ();
@@ -1674,6 +1678,7 @@ void client_server_location_runtime_t::stop_clients ()
 
 void client_server_location_runtime_t::stop_servers ()
 {
+    runtime_failure_collector_t failures;
     std::map<std::string, server_entry_t *> servers;
     _lane
       .run_checked ([this, &servers] {
@@ -1683,12 +1688,14 @@ void client_server_location_runtime_t::stop_servers ()
       .get ();
     for (auto &[channel_name, server] : servers) {
         if (!server->published_descriptor) {
-            server->owner->close ();
+            failures.capture ([&] { server->owner->close (); });
             if (_listener_statuses)
-                _listener_statuses->remove (listener_kind_t::client_server, channel_name);
+                failures.capture ([&] {
+                    _listener_statuses->remove (listener_kind_t::client_server, channel_name);
+                });
             continue;
         }
-        try {
+        failures.capture ([&] {
             auto admission = server->owner->descriptor ();
             if (admission.state != mesh::service_node_state_t::draining) {
                 ++admission.descriptor_revision;
@@ -1705,6 +1712,8 @@ void client_server_location_runtime_t::stop_servers ()
                 if (written.status == location_write_status_t::stored)
                     server->published_descriptor = std::move (draining);
             }
+        });
+        failures.capture ([&] {
             (void) _store
               ->remove_client_server ({server->published_descriptor->channel_name,
                                        server->published_descriptor->server_rid},
@@ -1712,13 +1721,13 @@ void client_server_location_runtime_t::stop_servers ()
                                        server->published_descriptor->lease_generation})
               .result ()
               .value ();
-        }
-        catch (...) {
-        }
-        server->owner->close ();
+        });
+        failures.capture ([&] { server->owner->close (); });
         if (_listener_statuses)
-            _listener_statuses->remove (listener_kind_t::client_server, channel_name);
+            failures.capture (
+              [&] { _listener_statuses->remove (listener_kind_t::client_server, channel_name); });
     }
+    failures.rethrow_if_failed ();
     _lane
       .run_checked ([this] {
           _servers.clear ();

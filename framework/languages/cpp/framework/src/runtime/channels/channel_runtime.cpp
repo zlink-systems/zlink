@@ -403,7 +403,14 @@ void drain_route_client_executors (channel_runtime_state_t &state) noexcept
 
 void drain_zlink_builder_state_runtime (zlink_builder_state_t &state) noexcept
 {
-    if (state.runtime) {
+    if (state.runtime
+        && state.runtime->lane
+             .run_checked ([&] {
+                 return !state.runtime->native_clients.empty ()
+                        || !state.runtime->native_publishers.empty ()
+                        || !state.runtime->route_client_executors.empty ();
+             })
+             .get ()) {
         auto failures = runtime_failures_for (state.runtime->monitoring);
         if (!failures->capture ([&] {
                 drain_route_client_executors (*state.runtime);

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -74,7 +75,7 @@ TEST (CppFrameworkRouteClientChannelRouting, OneWaySendDoesNotCreateCorrelation)
 
     zlink::framework::serializer_registry_t serializers;
     add_int_serializer<route_event_t> (serializers, "application/x-route-event");
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
     int received = 0;
@@ -118,7 +119,7 @@ TEST (CppFrameworkRouteClientChannelRouting, OneWayPublishDoesNotCreateCorrelati
 
     zlink::framework::serializer_registry_t serializers;
     add_int_serializer<route_event_t> (serializers, "application/x-route-event");
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.channel ("one-way-publisher").enable_publisher ().connect (endpoint);
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_core_context (context);
@@ -166,7 +167,7 @@ TEST (CppFrameworkRouteClientChannelRouting, ResolvesRouteMeshAndClientServerCha
     add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
     add_int_serializer<route_event_t> (serializers, "application/x-route-event");
 
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
 

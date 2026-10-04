@@ -139,12 +139,32 @@ class pending_request_guard_t
 
 } // namespace
 
+namespace
+{
+template <class Port, class Socket>
+void close_client_server_resources (Port &port,
+                                    std::unique_ptr<zlink::poller_t> &poller,
+                                    std::unique_ptr<zlink::socket_monitor_t> &monitor,
+                                    Socket &socket)
+{
+    runtime_failure_collector_t failures;
+    failures.capture ([&] { runtime_failure_collector_t::close_resources (port, poller); });
+    if (!poller)
+        failures.capture ([&] { runtime_failure_collector_t::close_resources (monitor); });
+    if (!port && !monitor)
+        failures.capture ([&] { runtime_failure_collector_t::close_resources (socket); });
+    failures.rethrow_if_failed ();
+}
+}
+
 raw_client_server_server_t::raw_client_server_server_t (raw_client_server_server_options_t options,
                                                         std::shared_ptr<zlink::context_t> context) :
     _options (std::move (options)),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
     _mailbox ()
 {
+    if (!_options.runtime_failures)
+        throw std::invalid_argument ("A host runtime failure collector is required");
     if (_options.descriptor.channel_name.empty ()
         || _options.descriptor.server_routing_id.empty ()) {
         throw std::invalid_argument ("ClientServer server channel and routing id are required");
@@ -161,7 +181,7 @@ raw_client_server_server_t::~raw_client_server_server_t () noexcept
               // Keep the native context and the port's borrowed mutex alive.
               (void) context;
               (void) socket_mutex;
-              runtime_failure_collector_t::close_resources (port, poller, monitor, socket);
+              close_client_server_resources (port, poller, monitor, socket);
           });
     }
 }
@@ -222,17 +242,29 @@ void raw_client_server_server_t::start ()
 
 void raw_client_server_server_t::close ()
 {
+    auto resources = _lane
+                       .run_checked ([this] {
+                           _receive_flow_registration.close ();
+                           _mailbox.close ();
+                           return std::tuple{std::move (_port), std::move (_monitor_poller),
+                                             std::move (_monitor), std::move (_router)};
+                       })
+                       .get ();
+    std::exception_ptr failure;
+    try {
+        std::apply ([] (auto &...owned) { close_client_server_resources (owned...); }, resources);
+    }
+    catch (const std::exception &) {
+        failure = std::current_exception ();
+    }
     _lane
-      .run_checked ([this] {
-          if (_closed)
-              return true;
-          _receive_flow_registration.close ();
-          _mailbox.close ();
-          runtime_failure_collector_t::close_resources (_port, _monitor_poller, _monitor, _router);
-          _closed = true;
-          return true;
+      .run_checked ([this, &resources, &failure] {
+          std::tie (_port, _monitor_poller, _monitor, _router) = std::move (resources);
+          _closed = !failure;
       })
       .get ();
+    if (failure)
+        std::rethrow_exception (failure);
 }
 std::string raw_client_server_server_t::endpoint () const
 {
@@ -697,6 +729,8 @@ raw_client_server_client_t::raw_client_server_client_t (raw_client_server_client
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
     _control_replies (std::make_shared<control_reply_state_t> ())
 {
+    if (!_options.runtime_failures)
+        throw std::invalid_argument ("A host runtime failure collector is required");
     if (_options.client_routing_id.empty () || _options.admission.channel_name.empty ()
         || _options.expected_server.advertised_endpoint.empty ()) {
         throw std::invalid_argument (
@@ -714,7 +748,7 @@ raw_client_server_client_t::~raw_client_server_client_t () noexcept
               // Keep the native context and the port's borrowed mutex alive.
               (void) context;
               (void) socket_mutex;
-              runtime_failure_collector_t::close_resources (port, poller, monitor, socket);
+              close_client_server_resources (port, poller, monitor, socket);
           });
     }
 }
@@ -773,15 +807,32 @@ void raw_client_server_client_t::close ()
 
 task_t<void> raw_client_server_client_t::close_task ()
 {
-    co_await _lane.run_task ([this] {
-        if (_closed)
-            return true;
+    std::tuple<decltype (_port), decltype (_monitor_poller), decltype (_monitor),
+               decltype (_dealer)>
+      resources;
+    co_await _lane.run_task ([this, &resources] {
         _receive_flow_registration.close ();
-        runtime_failure_collector_t::close_resources (_port, _monitor_poller, _monitor, _dealer);
-        _ready = false;
-        _closed = true;
+        resources = std::tuple{std::move (_port), std::move (_monitor_poller), std::move (_monitor),
+                               std::move (_dealer)};
         return true;
     });
+    std::exception_ptr failure;
+    try {
+        std::apply ([] (auto &...owned) { close_client_server_resources (owned...); }, resources);
+    }
+    catch (const std::exception &) {
+        failure = std::current_exception ();
+    }
+    co_await _lane.run_task ([this, &resources, &failure] {
+        std::tie (_port, _monitor_poller, _monitor, _dealer) = std::move (resources);
+        if (!failure) {
+            _ready = false;
+            _closed = true;
+        }
+        return true;
+    });
+    if (failure)
+        std::rethrow_exception (failure);
 }
 bool raw_client_server_client_t::ready () const
 {

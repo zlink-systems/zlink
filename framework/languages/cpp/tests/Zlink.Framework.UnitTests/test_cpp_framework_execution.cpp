@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
@@ -227,8 +228,11 @@ bool verify_timer_handler_activation_lifetime ()
         state->activation_scope = std::make_shared<zlink::framework::detail::service_scope_t> (
           zlink::framework::detail::service_scope_t::create (
             root, zlink::framework::detail::service_scope_kind_t::spot_activation));
-        state->channel_runtime =
-          std::make_shared<zlink::framework::detail::channel_runtime_state_t> ();
+        state->channel_runtime = zlink::framework::test::runtime_failure_fixture<
+          zlink::framework::detail::channel_runtime_state_t> ();
+        state->node = std::make_shared<zlink::framework::detail::spot_node_builder_state_t> (
+          "timer-activation");
+        state->node->monitoring = state->channel_runtime->monitoring;
         state->channel_runtime->serializers = &serializers;
         state->spot_instance = std::make_shared<timer_activation_spot_t> ();
 
@@ -465,8 +469,8 @@ bool verify_close_waits_for_timer_callback_barrier ()
     services.add_scoped<timer_activation_dependency_t> ();
     auto root = services.build_provider ();
     auto state = std::make_shared<zlink::framework::detail::spot_context_state_t> ();
-    state->node =
-      std::make_shared<zlink::framework::detail::spot_node_builder_state_t> ("timer-close-race");
+    state->node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("timer-close-race");
     auto executor = std::make_shared<zlink::framework::runtime::offload_executor_t> (1);
     state->serial_executor = executor;
     state->serial_queue = std::make_shared<zlink::framework::runtime::serial_execution_queue_t> (
@@ -484,7 +488,8 @@ bool verify_close_waits_for_timer_callback_barrier ()
 
     auto context = zlink::framework::detail::spot_context_access_t::create (state);
     zlink::framework::serializer_registry_t serializers;
-    state->channel_runtime = std::make_shared<zlink::framework::detail::channel_runtime_state_t> ();
+    state->channel_runtime = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::channel_runtime_state_t> ();
     state->channel_runtime->serializers = &serializers;
     auto pending_timer = std::make_shared<zlink::framework::detail::timer_state_t> ();
     pending_timer->name = "queued-before-close";
@@ -573,7 +578,8 @@ bool verify_spot_close_waits_for_earlier_lifecycle_join ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("close-after-join");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("close-after-join");
     auto executor = std::make_shared<runtime::offload_executor_t> (1);
     auto state = std::make_shared<spot_context_state_t> ();
     state->node = node;
@@ -887,7 +893,8 @@ bool verify_timer_terminal_precedes_lifecycle_close_turn ()
 
     serializer_registry_t serializers;
     auto state = std::make_shared<spot_context_state_t> ();
-    state->node = std::make_shared<spot_node_builder_state_t> ("timer-terminal-before-close");
+    state->node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("timer-terminal-before-close");
     auto executor = std::make_shared<runtime::offload_executor_t> (1);
     state->serial_executor = executor;
     state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
@@ -898,7 +905,8 @@ bool verify_timer_terminal_precedes_lifecycle_close_turn ()
     state->object_generation = 1;
     state->authority_owner_generation = 1;
     state->spot_instance = std::make_shared<int> (1);
-    state->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    state->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     state->channel_runtime->serializers = &serializers;
     auto timer_state = std::make_shared<timer_state_t> ();
     timer_state->name = "closing";
@@ -956,7 +964,8 @@ bool verify_timer_self_cancel_completes_after_callback ()
     serializer_registry_t serializers;
     auto state = std::make_shared<spot_context_state_t> ();
     state->spot_instance = std::make_shared<int> (1);
-    state->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    state->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     state->channel_runtime->serializers = &serializers;
     auto timer_state = std::make_shared<timer_state_t> ();
     timer_state->name = "self-cancel";
@@ -2162,13 +2171,15 @@ bool verify_spot_wide_yield_blocks_idle_eviction_until_handler_terminal ()
     namespace messaging = zlink::framework::runtime::messaging;
     namespace protocol = zlink::framework::runtime::protocol;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("yield-idle-eviction-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("yield-idle-eviction-node");
     node->instance_spot_idle_timeout = std::chrono::seconds (1);
 
     auto executor = std::make_shared<runtime::offload_executor_t> (1);
     node->worker_executor = executor;
     serializer_registry_t serializers;
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
     const auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
       .mesh = {.descriptor = {
@@ -3730,7 +3741,8 @@ bool verify_draining_host_refuses_new_admission_with_shutting_down ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("draining-host-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("draining-host-node");
     spot_node_runtime_t runtime (node);
     runtime.bind_drain_flag (std::make_shared<std::atomic_bool> (true));
     const auto draining_actor = actor_ref_access_t::make (
@@ -3775,7 +3787,8 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("idle-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("idle-node");
     node->instance_spot_idle_timeout = std::chrono::seconds (1);
 
     auto executor = std::make_shared<runtime::offload_executor_t> (1);
@@ -3860,11 +3873,13 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
 bool verify_idle_timer_closes_before_executor_releases_last_node_reference ()
 {
     using namespace zlink::framework::detail;
-    auto state = std::make_shared<spot_node_builder_state_t> ("idle-timer-lifetime-node");
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("idle-timer-lifetime-node");
     auto timer_worker = std::make_shared<zlink::framework::runtime::offload_executor_t> ();
     std::weak_ptr<zlink::framework::runtime::offload_executor_t> weak_timer_worker = timer_worker;
     state->worker_executor = timer_worker;
-    state->instance_spot_idle_timer = std::make_unique<core_timer_drain_loop_t> ();
+    state->instance_spot_idle_timer = std::make_unique<core_timer_drain_loop_t> (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     state->instance_spot_idle_timer->start (std::chrono::hours (1), 1,
                                             [timer_worker] (std::uint64_t) {});
     timer_worker.reset ();
@@ -3893,7 +3908,8 @@ bool verify_explicit_instance_spot_close_releases_authority_after_callback ()
     using namespace zlink::framework::detail;
     namespace service = zlink::framework::runtime::host;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("instance-explicit-close-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("instance-explicit-close-node");
     auto context = std::make_shared<spot_context_state_t> ();
     context->node = node;
     auto executor = std::make_shared<runtime::offload_executor_t> (1);
@@ -3968,7 +3984,8 @@ bool verify_close_terminal_for_operational_boundary ()
     using namespace zlink::framework::detail;
     namespace host = zlink::framework::runtime::host;
     for (int boundary = 0; boundary != 3; ++boundary) {
-        auto node = std::make_shared<spot_node_builder_state_t> ("close-terminal-node");
+        auto node = zlink::framework::test::runtime_failure_fixture<
+          zlink::framework::detail::spot_node_builder_state_t> ("close-terminal-node");
         node->drain_flag = std::make_shared<std::atomic_bool> (false);
         auto state = std::make_shared<spot_context_state_t> ();
         state->node = node;
@@ -4058,7 +4075,8 @@ bool verify_spot_close_returns_turn_while_store_step_is_pending ()
     namespace service = zlink::framework::runtime::host;
     using commit_t = service::spot_close_commit_t;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("close-store-step-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("close-store-step-node");
     auto context = std::make_shared<spot_context_state_t> ();
     context->node = node;
     auto executor = std::make_shared<runtime::offload_executor_t> (2);
@@ -4132,14 +4150,16 @@ bool verify_remote_actor_prepare_is_idempotent ()
     namespace runtime = zlink::framework::runtime;
 
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-prepare-idempotency-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-prepare-idempotency-node");
     auto target = std::make_shared<spot_context_state_t> ();
     target->node = node;
     target->node_rid = node_rid_t::from_string ("actor-prepare-idempotency-node");
     target->spot_id = spot_id_t ("target-spot");
     target->spot_name = "target";
     target->spot_instance = std::make_shared<int> (1);
-    target->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    target->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     target->channel_runtime->serializers = &serializers;
     target->serial_executor =
       std::make_shared<runtime::offload_executor_t> (2, "actor-prepare-idempotency");
@@ -4253,14 +4273,16 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     namespace runtime = zlink::framework::runtime;
 
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("wire-join-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("wire-join-node");
     auto target = std::make_shared<spot_context_state_t> ();
     target->node = node;
     target->node_rid = node_rid_t::from_string ("wire-join-node");
     target->spot_id = spot_id_t ("target-spot");
     target->spot_name = "target";
     target->spot_instance = std::make_shared<int> (1);
-    target->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    target->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     target->channel_runtime->serializers = &serializers;
     target->serial_executor =
       std::make_shared<runtime::offload_executor_t> (2, "wire-join-admission");
@@ -4364,10 +4386,14 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
               {{"actor-join", 100}},
               runtime::mesh::service_node_state_t::preparing};
         };
-        runtime::mesh::raw_mesh_node_owner_t source (
-          runtime::mesh::raw_mesh_node_options_t{descriptor ("wire-join-source", 3)});
-        runtime::mesh::raw_mesh_node_owner_t target_owner (
-          runtime::mesh::raw_mesh_node_options_t{descriptor ("wire-join-node", 1)});
+        runtime::mesh::raw_mesh_node_owner_t source (runtime::mesh::raw_mesh_node_options_t{
+          .descriptor = descriptor ("wire-join-source", 3),
+          .runtime_failures =
+            std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+        runtime::mesh::raw_mesh_node_owner_t target_owner (runtime::mesh::raw_mesh_node_options_t{
+          .descriptor = descriptor ("wire-join-node", 1),
+          .runtime_failures =
+            std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
         source.start ();
         target_owner.start ();
         const auto target_descriptor = target_owner.topology ().local_descriptor ();
@@ -4628,9 +4654,11 @@ bool verify_wire_join_requires_active_local_target ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("wire-join-inactive-target");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("wire-join-inactive-target");
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (2);
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     serializer_registry_t serializers;
     node->channel_runtime->serializers = &serializers;
     spot_node_runtime_t owner (node);
@@ -4668,7 +4696,8 @@ bool verify_relocation_abort_does_not_hold_receive_worker ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("relocation-abort-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("relocation-abort-node");
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (2);
     auto spot = std::make_shared<spot_context_state_t> ();
     spot->node = node;
@@ -5086,7 +5115,8 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
     std::atomic_int source_leave_failures{0};
     std::atomic_bool source_leave_identity{false};
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("join-commit-target");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("join-commit-target");
     node->dispatch.message_flow (message_flow_log_mode_t::errors);
     dispatch_options_access_t::set_observer_for_tests (
       node->dispatch, [&source_leave_failures, &source_leave_identity,
@@ -5110,7 +5140,8 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
           }
       });
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (2);
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
     auto spot = std::make_shared<spot_context_state_t> ();
     spot->node = node;
@@ -5460,7 +5491,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     using namespace zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-finalize-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-finalize-node");
     std::atomic_int leave_submit_unavailable_events{0};
     node->dispatch.message_flow (message_flow_log_mode_t::errors);
     dispatch_options_access_t::set_observer_for_tests (
@@ -5477,7 +5509,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
           }
       });
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "actor-finalize");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
     // The single finalize request keeps its original Join deadline while the
     // target finishes lifecycle and retained backlog publication.
@@ -5488,7 +5521,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     target->spot_id = spot_id_t ("target-spot");
     target->spot_name = "target";
     target->spot_instance = std::make_shared<int> (1);
-    target->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    target->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     target->channel_runtime->serializers = &serializers;
     target->serial_executor = node->worker_executor;
     target->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
@@ -5974,7 +6008,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     std::mutex probe_mutex;
     std::condition_variable probe_changed;
     bool probe_fired = false;
-    zlink::framework::detail::core_timer_drain_loop_t probe_timer;
+    zlink::framework::detail::core_timer_drain_loop_t probe_timer (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     probe_timer.start (std::chrono::milliseconds (1), 1, [&] (std::uint64_t) {
         {
             std::lock_guard lock (probe_mutex);
@@ -6465,12 +6500,14 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     serializer_registry_t serializers;
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_state = [&] (const std::string &rid, bool target) {
-        auto state = std::make_shared<mesh_node_builder_state_t> ("actor-cutover-mesh");
+        auto state = zlink::framework::test::runtime_failure_fixture<
+          zlink::framework::detail::mesh_node_builder_state_t> ("actor-cutover-mesh");
         state->core_context = core_context;
         state->listen_endpoint = "tcp://127.0.0.1:0";
         state->routing_id = zlink::routing_id_t::from (rid);
         state->spot_state->snapshot.routing_id = *state->routing_id;
-        state->spot_state->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+        state->spot_state->channel_runtime =
+          zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
         state->spot_state->channel_runtime->serializers = &serializers;
         state->spot_builder.add_spot_factory<actor_cutover_probe_spot_t> (
           "actor.cutover.spot",
@@ -7052,7 +7089,8 @@ bool verify_remote_actor_completion_keeps_session_ref_until_route_ack ()
     using namespace zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("remote-source-publication-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("remote-source-publication-node");
     spot_node_runtime_t spots (node);
     actor_gateway_runtime_t gateway;
     auto session = gateway.manager ();
@@ -7442,8 +7480,8 @@ int main (int argc, char **argv)
     }
 
     {
-        auto state = std::make_shared<zlink::framework::detail::spot_node_builder_state_t> (
-          "logical-multicast-observation");
+        auto state = zlink::framework::test::runtime_failure_fixture<
+          zlink::framework::detail::spot_node_builder_state_t> ("logical-multicast-observation");
         std::atomic_bool observed{false};
         zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
           state->dispatch, [&] (const zlink::framework::message_dispatch_error_event_t &event) {
@@ -8063,8 +8101,8 @@ int main (int argc, char **argv)
             return 34;
         }
 
-        auto completion_state =
-          std::make_shared<zlink::framework::detail::spot_node_builder_state_t> ("completion-node");
+        auto completion_state = zlink::framework::test::runtime_failure_fixture<
+          zlink::framework::detail::spot_node_builder_state_t> ("completion-node");
         std::vector<zlink::framework::message_flow_event_t> completion_failure_events;
         completion_state->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
         zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (

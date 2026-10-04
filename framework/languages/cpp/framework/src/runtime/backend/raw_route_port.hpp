@@ -38,7 +38,7 @@ struct raw_received_t
     std::optional<zlink::reply_token_t> reply_token;
     raw_message_t parts;
     // Opaque nonzero generation of the Core selected route that delivered
-    // this record (Core ROUTER 짠10.1); compared only for equality.
+    // this record (Core ROUTER §10.1); compared only for equality.
     std::uint64_t route_generation = 0;
 };
 

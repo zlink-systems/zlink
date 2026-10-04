@@ -1150,6 +1150,13 @@ class callback_context_scope_t final
 
 } // namespace
 
+std::shared_ptr<runtime::runtime_failure_collector_t>
+spot_node_builder_state_t::runtime_failures () const
+{
+    return runtime_failures_for (
+      monitoring ? monitoring : (channel_runtime ? channel_runtime->monitoring : nullptr));
+}
+
 spot_node_builder_state_t::~spot_node_builder_state_t () = default;
 
 void drain_spot_node_executors (spot_node_builder_state_t &node)
@@ -10983,7 +10990,7 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
     if (deadline) {
         std::weak_ptr<remote_actor_commit_turn_state_t> weak_commit = commit_state;
         auto timer = remote_actor_commit_deadline_t::start (
-          *deadline, deadline_executor, detail::runtime_failures_for (_state->monitoring),
+          *deadline, deadline_executor, _state->runtime_failures (),
           [weak_commit, submission_state] {
               auto commit = weak_commit.lock ();
               if (!commit)
@@ -13810,8 +13817,8 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
         attach_native_spot (context);
     if (plan.create_idle_timer) {
         auto weak_state = std::weak_ptr<spot_node_builder_state_t> (_state);
-        auto timer = std::make_unique<detail::core_timer_drain_loop_t> (
-          detail::runtime_failures_for (_state->monitoring));
+        auto timer =
+          std::make_unique<detail::core_timer_drain_loop_t> (_state->runtime_failures ());
         timer->start (plan.idle_timeout, std::numeric_limits<std::uint64_t>::max (),
                       [weak_state] (std::uint64_t) {
                           if (auto state = weak_state.lock ()) {

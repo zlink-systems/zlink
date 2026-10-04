@@ -788,12 +788,12 @@ void close_native_channel_transports (const std::shared_ptr<channel_runtime_stat
           }
       })
       .get ();
-    for (auto &client : clients) {
-        client->close ();
-    }
-    for (auto &publisher : publishers) {
-        publisher->close ();
-    }
+    runtime::runtime_failure_collector_t failures;
+    for (auto &client : clients)
+        failures.capture ([&] { client->close (); });
+    for (auto &publisher : publishers)
+        failures.capture ([&] { publisher->close (); });
+    failures.rethrow_if_failed ();
     state->lane
       .run ([&] {
           state->native_clients.clear ();

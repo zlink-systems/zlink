@@ -195,8 +195,10 @@ raw_fanout_subscriber_t::~raw_fanout_subscriber_t () noexcept
           [context = std::move (_context), owned_poller = std::move (_owned_poller),
            connections = std::move (_connections), poller = _poller] () mutable {
               (void) context;
+              runtime_failure_collector_t failures;
               for (auto &[_, connection] : connections)
-                  close_connection_locked (connection, poller);
+                  failures.capture ([&] { close_connection_locked (connection, poller); });
+              failures.rethrow_if_failed ();
               runtime_failure_collector_t::close_resources (owned_poller);
               connections.clear ();
           });
@@ -264,15 +266,19 @@ void raw_fanout_subscriber_t::close ()
     std::lock_guard lock (_mutex);
     if (_closed)
         return;
-    for (auto &[id, connection] : _connections) {
-        static_cast<void> (id);
-        close_connection_locked (connection, _poller);
+    runtime_failure_collector_t failures;
+    for (auto entry = _connections.begin (); entry != _connections.end ();) {
+        if (failures.capture ([&] { close_connection_locked (entry->second, _poller); }))
+            entry = _connections.erase (entry);
+        else
+            ++entry;
     }
-    if (_owned_poller)
-        _owned_poller->close ();
-    _connections.clear ();
+    if (_owned_poller && _connections.empty ())
+        failures.capture ([&] { _owned_poller->close (); });
+    failures.rethrow_if_failed ();
     _closed = true;
 }
+
 std::pair<fanout_receive_status_t, std::optional<fanout_received_t>>
 raw_fanout_subscriber_t::try_receive (std::chrono::steady_clock::time_point now)
 {

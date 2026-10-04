@@ -20,8 +20,7 @@ namespace zlink::framework::runtime
 class framework_runtime_t
 {
   public:
-    explicit framework_runtime_t (std::shared_ptr<runtime_failure_collector_t> failures =
-                                    std::make_shared<runtime_failure_collector_t> ());
+    explicit framework_runtime_t (std::shared_ptr<runtime_failure_collector_t> failures);
     ~framework_runtime_t ();
 
     framework_runtime_t (const framework_runtime_t &) = delete;

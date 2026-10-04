@@ -81,13 +81,11 @@ struct raw_fanout_connection_snapshot_t
 class raw_fanout_publisher_t
 {
   public:
-    explicit raw_fanout_publisher_t (
-      std::string endpoint,
-      std::shared_ptr<zlink::context_t> context = {},
-      bool no_drop = false,
-      std::optional<std::chrono::milliseconds> send_timeout = std::nullopt,
-      std::shared_ptr<runtime_failure_collector_t> failures =
-        std::make_shared<runtime_failure_collector_t> ());
+    explicit raw_fanout_publisher_t (std::string endpoint,
+                                     std::shared_ptr<zlink::context_t> context,
+                                     bool no_drop,
+                                     std::optional<std::chrono::milliseconds> send_timeout,
+                                     std::shared_ptr<runtime_failure_collector_t> failures);
     ~raw_fanout_publisher_t () noexcept;
 
     void start ();
@@ -119,15 +117,13 @@ class raw_fanout_publisher_t
 class raw_fanout_subscriber_t
 {
   public:
-    explicit raw_fanout_subscriber_t (zlink::poller_t *poller = nullptr,
-                                      std::vector<std::string> application_topics = {},
-                                      std::shared_ptr<runtime_failure_collector_t> failures =
-                                        std::make_shared<runtime_failure_collector_t> ());
+    explicit raw_fanout_subscriber_t (zlink::poller_t *poller,
+                                      std::vector<std::string> application_topics,
+                                      std::shared_ptr<runtime_failure_collector_t> failures);
     raw_fanout_subscriber_t (std::shared_ptr<zlink::context_t> context,
-                             zlink::poller_t *poller = nullptr,
-                             std::vector<std::string> application_topics = {},
-                             std::shared_ptr<runtime_failure_collector_t> failures =
-                               std::make_shared<runtime_failure_collector_t> ());
+                             zlink::poller_t *poller,
+                             std::vector<std::string> application_topics,
+                             std::shared_ptr<runtime_failure_collector_t> failures);
     ~raw_fanout_subscriber_t () noexcept;
 
     bool connect_manual (std::vector<std::uint8_t> publisher_routing_id, std::string endpoint);

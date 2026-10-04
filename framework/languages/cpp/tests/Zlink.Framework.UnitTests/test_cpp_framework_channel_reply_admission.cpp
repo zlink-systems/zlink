@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -196,7 +197,7 @@ TEST (ChannelHostReplyAdmission, MissingRouteTerminatesOnceWithOrdinaryEnvelopeO
     const auto server_rid = zlink::routing_id_t::from ("framework-channel-reply-server");
     const auto source_rid = zlink::routing_id_t::from ("framework-channel-reply-source");
 
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.channel ("reply-admission")
       .enable_server ()
       .set_routing_id (server_rid)
@@ -233,6 +234,7 @@ TEST (ChannelHostReplyAdmission, MissingRouteTerminatesOnceWithOrdinaryEnvelopeO
       {.packet_name = request_t::packet_name});
 
     zlink::framework::runtime::channel_host_service_t host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       builder.message_bus (), runtime.channel_snapshots (), handlers, serializers, {});
     host.start (provider);
 

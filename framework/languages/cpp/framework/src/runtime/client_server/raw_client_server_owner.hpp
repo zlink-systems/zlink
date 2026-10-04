@@ -72,8 +72,7 @@ struct raw_client_server_server_options_t
     zlink::poller_t *transport_poller = nullptr;
     std::uintptr_t transport_poller_slot = 0;
     std::shared_ptr<application_job_queue_t> application_jobs;
-    std::shared_ptr<runtime_failure_collector_t> runtime_failures =
-      std::make_shared<runtime_failure_collector_t> ();
+    std::shared_ptr<runtime_failure_collector_t> runtime_failures;
 };
 
 class raw_client_server_server_t
@@ -152,8 +151,7 @@ struct raw_client_server_client_options_t
     std::uintptr_t transport_poller_slot = 0;
     std::shared_ptr<application_job_queue_t> application_jobs;
     std::optional<std::chrono::milliseconds> send_timeout;
-    std::shared_ptr<runtime_failure_collector_t> runtime_failures =
-      std::make_shared<runtime_failure_collector_t> ();
+    std::shared_ptr<runtime_failure_collector_t> runtime_failures;
 };
 
 class raw_client_server_client_t

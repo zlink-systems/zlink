@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
 #include <zlink/stream_connector.hpp>
@@ -988,7 +989,7 @@ int main ()
         }
     } stream_dispatch_executor_guard;
 
-    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     zlink.stream ("client-stream").bind ("tcp://0.0.0.0:9200").register_session ("client");
     std::atomic_bool saw_stream_session_flow{false};
     std::vector<zlink::framework::message_flow_event_t> stream_flow_events;
@@ -1867,7 +1868,8 @@ int main ()
     zlink::framework::service_collection_t mutual_tls_services;
     zlink::framework::handler_registry_t mutual_tls_handlers;
     zlink::framework::serializer_registry_t mutual_tls_serializers;
-    zlink::framework::zlink_builder_t mutual_tls_zlink;
+    zlink::framework::zlink_builder_t mutual_tls_zlink =
+      zlink::framework::test::runtime_failure_builder ();
     zlink::framework::zlink_framework_options_t mutual_tls_options (
       mutual_tls_services, mutual_tls_handlers, mutual_tls_serializers, mutual_tls_zlink);
     mutual_tls_options.add_stream_node ("mutual-tls-listener")
@@ -1880,6 +1882,7 @@ int main ()
     auto mutual_tls_listeners =
       std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::runtime::stream_host_service_t mutual_tls_host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       zlink::framework::detail::stream_runtime_t::from (mutual_tls_zlink),
       zlink::framework::detail::stream_runtime_t::from (mutual_tls_zlink).snapshots (),
       {{"mutual-tls-listener-session",
@@ -1914,7 +1917,8 @@ int main ()
     zlink::framework::service_collection_t custom_services;
     zlink::framework::handler_registry_t custom_handlers;
     zlink::framework::serializer_registry_t custom_serializers;
-    zlink::framework::zlink_builder_t custom_zlink;
+    zlink::framework::zlink_builder_t custom_zlink =
+      zlink::framework::test::runtime_failure_builder ();
     zlink::framework::zlink_framework_options_t custom_options (custom_services, custom_handlers,
                                                                 custom_serializers, custom_zlink);
     custom_options.configure_stream_compression ().use (custom_codec);
@@ -1960,7 +1964,8 @@ int main ()
         return 25;
     }
 
-    zlink::framework::zlink_builder_t disabled_zlink;
+    zlink::framework::zlink_builder_t disabled_zlink =
+      zlink::framework::test::runtime_failure_builder ();
     zlink::framework::zlink_framework_options_t disabled_options (
       custom_services, custom_handlers, custom_serializers, disabled_zlink);
     disabled_options.configure_stream_compression ().disable ();
@@ -1996,7 +2001,8 @@ int main ()
         return 27;
     }
 
-    zlink::framework::zlink_builder_t oversized_zlink;
+    zlink::framework::zlink_builder_t oversized_zlink =
+      zlink::framework::test::runtime_failure_builder ();
     zlink::framework::zlink_framework_options_t oversized_options (
       custom_services, custom_handlers, custom_serializers, oversized_zlink);
     oversized_options.configure_stream_compression ().use (
@@ -2020,7 +2026,8 @@ int main ()
     zlink::framework::service_collection_t transport_services;
     zlink::framework::handler_registry_t transport_handlers;
     zlink::framework::serializer_registry_t transport_serializers;
-    zlink::framework::zlink_builder_t transport_zlink;
+    zlink::framework::zlink_builder_t transport_zlink =
+      zlink::framework::test::runtime_failure_builder ();
     transport_services.add_singleton<zlink::framework::detail::actor_gateway_runtime_t> ();
     transport_services.add_factory<zlink::framework::session_actor_manager_t> (
       [] (zlink::framework::service_provider_t &provider) {
@@ -2055,6 +2062,7 @@ int main ()
     auto transport_listeners =
       std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::runtime::stream_host_service_t transport_host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       zlink::framework::detail::stream_runtime_t::from (transport_zlink),
       zlink::framework::detail::stream_runtime_t::from (transport_zlink).snapshots (),
       {{"transport-session",
@@ -2347,7 +2355,8 @@ int main ()
     constexpr auto permit_stream_name = "permit-wait-stream";
     constexpr auto permit_session_name = "permit-wait-session";
     for (const auto end : {permit_wait_end_t::host_stop, permit_wait_end_t::source_close}) {
-        zlink::framework::zlink_builder_t permit_zlink;
+        zlink::framework::zlink_builder_t permit_zlink =
+          zlink::framework::test::runtime_failure_builder ();
         zlink::framework::zlink_framework_options_t permit_options (
           transport_services, transport_handlers, transport_serializers, permit_zlink);
         permit_options.add_stream_node (permit_stream_name)
@@ -2368,6 +2377,7 @@ int main ()
         auto permit_listeners =
           std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
         zlink::framework::runtime::stream_host_service_t permit_host (
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
           permit_runtime, permit_runtime.snapshots (),
           {{permit_session_name,
             [&permit_session] (zlink::framework::service_provider_t &)
@@ -2404,7 +2414,8 @@ int main ()
             return 335;
     }
 
-    zlink::framework::zlink_builder_t limited_zlink;
+    zlink::framework::zlink_builder_t limited_zlink =
+      zlink::framework::test::runtime_failure_builder ();
     zlink::framework::zlink_framework_options_t limited_options (
       transport_services, transport_handlers, transport_serializers, limited_zlink);
     auto limited_stream_options = limited_options.add_stream_node ("limited-stream");
@@ -2420,7 +2431,8 @@ int main ()
     auto limited_listeners =
       std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::runtime::stream_host_service_t limited_host (
-      limited_runtime, limited_snapshots,
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), limited_runtime,
+      limited_snapshots,
       {{"limited-session",
         [&limited_session] (zlink::framework::service_provider_t &)
           -> zlink::framework::packet_stream_session_t & { return limited_session; }}},
@@ -2447,7 +2459,8 @@ int main ()
         return 48;
     }
 
-    zlink::framework::zlink_builder_t rejected_zlink;
+    zlink::framework::zlink_builder_t rejected_zlink =
+      zlink::framework::test::runtime_failure_builder ();
     zlink::framework::zlink_framework_options_t rejected_options (
       transport_services, transport_handlers, transport_serializers, rejected_zlink);
     rejected_options.add_stream_node ("rejected-stream")
@@ -2458,6 +2471,7 @@ int main ()
     auto rejected_listeners =
       std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::runtime::stream_host_service_t rejected_host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       zlink::framework::detail::stream_runtime_t::from (rejected_zlink),
       zlink::framework::detail::stream_runtime_t::from (rejected_zlink).snapshots (),
       {{"rejected-session",
@@ -2483,7 +2497,8 @@ int main ()
     zlink::framework::service_collection_t core_services;
     zlink::framework::handler_registry_t core_handlers;
     zlink::framework::serializer_registry_t core_serializers;
-    zlink::framework::zlink_builder_t core_zlink;
+    zlink::framework::zlink_builder_t core_zlink =
+      zlink::framework::test::runtime_failure_builder ();
     zlink::framework::detail::zlink_builder_access_t::bind_shared_core_context (
       core_zlink, std::make_shared<zlink::context_t> ());
     core_services.add_singleton<zlink::framework::detail::actor_gateway_runtime_t> ();
@@ -2525,6 +2540,7 @@ int main ()
     auto core_listeners =
       std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::runtime::stream_host_service_t core_host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       core_stream_runtime, core_stream_runtime.snapshots (),
       {{"core-session",
         [] (zlink::framework::service_provider_t &provider)
@@ -2625,7 +2641,8 @@ int main ()
     zlink::framework::service_collection_t error_close_services;
     zlink::framework::handler_registry_t error_close_handlers;
     zlink::framework::serializer_registry_t error_close_serializers;
-    zlink::framework::zlink_builder_t error_close_zlink;
+    zlink::framework::zlink_builder_t error_close_zlink =
+      zlink::framework::test::runtime_failure_builder ();
     zlink::framework::detail::zlink_builder_access_t::bind_shared_core_context (
       error_close_zlink, std::make_shared<zlink::context_t> ());
     error_close_services.add_singleton<zlink::framework::detail::actor_gateway_runtime_t> ();
@@ -2667,6 +2684,7 @@ int main ()
     auto error_close_listeners =
       std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::runtime::stream_host_service_t error_close_host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       error_close_runtime, error_close_runtime.snapshots (),
       {{"error-close-session",
         [] (zlink::framework::service_provider_t &provider)

@@ -300,13 +300,18 @@ class app_state_t
         listener_statuses (std::make_shared<runtime::listener_status_registry_t> ())
     {
         status_access->state = this;
-        monitoring->runtime_failures->bind_shutdown ([access = std::weak_ptr (status_access)] {
-            if (auto owner = access.lock ()) {
-                std::shared_lock lock (owner->mutex);
-                if (owner->state)
-                    owner->state->stop_requested.store (true, std::memory_order_release);
-            }
-        });
+        monitoring->runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ();
+        bind_zlink_monitoring (zlink, monitoring);
+        monitoring->runtime_failures->bind_runtime_reporter (
+          [state = std::weak_ptr (monitoring)] (std::exception_ptr failure) {
+              try {
+                  std::rethrow_exception (failure);
+              }
+              catch (const std::exception &error) {
+                  if (auto monitoring = state.lock ())
+                      monitoring->diagnostics_logger.error (error.what ());
+              }
+          });
     }
     ~app_state_t ()
     {
@@ -332,15 +337,25 @@ class app_state_t
                                 std::vector<hosted_service_t *> &started)
     {
         for (const auto &service : hosted_services) {
-            if (auto *lifecycle = lifecycle_of (service.get ()))
-                lifecycle->bind_runtime_failures (monitoring->runtime_failures);
             service->start (provider).result ().value ();
             started.push_back (service.get ());
         }
     }
 
+    void close_framework_resources (service_provider_t &provider) noexcept
+    {
+        const auto &failures = monitoring->runtime_failures;
+        failures->capture ([&] { channel_runtime_t::from (zlink.message_bus ()).shutdown (); });
+        failures->capture ([&] { drain_zlink_builder_runtime (zlink); });
+        failures->capture ([&] { runtime::shutdown_handler_coroutine_executor (); });
+        failures->capture ([&] { shutdown_stream_dispatch_executor (); });
+        failures->capture ([&] { shutdown_handler_invocation_executor (); });
+        failures->capture ([&] { provider.close (); });
+    }
+
     void stop_hosted_services (const std::vector<hosted_service_t *> &started) noexcept
     {
+        monitoring->runtime_failures->bind_runtime_reporter ({});
         monitoring->runtime_failures->close_retained ();
         const char *trace_value = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
         const bool trace_enabled = trace_value != nullptr && std::string_view (trace_value) != "0"
@@ -745,12 +760,6 @@ volatile std::sig_atomic_t g_stop_signal_requested = 0;
 void handle_process_signal (int) noexcept
 {
     g_stop_signal_requested = 1;
-}
-
-bool host_stop_trace_enabled ()
-{
-    const char *value = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
-    return value != nullptr && std::string_view (value) != "0" && std::string_view (value) != "";
 }
 
 struct instance_spot_activation_trace_context_t
@@ -1468,8 +1477,9 @@ void app_t::_apply_zlink_framework ()
     runtime::mesh_node_host_service_t *mesh_node_service = nullptr;
     if (!mesh_node_registrations.empty ()) {
         auto mesh_service = std::make_unique<runtime::mesh_node_host_service_t> (
-          std::move (mesh_node_registrations), _state->serializers, _state->handlers,
-          options.dispatch_options (), _state->listener_statuses, _state->application_job_queue);
+          _state->monitoring->runtime_failures, std::move (mesh_node_registrations),
+          _state->serializers, _state->handlers, options.dispatch_options (),
+          _state->listener_statuses, _state->application_job_queue);
         mesh_node_service = mesh_service.get ();
         mesh_nodes = mesh_service->nodes ();
         _state->route_mesh_nodes = mesh_nodes;
@@ -2833,9 +2843,9 @@ void app_t::_apply_zlink_framework ()
           service_lifetime_t::singleton);
     }
     add_hosted_service (std::make_unique<runtime::location_auto_connect_host_service_t> (
-      _state->zlink.message_bus (), channel_snapshot, _state->handlers, _state->serializers,
-      options.runtime_client_server_advertise_hosts (), options.runtime_fanout_advertise_hosts (),
-      options.route_mesh_client_channels (), mesh_nodes,
+      _state->monitoring->runtime_failures, _state->zlink.message_bus (), channel_snapshot,
+      _state->handlers, _state->serializers, options.runtime_client_server_advertise_hosts (),
+      options.runtime_fanout_advertise_hosts (), options.route_mesh_client_channels (), mesh_nodes,
       [mesh_node_service] {
           return mesh_node_service == nullptr
                  || mesh_node_service->republish_after_store_recovery ();
@@ -2843,16 +2853,16 @@ void app_t::_apply_zlink_framework ()
       std::move (client_server_runtime), std::move (fanout_runtime), _state->listener_statuses));
     if (detail::has_inbound_channel (channel_snapshot)) {
         add_hosted_service (std::make_unique<runtime::channel_host_service_t> (
-          _state->zlink.message_bus (), channel_snapshot, _state->handlers, _state->serializers,
-          options.runtime_client_server_advertise_hosts (), _state->application_job_queue,
-          _state->listener_statuses));
+          _state->monitoring->runtime_failures, _state->zlink.message_bus (), channel_snapshot,
+          _state->handlers, _state->serializers, options.runtime_client_server_advertise_hosts (),
+          _state->application_job_queue, _state->listener_statuses));
     }
     if (!stream_snapshot.empty ()) {
         detail::configure_stream_dispatch_executor ();
         auto stream_runtime = detail::stream_runtime_t::from (_state->zlink);
         auto stream_service = std::make_unique<runtime::stream_host_service_t> (
-          stream_runtime, stream_snapshot, options.stream_session_factories (),
-          options.session_replacement_callback_timeout (),
+          _state->monitoring->runtime_failures, stream_runtime, stream_snapshot,
+          options.stream_session_factories (), options.session_replacement_callback_timeout (),
           mesh_nodes.empty () ? nullptr : mesh_nodes.front (), stream_runtime.advertise_hosts (),
           _state->listener_statuses, _state->application_job_queue);
         stream_service->bind_drain_flag (_state->draining);
@@ -2889,6 +2899,8 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "hosted service must not be null");
     }
+    if (auto *lifecycle = detail::lifecycle_of (service.get ()))
+        lifecycle->bind_runtime_failures (_state->monitoring->runtime_failures);
     _state->hosted_services.push_back (std::move (service));
     return *this;
 }
@@ -2941,12 +2953,7 @@ try {
     catch (...) {
         _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
         _state->stop_hosted_services (started);
-        detail::channel_runtime_t::from (_state->zlink.message_bus ()).shutdown ();
-        detail::drain_zlink_builder_runtime (_state->zlink);
-        runtime::shutdown_handler_coroutine_executor ();
-        detail::shutdown_stream_dispatch_executor ();
-        detail::shutdown_handler_invocation_executor ();
-        provider.close ();
+        _state->close_framework_resources (provider);
         {
             std::lock_guard lock (_state->termination_teardown_mutex);
             _state->run_active = false;
@@ -2956,42 +2963,8 @@ try {
         throw;
     }
 
-    const bool trace_enabled = host_stop_trace_enabled ();
     _state->stop_hosted_services (started);
-    if (trace_enabled) {
-        std::cerr << "zlink-cpp-host-stop stage=before-channel-runtime-shutdown" << std::endl;
-    }
-    detail::channel_runtime_t::from (_state->zlink.message_bus ()).shutdown ();
-    if (trace_enabled) {
-        std::cerr << "zlink-cpp-host-stop stage=after-channel-runtime-shutdown" << std::endl;
-        std::cerr << "zlink-cpp-host-stop stage=before-drain-runtime" << std::endl;
-    }
-    detail::drain_zlink_builder_runtime (_state->zlink);
-    if (trace_enabled) {
-        std::cerr << "zlink-cpp-host-stop stage=after-drain-runtime" << std::endl;
-        std::cerr << "zlink-cpp-host-stop stage=before-coroutine-executor-shutdown" << std::endl;
-    }
-    runtime::shutdown_handler_coroutine_executor ();
-    if (trace_enabled) {
-        std::cerr << "zlink-cpp-host-stop stage=after-coroutine-executor-shutdown" << std::endl;
-        std::cerr << "zlink-cpp-host-stop stage=before-stream-executor-shutdown" << std::endl;
-    }
-    detail::shutdown_stream_dispatch_executor ();
-    if (trace_enabled) {
-        std::cerr << "zlink-cpp-host-stop stage=after-stream-executor-shutdown" << std::endl;
-        std::cerr << "zlink-cpp-host-stop stage=before-handler-invocation-executor-shutdown"
-                  << std::endl;
-    }
-    detail::shutdown_handler_invocation_executor ();
-    if (trace_enabled) {
-        std::cerr << "zlink-cpp-host-stop stage=after-handler-invocation-executor-shutdown"
-                  << std::endl;
-        std::cerr << "zlink-cpp-host-stop stage=before-provider-close" << std::endl;
-    }
-    provider.close ();
-    if (trace_enabled) {
-        std::cerr << "zlink-cpp-host-stop stage=after-provider-close" << std::endl;
-    }
+    _state->close_framework_resources (provider);
     {
         std::lock_guard lock (_state->termination_teardown_mutex);
         _state->run_active = false;

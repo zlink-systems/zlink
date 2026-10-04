@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/client_server/client_server_location_runtime.hpp"
@@ -310,7 +311,9 @@ void verify_invalid_metadata_is_a_protocol_error ()
       "default",
       16 * 1024 * 1024,
       "tcp://127.0.0.1:0"};
-    client_server::raw_client_server_server_t server ({{descriptor}});
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{descriptor}));
     server.start ();
     zlink::context_t context;
     zlink::dealer_socket_t source (context);
@@ -387,6 +390,8 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
     zlink::poller_t transport;
     constexpr std::uintptr_t server_slot = 7;
     client_server::raw_client_server_server_options_t options{descriptor};
+    options.runtime_failures =
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
     options.transport_poller = &transport;
     options.transport_poller_slot = server_slot;
     auto server = std::make_shared<client_server::raw_client_server_server_t> (options, context);
@@ -639,7 +644,7 @@ void verify_network_defaults_are_deferred_until_apply ()
     zlink::framework::service_collection_t services;
     zlink::framework::handler_registry_t handlers;
     zlink::framework::serializer_registry_t serializers;
-    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     zlink::framework::zlink_framework_options_t options (services, handlers, serializers, zlink);
 
     auto client_server = options.add_client_server_channel ("network-client-server");
@@ -693,7 +698,9 @@ void verify_client_server_runtime_projection_and_observation ()
       "default",
       16 * 1024 * 1024,
       "tcp://127.0.0.1:0"};
-    client_server::raw_client_server_server_t server ({{descriptor}});
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{descriptor}));
     server.start ();
     const auto endpoint = server.descriptor ().advertised_endpoint;
 

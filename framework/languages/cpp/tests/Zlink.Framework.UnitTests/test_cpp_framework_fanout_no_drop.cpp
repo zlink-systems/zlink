@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -169,7 +170,7 @@ struct framework_options_fixture_t
     zlink::framework::service_collection_t services;
     zlink::framework::handler_registry_t handlers;
     zlink::framework::serializer_registry_t serializers;
-    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     zlink::framework::zlink_framework_options_t options;
 };
 

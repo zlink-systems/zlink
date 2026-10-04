@@ -26,7 +26,8 @@ namespace zlink::framework::runtime
 class channel_host_service_t final : public hosted_service_t, public hosted_service_lifecycle_t
 {
   public:
-    channel_host_service_t (message_bus_t bus,
+    channel_host_service_t (std::shared_ptr<runtime_failure_collector_t> failures,
+                            message_bus_t bus,
                             std::vector<channel_snapshot_t> channels,
                             handler_registry_t &handlers,
                             serializer_registry_t &serializers,
