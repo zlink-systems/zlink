@@ -330,8 +330,10 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         && left.ObjectGeneration == right.ObjectGeneration
         && left.SessionOwnerNodeGeneration == right.SessionOwnerNodeGeneration;
 
-    public ZLinkSessionFrameAcceptance? AcceptSessionFrame(string actorId, string bindingToken) =>
-        AwaitStateLane(_sessionBindings.AcceptAsync(actorId, bindingToken));
+    public ValueTask<ZLinkSessionFrameAcceptance> AcceptSessionFrameAsync(
+        string actorId,
+        string bindingToken
+    ) => _sessionBindings.AcceptAsync(actorId, bindingToken);
 
     internal ValueTask<ZLinkSessionOneWayAcceptance> AcceptOneWaySessionFrameAsync(
         string actorId,
@@ -390,8 +392,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             );
     }
 
-    public void CompleteAcceptedSessionFrame(string actorId, string bindingToken) =>
-        AwaitStateLane(_sessionBindings.CompleteAcceptedAsync(actorId, bindingToken));
+    public ValueTask CompleteAcceptedSessionFrameAsync(string actorId, string bindingToken) =>
+        _sessionBindings.CompleteAcceptedAsync(actorId, bindingToken);
 
     public string TrackRemoteSessionRequest(string actorId, ulong requestId, string bindingToken)
     {
@@ -511,11 +513,11 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     public ZLinkSessionBindingEntry? GetSessionBinding(string actorId, string bindingToken) =>
         AwaitStateLane(_sessionBindings.GetBindingAsync(actorId, bindingToken));
 
-    public ZLinkSessionBindingRoute? GetSessionRoute(
+    public ValueTask<ZLinkSessionBindingRoute?> GetSessionRouteAsync(
         string actorId,
         string bindingToken,
         ZLinkSessionActor actorRef
-    ) => AwaitStateLane(_sessionBindings.GetRouteAsync(actorId, bindingToken, actorRef));
+    ) => _sessionBindings.GetRouteAsync(actorId, bindingToken, actorRef);
 
     public ZLinkSessionBindingEntry? GetSessionBindingByActorId(string actorId) =>
         AwaitStateLane(_sessionBindings.GetEntryByActorIdAsync(actorId));
@@ -582,7 +584,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     public ZLinkSessionContext? GetSessionActorContext(string actorId, string bindingToken) =>
         AwaitStateLane(GetSessionActorContextAsync(actorId, bindingToken));
 
-    private ValueTask<ZLinkSessionContext?> GetSessionActorContextAsync(
+    public ValueTask<ZLinkSessionContext?> GetSessionActorContextAsync(
         string actorId,
         string bindingToken
     ) => _sessionBindings.GetContextAsync(actorId, bindingToken);

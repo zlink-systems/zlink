@@ -12,25 +12,24 @@ internal sealed class ZLinkActorSessionRegistry(
     private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<ZLinkActorId, ZLinkActorRuntimeState> _states = [];
 
-    public ZLinkActorRuntimeState GetOrCreate(ZLinkActorId actorId)
-    {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_states.TryGetValue(actorId, out var existing))
-                    return existing;
+    public ZLinkActorRuntimeState GetOrCreate(ZLinkActorId actorId) =>
+        AwaitStateLane(GetOrCreateAsync(actorId));
 
-                var created = new ZLinkActorRuntimeState(
-                    actorId,
-                    handoffDiagnostic: handoffDiagnostic,
-                    sessionBindingTombstoneRetention: sessionBindingTombstoneRetention,
-                    services: services
-                );
-                _states.Add(actorId, created);
-                return created;
-            })
-        );
-    }
+    internal ValueTask<ZLinkActorRuntimeState> GetOrCreateAsync(ZLinkActorId actorId) =>
+        _lane.RunAsync(() =>
+        {
+            if (_states.TryGetValue(actorId, out var existing))
+                return existing;
+
+            var created = new ZLinkActorRuntimeState(
+                actorId,
+                handoffDiagnostic: handoffDiagnostic,
+                sessionBindingTombstoneRetention: sessionBindingTombstoneRetention,
+                services: services
+            );
+            _states.Add(actorId, created);
+            return created;
+        });
 
     public bool TryGet(ZLinkActorId actorId, out ZLinkActorRuntimeState state)
     {

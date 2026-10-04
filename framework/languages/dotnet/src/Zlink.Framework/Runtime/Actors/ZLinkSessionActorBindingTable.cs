@@ -731,11 +731,11 @@ internal sealed class ZLinkSessionActorBindingTable
             return _tombstones.Count;
         });
 
-    public ValueTask<ZLinkSessionFrameAcceptance?> AcceptAsync(
+    public ValueTask<ZLinkSessionFrameAcceptance> AcceptAsync(
         string actorId,
         string bindingToken
     ) =>
-        _lane.RunAsync<ZLinkSessionFrameAcceptance?>(() =>
+        _lane.RunAsync(() =>
         {
             var key = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
             if (!_entries.TryGetValue(key, out var entry))

@@ -1044,6 +1044,79 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
+    public async Task Stream_receive_keeps_blocking_poll_on_its_dedicated_thread_after_capacity_wait()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        var lifetime = new SessionOrderingLifetime();
+        lifetime.ReleaseFirst.TrySetResult();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(lifetime)
+            .AddSingleton(_ => runtime);
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket();
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None,
+            runtime.ExecutionOwner
+        );
+        using var applicationJobQueue = new ZLinkApplicationJobQueue(
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                1,
+                1
+            )
+        );
+        using var heldPermit = await applicationJobQueue.AcquireAsync(CancellationToken.None);
+        var firstPoll = new TaskCompletionSource<(int ThreadId, bool Pool)>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var resumedPoll = new TaskCompletionSource<(int ThreadId, bool Pool)>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        socket.BeforePoll = () =>
+        {
+            var thread = (
+                Environment.CurrentManagedThreadId,
+                Thread.CurrentThread.IsThreadPoolThread
+            );
+            firstPoll.TrySetResult(thread);
+            if (socket.DequeuedPacketCount > 0)
+                resumedPoll.TrySetResult(thread);
+        };
+        var node = new ZLinkStreamNodeRuntime(
+            "stream-receive-thread",
+            provider,
+            socket,
+            new TestSocketMonitor(),
+            typeof(SessionOrderingSession),
+            runner,
+            "test",
+            applicationJobQueue: applicationJobQueue
+        );
+        try
+        {
+            socket.EnqueueUnidentifiedPacket([], []);
+            node.Start();
+            var initial = await firstPoll.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(initial.Pool);
+            await WaitUntilAsync(() => applicationJobQueue.GetStatus().CapacityWaiters == 1);
+            heldPermit.Dispose();
+            var resumed = await resumedPoll.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(resumed.Pool);
+            Assert.Equal(initial.ThreadId, resumed.ThreadId);
+        }
+        finally
+        {
+            heldPermit.Dispose();
+            await node.DisposeAsync();
+            await runner.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task Stream_receive_reserves_managed_queue_permit_before_native_packet_pull()
     {
         var registration = new ZLinkFrameworkRegistration();
@@ -2832,6 +2905,7 @@ public sealed class StreamSessionForcedCleanupTests
         public int DequeuedPacketCount => Volatile.Read(ref _dequeuedPacketCount);
 
         public Func<bool>? BeforeRecvPacket { get; set; }
+        public Action? BeforePoll { get; set; }
 
         public bool AllPullsHadPermit => Volatile.Read(ref _pullWithoutPermit) == 0;
 
@@ -2840,7 +2914,11 @@ public sealed class StreamSessionForcedCleanupTests
         public void SetTlsServer(string certPath, string keyPath, bool requireClientCert) { }
 
         public IZLinkBackendSocketPoller CreateReceivePoller() =>
-            new TestStreamSocketPoller(() => !_receivedPackets.IsEmpty, _receiveSignal);
+            new TestStreamSocketPoller(
+                () => !_receivedPackets.IsEmpty,
+                _receiveSignal,
+                () => BeforePoll?.Invoke()
+            );
 
         public bool RecvPacket(
             out ZLinkBackendStreamReceive? received,
@@ -2981,11 +3059,15 @@ public sealed class StreamSessionForcedCleanupTests
         public void Dispose() => Interlocked.Increment(ref _disposeCount);
     }
 
-    private sealed class TestStreamSocketPoller(Func<bool> isReadable, AutoResetEvent signal)
-        : IZLinkBackendSocketPoller
+    private sealed class TestStreamSocketPoller(
+        Func<bool> isReadable,
+        AutoResetEvent signal,
+        Action beforePoll
+    ) : IZLinkBackendSocketPoller
     {
         public ZLinkBackendSocketReadiness Wait(TimeSpan timeout)
         {
+            beforePoll();
             if (!isReadable() && timeout > TimeSpan.Zero)
                 signal.WaitOne(timeout);
             return isReadable()
