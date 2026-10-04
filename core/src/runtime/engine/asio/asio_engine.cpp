@@ -666,8 +666,6 @@ bool zlink::asio_engine_t::write_turn_available () const
 
 bool zlink::asio_engine_t::defer_terminal_error (error_reason_t reason_)
 {
-    if (_deferred_terminal_error)
-        return true;
     if (!_pipeline.write_pending || _connection_facade.terminating || _pipeline.io_error)
         return false;
     _deferred_terminal_error = reason_;
@@ -1903,10 +1901,12 @@ void zlink::asio_engine_t::error (error_reason_t reason_,
     //  Mark as terminating to prevent callbacks from processing
     if (_connection_facade.terminating)
         return;
+    _deferred_terminal_error.reset ();
     _connection_facade.terminating = true;
     _connection_facade.callback_guard.reset ();
 
     zlink_assert (_connection_facade.session);
+    session_base_t *const session = _connection_facade.session;
 
     // protocol errors have been signaled already at the point where they occurred
     if (reason_ != protocol_error && _connection_facade.handshaking) {
@@ -1931,9 +1931,9 @@ void zlink::asio_engine_t::error (error_reason_t reason_,
     }
 
     emit_disconnected (disconnect_reason);
-    _connection_facade.session->flush ();
-    _connection_facade.session->engine_error (!_connection_facade.handshaking, reason_);
+    session->flush ();
     unplug ();
+    session->engine_error (!_connection_facade.handshaking, reason_);
 
     destroy_after_callbacks ();
 }

@@ -14,6 +14,26 @@ namespace
 using test_zmp_wire::append_wire_frame;
 using test_zmp_wire::make_zmp_wire_frame;
 
+class handshake_timer_access_t : public zlink::asio_engine_t
+{
+  public:
+    static void expire (zlink::asio_engine_t *engine_)
+    {
+        const auto timer = &handshake_timer_access_t::on_timer;
+        (engine_->*timer) (handshake_timer_id, boost::system::error_code ());
+    }
+    static bool pending (zlink::asio_engine_t *engine_)
+    {
+        const auto check = &handshake_timer_access_t::terminal_error_pending;
+        return (engine_->*check) ();
+    }
+    static bool handshaking (zlink::asio_engine_t *engine_)
+    {
+        const auto check = &handshake_timer_access_t::is_handshaking;
+        return (engine_->*check) ();
+    }
+};
+
 uint64_t request_sequence (contract_zmp_engine_t &engine_)
 {
     engine_.pump ();
@@ -242,6 +262,32 @@ void test_malformed_input_waits_for_pending_write_before_error_frame ()
         application.pump ();
         TEST_ASSERT_FALSE (application.state->opened);
         TEST_ASSERT_EQUAL_UINT (1, application.state->sync_write_attempts);
+    }
+    test_context_socket_close_zero_linger (dealer);
+}
+
+void test_handshake_timeout_closes_pending_error_without_error_frame ()
+{
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    {
+        contract_zmp_engine_t application (dealer, true, false, 0, true);
+        TEST_ASSERT_FALSE (application.state->writes.empty ());
+        TEST_ASSERT_TRUE (handshake_timer_access_t::handshaking (application.engine));
+
+        std::vector<unsigned char> malformed = test_zmp_wire::control_frame (
+          {test_zmp_wire::zmp_control_hello, test_zmp_wire::socket_router, 0});
+        malformed[0] = 0;
+        application.feed (malformed);
+        TEST_ASSERT_TRUE (handshake_timer_access_t::pending (application.engine));
+        TEST_ASSERT_TRUE (application.state->opened);
+        TEST_ASSERT_EQUAL_UINT (0, application.state->sync_write_attempts);
+
+        const size_t writes_before_timeout = application.state->outgoing.size ();
+        handshake_timer_access_t::expire (application.engine);
+        application.pump ();
+        TEST_ASSERT_FALSE (application.state->opened);
+        TEST_ASSERT_EQUAL_UINT (writes_before_timeout, application.state->outgoing.size ());
+        TEST_ASSERT_EQUAL_UINT (0, application.state->sync_write_attempts);
     }
     test_context_socket_close_zero_linger (dealer);
 }
@@ -575,6 +621,7 @@ int main ()
     RUN_TEST (test_ws_batch_two_pointer_bodies_use_two_writes);
     RUN_TEST (test_terminated_pipe_input_does_not_send_error_frame);
     RUN_TEST (test_malformed_input_waits_for_pending_write_before_error_frame);
+    RUN_TEST (test_handshake_timeout_closes_pending_error_without_error_frame);
     RUN_TEST (test_malformed_input_without_pending_write_sends_error_frame);
     RUN_TEST (test_pending_error_closes_when_output_is_aborted);
     return UNITY_END ();
