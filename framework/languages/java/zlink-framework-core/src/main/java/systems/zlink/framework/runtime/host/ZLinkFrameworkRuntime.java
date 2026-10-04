@@ -2195,7 +2195,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 CompletionStage<Void> acceptedTargetRelocations =
                         spotRetire == null
                                 ? CompletableFuture.completedFuture(null)
-                                : spotRetire.awaitAcceptedTargetRelocations();
+                                : spotRetire.sealAcceptedTargetRelocations();
                 if (streams != null) {
                     streams.beginDrain();
                 }

@@ -265,6 +265,8 @@ match, the target proceeds with CAS and queue opening.
 
 The end of the cutover wait never permits CAS or application dispatch without verified cutover. The target records a `cutover_timeout` Warning. A late or duplicate cutover does not change the authority approved by the Store.
 
+**Target staging before a verified cutover ends with whichever is settled first: a confirmed source `Preserve`, expiry of the target lease, or the target host's shutdown [admission seal](../00-foundation/02-glossary.en.md#admission-seal); the staging is then discarded.** The order of the shutdown seal and cutover verification is settled once, at the execution boundary that owns that target attempt. If the seal is settled first, the same attempt does not start a CAS afterwards. If cutover verification is settled first, shutdown does not discard that attempt, and the CAS result follows [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). In either case the source does not resume before `Preserve` succeeds.
+
 The source can still receive a message that arrives late at the old address after this
 boundary. Before owner change it relays it to the temporary queue; after owner change it
 delivers it through the path by which the previous owner forwards it to the new owner on
