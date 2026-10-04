@@ -1652,12 +1652,14 @@ host_maintenance_runtime_t::host_maintenance_runtime_t (
   stream_session_registry_t &sessions,
   maintenance_runtime_t &relocation,
   std::shared_ptr<target_preflight_port_t> targets,
-  observer_t observer) :
+  observer_t observer,
+  std::function<task_t<void> ()> seal_targets) :
     _objects (objects),
     _sessions (sessions),
     _relocation (relocation),
     _targets (std::move (targets)),
     _observer (std::move (observer)),
+    _seal_targets (std::move (seal_targets)),
     _lane_executor (),
     _lane (_lane_executor)
 {
@@ -1774,7 +1776,7 @@ host_maintenance_runtime_t::run_termination_attempt (termination_intent_t intent
         complete_attempt (attempt, result);
         co_return result;
     }
-    const auto result = run_shutdown (termination_intent_t::shutdown);
+    const auto result = co_await run_shutdown (termination_intent_t::shutdown);
     complete_attempt (attempt, result);
     co_return result;
 }
@@ -1899,7 +1901,7 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
                                        *preflight_state.blocked_reason};
     }
     if (preflight_state.shutdown)
-        co_return run_shutdown (termination_intent_t::shutdown);
+        co_return co_await run_shutdown (termination_intent_t::shutdown);
 
     std::size_t committed_units = 0;
     const auto fail_relocation = [&] (termination_reason_t blocked_reason,
@@ -1988,7 +1990,7 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
                                    termination_reason_t::none};
 }
 
-termination_result_t
+task_t<termination_result_t>
 host_maintenance_runtime_t::run_shutdown (termination_intent_t effective_intent)
 {
     const auto acquire_inventory = _lane
@@ -1998,12 +2000,14 @@ host_maintenance_runtime_t::run_shutdown (termination_intent_t effective_intent)
                                          return !_inventory_sealed;
                                      })
                                      .get ();
+    if (_seal_targets)
+        co_await _seal_targets ();
     if (acquire_inventory) {
         const auto inventory = _objects.try_begin_maintenance_inventory ();
         if (!inventory) {
             _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
-            return {effective_intent, termination_outcome_t::force_stopped,
-                    termination_reason_t::teardown_failed};
+            co_return termination_result_t{effective_intent, termination_outcome_t::force_stopped,
+                                           termination_reason_t::teardown_failed};
         }
         _lane.run ([this] { _inventory_sealed = true; }).get ();
     }
@@ -2011,9 +2015,10 @@ host_maintenance_runtime_t::run_shutdown (termination_intent_t effective_intent)
     if (!sealed)
         _sessions.force_close_all ();
     _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
-    return {effective_intent,
-            sealed ? termination_outcome_t::stopped : termination_outcome_t::force_stopped,
-            sealed ? termination_reason_t::none : termination_reason_t::teardown_failed};
+    co_return termination_result_t{
+      effective_intent,
+      sealed ? termination_outcome_t::stopped : termination_outcome_t::force_stopped,
+      sealed ? termination_reason_t::none : termination_reason_t::teardown_failed};
 }
 
 void host_maintenance_runtime_t::complete_attempt (std::uint64_t attempt,
@@ -2138,12 +2143,13 @@ void public_host_runtime_t::configure_maintenance (
             (void) _stateful_dispatch->fail_pending_unavailable (owner);
     });
     auto termination = std::make_unique<stateful::host_maintenance_runtime_t> (
-      _objects, _sessions, *maintenance, std::move (targets), std::move (termination_observer));
+      _objects, _sessions, *maintenance, std::move (targets), std::move (termination_observer),
+      [this] { return seal_relocation_targets (); });
     _maintenance = std::move (maintenance);
     _termination = std::move (termination);
     _maintenance_started = [this] { _termination->mark_serving (); };
     _maintenance_closing = [this] {
-        (void) _termination->terminate (stateful::termination_intent_t::shutdown);
+        _termination->terminate (stateful::termination_intent_t::shutdown).result ().value ();
     };
 }
 

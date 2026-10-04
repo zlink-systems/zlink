@@ -1898,6 +1898,8 @@ task_t<bool> mesh_node_runtime_t::send_instance_spot_activation_remote (
 void mesh_node_runtime_t::request_stop () noexcept
 {
     _stopping.store (true, std::memory_order_release);
+    if (_node)
+        (void) _node->seal_relocation_targets ();
 }
 
 void mesh_node_runtime_t::cancel_pending_dispatch_waits () noexcept

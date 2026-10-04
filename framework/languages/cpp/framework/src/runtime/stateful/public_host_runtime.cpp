@@ -838,7 +838,11 @@ actor_handle_t::request_to (const actor_ref_t &target,
 }
 
 public_host_runtime_t::public_host_runtime_t (host_options_t options) :
-    _options (std::move (options)),
+    _options ([&] {
+        if (!options.mesh.shutdown_admission_seal)
+            options.mesh.shutdown_admission_seal = std::make_shared<std::atomic_bool> (false);
+        return std::move (options);
+    }()),
     _entry_spot_id (zlink::framework::detail::new_entry_spot_id (
       zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id).to_string ())),
     _transport (
@@ -1046,6 +1050,12 @@ void public_host_runtime_t::close () noexcept
         catch (...) {
         }
     }
+    const auto already_sealed =
+      _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire);
+    auto target_terminal = seal_relocation_targets ();
+    // Hosted shutdown already drained this terminal at its original deadline.
+    if (!already_sealed)
+        target_terminal.result ().value ();
     _lifecycle_configuration_lane.run ([&] { _started = false; }).get ();
     _relocation_session_terminal_lane
       .run ([&] {
@@ -1156,7 +1166,14 @@ node_status_t public_host_runtime_t::status () const
 
 std::size_t public_host_runtime_t::pending_operation_count () const noexcept
 {
-    return _transport->pending_operation_count ();
+    return _transport->pending_operation_count ()
+           + _relocation_session_terminal_lane
+               .run ([this] {
+                   return std::count_if (
+                     _relocation_target_attempts.begin (), _relocation_target_attempts.end (),
+                     [] (const auto &item) { return !relocation_target_terminal (item.second); });
+               })
+               .get ();
 }
 
 void public_host_runtime_t::set_channel_weight (const std::string &channel_name,
@@ -2878,6 +2895,65 @@ public_host_runtime_t::request_to_channel (const std::string &channel_name,
     co_return submitted (accepted);
 }
 
+bool public_host_runtime_t::relocation_target_terminal (const relocation_target_attempt_t &attempt)
+{
+    return attempt.terminal && attempt.terminal->task ().await_ready ();
+}
+
+std::optional<public_host_runtime_t::relocation_target_attempt_t>
+public_host_runtime_t::take_relocation_target_discard (relocation_target_attempt_t &attempt)
+{
+    if (attempt.targets.empty ())
+        return std::nullopt;
+    auto terminal = attempt.terminal;
+    auto discarded = std::move (attempt);
+    // Retain only the terminal while cleanup runs, so shutdown cannot miss it.
+    attempt = relocation_target_attempt_t{};
+    attempt.terminal = std::move (terminal);
+    return discarded;
+}
+
+void public_host_runtime_t::discard_unverified_relocation_targets (
+  const std::vector<relocation_attempt_key_t> &observed)
+{
+    if (observed.empty ()
+        && !_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
+        return;
+    std::vector<relocation_target_attempt_t> discarded;
+    _relocation_session_terminal_lane
+      .run ([&] {
+          const auto sealed =
+            _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire);
+          for (auto &[key, attempt] : _relocation_target_attempts) {
+              if (attempt.cutover_received)
+                  continue;
+              if (sealed || std::find (observed.begin (), observed.end (), key) != observed.end ())
+                  if (auto staging = take_relocation_target_discard (attempt))
+                      discarded.push_back (std::move (*staging));
+          }
+      })
+      .get ();
+    discard_relocation_target_attempts (std::move (discarded));
+}
+
+task_t<void> public_host_runtime_t::seal_relocation_targets ()
+{
+    auto terminals =
+      _relocation_session_terminal_lane
+        .run ([this] {
+            _options.mesh.shutdown_admission_seal->store (true, std::memory_order_release);
+            std::vector<task_t<void>> result;
+            for (const auto &[key, attempt] : _relocation_target_attempts)
+                if (attempt.terminal)
+                    result.push_back (attempt.terminal->task ());
+            return result;
+        })
+        .get ();
+    discard_unverified_relocation_targets ();
+    for (auto &terminal : terminals)
+        co_await terminal;
+}
+
 void public_host_runtime_t::discard_relocation_target_attempts (
   std::vector<relocation_target_attempt_t> attempts) noexcept
 {
@@ -2915,6 +2991,18 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                 catch (...) {
                 }
             }
+        const relocation_attempt_key_t key{attempt.prepare.relocation.high,
+                                           attempt.prepare.relocation.low,
+                                           attempt.prepare.target_attempt_generation};
+        _relocation_session_terminal_lane
+          .run ([&] {
+              const auto found = _relocation_target_attempts.find (key);
+              if (found != _relocation_target_attempts.end ()
+                  && found->second.terminal == attempt.terminal)
+                  _relocation_target_attempts.erase (found);
+          })
+          .get ();
+        attempt.terminal->complete (result_t<void>::success ());
     }
 }
 
@@ -2960,6 +3048,7 @@ public_host_runtime_t::observe_relocation_target (
 
 void public_host_runtime_t::poll_relocation_target_attempts ()
 {
+    discard_unverified_relocation_targets ();
     /* 28/52: command 44 (session_relocation_route) is a one-way send,
      * submitted exactly once per route -- there is no periodic re-select
      * and resend of an incomplete route here. Attempts with a verified
@@ -2973,7 +3062,7 @@ void public_host_runtime_t::poll_relocation_target_attempts ()
     _relocation_session_terminal_lane
       .run ([&] {
           for (auto &[key, attempt] : _relocation_target_attempts) {
-              if (attempt.target_finalized
+              if (relocation_target_terminal (attempt)
                   || attempt.next_finalize_at == std::chrono::steady_clock::time_point{}
                   || attempt.next_finalize_at > now)
                   continue;
@@ -2997,21 +3086,11 @@ void public_host_runtime_t::poll_relocation_target_attempts ()
         if (_relocation_target_metrics.cutover_timeout)
             _relocation_target_metrics.cutover_timeout ();
     }
-    std::vector<relocation_target_attempt_t> discarded;
-    for (const auto &[key, fence] : unverified) {
-        if (observe_relocation_target (fence) != relocation_target_settlement_t::discard)
-            continue;
-        _relocation_session_terminal_lane
-          .run ([&] {
-              const auto found = _relocation_target_attempts.find (key);
-              if (found == _relocation_target_attempts.end () || found->second.cutover_received)
-                  return;
-              discarded.push_back (std::move (found->second));
-              _relocation_target_attempts.erase (found);
-          })
-          .get ();
-    }
-    discard_relocation_target_attempts (std::move (discarded));
+    std::vector<relocation_attempt_key_t> observed;
+    for (const auto &[key, fence] : unverified)
+        if (observe_relocation_target (fence) == relocation_target_settlement_t::discard)
+            observed.push_back (key);
+    discard_unverified_relocation_targets (observed);
     for (const auto &key : pending)
         (void) try_finalize_relocation_target (key);
 }
@@ -3435,7 +3514,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
             const auto found = _relocation_target_attempts.find (key);
             if (found == _relocation_target_attempts.end ())
                 return false;
-            if (found->second.target_finalized) {
+            if (relocation_target_terminal (found->second)) {
                 attempt = found->second;
             } else {
                 const auto now = std::chrono::steady_clock::now ();
@@ -3451,7 +3530,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
         .get ();
     if (!attempt_current)
         return false;
-    if (attempt.target_finalized) {
+    if (relocation_target_terminal (attempt)) {
         start_relocation_session_route_submission (key);
         return true;
     }
@@ -3462,10 +3541,11 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
         _relocation_session_terminal_lane
           .run ([&] {
               const auto found = _relocation_target_attempts.find (key);
-              if (found == _relocation_target_attempts.end () || found->second.target_finalized)
+              if (found == _relocation_target_attempts.end ()
+                  || relocation_target_terminal (found->second))
                   return;
-              discarded.push_back (std::move (found->second));
-              _relocation_target_attempts.erase (found);
+              if (auto staging = take_relocation_target_discard (found->second))
+                  discarded.push_back (std::move (*staging));
           })
           .get ();
         discard_relocation_target_attempts (std::move (discarded));
@@ -3576,16 +3656,15 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
                              .run ([&] {
                                  const auto found = _relocation_target_attempts.find (key);
                                  if (found == _relocation_target_attempts.end ())
-                                     return false;
-                                 found->second.target_finalized = true;
-                                 return true;
+                                     return std::shared_ptr<task_completion_source_t<void>>{};
+                                 return found->second.terminal;
                              })
                              .get ();
     if (!finalized)
         return false;
     /* Metrics 25 §"zlink.relocation": target_resume is the target-local S2
      * (owner CAS confirmed) -> dispatch-open duration, emitted once on the
-     * tick that flips target_finalized. */
+     * tick that completes the target terminal. */
     if (_relocation_target_metrics.target_resume_seconds
         && attempt.authority_committed_at != std::chrono::steady_clock::time_point{}) {
         const auto elapsed = std::chrono::duration<double> (std::chrono::steady_clock::now ()
@@ -3593,6 +3672,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
         _relocation_target_metrics.target_resume_seconds (elapsed.count ());
     }
     start_relocation_session_route_submission (key);
+    finalized->complete (result_t<void>::success ());
     return true;
 }
 
@@ -3707,6 +3787,7 @@ void public_host_runtime_t::activate_relocation_assembly (
   relocation_assembly_staging_t staging)
 {
     relocation_target_attempt_t attempt;
+    attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
     attempt.prepare = pending.prepare;
     attempt.restore_identity = staging.restore_identity;
     attempt.sources = std::move (staging.sources);
@@ -3718,9 +3799,16 @@ void public_host_runtime_t::activate_relocation_assembly (
     }
     const auto inserted =
       _relocation_session_terminal_lane
-        .run ([&] { return _relocation_target_attempts.emplace (key, std::move (attempt)).second; })
+        .run ([&] {
+            if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
+                return false;
+            return _relocation_target_attempts.try_emplace (key, std::move (attempt)).second;
+        })
         .get ();
     if (!inserted) {
+        std::vector<relocation_target_attempt_t> cleanup;
+        cleanup.push_back (std::move (attempt));
+        discard_relocation_target_attempts (std::move (cleanup));
         reply_relocation_assembly_failure (
           pending, static_cast<protocol::framework_error_code> (
                      messaging::request_failure_mapper_t{}.target_failure_code (
@@ -3748,26 +3836,15 @@ void public_host_runtime_t::activate_relocation_assembly (
       .run ([&] {
           const auto found = _relocation_target_attempts.find (key);
           if (found != _relocation_target_attempts.end ()) {
-              aborted.emplace (std::move (found->second));
-              _relocation_target_attempts.erase (found);
+              aborted = take_relocation_target_discard (found->second);
           }
       })
       .get ();
     if (!aborted)
         return;
-    unregister_relocation_wire_targets (aborted->prepare.relocation,
-                                        aborted->prepare.target_attempt_generation,
-                                        aborted->wire_objects);
-    try {
-        if (aborted->targets.size () == 1)
-            (void) _objects.abort_relocation_restore (aborted->targets.front (),
-                                                      aborted->restore_identity);
-        else
-            (void) _objects.abort_relocation_restore_aggregate (aborted->targets,
-                                                                aborted->restore_identity);
-    }
-    catch (...) {
-    }
+    std::vector<relocation_target_attempt_t> cleanup;
+    cleanup.push_back (std::move (*aborted));
+    discard_relocation_target_attempts (std::move (cleanup));
 }
 
 void public_host_runtime_t::complete_relocation_assembly (const relocation_attempt_key_t &key,
@@ -4997,6 +5074,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                    != mailbox_record.source_routing_id
                               || found->second.prepare.source_node_generation
                                    != mailbox_record.source_node_generation
+                              || _options.mesh.shutdown_admission_seal->load (
+                                std::memory_order_acquire)
                               || found->second.cutover_received) {
                               /* Late or duplicate cutover (28 §4.4): the
                                * boundary already resolved and is never
@@ -5033,8 +5112,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                            * implementation defect, not a retryable
                            * condition (28 §4.4) — no CAS on a possibly
                            * incomplete batch; discard the staging. */
-                          mismatched.emplace (std::move (found->second));
-                          _relocation_target_attempts.erase (found);
+                          mismatched = take_relocation_target_discard (found->second);
                       })
                       .get ();
                     if (verified) {
@@ -5051,8 +5129,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                     std::chrono::steady_clock::now ();
                                   return;
                               }
-                              mismatched.emplace (std::move (found->second));
-                              _relocation_target_attempts.erase (found);
+                              mismatched = take_relocation_target_discard (found->second);
                           })
                           .get ();
                         if (staged)
@@ -6274,7 +6351,7 @@ public_host_runtime_t::next_dispatch_activity_async ()
           for (const auto &[key, assembly] : _relocation_assemblies)
               include (assembly.expires_at);
           for (const auto &[key, attempt] : _relocation_target_attempts) {
-              if (!attempt.target_finalized
+              if (!relocation_target_terminal (attempt)
                   && attempt.next_finalize_at != std::chrono::steady_clock::time_point{})
                   include (attempt.next_finalize_at);
           }
