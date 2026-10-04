@@ -2147,14 +2147,21 @@ test('a relocation target Restore holds one activation admission from Prepare un
   // MeshNode §5.1 Pending activation: the target MeshNode counts the Restore from the moment it
   // receives the Prepare until the target commit, in the same record placement reads.
   let events: string[] = [];
-  const activationAdmission = new ZLinkActivationAdmission(
-    () => 1,
-    (meshName) => {
-      const current = activationAdmission.current(meshName);
-      assert.equal(activationAdmission.hasHeadroom(meshName), current.active === 0);
-      events.push(`activation:${meshName}:${current.active}/${current.limit}`);
-    }
-  );
+  const activationAdmission = new ZLinkActivationAdmission(() => 1);
+  const observeAdmission = (meshName: string) => {
+    const current = activationAdmission.current(meshName);
+    assert.equal(activationAdmission.hasHeadroom(meshName), current.active === 0);
+    events.push(`activation:${meshName}:${current.active}/${current.limit}`);
+  };
+  const acquire = activationAdmission.acquire.bind(activationAdmission);
+  activationAdmission.acquire = async (meshName, signal) => {
+    const release = await acquire(meshName, signal);
+    observeAdmission(meshName);
+    return () => {
+      release();
+      observeAdmission(meshName);
+    };
+  };
   const harness = createActorJoinHostHarness({ holdAccepted: true, activationAdmission });
   events = harness.events;
   try {

@@ -289,16 +289,7 @@ export class ZLinkFrameworkRuntimeHost
   private readonly activationAdmission = new ZLinkActivationAdmission(
     (meshName) =>
       this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ??
-      DEFAULT_ACTIVATION_CONCURRENCY_LIMIT,
-    (meshName) => {
-      void this.spotNodeRuntime
-        ?.publishMeshNodeState(
-          this.runtimeState,
-          this.executionState?.abortController.signal,
-          meshName
-        )
-        .catch(() => undefined);
-    }
+      DEFAULT_ACTIVATION_CONCURRENCY_LIMIT
   );
   private cachedLocationSpotRouteResolver?: ZLinkSpotRouteResolver;
   private actorClientLocationResolver?: ZLinkStoreLocationResolvers;
