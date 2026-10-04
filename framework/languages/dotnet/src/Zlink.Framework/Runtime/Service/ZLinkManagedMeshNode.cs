@@ -203,7 +203,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private ZLinkApplicationJobQueueLease? _reservedRawApplicationAdmission;
     private int _rawApplicationAdmissionWaitActive;
     private int _readyPosted;
-    private int _disposed;
+    private bool IsDisposing => Volatile.Read(ref _disposeTask) is not null;
     private bool _inboundOperationAdmissionClosed;
     private ulong _activeSocketGeneration;
 
@@ -3306,9 +3306,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private async Task DisposeCoreAsync(CancellationToken shutdownToken)
     {
-        if (Volatile.Read(ref _disposed) != 0)
-            return;
-
         var receiveLoop = RunState(() =>
         {
             _state = MeshNodeState.Stopped;
@@ -3402,7 +3399,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 monitor.Dispose();
             Volatile.Write(ref _monitorState, new([], _monitorState.Item2));
         });
-        Volatile.Write(ref _disposed, 1);
     }
 
     private bool RunInboundOperation(Func<Task> operation)
@@ -11974,7 +11970,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (accepted && key.Command == ServiceWireConstants.Command.Admit)
                     RunState(() =>
                     {
-                        if (_disposed != 0 || cancellationToken.IsCancellationRequested)
+                        if (IsDisposing || cancellationToken.IsCancellationRequested)
                             return;
                         var peer = _peersByRid.Values.FirstOrDefault(candidate =>
                             candidate.PhysicalRoutingId == key.Target
@@ -12396,8 +12392,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         });
     }
 
-    private void ThrowIfDisposed() =>
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(IsDisposing, this);
 
     private T RunState<T>(Func<T> operation) => AwaitStateLane(_lane.RunAsync(operation));
 

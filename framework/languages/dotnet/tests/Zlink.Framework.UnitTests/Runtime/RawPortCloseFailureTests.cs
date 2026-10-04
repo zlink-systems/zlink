@@ -12,6 +12,35 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RawPortCloseFailureTests
 {
     [Fact]
+    public async Task ManagedMesh_Rejects_Work_And_Shares_Concurrent_Disposal()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var socket = context.CreateRouterSocket();
+        var router = DispatchProxy.Create<IRouterSocket, CloseFailureProxy>();
+        var proxy = (CloseFailureProxy)(object)router;
+        proxy.Inner = socket;
+        proxy.BlockClose = true;
+        var node = new ZLinkManagedMeshNode(context, "blocked-mesh");
+        typeof(ZLinkManagedMeshNode)
+            .GetField("_socket", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(node, router);
+        var first = node.DisposeAsync().AsTask();
+        await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = node.DisposeAsync().AsTask();
+        try
+        {
+            Assert.Same(first, second);
+            Assert.Equal(1, proxy.CloseAttempts);
+            Assert.Throws<ObjectDisposedException>(() => node.AddChannel("late-channel"));
+        }
+        finally
+        {
+            proxy.ReleaseClose.TrySetResult();
+            await Task.WhenAll(first, second);
+        }
+    }
+
+    [Fact]
     public async Task BackendContext_Rejects_Work_And_Shares_Concurrent_Disposal()
     {
         using var context = Systems.Zlink.Zlink.CreateContext();
@@ -408,11 +437,14 @@ public sealed class RawPortCloseFailureTests
                 return Router;
             if (method.Name == nameof(IZLinkBackendRuntimeContext.CreateSubscriberSocket))
                 return Subscriber;
-            if (BlockClose && method.Name == "DisposeAsync")
+            if (BlockClose && method.Name is "Dispose" or "DisposeAsync")
             {
                 ++CloseAttempts;
                 CloseAttempted.TrySetResult();
-                return new ValueTask(ReleaseClose.Task);
+                if (method.Name == "DisposeAsync")
+                    return new ValueTask(ReleaseClose.Task);
+                ReleaseClose.Task.GetAwaiter().GetResult();
+                return null;
             }
             if ((FailClose || Inner is IRouterSocket) && method.Name is "Dispose" or "DisposeAsync")
             {
