@@ -1618,10 +1618,12 @@ store record golden fixture. Each item maps to one test.
 - Follows §8.2's owner rules and target attempt number — a previous target attempt can't
   change owner or receive new messages.
 - The target keeps receiving source messages even after registering the current target
-  attempt's temporary queue. Only an abort before the relay-ready reply is accepted (§9.4)
-  and the end of target staging before a verified cutover
-  ([Common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover))
-  discard the temporary queue and keep the source original.
+  attempt's temporary queue. Temporary queue disposal follows §9.4 for cancellation before
+  relay-ready acceptance,
+  [Common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)
+  for staging termination before verified cutover, and §10 for CAS settlement after
+  verification. Retention, release, and resumption of the source originals follow Common
+  relocation §4.4.
 - An Entry Spot member Actor move and a whole User Spot move each change the needed
   owner and membership together, in one step.
 

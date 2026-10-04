@@ -1455,9 +1455,10 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 - §8.2의 owner 규칙과 target 시도 번호를 지킨다 — 이전 target 시도는 owner를 바꾸거나 새
   message를 받을 수 없다.
 - Target이 현재 target attempt의 temporary queue를 등록한 뒤에도 source message를 계속
-  받는다. Relay-ready reply가 accepted 상태가 되기 전 abort(§9.4)와 검증된 cutover 전 target
-  staging의 종료([공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover))에서만
-  temporary queue를 폐기하고 source 원본을 유지한다.
+  받는다. Temporary queue의 폐기는 relay-ready accepted 전 취소에서는 §9.4, 검증된 cutover 전
+  staging 종료에서는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover),
+  검증 뒤 CAS settlement에서는 §10을 따른다. Source 원본의 보관·해제·재개는 공통 relocation
+  §4.4를 따른다.
 - Entry Spot member Actor와 User Spot 전체 이동은 각각 필요한 owner와 membership을 한 번에
   바꾼다.
 
