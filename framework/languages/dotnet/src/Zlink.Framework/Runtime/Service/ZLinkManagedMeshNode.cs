@@ -4892,7 +4892,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     .Messages(wire)
                     .Timeout(remaining);
                 ownershipTransferred = true;
-                request = requestOperation.Async(cancellationToken).Reply;
+                request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                    requestOperation,
+                    cancellationToken
+                );
             }
 
             Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: peer.RoutingId);
@@ -9915,12 +9918,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     var socket = _socket;
                     if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
                         throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                    request = socket
-                        .Request(target)
-                        .Messages(messages)
-                        .Timeout(timeout)
-                        .Async(cancellationToken)
-                        .Reply;
+                    request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                        socket.Request(target).Messages(messages).Timeout(timeout),
+                        cancellationToken
+                    );
                     ownershipTransferred = true;
                 }
             }
