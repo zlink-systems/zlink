@@ -69,14 +69,15 @@ local function encodeMember(originalKey, bytes, version, expiresAtMs, tombstone)
 end
 `;
 
-export const OPAQUE_READ_SCRIPT =
+export const OPAQUE_READ_SCRIPT = Buffer.from(
   PROLOGUE +
-  DECODE_HELPERS +
-  `
+    DECODE_HELPERS +
+    `
 local record = liveRecordAt(KEYS[1], nowMs)
 if not record then return {0, nowMs} end
 return {1, nowMs, record[1], record[2], record[3], tostring(tonumber(record[4]))}
-`;
+`
+);
 
 // KEYS[1..6] = indexKey, mapKey, cleanupKey, sequenceKey, snapshotExpiryKey,
 // snapshotBoundaryKey (private auxiliary keys, not part of the public
@@ -150,10 +151,10 @@ end
 
 `;
 
-export const OPAQUE_WRITE_SCRIPT =
+export const OPAQUE_WRITE_SCRIPT = Buffer.from(
   PROLOGUE +
-  DECODE_HELPERS +
-  `
+    DECODE_HELPERS +
+    `
 local indexKey = KEYS[1]
 local mapKey = KEYS[2]
 local cleanupKey = KEYS[3]
@@ -162,8 +163,8 @@ local snapshotExpiryKey = KEYS[5]
 local snapshotBoundaryKey = KEYS[6]
 
 ` +
-  CLEANUP_AND_BOUNDARY +
-  `
+    CLEANUP_AND_BOUNDARY +
+    `
 local conditions = cjson.decode(ARGV[1])
 local mutations = cjson.decode(ARGV[2])
 
@@ -221,7 +222,8 @@ for _, mutation in ipairs(mutations) do
     end
 end
 return result
-`;
+`
+);
 
 // Shared body for point-in-time paged scanning. KEYS[1]=indexKey,
 // KEYS[2]=mapKey, KEYS[3]=snapshotKey, KEYS[4]=cleanupKey,
