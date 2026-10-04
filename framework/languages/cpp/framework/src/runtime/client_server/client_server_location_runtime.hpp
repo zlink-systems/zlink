@@ -182,8 +182,11 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::shared_ptr<eventing::runtime_wake_timer_t> _wake_timer =
       std::make_shared<eventing::runtime_wake_timer_t> ();
     std::atomic_bool _stop{false};
-    std::mutex _descriptor_publish_mutex;
-    std::condition_variable _descriptor_publish_changed;
+    // Protects _descriptor_publish_pending/result, _active_application_drains,
+    // server_entry_t::pump_task, and publication of pump_task_state_t::task.
+    // Terminal waits read the published task; its completion uses state->mutex.
+    std::mutex _server_progress_mutex;
+    std::condition_variable _server_progress_changed;
     bool _descriptor_publish_pending = false;
     bool _descriptor_publish_result = false;
     std::size_t _active_application_drains = 0;

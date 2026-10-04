@@ -652,7 +652,7 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
     for (std::size_t index = 0; index < queued_records; ++index) {
         const auto submitted = source.send ()
                                  .message (zlink::message_t::from (header))
-                                 .message (zlink::message_t::from ("{}"))
+                                 .message (zlink::message_t::from (std::to_string (index)))
                                  .async ();
         assert (submitted.result == ZLINK_SUBMIT_OK);
     }
@@ -684,6 +684,18 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
       .value ();
     const auto records =
       server->mailbox ().pending_messages (service_mailbox_domain_t::application);
+    assert (jobs->snapshot ().queued_application_jobs == records);
+    assert (jobs->snapshot ().permits_in_use == records);
+    const auto claim =
+      server->mailbox ().try_claim (service_mailbox_domain_t::application, records, 1024 * 1024);
+    assert (claim && claim->records.size () == records);
+    for (std::size_t index = 0; index < records; ++index) {
+        const auto &payload = claim->records[index].parts[1];
+        assert (std::string (payload.begin (), payload.end ()) == std::to_string (index));
+        claim->records[index].before_application_handler ();
+    }
+    assert (jobs->snapshot ().permits_in_use == 0);
+    assert (server->mailbox ().release (*claim));
     server->close ();
     return records;
 }

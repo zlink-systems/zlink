@@ -245,9 +245,10 @@ pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        receive_batch_budget_t budget)
 {
     (void) co_await server->drain_monitor_events_task (now);
+    std::vector<mesh::service_mailbox_record_t> application_records;
     while (application_permit && budget.can_receive ()) {
-        const auto result =
-          co_await server->pump_one (now, std::move (application_permit), &budget);
+        const auto result = co_await server->pump_one (now, std::move (application_permit), &budget,
+                                                       &application_records);
         if (result == client_server_pump_result_t::no_data
             || result == client_server_pump_result_t::backpressured)
             break;
@@ -257,6 +258,7 @@ pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
             application_permit =
               std::make_shared<application_job_queue_t::permit_t> (std::move (*next));
     }
+    (void) co_await server->enqueue_application_records (application_records);
     (void) co_await server->tick_liveness (now);
 }
 
@@ -661,7 +663,7 @@ void client_server_location_runtime_t::start_server (
           if (!server)
               return;
           {
-              std::lock_guard lock (_descriptor_publish_mutex);
+              std::lock_guard lock (_server_progress_mutex);
               ++_active_application_drains;
           }
           std::optional<task_t<void>> task;
@@ -673,9 +675,9 @@ void client_server_location_runtime_t::start_server (
           }
           catch (const std::exception &) {
               _locations->record_store_error ();
-              std::lock_guard lock (_descriptor_publish_mutex);
+              std::lock_guard lock (_server_progress_mutex);
               --_active_application_drains;
-              _descriptor_publish_changed.notify_all ();
+              _server_progress_changed.notify_all ();
               return;
           }
           try {
@@ -683,9 +685,9 @@ void client_server_location_runtime_t::start_server (
                   if (!result)
                       _locations->record_store_error ();
                   {
-                      std::lock_guard lock (_descriptor_publish_mutex);
+                      std::lock_guard lock (_server_progress_mutex);
                       --_active_application_drains;
-                      _descriptor_publish_changed.notify_all ();
+                      _server_progress_changed.notify_all ();
                   }
               });
           }
@@ -744,18 +746,18 @@ bool client_server_location_runtime_t::publish_descriptor_state (
     if (state != framework_runtime_state_t::draining)
         return true;
     {
-        std::lock_guard lock (_descriptor_publish_mutex);
+        std::lock_guard lock (_server_progress_mutex);
         if (_stop.load (std::memory_order_acquire))
             return false;
         _descriptor_publish_result = false;
         _descriptor_publish_pending = true;
     }
-    _descriptor_publish_changed.notify_all ();
+    _server_progress_changed.notify_all ();
     _wake_timer->signal ();
 
-    std::unique_lock lock (_descriptor_publish_mutex);
+    std::unique_lock lock (_server_progress_mutex);
     if (!runtime::infrastructure_wait_guard::condition_wait_for (
-          _descriptor_publish_changed, lock, std::chrono::seconds (5),
+          _server_progress_changed, lock, std::chrono::seconds (5),
           [this] { return !_descriptor_publish_pending; }, "client-server/descriptor-publish",
           runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion)) {
         return false;
@@ -794,7 +796,7 @@ void client_server_location_runtime_t::run ()
             }
             maintenance_lock.unlock ();
             if (!reconcile_after_publish)
-                _descriptor_publish_changed.notify_all ();
+                _server_progress_changed.notify_all ();
             if (reconcile_after_publish && result && !_stop.load (std::memory_order_acquire)) {
                 pending_reconcile = std::make_shared<task_t<void>> (reconcile_task ());
                 detail::observe_task_terminal (
@@ -841,7 +843,7 @@ void client_server_location_runtime_t::run ()
         const auto now = std::chrono::steady_clock::now ();
         if (!pending_maintenance && !pending_reconcile && !pending_worker_snapshot
             && !pending_pump) {
-            maintenance_lock = std::unique_lock<std::mutex> (_descriptor_publish_mutex);
+            maintenance_lock = std::unique_lock<std::mutex> (_server_progress_mutex);
             if (_descriptor_publish_pending || now >= next_reconcile) {
                 _client_pump_snapshot.clear ();
                 pending_maintenance = std::make_shared<task_t<bool>> (publish_servers_task ());
@@ -927,7 +929,7 @@ void client_server_location_runtime_t::run ()
 
 bool client_server_location_runtime_t::publish_servers ()
 {
-    std::lock_guard publish_lock (_descriptor_publish_mutex);
+    std::lock_guard publish_lock (_server_progress_mutex);
     return publish_servers_task ().result ().value ();
 }
 
@@ -1153,19 +1155,19 @@ task_t<void> client_server_location_runtime_t::pump ()
             auto &server = *_server_pump_snapshot[(start + offset) % _server_pump_snapshot.size ()];
             std::shared_ptr<pump_task_state_t> current;
             {
-                std::lock_guard dispatch_lock (_descriptor_publish_mutex);
+                std::lock_guard dispatch_lock (_server_progress_mutex);
                 current = server.pump_task;
             }
             if (const auto completed = take_completed (current)) {
                 if (!*completed)
                     _locations->record_store_error ();
-                std::lock_guard dispatch_lock (_descriptor_publish_mutex);
+                std::lock_guard dispatch_lock (_server_progress_mutex);
                 if (server.pump_task == current)
                     server.pump_task.reset ();
             }
             bool can_start;
             {
-                std::lock_guard dispatch_lock (_descriptor_publish_mutex);
+                std::lock_guard dispatch_lock (_server_progress_mutex);
                 can_start = !server.pump_task;
             }
             if (can_start) {
@@ -1174,7 +1176,7 @@ task_t<void> client_server_location_runtime_t::pump ()
                     auto state = std::make_shared<pump_task_state_t> ();
                     bool installed = false;
                     {
-                        std::lock_guard dispatch_lock (_descriptor_publish_mutex);
+                        std::lock_guard dispatch_lock (_server_progress_mutex);
                         if (!server.pump_task) {
                             server.pump_task = state;
                             installed = true;
@@ -1186,9 +1188,9 @@ task_t<void> client_server_location_runtime_t::pump ()
                           std::make_shared<application_job_queue_t::permit_t> (
                             std::move (*reserved))));
                         {
-                            std::lock_guard dispatch_lock (_descriptor_publish_mutex);
+                            std::lock_guard dispatch_lock (_server_progress_mutex);
                             state->task = task;
-                            _descriptor_publish_changed.notify_all ();
+                            _server_progress_changed.notify_all ();
                         }
                         detail::observe_task_terminal (
                           *task, [state, wake = _wake_timer] (const result_t<void> &result) {
@@ -1707,7 +1709,7 @@ void client_server_location_runtime_t::seal_application_dispatch () noexcept
                   servers.push_back (server->owner);
           })
           .get ();
-        std::lock_guard dispatch_lock (_descriptor_publish_mutex);
+        std::lock_guard dispatch_lock (_server_progress_mutex);
         for (auto &server : servers)
             server->mailbox ().close ();
     }
@@ -1735,7 +1737,7 @@ bool client_server_location_runtime_t::wait_for_accepted_callbacks_until (
           })
           .get ();
         {
-            std::lock_guard dispatch_lock (_descriptor_publish_mutex);
+            std::lock_guard dispatch_lock (_server_progress_mutex);
             for (auto &server : servers)
                 server.pump = server.entry->pump_task;
         }
@@ -1744,8 +1746,8 @@ bool client_server_location_runtime_t::wait_for_accepted_callbacks_until (
                 continue;
             std::shared_ptr<task_t<void>> task;
             {
-                std::unique_lock lock (_descriptor_publish_mutex);
-                if (!_descriptor_publish_changed.wait_until (
+                std::unique_lock lock (_server_progress_mutex);
+                if (!_server_progress_changed.wait_until (
                       lock, deadline, [&] { return static_cast<bool> (server.pump->task); }))
                     return false;
                 task = server.pump->task;
@@ -1756,7 +1758,7 @@ bool client_server_location_runtime_t::wait_for_accepted_callbacks_until (
             if (!task->result_for (remaining))
                 return false;
         }
-        std::unique_lock lock (_descriptor_publish_mutex);
+        std::unique_lock lock (_server_progress_mutex);
         const auto settled = [&] {
             if (_active_application_drains != 0)
                 return false;
@@ -1769,7 +1771,7 @@ bool client_server_location_runtime_t::wait_for_accepted_callbacks_until (
             return true;
         };
         while (!settled () && std::chrono::steady_clock::now () < deadline) {
-            _descriptor_publish_changed.wait_until (lock, deadline);
+            _server_progress_changed.wait_until (lock, deadline);
         }
         return settled ();
     }
@@ -1785,11 +1787,11 @@ void client_server_location_runtime_t::stop ()
     runtime_failure_collector_t failures;
     const bool was_stopped = _stop.exchange (true, std::memory_order_acq_rel);
     {
-        std::lock_guard lock (_descriptor_publish_mutex);
+        std::lock_guard lock (_server_progress_mutex);
         _descriptor_publish_result = false;
         _descriptor_publish_pending = false;
     }
-    _descriptor_publish_changed.notify_all ();
+    _server_progress_changed.notify_all ();
     _wake_timer->signal ();
     failures.capture ([&] { complete_ready_waiters ().result ().value (); });
     if (_thread.joinable ())
