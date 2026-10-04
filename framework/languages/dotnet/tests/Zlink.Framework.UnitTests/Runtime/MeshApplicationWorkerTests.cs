@@ -4,12 +4,262 @@ using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshApplicationWorkerTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalRequests_PreserveSubmissionOrderAcrossPermitWait(bool actorRequest)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "local-order",
+            applicationJobQueue: jobs
+        );
+        var rid = RoutingId.From("local-order-node");
+        node.SetRoutingId(rid);
+        node.Start();
+        using var held = await jobs.AcquireAsync(CancellationToken.None);
+        var spot = node.GetOrCreateSpot("local-spot", out _);
+        var actor = node.CreateActor("local-actor");
+        using var payload = Message.From(new byte[16]);
+        var submitted = new MeshOperationId[64];
+        var readable = System.Threading.Channels.Channel.CreateUnbounded<MeshReadyDomains>();
+        node.SetReadyHandler(domains =>
+        {
+            readable.Writer.TryWrite(domains);
+            return MeshReadyDomains.None;
+        });
+        for (var index = 0; index < submitted.Length; index++)
+        {
+            Assert.Equal(
+                SubmitResult.Ok,
+                actorRequest
+                    ? node.RequestToActor(
+                        actor,
+                        [payload],
+                        out submitted[index],
+                        TimeSpan.FromSeconds(5)
+                    )
+                    : node.RequestToSpot(
+                        "",
+                        rid,
+                        "local-spot",
+                        spot.LifecycleGeneration,
+                        [payload],
+                        out submitted[index],
+                        TimeSpan.FromSeconds(5),
+                        SendFlags.None,
+                        default
+                    )
+            );
+        }
+        Assert.Equal(0UL, node.Status().PendingApplicationMessages);
+        held.Dispose();
+        var receivedIds = new List<MeshOperationId>();
+        while (receivedIds.Count < submitted.Length)
+        {
+            await readable.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            using var ready = new MeshReadyBatch();
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            for (var index = 0; index < ready.Count; index++)
+            {
+                using var claim = ready.TakeClaim(index);
+                using var received = new MeshReceiveBatch();
+                Assert.True(claim.Receive(received, RecvFlags.DontWait));
+                for (var record = 0; record < received.Count; record++)
+                {
+                    if (
+                        received[record].Kind
+                        == (actorRequest ? MeshRecordKind.ActorRequest : MeshRecordKind.SpotRequest)
+                    )
+                        receivedIds.Add(received[record].OperationId);
+                    await received
+                        .GetApplicationJobAdmission(record)!
+                        .ReleaseForHandlerStartAsync();
+                }
+            }
+        }
+        Assert.Equal(submitted, receivedIds);
+        Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalRequests_DoNotPublishWithoutSharedPermit(bool actorRequest)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "local-admission",
+            applicationJobQueue: jobs
+        );
+        var rid = RoutingId.From("local-admission-node");
+        node.SetRoutingId(rid);
+        node.Start();
+        using var held = await jobs.AcquireAsync(CancellationToken.None);
+        var spot = node.GetOrCreateSpot("local-spot", out _);
+        var actor = node.CreateActor("local-actor");
+        var initialMessages = node.Status().PendingApplicationMessages;
+        using var payload = Message.From(new byte[16]);
+        for (var index = 0; index < 4; index++)
+        {
+            var submitted = actorRequest
+                ? node.RequestToActor(actor, [payload], out _, TimeSpan.FromMilliseconds(100))
+                : node.RequestToSpot(
+                    "",
+                    rid,
+                    "local-spot",
+                    spot.LifecycleGeneration,
+                    [payload],
+                    out _,
+                    TimeSpan.FromMilliseconds(100),
+                    SendFlags.None,
+                    default
+                );
+            Assert.Equal(SubmitResult.Ok, submitted);
+        }
+        Assert.Equal(initialMessages, node.Status().PendingApplicationMessages);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalRequestTerminal_RemovesPermitWaiterBeforePublication(bool cancel)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "local-terminal",
+            applicationJobQueue: jobs
+        );
+        var rid = RoutingId.From("local-terminal-node");
+        node.SetRoutingId(rid);
+        node.Start();
+        var spot = node.GetOrCreateSpot("local-spot", out _);
+        using var held = await jobs.AcquireAsync(CancellationToken.None);
+        using var payload = Message.From(new byte[16]);
+        using var cancellation = new CancellationTokenSource();
+        var requests = Enumerable
+            .Range(0, 4)
+            .Select(_ =>
+                node.RequestToSpotDirectAsync(
+                        "",
+                        rid,
+                        "local-spot",
+                        spot.LifecycleGeneration,
+                        [payload],
+                        SendFlags.None,
+                        default,
+                        cancel ? TimeSpan.FromSeconds(5) : TimeSpan.FromMilliseconds(100),
+                        cancellation.Token
+                    )
+                    .AsTask()
+            )
+            .ToArray();
+        if (cancel)
+            cancellation.Cancel();
+        foreach (var request in requests)
+        {
+            if (cancel)
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+            else
+                await Assert.ThrowsAsync<ZLinkRequestTerminalException>(() => request);
+        }
+        Assert.Equal(0UL, node.Status().PendingApplicationMessages);
+        Assert.Equal(0UL, jobs.GetStatus().CapacityWaiters);
+        Assert.Equal(1UL, jobs.GetStatus().PermitsInUse);
+        held.Dispose();
+        using var next = await jobs.AcquireAsync(CancellationToken.None);
+        Assert.Equal(0UL, node.Status().PendingApplicationMessages);
+    }
+
+    [Fact]
+    public async Task LocalRequest_UsesPublicationPermitUntilHandlerEntry()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "local-handler",
+            applicationJobQueue: jobs
+        );
+        var rid = RoutingId.From("local-handler-node");
+        node.SetRoutingId(rid);
+        node.Start();
+        var spot = node.GetOrCreateSpot("local-spot", out _);
+        var failures = new Failures();
+        var runner = new ZLinkRuntimeTaskRunner(failures, CancellationToken.None);
+        await using var pump = new ZLinkMeshDispatchPump(
+            node,
+            new ZLinkMeshCompletionTable(),
+            jobs
+        );
+        pump.SetNodeRouteHandler(
+            (records, _) =>
+            {
+                foreach (var record in records)
+                    record.Dispose();
+                return ValueTask.CompletedTask;
+            },
+            runner
+        );
+        var state = pump.RegisterSpot("local-spot");
+        pump.SetDispatchHandler("local-spot", info => (DispatchAsync(info), null));
+        async ValueTask DispatchAsync(ZLinkBackendSpotDispatchInfo info)
+        {
+            Assert.True(state.Routes.TryDequeue(out var received));
+            using (received)
+            {
+                Assert.NotNull(received.ApplicationJobAdmission);
+                await received.ApplicationJobAdmission.ReleaseForHandlerStartAsync();
+                Assert.Equal(0UL, jobs.GetStatus().QueuedApplicationJobs);
+                Assert.Equal(SubmitResult.Ok, received.Reply(received.Parts));
+            }
+        }
+        using var held = await jobs.AcquireAsync(CancellationToken.None);
+        using var payload = Message.From(new byte[16]);
+        pump.EnsureStarted();
+        var request = node.RequestToSpotDirectAsync(
+                "",
+                rid,
+                "local-spot",
+                spot.LifecycleGeneration,
+                [payload],
+                SendFlags.None,
+                default,
+                TimeSpan.FromSeconds(5),
+                CancellationToken.None
+            )
+            .AsTask();
+        Assert.False(request.IsCompleted);
+        held.Dispose();
+        using var reply = await request.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(16, reply.Parts[0].Size);
+        await pump.DisposeAsync();
+        await runner.StopAsync();
+        Assert.Empty(failures.Errors);
+        Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
+    }
+
     [Fact]
     public async Task SerialDrainReservation_UsesWorkerAndRetainsLifecycleOrdering()
     {

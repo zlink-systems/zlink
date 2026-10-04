@@ -2052,6 +2052,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;execution;admission")
   target_link_libraries(test_cpp_framework_application_job_queue PRIVATE
     GTest::gtest_main)
+  target_include_directories(test_cpp_framework_application_job_queue PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_instance_spot_activation
     tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp
