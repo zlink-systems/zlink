@@ -29,6 +29,94 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkApplicationJobQueueTest {
     @Test
+    void publicationStaysInGrantOrderAcrossConcurrentReturnsAndHandlerEntry() {
+        try (var queue = queue(2)) {
+            var heldFirst = queue.acquire().toCompletableFuture().join();
+            var heldSecond = queue.acquire().toCompletableFuture().join();
+            var deliveries = new java.util.ArrayDeque<Runnable>();
+            var published = new ArrayList<Integer>();
+            var first =
+                    queue.acquireAndPublish(
+                            deliveries::add,
+                            permit -> {
+                                permit.handlerStarted();
+                                assertTrue(
+                                        deliveries.isEmpty(),
+                                        "capacity return must not publish the next job inside this turn");
+                                published.add(1);
+                                return CompletableFuture.completedFuture(null);
+                            });
+            var second =
+                    queue.acquireAndPublish(
+                            deliveries::add,
+                            permit -> {
+                                published.add(2);
+                                permit.handlerStarted();
+                                return CompletableFuture.completedFuture(null);
+                            });
+            heldFirst.close();
+            heldSecond.close();
+            assertEquals(
+                    1, deliveries.size(), "a later grant must wait for the earlier publication");
+            assertFalse(second.toCompletableFuture().isDone());
+            deliveries.removeFirst().run();
+            assertEquals(List.of(1), published);
+            deliveries.removeFirst().run();
+            first.toCompletableFuture().join();
+            second.toCompletableFuture().join();
+            assertEquals(List.of(1, 2), published);
+            assertEquals(0, queue.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
+    void cancelledScheduledPublicationReturnsItsGrantBeforeNextPublication() {
+        try (var queue = queue(1)) {
+            var deliveries = new java.util.ArrayDeque<Runnable>();
+            var first =
+                    queue.acquireAndPublish(
+                                    deliveries::add,
+                                    permit -> {
+                                        throw new AssertionError("cancelled publication ran");
+                                    })
+                            .toCompletableFuture();
+            var second =
+                    queue.acquireAndPublish(
+                                    deliveries::add,
+                                    permit -> {
+                                        permit.handlerStarted();
+                                        return CompletableFuture.completedFuture(null);
+                                    })
+                            .toCompletableFuture();
+            assertTrue(first.cancel(false));
+            assertEquals(0, queue.snapshot().permitsInUse());
+            deliveries.removeFirst().run();
+            deliveries.removeFirst().run();
+            second.join();
+            assertEquals(0, queue.snapshot().capacityWaiters());
+            assertEquals(0, queue.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
+    void closeReturnsScheduledPublicationEvenIfExecutorDropsTheTask() {
+        var queue = queue(1);
+        var deliveries = new java.util.ArrayDeque<Runnable>();
+        var result =
+                queue.acquireAndPublish(
+                                deliveries::add,
+                                permit -> {
+                                    throw new AssertionError("closed publication ran");
+                                })
+                        .toCompletableFuture();
+        queue.close();
+        assertTrue(result.isCompletedExceptionally());
+        assertEquals(0, queue.snapshot().permitsInUse());
+        deliveries.removeFirst().run();
+        assertEquals(0, queue.snapshot().permitsInUse());
+    }
+
+    @Test
     void resolvesTheExactProfileMatrixAndManualOverride() {
         for (int processors : List.of(4, 8, 16)) {
             var candidates = candidates(processors);

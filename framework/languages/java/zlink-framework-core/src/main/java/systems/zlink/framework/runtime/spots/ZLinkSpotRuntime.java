@@ -4399,34 +4399,18 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         } catch (ZLinkFrameworkException rejected) {
             return CompletableFuture.failedFuture(rejected);
         }
-        var acquisition = applicationJobQueue.acquire().toCompletableFuture();
-        // Cancellation belongs to admission until the grant is delivered. Once
-        // granted, the queued job retains ownership until its existing terminal.
-        CompletableFuture<T> completion =
-                new CompletableFuture<>() {
-                    @Override
-                    public boolean cancel(boolean mayInterruptIfRunning) {
-                        return acquisition.cancel(mayInterruptIfRunning);
+        return applicationJobQueue.acquireAndPublish(
+                infrastructureExecutor,
+                permit -> {
+                    try (var ignored =
+                            systems.zlink.framework.runtime.internal.dispatch
+                                    .ZLinkApplicationJobContext.enter(permit)) {
+                        return runQueuedApplicationJob(
+                                systems.zlink.framework.runtime.internal.dispatch
+                                        .ZLinkApplicationJobContext.transferToQueuedJob(),
+                                operation);
                     }
-                };
-        acquisition
-                .thenCompose(
-                        permit -> {
-                            try (var ignored =
-                                    systems.zlink.framework.runtime.internal.dispatch
-                                            .ZLinkApplicationJobContext.enter(permit)) {
-                                return runQueuedApplicationJob(
-                                        systems.zlink.framework.runtime.internal.dispatch
-                                                .ZLinkApplicationJobContext.transferToQueuedJob(),
-                                        operation);
-                            }
-                        })
-                .whenComplete(
-                        (value, failure) -> {
-                            if (failure == null) completion.complete(value);
-                            else completion.completeExceptionally(failure);
-                        });
-        return completion;
+                });
     }
 
     systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit

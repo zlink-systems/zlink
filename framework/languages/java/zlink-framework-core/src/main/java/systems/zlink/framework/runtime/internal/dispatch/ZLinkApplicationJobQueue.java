@@ -22,6 +22,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 
 /**
@@ -29,7 +30,8 @@ import java.util.function.LongSupplier;
  *
  * <p>A permit starts as a receive/claim reservation, moves with the queued job, and is returned
  * immediately before the handler's first instruction. Capacity is handed directly to the oldest
- * live waiter; a new caller cannot barge ahead of an existing waiter.
+ * live waiter; a new caller cannot barge ahead of an existing waiter. A delivered grant stays at
+ * the FIFO head until publication returns, including when a handler returns capacity meanwhile.
  */
 public final class ZLinkApplicationJobQueue implements AutoCloseable {
     public static final int DEFAULT_PAUSE_THRESHOLD_PERCENT = 80;
@@ -154,7 +156,7 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                 permit = reserveUnderLock();
                 transition = evaluatePressureUnderLock();
             } else {
-                Waiter waiter = new Waiter(this, nanoTime.getAsLong(), metricsEpoch);
+                Waiter waiter = new Waiter(this, Runnable::run, nanoTime.getAsLong(), metricsEpoch);
                 waiters.addLast(waiter);
                 capacityWaitCount = saturatingIncrement(capacityWaitCount);
                 return waiter.future;
@@ -162,6 +164,55 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         }
         notifyPressureTransition(transition);
         return CompletableFuture.completedFuture(permit);
+    }
+
+    /** Registers publication before joining the FIFO, including an immediately available grant. */
+    public <T> CompletionStage<T> acquireAndPublish(
+            Executor executor, Function<Permit, CompletionStage<T>> publication) {
+        Objects.requireNonNull(executor, "executor");
+        Objects.requireNonNull(publication, "publication");
+        return acquire(
+                executor,
+                acquisition -> {
+                    CompletableFuture<T> completion =
+                            new CompletableFuture<>() {
+                                @Override
+                                public boolean cancel(boolean mayInterruptIfRunning) {
+                                    return acquisition.cancel(mayInterruptIfRunning);
+                                }
+                            };
+                    acquisition
+                            .thenCompose(publication)
+                            .whenComplete(
+                                    (value, failure) -> {
+                                        if (failure == null) completion.complete(value);
+                                        else completion.completeExceptionally(failure);
+                                    });
+                    return completion;
+                });
+    }
+
+    private <T> T acquire(Executor executor, Function<CompletableFuture<Permit>, T> registration) {
+        T result;
+        PressureSnapshot transition;
+        Grant grant;
+        synchronized (lock) {
+            Waiter waiter = new Waiter(this, executor, nanoTime.getAsLong(), metricsEpoch);
+            result = registration.apply(waiter.future);
+            if (closed) {
+                waiter.future.cancelFromQueue();
+                return result;
+            }
+            boolean waiting = !waiters.isEmpty() || permitsInUse >= effectiveLimit;
+            waiters.addLast(waiter);
+            if (waiting) capacityWaitCount = saturatingIncrement(capacityWaitCount);
+            else waiter.durationRecorded = true;
+            grant = grantOldestUnderLock();
+            transition = evaluatePressureUnderLock();
+        }
+        notifyPressureTransition(transition);
+        finishGrant(grant);
+        return result;
     }
 
     /**
@@ -323,14 +374,18 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
             receiveFlow.beginClose();
             while (!waiters.isEmpty()) {
                 Waiter waiter = waiters.removeFirst();
-                if (waiter.state == WaiterState.WAITING) {
+                if (waiter.state != WaiterState.CANCELLED) {
                     waiter.state = WaiterState.CANCELLED;
                     recordWaitDurationUnderLock(waiter);
                     cancelled.add(waiter);
                 }
             }
         }
-        cancelled.forEach(waiter -> waiter.future.cancelFromQueue());
+        cancelled.forEach(
+                waiter -> {
+                    waiter.future.cancelFromQueue();
+                    if (waiter.permit != null) waiter.permit.abandonReservation();
+                });
     }
 
     public static ResolvedCapacity resolveCapacity(
@@ -570,9 +625,14 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     }
 
     private Grant grantOldestUnderLock() {
-        while (!waiters.isEmpty()) {
-            Waiter waiter = waiters.removeFirst();
+        while (!closed && permitsInUse < effectiveLimit && !waiters.isEmpty()) {
+            Waiter waiter = waiters.peekFirst();
+            // Keep the grant at the FIFO head until its publication returns. A
+            // handler may return capacity during publication; it must not nest
+            // the next publication inside the current application turn.
+            if (waiter.permit != null) return null;
             if (waiter.state != WaiterState.WAITING) {
+                waiters.removeFirst();
                 continue;
             }
             waiter.state = WaiterState.GRANTED;
@@ -584,13 +644,34 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         return null;
     }
 
-    private static void finishGrant(Grant grant) {
-        if (grant == null) {
-            return;
+    private void finishGrant(Grant grant) {
+        if (grant == null) return;
+        try {
+            grant.waiter.executor.execute(() -> deliverGrant(grant));
+        } catch (java.util.concurrent.RejectedExecutionException stopped) {
+            grant.waiter.future.completeExceptionally(stopped);
+            grant.permit.close();
+            finishPublication(grant);
         }
+    }
+
+    private void deliverGrant(Grant grant) {
         if (!grant.waiter.future.complete(grant.permit)) {
             grant.permit.close();
         }
+        finishPublication(grant);
+    }
+
+    private void finishPublication(Grant published) {
+        Grant next;
+        PressureSnapshot transition;
+        synchronized (lock) {
+            if (waiters.peekFirst() == published.waiter) waiters.removeFirst();
+            next = grantOldestUnderLock();
+            transition = evaluatePressureUnderLock();
+        }
+        notifyPressureTransition(transition);
+        finishGrant(next);
     }
 
     private void cancelWaiter(Waiter waiter) {
@@ -826,11 +907,17 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         private final long startedAtNanos;
         private final long metricsEpoch;
         private final WaitFuture future;
+        private final Executor executor;
         private WaiterState state = WaiterState.WAITING;
         private Permit permit;
         private boolean durationRecorded;
 
-        private Waiter(ZLinkApplicationJobQueue owner, long startedAtNanos, long metricsEpoch) {
+        private Waiter(
+                ZLinkApplicationJobQueue owner,
+                Executor executor,
+                long startedAtNanos,
+                long metricsEpoch) {
+            this.executor = executor;
             this.startedAtNanos = startedAtNanos;
             this.metricsEpoch = metricsEpoch;
             this.future = new WaitFuture(owner, this);
