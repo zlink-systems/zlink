@@ -964,6 +964,51 @@ test('RouteMesh with only its own weight-zero server reports NotFound for send a
   }
 });
 
+test('RouteMesh ready remote weight-zero channel reports Unavailable for send and request without waiting', async () => {
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: {
+      meshName: 'zero-mesh', nodeRoutingId: 'zero-local', lifecycleGeneration: 1n,
+      descriptorRevision: 1n, advertisedEndpoint: 'tcp://127.0.0.1:0',
+      channels: [], state: 'serving', securityIdentity: 'test',
+      applicationVersion: 1n, protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY], objectRole: 'client',
+      placementWeight: 100, activeCapacityLimit: 100, pendingCapacityLimit: 10,
+      activeCapacityUsed: 0, pendingCapacityUsed: 0
+    },
+    bindingPort: new ZLinkNodeRawBindingPort(),
+    applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration())
+  });
+  runtime.start();
+  try {
+    const remoteRid = 'zero-remote';
+    const connectionId = 'zero-connection';
+    assert.equal(runtime.topology.admit({ ...runtime.topology.localDescriptor(),
+      nodeRoutingId: remoteRid, advertisedEndpoint: 'tcp://127.0.0.1:1',
+      objectRole: 'server', channels: [{ name: 'zero-channel', weight: 0 }]
+    }, connectionId), 'admitted');
+    runtime.liveness.admit(remoteRid, connectionId, 0);
+    assert.equal(runtime.liveness.requestProbe(remoteRid, connectionId, 0), true);
+    const [probe] = runtime.liveness.tick(0).probes;
+    assert.equal(runtime.liveness.acknowledge(remoteRid, connectionId, probe.probeId, 0), true);
+    assert.equal(runtime.isPeerRouteReady(remoteRid), true);
+    assert.equal(runtime.topology.hasKnownChannelTarget('zero-channel'), true);
+    assert.equal(runtime.topology.selectChannel('zero-channel'), undefined);
+
+    const payload = { packetName: 'Notice', contentType: 'application/json', payload: Buffer.from('{}') };
+    const results = await Promise.race([
+      Promise.all([
+        runtime.sendToChannel('zero-channel', payload),
+        runtime.requestToChannel('zero-channel', payload, 100).promise
+      ]),
+      new Promise(resolve => setImmediate(() => resolve('waited for an event-loop turn')))
+    ]);
+    // Framework API §no-eligible-select-one-member: raw NotConnected maps to public Unavailable.
+    assert.deepEqual(results, [zlink.SubmitResult.NotConnected,
+      { terminalResult: zlink.RequestResult.NotConnected, failureCode: 0 }]);
+  } finally {
+    runtime.close();
+  }
+});
+
 for (const state of ['preparing', 'stopped', 'error', 'retiring', 'draining']) {
   test(`RouteMesh ${state} channel snapshot reports its selection result without waiting`, async () => {
     const runtime = new RawServiceMeshRuntime({
