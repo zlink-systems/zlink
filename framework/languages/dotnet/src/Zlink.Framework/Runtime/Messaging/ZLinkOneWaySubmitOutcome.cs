@@ -27,7 +27,9 @@ internal static class ZLinkOneWaySubmitOutcome
     // Async throws immediate failures. Ok already owns a local queue slot;
     // only Backpressured needs the binding's retained-payload admission task.
     public static Task EnsureAcceptedAsync(this SendSubmission submission) =>
-        submission.Result == SubmitResult.Backpressured ? submission.Admitted : Task.CompletedTask;
+        ZLinkBindingSubmissionOutcome.RequiresAdmission(submission.Result)
+            ? submission.Admitted
+            : Task.CompletedTask;
 
     public static async ValueTask EnsureAcceptedAsync(
         this ValueTask<ZLinkOneWaySubmitResult> pending,
@@ -84,6 +86,12 @@ internal static class ZLinkOneWaySubmitOutcome
                 );
         }
     }
+}
+
+internal static class ZLinkBindingSubmissionOutcome
+{
+    internal static bool RequiresAdmission(SubmitResult result) =>
+        result == SubmitResult.Backpressured;
 }
 
 internal static class ZLinkMeshCallSupport

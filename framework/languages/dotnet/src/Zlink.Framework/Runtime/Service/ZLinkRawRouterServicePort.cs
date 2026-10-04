@@ -150,12 +150,12 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         var messages = CreateMessages(parts);
         try
         {
-            var reply = await _socket
-                .Request(target)
-                .Messages(messages)
-                .Timeout(timeout)
-                .Async(cancellationToken)
-                .Reply.ConfigureAwait(false);
+            var reply = await ZLinkRequestSubmissionOutcome
+                .SubmitAndAwaitReplyAsync(
+                    _socket.Request(target).Messages(messages).Timeout(timeout),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
             return new ZLinkRawReplyEnvelope(reply);
         }
         finally

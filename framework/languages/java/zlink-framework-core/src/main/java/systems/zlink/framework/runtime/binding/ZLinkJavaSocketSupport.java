@@ -1,11 +1,13 @@
 package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.PublishOperation;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyOperation;
 import systems.zlink.contracts.messaging.RequestOperation;
+import systems.zlink.contracts.messaging.RequestSubmission;
 import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.contracts.messaging.SendSubmitOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
@@ -14,6 +16,7 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -26,6 +29,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 final class ZLinkJavaSocketSupport {
     private ZLinkJavaSocketSupport() {}
@@ -61,9 +65,31 @@ final class ZLinkJavaSocketSupport {
 
     static CompletionStage<Void> submit(SendSubmitOperation operation) {
         var submission = operation.submit();
-        return submission.result() == SubmitResult.BACKPRESSURED
-                ? submission.admitted()
-                : ZLinkOneWayCalls.immediateAdmission();
+        return admission(submission.result(), submission::admitted);
+    }
+
+    static CompletionStage<List<Message>> reply(RequestSubmission submission) {
+        CompletionStage<Void> admitted = admission(submission.result(), submission::admitted);
+        CompletionStage<List<Message>> bindingReply = submission.reply();
+        CompletableFuture<List<Message>> result = new CompletableFuture<>();
+        admitted.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) result.completeExceptionally(failure);
+                });
+        bindingReply.whenComplete(
+                (parts, failure) -> {
+                    if (failure != null) result.completeExceptionally(failure);
+                    else ZLinkCompletionBridge.completeOrDiscard(result, parts, Message::closeAll);
+                });
+        ZLinkCompletionBridge.forwardCancellation(result, admitted, bindingReply);
+        return result;
+    }
+
+    private static CompletionStage<Void> admission(
+            SubmitResult result, Supplier<CompletionStage<Void>> admitted) {
+        if (result == SubmitResult.OK) return ZLinkOneWayCalls.immediateAdmission();
+        if (result == SubmitResult.BACKPRESSURED) return admitted.get();
+        return CompletableFuture.failedFuture(new ZlinkSubmitException(result));
     }
 
     static boolean submitSync(SendOperation operation, List<Message> parts) {
@@ -98,14 +124,15 @@ final class ZLinkJavaSocketSupport {
             submit.message(parts.get(i));
         }
         try {
-            return submit.submit()
-                    .reply()
-                    .handle(
-                            (replyParts, failure) -> {
-                                if (failure != null) {
-                                    RequestResult terminal =
-                                            ZLinkJavaRawMeshNode.requestResult(failure, false);
-                                    throw new CompletionException(
+            CompletionStage<List<Message>> bindingReply = reply(submit.submit());
+            CompletableFuture<ZLinkBackendReceived> result = new CompletableFuture<>();
+            bindingReply.whenComplete(
+                    (replyParts, failure) -> {
+                        if (failure != null) {
+                            RequestResult terminal =
+                                    ZLinkJavaRawMeshNode.requestResult(failure, false);
+                            result.completeExceptionally(
+                                    new CompletionException(
                                             terminal == null
                                                     ? failure
                                                     : new ZLinkFrameworkException(
@@ -113,19 +140,27 @@ final class ZLinkJavaSocketSupport {
                                                                             terminal)
                                                                     .toFrameworkErrorKind(),
                                                             failure.getMessage(),
-                                                            failure));
-                                }
-                                try {
-                                    return new ZLinkBackendReceived(
+                                                            failure)));
+                            return;
+                        }
+                        try {
+                            ZLinkBackendReceived received =
+                                    new ZLinkBackendReceived(
                                             ZLinkBackendRequestResult.OK,
                                             Optional.empty(),
                                             Optional.empty(),
                                             Optional.empty(),
                                             replyParts.stream().map(Message::from).toList());
-                                } finally {
-                                    replyParts.forEach(Message::close);
-                                }
-                            });
+                            ZLinkCompletionBridge.completeOrDiscard(
+                                    result, received, ZLinkBackendReceived::close);
+                        } catch (RuntimeException | Error error) {
+                            result.completeExceptionally(error);
+                        } finally {
+                            replyParts.forEach(Message::close);
+                        }
+                    });
+            ZLinkCompletionBridge.forwardCancellation(result, bindingReply);
+            return result;
         } catch (RuntimeException failure) {
             RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(failure, true);
             return CompletableFuture.failedFuture(

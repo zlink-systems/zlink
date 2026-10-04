@@ -15,7 +15,9 @@
 #include <cassert>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <condition_variable>
+#include <coroutine>
 #include <exception>
 #include <optional>
 #include <iostream>
@@ -24,6 +26,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -72,6 +75,121 @@ constexpr std::size_t raw_route_backpressure_attempt_limit = 256;
 constexpr std::size_t deferred_trace_payload_size = 1024;
 constexpr char deferred_trace_actor_id[] = "deferred-raw-route-actor";
 constexpr char deferred_trace_session_id[] = "deferred-raw-route-session";
+
+class admission_probe_t final : public zlink::detail::async_result_state_t<void>
+{
+  public:
+    explicit admission_probe_t (int error) : _error (error) {}
+
+    bool ready () const noexcept override { return true; }
+    bool suspend (std::coroutine_handle<>, zlink::detail::async_continuation_scheduler_t) override
+    {
+        return false;
+    }
+    void take () override
+    {
+        ++consumed;
+        if (_error != 0)
+            throw zlink::submit_error_t (zlink::submit_result_t::backpressured, _error);
+    }
+    void detach () noexcept override {}
+    void abandon (std::coroutine_handle<>) noexcept override {}
+
+    int consumed = 0;
+
+  private:
+    int _error;
+};
+
+class reply_probe_t final
+    : public zlink::detail::async_result_state_t<std::vector<zlink::message_t>>
+{
+  public:
+    explicit reply_probe_t (int error) : _error (error) {}
+
+    bool ready () const noexcept override { return true; }
+    bool suspend (std::coroutine_handle<>, zlink::detail::async_continuation_scheduler_t) override
+    {
+        return false;
+    }
+    std::vector<zlink::message_t> take () override
+    {
+        ++consumed;
+        if (_error != 0)
+            throw zlink::submit_error_t (zlink::submit_result_t::backpressured, _error);
+        return {};
+    }
+    void detach () noexcept override {}
+    void abandon (std::coroutine_handle<>) noexcept override {}
+
+    int consumed = 0;
+
+  private:
+    int _error;
+};
+
+void verify_request_submission_stages ()
+{
+    for (const auto [admission_error, reply_error, expected_error] :
+         {std::tuple{0, 0, 0}, std::tuple{EAGAIN, 0, EAGAIN}, std::tuple{0, ENOMEM, ENOMEM}}) {
+        auto admission_probe = std::make_shared<admission_probe_t> (admission_error);
+        auto reply_probe = std::make_shared<reply_probe_t> (reply_error);
+        int submissions = 0;
+        auto stages = backend::submit_request_once ([&] {
+            ++submissions;
+            return zlink::request_submission_t{
+              ZLINK_SUBMIT_BACKPRESSURED,
+              zlink::detail::async_result_access_t::make<void> (admission_probe),
+              zlink::detail::async_result_access_t::make<std::vector<zlink::message_t>> (
+                reply_probe)};
+        });
+        assert (submissions == 1);
+        assert (stages.admission);
+        auto source = std::make_shared<
+          zlink::framework::task_completion_source_t<backend::raw_request_completion_t>> ();
+        backend::observe_request_completion (std::move (stages), source);
+        auto completion = source->task ();
+        const auto &observed = completion.result ().value ();
+        if (expected_error == 0) {
+            assert (observed.terminal == zlink::request_result_t::ok);
+            assert (!observed.failure);
+        } else {
+            assert (observed.terminal == zlink::request_result_t::timed_out);
+            assert (observed.failure);
+            assert (observed.failure->internal_errno == expected_error);
+        }
+        assert (admission_probe->consumed == 1);
+        assert (reply_probe->consumed == 1);
+    }
+}
+
+void verify_submission_admission_consumes_only_backpressure ()
+{
+    for (const bool fail : {false, true}) {
+        auto probe = std::make_shared<admission_probe_t> (fail ? EAGAIN : 0);
+        zlink::send_submission_t submission{
+          ZLINK_SUBMIT_BACKPRESSURED, zlink::detail::async_result_access_t::make<void> (probe)};
+        auto admission = backend::take_submission_admission (submission);
+        assert (admission);
+        auto awaiter = std::move (*admission).operator co_await();
+        assert (awaiter.await_ready ());
+        try {
+            awaiter.await_resume ();
+            assert (!fail);
+        }
+        catch (const zlink::submit_error_t &error) {
+            assert (fail);
+            assert (error.result () == zlink::submit_result_t::backpressured);
+        }
+        assert (probe->consumed == 1);
+    }
+
+    auto probe = std::make_shared<admission_probe_t> (0);
+    zlink::send_submission_t admitted{ZLINK_SUBMIT_OK,
+                                      zlink::detail::async_result_access_t::make<void> (probe)};
+    assert (!backend::take_submission_admission (admitted));
+    assert (probe->consumed == 0);
+}
 
 bool wait_for_monitor_event (zlink::socket_monitor_t &monitor,
                              zlink::monitor_event expected,
@@ -171,9 +289,15 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
     assert (blocked_send);
     auto pending =
       port.request (target_rid.to_bytes (), request_parts (), raw_route_fixture_timeout);
+    std::atomic_int terminal_count{0};
+    zlink::framework::detail::observe_task_completion (pending, [&] (const auto &settled) {
+        assert (settled && settled.value ().terminal == zlink::request_result_t::timed_out);
+        terminal_count.fetch_add (1, std::memory_order_release);
+    });
     assert (!pending.await_ready ());
     const auto deadline = std::chrono::steady_clock::now () + raw_route_fixture_timeout;
-    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline)
+    while ((!pending.await_ready () || terminal_count.load (std::memory_order_acquire) == 0)
+           && std::chrono::steady_clock::now () < deadline)
         (void) port.poll (raw_route_fixture_poll_interval);
     assert (pending.await_ready ());
     assert (pending.result ());
@@ -187,6 +311,7 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
     assert (completion.failure->phase == backend::raw_request_failure_phase_t::completion_terminal);
     assert (completion.failure->submit_result == zlink::submit_result_t::backpressured);
     assert (completion.terminal == zlink::request_result_t::timed_out);
+    assert (terminal_count.load (std::memory_order_acquire) == 1);
     port.close ();
     target_port.close ();
     ready.close ();
@@ -327,10 +452,10 @@ void verify_binding_completion_bypasses_handler_executor ()
 
     backend::raw_route_port_t source_port (source), target_port (target);
     auto pending = source_port.request (target_rid.to_bytes (), request_parts (), 2s);
-    std::atomic_bool observed{false};
+    std::atomic_int observed_count{0};
     zlink::framework::detail::observe_task_completion (pending, [&] (const auto &settled) {
         assert (settled && settled.value ().terminal == zlink::request_result_t::ok);
-        observed.store (true, std::memory_order_release);
+        observed_count.fetch_add (1, std::memory_order_release);
     });
     std::optional<backend::raw_received_t> received;
     const auto deadline = std::chrono::steady_clock::now () + 2s;
@@ -338,15 +463,16 @@ void verify_binding_completion_bypasses_handler_executor ()
         received = target_port.receive_if_ready (target_port.poll (10ms));
     assert (received && received->reply_token);
     assert (target_port.reply (*received, request_parts ()));
+    assert (!target_port.receive_if_ready (target_port.poll (0ms)));
     const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
-    while (!observed.load (std::memory_order_acquire)
+    while (observed_count.load (std::memory_order_acquire) == 0
            && std::chrono::steady_clock::now () < completion_deadline) {
         (void) source_port.poll (10ms);
     }
     // The only handler-executor worker is still blocked. The raw binding
     // terminal must therefore reach its observer on the binding completion
     // resource rather than waiting for that executor.
-    assert (observed.load (std::memory_order_acquire));
+    assert (observed_count.load (std::memory_order_acquire) == 1);
 
     {
         std::lock_guard lock (blocker_mutex);
@@ -640,6 +766,8 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
 
 int main ()
 {
+    verify_request_submission_stages ();
+    verify_submission_admission_consumes_only_backpressure ();
     verify_capacity_refusal_phase_controls_public_terminal ();
     verify_writable_request_timeout_remains_deadline_exceeded ();
     verify_deferred_send_trace_owns_its_context ();

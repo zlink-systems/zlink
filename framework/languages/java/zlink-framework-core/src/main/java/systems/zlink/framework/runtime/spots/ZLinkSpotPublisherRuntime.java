@@ -9,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -666,10 +667,7 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
                 source.thenCompose(admission -> ZLinkOneWayCalls.oneWayStatus(admission.status()))
                         .toCompletableFuture();
         if (result.isDone()) return result;
-        result.whenComplete(
-                (ignored, failure) -> {
-                    if (result.isCancelled()) source.toCompletableFuture().cancel(false);
-                });
+        ZLinkCompletionBridge.forwardCancellation(result, source);
         return ZLinkSerialExecutionQueue.manageCurrent(result);
     }
 }

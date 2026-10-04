@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
 
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -112,6 +114,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         if (synchronousFailure != null) {
             completions.post(synchronousFailure);
         } else if (submitted != null) {
+            CompletionStage<T> accepted = submitted;
+            ZLinkCompletionBridge.forwardCancellation(operation.completion(), accepted);
             submitted.whenComplete(
                     (value, failure) -> {
                         if (failure != null) {
