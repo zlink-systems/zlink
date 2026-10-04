@@ -90,7 +90,22 @@ return {1, nowMs, record[1], record[2], record[3], tostring(tonumber(record[4]))
 //           | ['delete', keyIndex, originalKey]
 // ARGV[3..] = raw expected bytes for 'value' conditions, then raw bytes for
 //             'put' mutations, each in request order.
-const CLEANUP_AND_BOUNDARY = `
+const PRUNE_HISTORY_HELPER = `
+local function pruneHistory(rowKey, minimumBoundary)
+    if minimumBoundary then
+        local anchor = redis.call('ZREVRANGEBYSCORE', rowKey, minimumBoundary, '-inf', 'WITHSCORES', 'LIMIT', 0, 1)
+        if #anchor == 2 then
+            redis.call('ZREMRANGEBYSCORE', rowKey, '-inf', '(' .. anchor[2])
+        end
+    else
+        redis.call('ZREMRANGEBYRANK', rowKey, 0, -2)
+    end
+end
+`;
+
+const CLEANUP_AND_BOUNDARY =
+  PRUNE_HISTORY_HELPER +
+  `
 local expiredSnapshots = redis.call('ZRANGEBYSCORE', snapshotExpiryKey, '-inf', nowMs, 'LIMIT', 0, ${REDIS_EXPIRED_SNAPSHOT_BATCH_SIZE})
 for _, snapshotId in ipairs(expiredSnapshots) do
     redis.call('ZREM', snapshotExpiryKey, snapshotId)
@@ -112,10 +127,7 @@ for _, original in ipairs(due) do
         redis.call('HDEL', mapKey, original)
         redis.call('ZREM', cleanupKey, original)
     elseif minimumBoundary then
-        local anchor = redis.call('ZREVRANGEBYSCORE', rowKey, minimumBoundary, '-inf', 'WITHSCORES', 'LIMIT', 0, 1)
-        if #anchor == 2 then
-            redis.call('ZREMRANGEBYSCORE', rowKey, '-inf', '(' .. anchor[2])
-        end
+        pruneHistory(rowKey, minimumBoundary)
         redis.call('ZADD', cleanupKey, nowMs + ${REDIS_CLEANUP_RETRY_DELAY_MS}, original)
     else
         local record = decodeMember(members[1])
@@ -126,7 +138,7 @@ for _, original in ipairs(due) do
             redis.call('HDEL', mapKey, original)
             redis.call('ZREM', cleanupKey, original)
         else
-            redis.call('ZREMRANGEBYRANK', rowKey, 0, -2)
+            pruneHistory(rowKey, minimumBoundary)
             if expiresAtMs > 0 then
                 redis.call('ZADD', cleanupKey, math.max(nowMs + ${REDIS_CLEANUP_RETRY_DELAY_MS}, expiresAtMs + ${REDIS_RECORD_RETENTION_MS}), original)
             else
@@ -171,9 +183,7 @@ end
 
 for _, mutation in ipairs(mutations) do
     local rowKey = KEYS[mutation[2] + 6]
-    if not minimumBoundary then
-        redis.call('ZREMRANGEBYRANK', rowKey, 0, -2)
-    end
+    pruneHistory(rowKey, minimumBoundary)
     if redis.call('ZCARD', rowKey) >= ${REDIS_ROW_COMPACTION_ENTRY_LIMIT} then
         return {'${REDIS_STORE_TOKEN.Backlog}', nowMs}
     end

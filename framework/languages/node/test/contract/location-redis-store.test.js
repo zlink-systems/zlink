@@ -258,6 +258,36 @@ test('redis prefix scan excludes unrelated index records from its page work', as
   }
 });
 
+test('redis history pruning follows the oldest active snapshot before backlog admission', async t => {
+  const fixture = await redisFixture(t);
+  if (!fixture) return;
+  const prefix = testPrefix('history-boundary');
+  const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+  const put = value => store.write({ conditions: [], mutations: [{ kind: 'put', key: key('history/a'), bytes: Buffer.from(value) }] });
+  try {
+    await put('original');
+    await store.write({ conditions: [], mutations: [{ kind: 'put', key: key('history/0'), bytes: Buffer.from('last') }] });
+    const oldest = await store.scan({ prefix: 'history/', limit: 1 });
+    assert.ok(oldest.value.nextCursor);
+    for (let index = 1; index < 128; index++) await put(`version-${index}`);
+    await assert.rejects(() => put('blocked'), /backlog/u);
+    assert.equal(Buffer.from((await store.read(key('history/a'))).value.bytes).toString(), 'version-127');
+    const newer = await store.scan({ prefix: 'history/', limit: 1 });
+    assert.ok(newer.value.nextCursor);
+    assert.equal(newer.value.items[0].key.value, 'history/0');
+    const oldTail = await store.scan({ prefix: 'history/', limit: 10, cursor: oldest.value.nextCursor });
+    assert.equal(Buffer.from(oldTail.value.items[0].value.bytes).toString(), 'original');
+    assert.equal((await put('after-oldest')).kind, 'applied');
+    const newTail = await store.scan({ prefix: 'history/', limit: 10, cursor: newer.value.nextCursor });
+    assert.equal(Buffer.from(newTail.value.items[0].value.bytes).toString(), 'version-127');
+    assert.equal((await put('after-all')).kind, 'applied');
+  } finally {
+    await store.dispose();
+    await cleanup(fixture.client, prefix);
+    await fixture.client.quit();
+  }
+});
+
 test('redis opaque Location Store enforces TTL and fixed scan snapshots', async (t) => {
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;
