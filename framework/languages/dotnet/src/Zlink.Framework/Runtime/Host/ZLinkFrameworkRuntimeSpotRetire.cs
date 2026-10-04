@@ -474,93 +474,92 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        var spotParticipant = stage.SpotParticipant;
         try
         {
-            if (Volatile.Read(ref stage.Published) == 0)
-            {
-                await PrepareInboundSpotAggregateCoreAsync(
-                        stage,
-                        spotParticipant,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                var handoffId = stage.Envelope.AggregateId.ToString("N");
-                foreach (var actorState in stage.ActorStates)
-                {
-                    var actorRef =
-                        actorState.NativeActorRef
-                        ?? throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.NotFound,
-                            $"Actor '{actorState.ActorId}' has no staged target reference."
-                        );
-                    actorState.MarkRelocationSessionAuthorityCommitted(
-                        handoffId,
-                        actorRef,
-                        stage.TargetActorAuthorityOwnerGeneration(actorState.RuntimeActorId),
-                        ZLinkMeshName.FromBoundary(
-                            stage.TargetMeshName,
-                            nameof(stage.TargetMeshName)
-                        ),
-                        stage.TargetNodeLifecycleGeneration,
-                        stage.TargetOwnerLeaseGeneration
-                    );
-                }
-
-                if (Volatile.Read(ref stage.RelocationReadyDelivered) == 0)
-                {
-                    await stage
-                        .Spot.Activation.InvokeTargetRelocationReadyCompletedAsync(
-                            stage.TargetAdmissionSeal,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                    Volatile.Write(ref stage.RelocationReadyDelivered, 1);
-                }
-
-                if (
-                    !stage.Spot.Existing
-                    && Volatile.Read(ref stage.RelocatedInitializationCompleted) == 0
-                    && stage.Spot.Activation is ZLinkUserSpotActivation userSpot
-                )
-                {
-                    await userSpot
-                        .InitializeRelocatedUserSpotAsync(
-                            stage.TargetAdmissionSeal,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                    Volatile.Write(ref stage.RelocatedInitializationCompleted, 1);
-                }
-
-                await PublishCatalogBeforeNormalizationAsync(
-                        stage,
-                        () =>
-                        {
-                            foreach (var actorState in stage.ActorStates)
-                                _actorSessionManager.PublishReservedActor(actorState.ActorId);
-                            stage.Node.Catalog.PublishRelocatedReserved(stage.Spot);
-                        },
-                        normalizeAuthority is null
-                            ? null
-                            : () => normalizeAuthority(cancellationToken)
-                    )
-                    .ConfigureAwait(false);
-                Volatile.Write(ref stage.Published, 1);
-            }
-            else if (normalizeAuthority is not null)
-            {
-                await normalizeAuthority(cancellationToken).ConfigureAwait(false);
-            }
-
-            // Published means queue publication is complete: restore, replay,
-            // catalog, and the ready callback. Admission opens from the
-            // publish path and session route convergence remains asynchronous.
+            await PublishInboundSpotAggregateCoreAsync(stage, normalizeAuthority, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
             stage.PublishGate.Release();
         }
+    }
+
+    // The caller owns the stage publish gate through CAS settlement and publication.
+    internal async ValueTask PublishInboundSpotAggregateCoreAsync(
+        TargetStage stage,
+        Func<CancellationToken, ValueTask>? normalizeAuthority,
+        CancellationToken cancellationToken
+    )
+    {
+        var spotParticipant = stage.SpotParticipant;
+        if (Volatile.Read(ref stage.Published) == 0)
+        {
+            await PrepareInboundSpotAggregateCoreAsync(stage, spotParticipant, cancellationToken)
+                .ConfigureAwait(false);
+            var handoffId = stage.Envelope.AggregateId.ToString("N");
+            foreach (var actorState in stage.ActorStates)
+            {
+                var actorRef =
+                    actorState.NativeActorRef
+                    ?? throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.NotFound,
+                        $"Actor '{actorState.ActorId}' has no staged target reference."
+                    );
+                actorState.MarkRelocationSessionAuthorityCommitted(
+                    handoffId,
+                    actorRef,
+                    stage.TargetActorAuthorityOwnerGeneration(actorState.RuntimeActorId),
+                    ZLinkMeshName.FromBoundary(stage.TargetMeshName, nameof(stage.TargetMeshName)),
+                    stage.TargetNodeLifecycleGeneration,
+                    stage.TargetOwnerLeaseGeneration
+                );
+            }
+
+            if (Volatile.Read(ref stage.RelocationReadyDelivered) == 0)
+            {
+                await stage
+                    .Spot.Activation.InvokeTargetRelocationReadyCompletedAsync(
+                        stage.TargetAdmissionSeal,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                Volatile.Write(ref stage.RelocationReadyDelivered, 1);
+            }
+
+            if (
+                !stage.Spot.Existing
+                && Volatile.Read(ref stage.RelocatedInitializationCompleted) == 0
+                && stage.Spot.Activation is ZLinkUserSpotActivation userSpot
+            )
+            {
+                await userSpot
+                    .InitializeRelocatedUserSpotAsync(stage.TargetAdmissionSeal, cancellationToken)
+                    .ConfigureAwait(false);
+                Volatile.Write(ref stage.RelocatedInitializationCompleted, 1);
+            }
+
+            await PublishCatalogBeforeNormalizationAsync(
+                    stage,
+                    () =>
+                    {
+                        foreach (var actorState in stage.ActorStates)
+                            _actorSessionManager.PublishReservedActor(actorState.ActorId);
+                        stage.Node.Catalog.PublishRelocatedReserved(stage.Spot);
+                    },
+                    normalizeAuthority is null ? null : () => normalizeAuthority(cancellationToken)
+                )
+                .ConfigureAwait(false);
+            Volatile.Write(ref stage.Published, 1);
+        }
+        else if (normalizeAuthority is not null)
+        {
+            await normalizeAuthority(cancellationToken).ConfigureAwait(false);
+        }
+
+        // Published means queue publication is complete: restore, replay,
+        // catalog, and the ready callback. Admission opens from the
+        // publish path and session route convergence remains asynchronous.
     }
 
     internal static async ValueTask OpenTargetAdmissionOnceAsync(
