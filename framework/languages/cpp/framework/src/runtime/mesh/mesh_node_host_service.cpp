@@ -2849,29 +2849,29 @@ bool mesh_node_host_service_t::republish_after_store_recovery ()
 
 void mesh_node_host_service_t::stop () noexcept
 {
-    if (_actor_destroy_gate)
-        _actor_destroy_gate->stop_and_wait ();
-    request_stop ();
-    if (_application_dispatch)
-        _application_dispatch->drain ();
-    trace_mesh_host_stop ("application-drained");
-    _stop.store (true, std::memory_order_release);
-    for (const auto &node : _nodes)
-        node->signal_dispatch_activity ();
-    trace_mesh_host_stop ("pump-join-begin");
-    for (auto &thread : _threads) {
-        if (thread.joinable ())
-            thread.join ();
-    }
-    trace_mesh_host_stop ("pump-join-end");
-    _threads.clear ();
-    for (auto &node : _nodes) {
-        node->bind_descriptor_publisher ({});
-    }
-    const auto owner = current_location_owner ();
-    if (_location_store && owner) {
-        for (const auto &key : _published_mesh_nodes) {
-            try {
+    _runtime_failures->capture ([&] {
+        if (_actor_destroy_gate)
+            _actor_destroy_gate->stop_and_wait ();
+        request_stop ();
+        if (_application_dispatch)
+            _application_dispatch->drain ();
+        trace_mesh_host_stop ("application-drained");
+        _stop.store (true, std::memory_order_release);
+        for (const auto &node : _nodes)
+            node->signal_dispatch_activity ();
+        trace_mesh_host_stop ("pump-join-begin");
+        for (auto &thread : _threads) {
+            if (thread.joinable ())
+                thread.join ();
+        }
+        trace_mesh_host_stop ("pump-join-end");
+        _threads.clear ();
+        for (auto &node : _nodes) {
+            node->bind_descriptor_publisher ({});
+        }
+        const auto owner = current_location_owner ();
+        if (_location_store && owner) {
+            for (const auto &key : _published_mesh_nodes) {
                 const auto removed = infrastructure_result ([&] {
                                          return _location_store->remove_mesh_node (key, *owner);
                                      }).value ();
@@ -2880,22 +2880,20 @@ void mesh_node_host_service_t::stop () noexcept
                     std::cerr << "zlink-cpp-host-stop mesh-descriptor-remove mesh=" << key.mesh_name
                               << " status=" << static_cast<int> (removed) << std::endl;
             }
-            catch (...) {
-            }
         }
-    }
-    _published_mesh_nodes.clear ();
-    _published_mesh_descriptors.clear ();
-    _location_owner.reset ();
-    _location_runtime = nullptr;
-    for (auto &node : _nodes) {
-        trace_mesh_host_stop ("node-stop-begin");
-        node->stop ();
-        if (_listener_statuses)
-            _listener_statuses->remove (listener_kind_t::route_mesh, node->mesh_name ());
-        trace_mesh_host_stop ("node-stop-end");
-    }
-    _actor_destroy_gate.reset ();
+        _published_mesh_nodes.clear ();
+        _published_mesh_descriptors.clear ();
+        _location_owner.reset ();
+        _location_runtime = nullptr;
+        for (auto &node : _nodes) {
+            trace_mesh_host_stop ("node-stop-begin");
+            node->stop ();
+            if (_listener_statuses)
+                _listener_statuses->remove (listener_kind_t::route_mesh, node->mesh_name ());
+            trace_mesh_host_stop ("node-stop-end");
+        }
+        _actor_destroy_gate.reset ();
+    });
 }
 
 std::optional<location_owner_token_t> mesh_node_host_service_t::current_location_owner () const

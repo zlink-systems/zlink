@@ -153,7 +153,17 @@ raw_client_server_server_t::raw_client_server_server_t (raw_client_server_server
 
 raw_client_server_server_t::~raw_client_server_server_t () noexcept
 {
-    close ();
+    if (!_options.runtime_failures->capture ([&] { close (); })) {
+        _options.runtime_failures->retain (
+          [context = std::move (_context), socket_mutex = std::move (_socket_mutex),
+           socket = std::move (_router), poller = std::move (_monitor_poller),
+           monitor = std::move (_monitor), port = std::move (_port)] () mutable {
+              // Keep the native context and the port's borrowed mutex alive.
+              (void) context;
+              (void) socket_mutex;
+              runtime_failure_collector_t::close_resources (port, poller, monitor, socket);
+          });
+    }
 }
 
 void raw_client_server_server_t::start ()
@@ -200,7 +210,7 @@ void raw_client_server_server_t::start ()
           auto monitor_poller = std::make_unique<zlink::poller_t> ();
           monitor_poller->add (*monitor, zlink::poll_event_flag_t::pollin, 1);
           _port = std::make_shared<detail::backend::raw_route_port_t> (
-            *router, &_socket_mutex, zlink::poll_event_flag_t::pollin, _options.transport_poller,
+            *router, _socket_mutex, zlink::poll_event_flag_t::pollin, _options.transport_poller,
             _options.transport_poller_slot);
           _monitor_poller = std::move (monitor_poller);
           _monitor = std::move (monitor);
@@ -210,54 +220,20 @@ void raw_client_server_server_t::start ()
       .get ();
 }
 
-void raw_client_server_server_t::close () noexcept
+void raw_client_server_server_t::close ()
 {
-    std::shared_ptr<detail::backend::raw_route_port_t> port;
-    std::unique_ptr<zlink::router_socket_t> router;
-    std::unique_ptr<zlink::poller_t> monitor_poller;
-    std::unique_ptr<zlink::socket_monitor_t> monitor;
-    application_job_queue_t::receive_flow_registration_t receive_flow_registration;
-    try {
-        _lane
-          .run_checked (
-            [this, &port, &router, &monitor_poller, &monitor, &receive_flow_registration] {
-                if (_closed) {
-                    return;
-                }
-                _closed = true;
-                port = std::move (_port);
-                router = std::move (_router);
-                monitor_poller = std::move (_monitor_poller);
-                monitor = std::move (_monitor);
-                receive_flow_registration = std::move (_receive_flow_registration);
-            })
-          .get ();
-    }
-    catch (...) {
-        return;
-    }
-    receive_flow_registration.close ();
-    _mailbox.close ();
-    if (port) {
-        port->close ();
-    }
-    if (monitor_poller) {
-        try {
-            monitor_poller->close ();
-        }
-        catch (...) {
-        }
-    }
-    if (monitor) {
-        try {
-            monitor->close ();
-        }
-        catch (...) {
-        }
-    }
-    router.reset ();
+    _lane
+      .run_checked ([this] {
+          if (_closed)
+              return true;
+          _receive_flow_registration.close ();
+          _mailbox.close ();
+          runtime_failure_collector_t::close_resources (_port, _monitor_poller, _monitor, _router);
+          _closed = true;
+          return true;
+      })
+      .get ();
 }
-
 std::string raw_client_server_server_t::endpoint () const
 {
     return _lane.run_checked ([this] { return _options.descriptor.advertised_endpoint; }).get ();
@@ -730,7 +706,17 @@ raw_client_server_client_t::raw_client_server_client_t (raw_client_server_client
 
 raw_client_server_client_t::~raw_client_server_client_t () noexcept
 {
-    close ();
+    if (!_options.runtime_failures->capture ([&] { close (); })) {
+        _options.runtime_failures->retain (
+          [context = std::move (_context), socket_mutex = std::move (_socket_mutex),
+           socket = std::move (_dealer), poller = std::move (_monitor_poller),
+           monitor = std::move (_monitor), port = std::move (_port)] () mutable {
+              // Keep the native context and the port's borrowed mutex alive.
+              (void) context;
+              (void) socket_mutex;
+              runtime_failure_collector_t::close_resources (port, poller, monitor, socket);
+          });
+    }
 }
 
 void raw_client_server_client_t::start ()
@@ -771,7 +757,7 @@ task_t<void> raw_client_server_client_t::start_task ()
         auto monitor_poller = std::make_unique<zlink::poller_t> ();
         monitor_poller->add (*monitor, zlink::poll_event_flag_t::pollin, 1);
         _port = std::make_shared<detail::backend::raw_dealer_port_t> (
-          *dealer, &_socket_mutex, _options.transport_poller, _options.transport_poller_slot);
+          *dealer, _socket_mutex, _options.transport_poller, _options.transport_poller_slot);
         _monitor_poller = std::move (monitor_poller);
         _monitor = std::move (monitor);
         _dealer = std::move (dealer);
@@ -780,57 +766,23 @@ task_t<void> raw_client_server_client_t::start_task ()
     });
 }
 
-void raw_client_server_client_t::close () noexcept
+void raw_client_server_client_t::close ()
 {
     close_task ().result ().value ();
 }
 
 task_t<void> raw_client_server_client_t::close_task ()
 {
-    std::shared_ptr<detail::backend::raw_dealer_port_t> port;
-    std::unique_ptr<zlink::dealer_socket_t> dealer;
-    std::unique_ptr<zlink::poller_t> monitor_poller;
-    std::unique_ptr<zlink::socket_monitor_t> monitor;
-    application_job_queue_t::receive_flow_registration_t receive_flow_registration;
-    try {
-        co_await _lane.run_task (
-          [this, &port, &dealer, &monitor_poller, &monitor, &receive_flow_registration] {
-              if (_closed)
-                  return true;
-              _closed = true;
-              _ready = false;
-              port = std::move (_port);
-              dealer = std::move (_dealer);
-              monitor_poller = std::move (_monitor_poller);
-              monitor = std::move (_monitor);
-              receive_flow_registration = std::move (_receive_flow_registration);
-              return true;
-          });
-    }
-    catch (...) {
-        co_return;
-    }
-    receive_flow_registration.close ();
-    if (port) {
-        port->close ();
-    }
-    if (monitor_poller) {
-        try {
-            monitor_poller->close ();
-        }
-        catch (...) {
-        }
-    }
-    if (monitor) {
-        try {
-            monitor->close ();
-        }
-        catch (...) {
-        }
-    }
-    dealer.reset ();
+    co_await _lane.run_task ([this] {
+        if (_closed)
+            return true;
+        _receive_flow_registration.close ();
+        runtime_failure_collector_t::close_resources (_port, _monitor_poller, _monitor, _dealer);
+        _ready = false;
+        _closed = true;
+        return true;
+    });
 }
-
 bool raw_client_server_client_t::ready () const
 {
     return _lane.run_checked ([this] { return _ready; }).get ();

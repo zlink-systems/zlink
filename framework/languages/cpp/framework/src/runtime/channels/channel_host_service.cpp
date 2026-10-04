@@ -164,30 +164,18 @@ class channel_host_service_t::server_loop_t
         drain_monitor_events ();
     }
 
-    void stop () noexcept
+    void stop ()
     {
         if (_handler_executor) {
             _handler_executor->drain ();
         }
         flush_replies ();
-        try {
-            _poller.close ();
-        }
-        catch (...) {
-        }
+        _poller.close ();
         if (_monitor.valid ()) {
-            try {
-                _monitor.close ();
-            }
-            catch (...) {
-            }
+            _monitor.close ();
         }
         if (_router) {
-            try {
-                _router->close ();
-            }
-            catch (...) {
-            }
+            _router->close ();
         }
         clear_replies ();
         if (_router) {
@@ -467,22 +455,14 @@ class channel_host_service_t::subscriber_loop_t
         }
     }
 
-    void stop () noexcept
+    void stop ()
     {
         if (_handler_executor) {
             _handler_executor->drain ();
         }
-        try {
-            _poller.close ();
-        }
-        catch (...) {
-        }
+        _poller.close ();
         if (_subscriber) {
-            try {
-                _subscriber->close ();
-            }
-            catch (...) {
-            }
+            _subscriber->close ();
         }
         if (_subscriber) {
             _subscriber.reset ();
@@ -646,22 +626,24 @@ void channel_host_service_t::request_stop () noexcept
 
 void channel_host_service_t::stop () noexcept
 {
-    request_stop ();
-    for (auto &thread : _threads) {
-        if (thread.joinable ()) {
-            thread.join ();
+    _runtime_failures->capture ([&] {
+        request_stop ();
+        for (auto &thread : _threads) {
+            if (thread.joinable ()) {
+                thread.join ();
+            }
         }
-    }
-    for (auto &loop : _loops) {
-        loop->stop ();
-    }
-    for (auto &loop : _subscriber_loops) {
-        loop->stop ();
-    }
-    _threads.clear ();
-    _loops.clear ();
-    _subscriber_loops.clear ();
-    _services = nullptr;
+        for (auto &loop : _loops) {
+            loop->stop ();
+        }
+        for (auto &loop : _subscriber_loops) {
+            loop->stop ();
+        }
+        _threads.clear ();
+        _loops.clear ();
+        _subscriber_loops.clear ();
+        _services = nullptr;
+    });
 }
 
 } // namespace zlink::framework::runtime

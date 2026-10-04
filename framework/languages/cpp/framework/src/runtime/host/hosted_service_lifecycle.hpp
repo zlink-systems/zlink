@@ -3,6 +3,8 @@
 
 #include <zlink/framework/contracts/configuration/lifecycle.hpp>
 
+#include "runtime/host/runtime_failure_collector.hpp"
+
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -25,6 +27,16 @@ class hosted_service_lifecycle_t
   public:
     virtual ~hosted_service_lifecycle_t () = default;
 
+    void bind_runtime_failures (std::shared_ptr<runtime_failure_collector_t> failures)
+    {
+        _runtime_failures = std::move (failures);
+    }
+
+  protected:
+    std::shared_ptr<runtime_failure_collector_t> _runtime_failures =
+      std::make_shared<runtime_failure_collector_t> ();
+
+  public:
     virtual int shutdown_request_priority () const noexcept { return 0; }
 
     virtual int shutdown_stop_priority () const noexcept { return 0; }

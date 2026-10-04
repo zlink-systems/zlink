@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/host/runtime_failure_collector.hpp"
 #include "runtime/mesh/service_topology_registry.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include <zlink/framework/contracts/dispatch/task.hpp>
@@ -84,11 +85,13 @@ class raw_fanout_publisher_t
       std::string endpoint,
       std::shared_ptr<zlink::context_t> context = {},
       bool no_drop = false,
-      std::optional<std::chrono::milliseconds> send_timeout = std::nullopt);
+      std::optional<std::chrono::milliseconds> send_timeout = std::nullopt,
+      std::shared_ptr<runtime_failure_collector_t> failures =
+        std::make_shared<runtime_failure_collector_t> ());
     ~raw_fanout_publisher_t () noexcept;
 
     void start ();
-    void close () noexcept;
+    void close ();
     std::string endpoint () const;
     std::chrono::steady_clock::time_point next_activity () const;
     /* Publishes one application record as the cross-language channel
@@ -103,6 +106,7 @@ class raw_fanout_publisher_t
   private:
     std::string _configured_endpoint;
     mutable std::mutex _mutex;
+    std::shared_ptr<runtime_failure_collector_t> _runtime_failures;
     std::shared_ptr<zlink::context_t> _context;
     bool _no_drop = false;
     std::optional<std::chrono::milliseconds> _send_timeout;
@@ -116,16 +120,20 @@ class raw_fanout_subscriber_t
 {
   public:
     explicit raw_fanout_subscriber_t (zlink::poller_t *poller = nullptr,
-                                      std::vector<std::string> application_topics = {});
+                                      std::vector<std::string> application_topics = {},
+                                      std::shared_ptr<runtime_failure_collector_t> failures =
+                                        std::make_shared<runtime_failure_collector_t> ());
     raw_fanout_subscriber_t (std::shared_ptr<zlink::context_t> context,
                              zlink::poller_t *poller = nullptr,
-                             std::vector<std::string> application_topics = {});
+                             std::vector<std::string> application_topics = {},
+                             std::shared_ptr<runtime_failure_collector_t> failures =
+                               std::make_shared<runtime_failure_collector_t> ());
     ~raw_fanout_subscriber_t () noexcept;
 
     bool connect_manual (std::vector<std::uint8_t> publisher_routing_id, std::string endpoint);
     void reconcile_automatic (const std::vector<fanout_publisher_intent_t> &publishers);
     bool disconnect (const std::vector<std::uint8_t> &publisher_routing_id);
-    void close () noexcept;
+    void close ();
 
     std::pair<fanout_receive_status_t, std::optional<fanout_received_t>>
     try_receive (std::chrono::steady_clock::time_point now);
@@ -170,10 +178,11 @@ class raw_fanout_subscriber_t
                          std::uint64_t lifecycle_generation,
                          std::string endpoint,
                          bool automatic);
-    void close_connection_locked (connection_t &connection) noexcept;
+    static void close_connection_locked (connection_t &connection, zlink::poller_t *poller);
     void reopen_locked (connection_t &connection);
 
     mutable std::mutex _mutex;
+    std::shared_ptr<runtime_failure_collector_t> _runtime_failures;
     std::shared_ptr<zlink::context_t> _context;
     std::vector<std::string> _application_topics;
     std::unique_ptr<zlink::poller_t> _owned_poller;

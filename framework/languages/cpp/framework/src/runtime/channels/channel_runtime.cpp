@@ -404,7 +404,12 @@ void drain_route_client_executors (channel_runtime_state_t &state) noexcept
 void drain_zlink_builder_state_runtime (zlink_builder_state_t &state) noexcept
 {
     if (state.runtime) {
-        drain_route_client_executors (*state.runtime);
+        auto failures = runtime_failures_for (state.runtime->monitoring);
+        if (!failures->capture ([&] {
+                drain_route_client_executors (*state.runtime);
+                close_native_channel_transports (state.runtime);
+            }))
+            return;
     }
     state.stream_runtime.reset ();
     state.route_channels.clear ();
@@ -597,14 +602,14 @@ result_t<void> channel_runtime_t::cancel_outbound_request (std::uint64_t request
       .get ();
 }
 
-void channel_runtime_t::close () noexcept
+void channel_runtime_t::close ()
 {
-    _state->lane.run_checked ([&] { _state->closed = true; }).get ();
     close_native_channel_transports (_state);
+    _state->lane.run_checked ([&] { _state->closed = true; }).get ();
     drain ();
 }
 
-void channel_runtime_t::shutdown () noexcept
+void channel_runtime_t::shutdown ()
 {
     std::vector<std::shared_ptr<route_channel_runtime_t>> route_channels;
     _state->lane
@@ -673,7 +678,7 @@ void channel_runtime_t::initialize_manual_channel_publishers ()
     detail::initialize_manual_channel_publishers (_state);
 }
 
-void channel_runtime_t::close_manual_channel_publishers () noexcept
+void channel_runtime_t::close_manual_channel_publishers ()
 {
     detail::close_manual_channel_publishers (_state);
 }

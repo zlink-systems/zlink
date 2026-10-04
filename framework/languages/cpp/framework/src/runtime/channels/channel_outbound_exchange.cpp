@@ -421,17 +421,18 @@ class channel_native_client_t
         }
     }
 
-    void close () noexcept
+    void close ()
     {
         const std::lock_guard lock (_mutex);
-        const bool was_closed = _closed.exchange (true, std::memory_order_acq_rel);
+        const bool was_closed = _closed.load (std::memory_order_acquire);
         if (was_closed) {
             return;
         }
         if (_transport) {
-            _transport->close_noexcept ();
+            _transport->close ();
             _transport.reset ();
         }
+        _closed.store (true, std::memory_order_release);
     }
 
   private:
@@ -457,7 +458,7 @@ class channel_native_client_t
               2);
         }
 
-        ~transport_t () { close_noexcept (); }
+        ~transport_t () { close (); }
 
         // The one poller of this DEALER: waiting on it drains the binding
         // completions; monitor events are diagnostics only (server 05 §5).
@@ -493,7 +494,7 @@ class channel_native_client_t
             });
         }
 
-        void close_noexcept () noexcept
+        void close ()
         {
             monitor_stop.store (true, std::memory_order_release);
             if (monitor_thread.joinable ()) {
@@ -501,21 +502,9 @@ class channel_native_client_t
             }
             const std::lock_guard lock (mutex);
             if (socket) {
-                try {
-                    monitor_poller.close ();
-                }
-                catch (...) {
-                }
-                try {
-                    monitor.close ();
-                }
-                catch (...) {
-                }
-                try {
-                    socket->close ();
-                }
-                catch (...) {
-                }
+                monitor_poller.close ();
+                monitor.close ();
+                socket->close ();
                 socket.reset ();
             }
         }
@@ -644,21 +633,14 @@ class channel_native_publisher_t
         co_return;
     }
 
-    void close () noexcept
+    void close ()
     {
         const std::lock_guard lock (_mutex);
-        if (_closed.exchange (true, std::memory_order_acq_rel))
+        if (_closed.load (std::memory_order_acquire))
             return;
-        try {
-            _poller.close ();
-        }
-        catch (...) {
-        }
-        try {
-            _socket.close ();
-        }
-        catch (...) {
-        }
+        _poller.close ();
+        _socket.close ();
+        _closed.store (true, std::memory_order_release);
     }
 
   private:
@@ -769,8 +751,7 @@ void initialize_manual_channel_publishers (const std::shared_ptr<channel_runtime
     }
 }
 
-void close_manual_channel_publishers (
-  const std::shared_ptr<channel_runtime_state_t> &state) noexcept
+void close_manual_channel_publishers (const std::shared_ptr<channel_runtime_state_t> &state)
 {
     if (!state)
         return;
@@ -779,17 +760,16 @@ void close_manual_channel_publishers (
       .run ([&] {
           for (auto &[_, publisher] : state->native_publishers) {
               if (publisher)
-                  publishers.push_back (std::move (publisher));
+                  publishers.push_back (publisher);
           }
-          state->native_publishers.clear ();
       })
       .get ();
     for (auto &publisher : publishers)
         publisher->close ();
+    state->lane.run ([&] { state->native_publishers.clear (); }).get ();
 }
 
-void close_native_channel_transports (
-  const std::shared_ptr<channel_runtime_state_t> &state) noexcept
+void close_native_channel_transports (const std::shared_ptr<channel_runtime_state_t> &state)
 {
     std::vector<std::shared_ptr<channel_native_client_t>> clients;
     std::vector<std::shared_ptr<channel_native_publisher_t>> publishers;
@@ -806,8 +786,6 @@ void close_native_channel_transports (
                   publishers.push_back (publisher);
               }
           }
-          state->native_clients.clear ();
-          state->native_publishers.clear ();
       })
       .get ();
     for (auto &client : clients) {
@@ -816,6 +794,12 @@ void close_native_channel_transports (
     for (auto &publisher : publishers) {
         publisher->close ();
     }
+    state->lane
+      .run ([&] {
+          state->native_clients.clear ();
+          state->native_publishers.clear ();
+      })
+      .get ();
 }
 
 channel_outbound_exchange_t::channel_outbound_exchange_t (

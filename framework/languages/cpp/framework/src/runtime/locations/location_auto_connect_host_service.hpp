@@ -229,24 +229,26 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
     void stop () noexcept override
     {
-        _stop.store (true, std::memory_order_release);
-        if (_client_server) {
-            _client_server->stop ();
-            _client_server_started = false;
-            _client_server.reset ();
-        }
-        if (_fanout) {
-            _fanout->stop ();
-            _fanout.reset ();
-        }
-        for (auto &loop : _loops) {
-            if (loop.thread.joinable ())
-                loop.thread.join ();
-            for (const auto &[_, target] : loop.active)
-                stop_target (loop, target);
-        }
-        _loops.clear ();
-        detail::channel_runtime_t::from (_bus).close_manual_channel_publishers ();
+        _runtime_failures->capture ([&] {
+            _stop.store (true, std::memory_order_release);
+            if (_client_server) {
+                _client_server->stop ();
+                _client_server_started = false;
+                _client_server.reset ();
+            }
+            if (_fanout) {
+                _fanout->stop ();
+                _fanout.reset ();
+            }
+            for (auto &loop : _loops) {
+                if (loop.thread.joinable ())
+                    loop.thread.join ();
+                for (const auto &[_, target] : loop.active)
+                    stop_target (loop, target);
+            }
+            _loops.clear ();
+            detail::channel_runtime_t::from (_bus).close_manual_channel_publishers ();
+        });
     }
 
   private:

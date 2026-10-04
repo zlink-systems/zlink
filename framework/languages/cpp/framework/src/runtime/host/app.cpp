@@ -300,6 +300,13 @@ class app_state_t
         listener_statuses (std::make_shared<runtime::listener_status_registry_t> ())
     {
         status_access->state = this;
+        monitoring->runtime_failures->bind_shutdown ([access = std::weak_ptr (status_access)] {
+            if (auto owner = access.lock ()) {
+                std::shared_lock lock (owner->mutex);
+                if (owner->state)
+                    owner->state->stop_requested.store (true, std::memory_order_release);
+            }
+        });
     }
     ~app_state_t ()
     {
@@ -325,6 +332,8 @@ class app_state_t
                                 std::vector<hosted_service_t *> &started)
     {
         for (const auto &service : hosted_services) {
+            if (auto *lifecycle = lifecycle_of (service.get ()))
+                lifecycle->bind_runtime_failures (monitoring->runtime_failures);
             service->start (provider).result ().value ();
             started.push_back (service.get ());
         }
@@ -332,6 +341,7 @@ class app_state_t
 
     void stop_hosted_services (const std::vector<hosted_service_t *> &started) noexcept
     {
+        monitoring->runtime_failures->close_retained ();
         const char *trace_value = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
         const bool trace_enabled = trace_value != nullptr && std::string_view (trace_value) != "0"
                                    && std::string_view (trace_value) != "";
@@ -477,7 +487,6 @@ class app_state_t
     std::vector<std::shared_ptr<mesh_node_runtime_t>> route_mesh_nodes;
     std::function<bool ()> has_manual_service_topology;
     std::atomic_bool stop_requested = false;
-    int exit_code = 0;
     // Shared, runtime-mutable message-flow mode (set_message_flow_mode). Created
     // once here (never reassigned) so concurrent set/apply only touch the atomic,
     // not the shared_ptr. Installed into dispatch options at apply.
@@ -2990,7 +2999,8 @@ try {
     }
     _state->termination_teardown_changed.notify_all ();
     _state->runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
-    return _state->stop_requested.load (std::memory_order_acquire) ? 0 : _state->exit_code;
+    _state->monitoring->runtime_failures->rethrow_if_failed ();
+    return 0;
 }
 catch (const std::exception &error) {
     _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);

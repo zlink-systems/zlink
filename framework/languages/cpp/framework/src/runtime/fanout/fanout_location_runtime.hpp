@@ -50,7 +50,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     fanout_location_runtime_t &operator= (const fanout_location_runtime_t &) = delete;
 
     void start ();
-    void stop () noexcept;
+    void stop ();
     bool republish_after_store_recovery ();
     bool empty () const noexcept;
 
@@ -84,8 +84,8 @@ class fanout_location_runtime_t final : public fanout_runtime_t
                                      const fanout_channel_snapshot_t &right) noexcept;
     void pump ();
     void wait_for_activity (std::chrono::milliseconds timeout) noexcept;
-    void stop_publishers () noexcept;
-    void stop_subscribers () noexcept;
+    void stop_publishers ();
+    void stop_subscribers ();
     task_t<void> publish (const std::string &channel_name,
                           std::string topic,
                           std::string packet_name,

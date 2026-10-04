@@ -1214,6 +1214,27 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
   add_executable(test_cpp_framework_mesh_shutdown_seal
     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_shutdown_seal.cpp)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(test_cpp_framework_close_failure
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_close_failure.cpp)
+    target_compile_features(test_cpp_framework_close_failure PRIVATE cxx_std_20)
+    target_compile_options(test_cpp_framework_close_failure PRIVATE -UNDEBUG)
+    target_include_directories(test_cpp_framework_close_failure PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_link_libraries(test_cpp_framework_close_failure PRIVATE zlink_framework zlink::cpp Threads::Threads)
+    target_link_options(test_cpp_framework_close_failure PRIVATE
+      -Wl,--wrap=zlink_poller_destroy -Wl,--wrap=zlink_close -Wl,--wrap=zlink_poller_wait -Wl,--wrap=zlink_socket)
+    foreach(owner route dealer timer mesh fanout-poller fanout-publisher fanout-subscriber channel-publisher channel-poller host-stop host-timer timer-destructor stream-worker stream-worker-no-monitoring destructor-publisher destructor-mesh)
+      zlink_framework_cpp_add_test(
+        NAME test_cpp_framework_close_failure_${owner}
+        COMMAND test_cpp_framework_close_failure ${owner}
+        LABELS "framework-unit;raw-binding"
+        TIER unit
+        TIMEOUT 30)
+    endforeach()
+  endif()
   target_compile_features(test_cpp_framework_mesh_shutdown_seal PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_mesh_shutdown_seal PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src

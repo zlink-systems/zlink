@@ -352,7 +352,24 @@ client_server_location_runtime_t::client_server_location_runtime_t (
 
 client_server_location_runtime_t::~client_server_location_runtime_t () noexcept
 {
-    stop ();
+    auto failures = _channel_runtime.runtime_failures ();
+    if (!failures->capture ([&] { stop (); })) {
+        for (const auto &[name, _] : _clients)
+            _channel_runtime.unbind_client_server_transport (name);
+        failures->retain ([poller = std::move (_transport_poller), servers = std::move (_servers),
+                           clients = std::move (_clients),
+                           supply = std::move (_application_supply)] () mutable {
+            runtime_failure_collector_t::close_resources (supply);
+            for (auto &[_, channel] : clients)
+                for (auto &[__, connection] : channel->connections)
+                    connection.owner->close ();
+            for (auto &[_, server] : servers)
+                server->owner->close ();
+            clients.clear ();
+            servers.clear ();
+            runtime_failure_collector_t::close_resources (poller);
+        });
+    }
 }
 
 bool client_server_location_runtime_t::empty () const noexcept
@@ -634,6 +651,7 @@ void client_server_location_runtime_t::start_server (
     options.transport_poller = _transport_poller.get ();
     options.transport_poller_slot = next_transport_poller_slot ();
     options.application_jobs = _application_jobs;
+    options.runtime_failures = _channel_runtime.runtime_failures ();
     auto raw = std::make_shared<raw_client_server_server_t> (std::move (options),
                                                              _channel_runtime.core_context ());
     raw->start ();
@@ -1007,6 +1025,7 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_ch
         options.transport_poller = _transport_poller.get ();
         options.transport_poller_slot = next_transport_poller_slot ();
         options.application_jobs = _application_jobs;
+        options.runtime_failures = _channel_runtime.runtime_failures ();
         options.send_timeout = channel.snapshot.client.send_timeout;
         auto raw = std::make_shared<raw_client_server_client_t> (std::move (options),
                                                                  _channel_runtime.core_context ());
@@ -1215,7 +1234,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
             std::optional<framework_exception_t> pending_failure_reply;
             try {
                 /* ClientServer application records ride the channel
-                 * envelope: [JSON header, payload]. flow-correlation §4: at
+                 * envelope: [JSON header, payload]. flow-correlation 짠4: at
                  * Off the wire flow pair is neither validated nor
                  * materialized at this ingress. */
                 auto envelope_header = runtime::messaging::envelope_codec_t{}.decode_header (
@@ -1588,7 +1607,7 @@ task_t<void> client_server_location_runtime_t::complete_ready_waiters ()
         entry.first->complete (std::move (entry.second));
 }
 
-void client_server_location_runtime_t::stop () noexcept
+void client_server_location_runtime_t::stop ()
 {
     const bool was_stopped = _stop.exchange (true, std::memory_order_acq_rel);
     {
@@ -1625,18 +1644,14 @@ void client_server_location_runtime_t::stop () noexcept
     for (const auto &channel_name : client_channels)
         _channel_runtime.unbind_client_server_transport (channel_name);
     if (_transport_poller) {
-        try {
-            _transport_poller->close ();
-        }
-        catch (...) {
-        }
+        _transport_poller->close ();
     }
     _lane.run_checked ([this] { _transport_poller.reset (); }).get ();
     if (!was_stopped || has_servers || has_clients)
         publish_snapshot_changes ().result ().value ();
 }
 
-void client_server_location_runtime_t::stop_clients () noexcept
+void client_server_location_runtime_t::stop_clients ()
 {
     std::vector<std::shared_ptr<raw_client_server_client_t>> clients;
     _lane
@@ -1644,23 +1659,26 @@ void client_server_location_runtime_t::stop_clients () noexcept
           for (auto &[_, channel] : _clients) {
               for (auto &[__, connection] : channel->connections)
                   clients.push_back (connection.owner);
-              channel->connections.clear ();
           }
-          _clients.clear ();
-          _client_pump_snapshot.clear ();
       })
       .get ();
     for (auto &client : clients)
         client->close ();
+    _lane
+      .run_checked ([this] {
+          _clients.clear ();
+          _client_pump_snapshot.clear ();
+      })
+      .get ();
 }
 
-void client_server_location_runtime_t::stop_servers () noexcept
+void client_server_location_runtime_t::stop_servers ()
 {
-    std::map<std::string, std::unique_ptr<server_entry_t>> servers;
+    std::map<std::string, server_entry_t *> servers;
     _lane
       .run_checked ([this, &servers] {
-          servers.swap (_servers);
-          _server_pump_snapshot.clear ();
+          for (auto &[name, server] : _servers)
+              servers.emplace (name, server.get ());
       })
       .get ();
     for (auto &[channel_name, server] : servers) {
@@ -1701,6 +1719,12 @@ void client_server_location_runtime_t::stop_servers () noexcept
         if (_listener_statuses)
             _listener_statuses->remove (listener_kind_t::client_server, channel_name);
     }
+    _lane
+      .run_checked ([this] {
+          _servers.clear ();
+          _server_pump_snapshot.clear ();
+      })
+      .get ();
 }
 
 std::uint64_t client_server_location_runtime_t::make_lifecycle_generation ()

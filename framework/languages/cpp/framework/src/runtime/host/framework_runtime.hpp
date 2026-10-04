@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/host/runtime_failure_collector.hpp"
 
 #include <memory>
 
@@ -19,7 +20,8 @@ namespace zlink::framework::runtime
 class framework_runtime_t
 {
   public:
-    framework_runtime_t ();
+    explicit framework_runtime_t (std::shared_ptr<runtime_failure_collector_t> failures =
+                                    std::make_shared<runtime_failure_collector_t> ());
     ~framework_runtime_t ();
 
     framework_runtime_t (const framework_runtime_t &) = delete;
@@ -33,6 +35,11 @@ class framework_runtime_t
     offload_executor_t &offload_executor () noexcept;
 
   private:
+    static void close_resources (std::unique_ptr<zlink::context_t> &context,
+                                 std::unique_ptr<zlink::router_socket_t> &router,
+                                 std::unique_ptr<zlink::dealer_socket_t> &dealer,
+                                 std::unique_ptr<zlink::stream_socket_t> &stream);
+    std::shared_ptr<runtime_failure_collector_t> _runtime_failures;
     std::unique_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
     std::unique_ptr<zlink::dealer_socket_t> _dealer;

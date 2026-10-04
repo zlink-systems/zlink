@@ -4,6 +4,8 @@
 #include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Eventing/timers.hpp>
 
+#include "runtime/host/runtime_failure_collector.hpp"
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -26,7 +28,12 @@ class core_timer_drain_loop_t
     static constexpr std::chrono::milliseconds poll_interval{50};
 
   public:
-    core_timer_drain_loop_t () = default;
+    explicit core_timer_drain_loop_t (
+      std::shared_ptr<runtime::runtime_failure_collector_t> failures =
+        std::make_shared<runtime::runtime_failure_collector_t> ()) :
+        _failures (std::move (failures))
+    {
+    }
 
     ~core_timer_drain_loop_t () noexcept
     {
@@ -34,8 +41,12 @@ class core_timer_drain_loop_t
             close ();
         }
         catch (...) {
-            // Explicit owners call close() and receive its failure. A
-            // destructor cannot report a failure and must not throw.
+            _failures->report (std::current_exception ());
+            auto native = _native;
+            _failures->retain ([native] {
+                native->poller.close ();
+                native->timer.close ();
+            });
         }
     }
 
@@ -51,47 +62,28 @@ class core_timer_drain_loop_t
         if (_worker.joinable ())
             return;
         _drain = std::move (drain);
-        _poller.add (_timer, 1);
-        _timer.start (interval, repeat_count);
+        _native->poller.add (_native->timer, 1);
+        _native->timer.start (interval, repeat_count);
         _stop.store (false, std::memory_order_release);
         _worker = std::thread ([this] { run (); });
     }
 
-    bool valid () const noexcept { return _timer.valid (); }
+    bool valid () const noexcept { return _native->timer.valid (); }
 
-    void stop () { _timer.stop (); }
+    void stop () { _native->timer.stop (); }
 
     void close ()
     {
-        std::thread worker;
-        {
-            std::lock_guard lock (_lifecycle_mutex);
-            if (_closed)
-                return;
-            _closed = true;
-            _stop.store (true, std::memory_order_release);
-            if (_worker.joinable ())
-                worker = std::move (_worker);
-        }
-        if (worker.joinable ())
-            worker.join ();
-        std::exception_ptr failure;
-        try {
-            _poller.close ();
-        }
-        catch (...) {
-            failure = std::current_exception ();
-        }
-        try {
-            _timer.close ();
-        }
-        catch (...) {
-            if (!failure)
-                failure = std::current_exception ();
-        }
+        std::lock_guard lock (_lifecycle_mutex);
+        if (_closed)
+            return;
+        _stop.store (true, std::memory_order_release);
+        if (_worker.joinable ())
+            _worker.join ();
+        _native->poller.close ();
+        _native->timer.close ();
         _drain = {};
-        if (failure)
-            std::rethrow_exception (failure);
+        _closed = true;
     }
 
   private:
@@ -100,20 +92,26 @@ class core_timer_drain_loop_t
         std::array<zlink::poll_event_t, 1> events{};
         while (!_stop.load (std::memory_order_acquire)) {
             try {
-                if (_poller.wait (events.data (), events.size (), poll_interval) == 0)
+                if (_native->poller.wait (events.data (), events.size (), poll_interval) == 0)
                     continue;
-                const auto fire_count = _timer.recv ();
+                const auto fire_count = _native->timer.recv ();
                 if (fire_count && _drain)
                     _drain (*fire_count);
             }
             catch (...) {
+                _failures->report (std::current_exception ());
                 break;
             }
         }
     }
 
-    zlink::timer_t _timer;
-    zlink::poller_t _poller;
+    struct native_resources_t
+    {
+        zlink::timer_t timer;
+        zlink::poller_t poller;
+    };
+    std::shared_ptr<native_resources_t> _native = std::make_shared<native_resources_t> ();
+    std::shared_ptr<runtime::runtime_failure_collector_t> _failures;
     std::function<void (std::uint64_t)> _drain;
     std::atomic_bool _stop{false};
     std::thread _worker;

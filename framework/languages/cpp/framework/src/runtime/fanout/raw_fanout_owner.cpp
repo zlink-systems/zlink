@@ -37,8 +37,10 @@ raw_fanout_publisher_t::raw_fanout_publisher_t (
   std::string endpoint,
   std::shared_ptr<zlink::context_t> context,
   bool no_drop,
-  std::optional<std::chrono::milliseconds> send_timeout) :
+  std::optional<std::chrono::milliseconds> send_timeout,
+  std::shared_ptr<runtime_failure_collector_t> failures) :
     _configured_endpoint (std::move (endpoint)),
+    _runtime_failures (std::move (failures)),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
     _no_drop (no_drop),
     _send_timeout (send_timeout)
@@ -50,7 +52,12 @@ raw_fanout_publisher_t::raw_fanout_publisher_t (
 
 raw_fanout_publisher_t::~raw_fanout_publisher_t () noexcept
 {
-    close ();
+    if (!_runtime_failures->capture ([&] { close (); }))
+        _runtime_failures->retain (
+          [context = std::move (_context), socket = std::move (_socket)] () mutable {
+              (void) context;
+              runtime_failure_collector_t::close_resources (socket);
+          });
 }
 
 void raw_fanout_publisher_t::start ()
@@ -72,23 +79,12 @@ void raw_fanout_publisher_t::start ()
     _socket = std::move (socket);
 }
 
-void raw_fanout_publisher_t::close () noexcept
+void raw_fanout_publisher_t::close ()
 {
-    std::unique_ptr<zlink::pub_socket_t> socket;
-    {
-        std::lock_guard lock (_mutex);
-        _closed = true;
-        socket = std::move (_socket);
-    }
-    if (socket) {
-        try {
-            socket->close ();
-        }
-        catch (...) {
-        }
-    }
+    std::lock_guard lock (_mutex);
+    runtime_failure_collector_t::close_resources (_socket);
+    _closed = true;
 }
-
 std::string raw_fanout_publisher_t::endpoint () const
 {
     std::lock_guard lock (_mutex);
@@ -168,16 +164,23 @@ const std::vector<std::uint8_t> &raw_fanout_publisher_t::beacon_payload ()
     return value;
 }
 
-raw_fanout_subscriber_t::raw_fanout_subscriber_t (zlink::poller_t *poller,
-                                                  std::vector<std::string> application_topics) :
-    raw_fanout_subscriber_t (
-      std::make_shared<zlink::context_t> (), poller, std::move (application_topics))
+raw_fanout_subscriber_t::raw_fanout_subscriber_t (
+  zlink::poller_t *poller,
+  std::vector<std::string> application_topics,
+  std::shared_ptr<runtime_failure_collector_t> failures) :
+    raw_fanout_subscriber_t (std::make_shared<zlink::context_t> (),
+                             poller,
+                             std::move (application_topics),
+                             std::move (failures))
 {
 }
 
-raw_fanout_subscriber_t::raw_fanout_subscriber_t (std::shared_ptr<zlink::context_t> context,
-                                                  zlink::poller_t *poller,
-                                                  std::vector<std::string> application_topics) :
+raw_fanout_subscriber_t::raw_fanout_subscriber_t (
+  std::shared_ptr<zlink::context_t> context,
+  zlink::poller_t *poller,
+  std::vector<std::string> application_topics,
+  std::shared_ptr<runtime_failure_collector_t> failures) :
+    _runtime_failures (std::move (failures)),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
     _application_topics (std::move (application_topics)),
     _owned_poller (poller == nullptr ? std::make_unique<zlink::poller_t> () : nullptr),
@@ -187,7 +190,16 @@ raw_fanout_subscriber_t::raw_fanout_subscriber_t (std::shared_ptr<zlink::context
 
 raw_fanout_subscriber_t::~raw_fanout_subscriber_t () noexcept
 {
-    close ();
+    if (!_runtime_failures->capture ([&] { close (); }))
+        _runtime_failures->retain (
+          [context = std::move (_context), owned_poller = std::move (_owned_poller),
+           connections = std::move (_connections), poller = _poller] () mutable {
+              (void) context;
+              for (auto &[_, connection] : connections)
+                  close_connection_locked (connection, poller);
+              runtime_failure_collector_t::close_resources (owned_poller);
+              connections.clear ();
+          });
 }
 
 bool raw_fanout_subscriber_t::connect_manual (std::vector<std::uint8_t> publisher_routing_id,
@@ -224,7 +236,7 @@ void raw_fanout_subscriber_t::reconcile_automatic (
     }
     for (auto entry = _connections.begin (); entry != _connections.end ();) {
         if (entry->second.automatic && !desired.contains (entry->first)) {
-            close_connection_locked (entry->second);
+            close_connection_locked (entry->second, _poller);
             entry = _connections.erase (entry);
         } else {
             ++entry;
@@ -242,34 +254,25 @@ bool raw_fanout_subscriber_t::disconnect (const std::vector<std::uint8_t> &publi
     if (found == _connections.end ()) {
         return false;
     }
-    close_connection_locked (found->second);
+    close_connection_locked (found->second, _poller);
     _connections.erase (found);
     return true;
 }
 
-void raw_fanout_subscriber_t::close () noexcept
+void raw_fanout_subscriber_t::close ()
 {
-    {
-        std::lock_guard lock (_mutex);
-        if (_closed) {
-            return;
-        }
-        _closed = true;
-        for (auto &[id, connection] : _connections) {
-            static_cast<void> (id);
-            close_connection_locked (connection);
-        }
-        _connections.clear ();
-        if (_owned_poller) {
-            try {
-                _owned_poller->close ();
-            }
-            catch (...) {
-            }
-        }
+    std::lock_guard lock (_mutex);
+    if (_closed)
+        return;
+    for (auto &[id, connection] : _connections) {
+        static_cast<void> (id);
+        close_connection_locked (connection, _poller);
     }
+    if (_owned_poller)
+        _owned_poller->close ();
+    _connections.clear ();
+    _closed = true;
 }
-
 std::pair<fanout_receive_status_t, std::optional<fanout_received_t>>
 raw_fanout_subscriber_t::try_receive (std::chrono::steady_clock::time_point now)
 {
@@ -455,34 +458,27 @@ bool raw_fanout_subscriber_t::connect_locked (std::vector<std::uint8_t> publishe
         inserted->second.reconnecting = false;
     }
     catch (...) {
-        close_connection_locked (inserted->second);
+        close_connection_locked (inserted->second, _poller);
         _connections.erase (inserted);
         return false;
     }
     return true;
 }
 
-void raw_fanout_subscriber_t::close_connection_locked (connection_t &connection) noexcept
+void raw_fanout_subscriber_t::close_connection_locked (connection_t &connection,
+                                                       zlink::poller_t *poller)
 {
-    if (!connection.socket) {
+    if (!connection.socket)
         return;
+    if (connection.poller_slot != 0) {
+        poller->remove (*connection.socket);
+        connection.poller_slot = 0;
     }
-    try {
-        _poller->remove (*connection.socket);
-    }
-    catch (...) {
-    }
-    try {
-        connection.socket->close ();
-    }
-    catch (...) {
-    }
-    connection.socket.reset ();
+    runtime_failure_collector_t::close_resources (connection.socket);
 }
-
 void raw_fanout_subscriber_t::reopen_locked (connection_t &connection)
 {
-    close_connection_locked (connection);
+    close_connection_locked (connection, _poller);
     auto socket = std::make_unique<zlink::sub_socket_t> (*_context);
     socket->options ().linger (std::chrono::milliseconds (0));
     apply_fanout_subscriptions (*socket, _application_topics);

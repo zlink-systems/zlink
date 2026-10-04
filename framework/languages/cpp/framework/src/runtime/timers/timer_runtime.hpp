@@ -31,6 +31,11 @@ class timer_resource_t
 class core_timer_resource_t final : public timer_resource_t
 {
   public:
+    explicit core_timer_resource_t (
+      std::shared_ptr<runtime::runtime_failure_collector_t> failures) :
+        _loop (std::move (failures))
+    {
+    }
     result_t<void> cancel () noexcept override;
 
     core_timer_drain_loop_t &loop () noexcept { return _loop; }

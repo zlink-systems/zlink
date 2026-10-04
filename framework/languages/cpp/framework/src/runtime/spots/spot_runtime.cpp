@@ -408,10 +408,11 @@ class remote_actor_commit_deadline_t final
     static std::shared_ptr<remote_actor_commit_deadline_t>
     start (std::chrono::steady_clock::time_point deadline,
            std::shared_ptr<runtime::offload_executor_t> executor,
+           std::shared_ptr<runtime::runtime_failure_collector_t> failures,
            std::function<void ()> expired)
     {
         auto owner = std::shared_ptr<remote_actor_commit_deadline_t> (
-          new remote_actor_commit_deadline_t (std::move (expired)));
+          new remote_actor_commit_deadline_t (std::move (failures), std::move (expired)));
         std::weak_ptr<remote_actor_commit_deadline_t> weak_owner = owner;
         std::weak_ptr<runtime::offload_executor_t> weak_executor = executor;
         const auto now = std::chrono::steady_clock::now ();
@@ -429,15 +430,7 @@ class remote_actor_commit_deadline_t final
         return owner;
     }
 
-    ~remote_actor_commit_deadline_t () noexcept
-    {
-        cancel ();
-        try {
-            _timer.close ();
-        }
-        catch (...) {
-        }
-    }
+    ~remote_actor_commit_deadline_t () noexcept { cancel (); }
 
     void cancel () noexcept
     {
@@ -456,12 +449,15 @@ class remote_actor_commit_deadline_t final
             _timer.stop ();
         }
         catch (...) {
+            _failures->report (std::current_exception ());
         }
     }
 
   private:
-    explicit remote_actor_commit_deadline_t (std::function<void ()> expired) :
-        _expired (std::move (expired))
+    explicit remote_actor_commit_deadline_t (
+      std::shared_ptr<runtime::runtime_failure_collector_t> failures,
+      std::function<void ()> expired) :
+        _failures (std::move (failures)), _timer (_failures), _expired (std::move (expired))
     {
     }
 
@@ -480,6 +476,7 @@ class remote_actor_commit_deadline_t final
                 expired ();
             }
             catch (...) {
+                _failures->report (std::current_exception ());
             }
         }
         {
@@ -490,6 +487,7 @@ class remote_actor_commit_deadline_t final
     }
 
     std::mutex _mutex;
+    std::shared_ptr<runtime::runtime_failure_collector_t> _failures;
     detail::core_timer_drain_loop_t _timer;
     std::function<void ()> _expired;
     bool _cancelled = false;
@@ -10985,7 +10983,8 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
     if (deadline) {
         std::weak_ptr<remote_actor_commit_turn_state_t> weak_commit = commit_state;
         auto timer = remote_actor_commit_deadline_t::start (
-          *deadline, deadline_executor, [weak_commit, submission_state] {
+          *deadline, deadline_executor, detail::runtime_failures_for (_state->monitoring),
+          [weak_commit, submission_state] {
               auto commit = weak_commit.lock ();
               if (!commit)
                   return;
@@ -13811,7 +13810,8 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
         attach_native_spot (context);
     if (plan.create_idle_timer) {
         auto weak_state = std::weak_ptr<spot_node_builder_state_t> (_state);
-        auto timer = std::make_unique<detail::core_timer_drain_loop_t> ();
+        auto timer = std::make_unique<detail::core_timer_drain_loop_t> (
+          detail::runtime_failures_for (_state->monitoring));
         timer->start (plan.idle_timeout, std::numeric_limits<std::uint64_t>::max (),
                       [weak_state] (std::uint64_t) {
                           if (auto state = weak_state.lock ()) {
@@ -13830,32 +13830,21 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
 
 void spot_node_runtime_t::detach_native_node ()
 {
-    std::unique_ptr<detail::core_timer_drain_loop_t> idle_timer;
+    detail::core_timer_drain_loop_t *idle_timer = nullptr;
     auto native_spots = _state->lane
                           .run ([&] {
                               std::vector<std::shared_ptr<service::spot_t>> result;
-                              idle_timer = std::move (_state->instance_spot_idle_timer);
+                              idle_timer = _state->instance_spot_idle_timer.get ();
                               result.reserve (_state->native_spots_by_id.size ());
                               for (const auto &[_, native] : _state->native_spots_by_id) {
                                   if (native)
                                       result.push_back (native);
                               }
-                              _state->native_node.reset ();
-                              _state->native_spots_by_id.clear ();
-                              _state->routed_control_spot.reset ();
-                              for (auto &[_, context] : _state->spot_contexts_by_id) {
-                                  context._state->native_spot.reset ();
-                              }
                               return result;
                           })
                           .get ();
-    if (idle_timer) {
-        try {
-            idle_timer->close ();
-        }
-        catch (...) {
-        }
-    }
+    if (idle_timer)
+        idle_timer->close ();
 
     std::exception_ptr close_error;
     for (const auto &native : native_spots) {
@@ -13871,6 +13860,16 @@ void spot_node_runtime_t::detach_native_node ()
     if (close_error) {
         std::rethrow_exception (close_error);
     }
+    _state->lane
+      .run ([&] {
+          _state->instance_spot_idle_timer.reset ();
+          _state->native_node.reset ();
+          _state->native_spots_by_id.clear ();
+          _state->routed_control_spot.reset ();
+          for (auto &[_, context] : _state->spot_contexts_by_id)
+              context._state->native_spot.reset ();
+      })
+      .get ();
 }
 
 void spot_node_runtime_t::evict_idle_spots () noexcept
