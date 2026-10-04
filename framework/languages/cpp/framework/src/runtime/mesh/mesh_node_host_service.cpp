@@ -2586,6 +2586,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                     mesh::service_mailbox_t::application_owner (owner);
                                   mailbox_record.domain =
                                     mesh::service_mailbox_domain_t::application;
+                                  mailbox_record.before_application_handler =
+                                    record.before_application_handler;
                                   mailbox_record.application =
                                     std::make_shared<host::local_application_dispatch_t> (
                                       host::local_application_dispatch_t{owner, record,

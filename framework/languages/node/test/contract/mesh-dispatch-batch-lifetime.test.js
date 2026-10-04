@@ -440,12 +440,14 @@ for (const partsPerRecord of [1, 2]) {
     const fromOwned = ZLinkBufferMessage.fromOwned;
     try {
       node.setBind(`inproc://batch-decode-${process.pid}`);
-      node.addChannelName('batch');
       node.start();
+      const spot = node.entrySpot();
+      const status = node.status();
+      // Channel messaging §2 excludes self; retain local batch coverage through Spot.
       for (let sequence = 0; sequence < 3; sequence++) {
-        await node.sendToChannel('batch', Array.from(
+        await spot.sendToSpot(status.routingId, status.routingId, status.lifecycleGeneration, Array.from(
           { length: partsPerRecord }, (_, part) => Buffer.from(`${sequence}-${part}`)
-        ));
+        ), { entrySpot: true });
       }
       assert.equal(queue.snapshot().permitsInUse, 3n);
       t.mock.method(ZLinkBufferMessage, 'fromOwned', function (data) {
@@ -501,10 +503,12 @@ test('a reused receive batch applies the current admission limit without changin
   const received = [];
   try {
     node.setBind(`inproc://batch-limit-${process.pid}`);
-    node.addChannelName('batch');
     node.start();
+    const spot = node.entrySpot();
+    const status = node.status();
     for (let sequence = 0; sequence < 3; sequence++) {
-      await node.sendToChannel('batch', Buffer.from(String(sequence)));
+      await spot.sendToSpot(status.routingId, status.routingId, status.lifecycleGeneration,
+        Buffer.from(String(sequence)), { entrySpot: true });
     }
     for (const limit of [1, 64]) {
       readyBatch.reset();

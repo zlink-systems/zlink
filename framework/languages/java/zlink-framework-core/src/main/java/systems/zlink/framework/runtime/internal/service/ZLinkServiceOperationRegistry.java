@@ -95,36 +95,24 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         Objects.requireNonNull(discardValue, "discardValue");
         long timeoutNanos = timeoutNanos(timeout);
         Operation<T> operation;
-        Entry<?> synchronousFailure = null;
-        CompletionStage<T> submitted = null;
         synchronized (gate) {
-            if (closed) {
-                return CompletableFuture.failedFuture(closeFailure);
-            }
+            if (closed) return CompletableFuture.failedFuture(closeFailure);
             operation = registerLocked(timeoutNanos, id);
-            try {
-                submitted = Objects.requireNonNull(submission.get(), "submission result");
-            } catch (Throwable failure) {
-                synchronousFailure = takeLocked(operation.id());
-                if (synchronousFailure != null) {
-                    synchronousFailure.completeWithFailure(failure);
-                }
-            }
         }
-        if (synchronousFailure != null) {
-            completions.post(synchronousFailure);
-        } else if (submitted != null) {
-            CompletionStage<T> accepted = submitted;
-            ZLinkCompletionBridge.forwardCancellation(operation.completion(), accepted);
-            submitted.whenComplete(
-                    (value, failure) -> {
-                        if (failure != null) {
-                            completeExceptionally(operation.id(), failure);
-                        } else if (!complete(operation.id(), value) && value != null) {
-                            discardValue.accept(value);
-                        }
-                    });
+        CompletionStage<T> submitted;
+        try {
+            submitted = Objects.requireNonNull(submission.get(), "submission result");
+        } catch (RuntimeException | Error failure) {
+            completeExceptionally(operation.id(), failure);
+            return operation.completion();
         }
+        ZLinkCompletionBridge.forwardCancellation(operation.completion(), submitted);
+        submitted.whenComplete(
+                (value, failure) -> {
+                    if (failure != null) completeExceptionally(operation.id(), failure);
+                    else if (!complete(operation.id(), value) && value != null)
+                        discardValue.accept(value);
+                });
         return operation.completion();
     }
 

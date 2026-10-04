@@ -39,10 +39,13 @@ test('mesh owner drains 64 pre-admitted records in one receive batch without los
   let pump;
   try {
     node.setBind(`inproc://ingress-batch-${process.pid}`);
-    node.addChannelName('batch');
     node.start();
+    const spot = node.entrySpot();
+    const status = node.status();
+    // Channel messaging §2 excludes self; local Spot uses the same batch owner.
     for (let i = 0; i < 64; i++) {
-      await node.sendToChannel('batch', Buffer.from(String(i)));
+      await spot.sendToSpot(status.routingId, status.routingId,
+        status.lifecycleGeneration, Buffer.from(String(i)), { entrySpot: true });
     }
     let areaEntries = 0;
     let ioTurn = false;

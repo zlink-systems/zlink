@@ -8,7 +8,6 @@ import {
 import { descriptorConnectionNotRequired } from './route-mesh-connection-policy';
 import { SmoothWeightedSelection } from './service-weighted-selection';
 import { SERVICE_WIRE_REQUIRED_CAPABILITY } from './service-wire-constants.generated';
-const LOCAL_DIAGNOSTIC_CONNECTION_ID = 'local';
 
 export type ServiceNodeState =
   'preparing' | 'serving' | 'retiring' | 'draining' | 'stopped' | 'error';
@@ -226,7 +225,7 @@ export class ServiceTopologyRegistry {
 
   hasKnownChannelTarget(channelName: string): boolean {
     requireText(channelName, 'channelName');
-    return [this.local, ...this.knownByRid.values()].some(
+    return [...this.knownByRid.values()].some(
       (descriptor) =>
         (descriptor.state === 'serving' ||
           descriptor.state === 'retiring' ||
@@ -254,12 +253,8 @@ export class ServiceTopologyRegistry {
     requireText(channelName, 'channelName');
     return this.selectWeightedCycle(
       `channel:${channelName}`,
-      () => {
-        const local: AdmittedServicePeer = {
-          descriptor: cloneDescriptor(this.local),
-          connectionId: LOCAL_DIAGNOSTIC_CONNECTION_ID
-        };
-        return [local, ...this.peersByRid.values()]
+      () =>
+        [...this.peersByRid.values()]
           .map((peer) => ({
             peer: clonePeer(peer),
             channel: selectableChannel(peer.descriptor, channelName)
@@ -271,8 +266,7 @@ export class ServiceTopologyRegistry {
               peer: AdmittedServicePeer;
               channel: ServiceChannelDescriptor;
             } => value.channel !== undefined
-          );
-      },
+          ),
       (value) => value.channel.weight,
       (value) => value.peer.descriptor.nodeRoutingId,
       (left, right) =>

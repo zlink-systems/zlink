@@ -4252,6 +4252,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             operation.DeadlineUnixMs = checked(
                 (ulong)DateTimeOffset.UtcNow.Add(effectiveTimeout).ToUnixTimeMilliseconds()
             );
+            StartDetached(() => ExpireOperationAsync(correlation, operation, effectiveTimeout));
+            using var cancellation = cancellationToken.Register(() =>
+            {
+                if (TryRemoveOperation(correlation, out _))
+                    operation.Cancel();
+            });
             var result = SubmitSpot(
                 targetRid,
                 sourceSpotId,
@@ -4270,12 +4276,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 operation.Cancel();
                 throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
             }
-            StartDetached(() => ExpireOperationAsync(correlation, operation, effectiveTimeout));
-            using var cancellation = cancellationToken.Register(() =>
-            {
-                if (TryRemoveOperation(correlation, out _))
-                    operation.Cancel();
-            });
             var completion = await operation
                 .AwaitedCompletion!.Task.WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -11346,6 +11346,66 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ? payloadOwner
             : new ZLinkApplicationJobQueueRecordOwner(payloadOwner, admission);
 
+    private void EnqueueLocalApplication(
+        MailboxKey key,
+        MeshReceiveRecord record,
+        IReadOnlyList<Message> parts,
+        PendingOperation? operation,
+        IDisposable? payloadOwner
+    )
+    {
+        var terminal = operation?.Token ?? CancellationToken.None;
+        var shutdown = _stop?.Token ?? CancellationToken.None;
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(terminal, shutdown);
+        var transferred = false;
+        // Register on the submitting turn; the queue posts publications in
+        // grant order without waiting for the destination lane.
+        var acquisition = _applicationJobQueue!.AcquireAndPostAsync(
+            cancellation.Token,
+            _operationLane,
+            admission =>
+            {
+                if (
+                    cancellation.IsCancellationRequested
+                    || (
+                        operation is not null
+                        && (
+                            !_operations.TryGetValue(operation.OperationId.Low, out var current)
+                            || !ReferenceEquals(current, operation)
+                        )
+                    )
+                )
+                {
+                    admission.Dispose();
+                    return;
+                }
+                var owner = new ZLinkApplicationJobQueueRecordOwner(payloadOwner, admission);
+                transferred = true;
+                EnqueueOwned(key, record, parts, admitApplication: true, payloadOwner: owner);
+            }
+        );
+        _ = FinishAdmissionAsync();
+
+        async Task FinishAdmissionAsync()
+        {
+            try
+            {
+                await acquisition.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+            catch (ObjectDisposedException) when (shutdown.IsCancellationRequested) { }
+            finally
+            {
+                if (!transferred)
+                {
+                    DisposeParts(parts);
+                    payloadOwner?.Dispose();
+                }
+                cancellation.Dispose();
+            }
+        }
+    }
+
     private bool EnqueueOwned(
         MailboxKey key,
         MeshReceiveRecord record,
@@ -11354,6 +11414,29 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         IDisposable? payloadOwner = null
     )
     {
+        if (
+            record.Domain == MeshReadyDomains.Application
+            && !admitApplication
+            && _applicationJobQueue is not null
+        )
+        {
+            _operations.TryGetValue(record.OperationId.Low, out var operation);
+            if (
+                operation is null
+                && record.OperationId.Low != 0
+                && record.Kind
+                    is MeshRecordKind.SpotRequest
+                        or MeshRecordKind.ActorRequest
+                        or MeshRecordKind.SpotControl
+            )
+            {
+                DisposeParts(parts);
+                payloadOwner?.Dispose();
+                return true;
+            }
+            EnqueueLocalApplication(key, record, parts, operation, payloadOwner);
+            return true;
+        }
         var payloadBytes = GetApplicationPayloadBytes(record, parts);
         record.ApplicationPayloadBytes = payloadBytes;
         var queued = new QueuedRecord(record, parts, payloadBytes, payloadOwner);
@@ -12721,25 +12804,36 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ulong Generation
     );
 
-    private sealed class PendingOperation(
-        MeshOperationId operationId,
-        MeshOperationKind kind,
-        ZLinkServiceWireCodec.RequestSourceFence requestSource,
-        bool awaitCompletion = false
-    )
+    private sealed class PendingOperation
     {
         private readonly CancellationTokenSource _timeout = new();
         private int _terminal;
-        internal MeshOperationId OperationId { get; } = operationId;
-        internal MeshOperationKind Kind { get; } = kind;
-        internal ZLinkServiceWireCodec.RequestSourceFence RequestSource { get; } = requestSource;
-        internal TaskCompletionSource<ManagedRequestCompletion>? AwaitedCompletion { get; } =
-            awaitCompletion ? new(TaskCreationOptions.RunContinuationsAsynchronously) : null;
+
+        internal PendingOperation(
+            MeshOperationId operationId,
+            MeshOperationKind kind,
+            ZLinkServiceWireCodec.RequestSourceFence requestSource,
+            bool awaitCompletion = false
+        )
+        {
+            OperationId = operationId;
+            Kind = kind;
+            RequestSource = requestSource;
+            AwaitedCompletion = awaitCompletion
+                ? new(TaskCreationOptions.RunContinuationsAsynchronously)
+                : null;
+            Token = _timeout.Token;
+        }
+
+        internal MeshOperationId OperationId { get; }
+        internal MeshOperationKind Kind { get; }
+        internal ZLinkServiceWireCodec.RequestSourceFence RequestSource { get; }
+        internal TaskCompletionSource<ManagedRequestCompletion>? AwaitedCompletion { get; }
         internal long DeadlineStartTimestamp { get; set; }
         internal TimeSpan DeadlineTimeout { get; set; }
         internal ulong DeadlineUnixMs { get; set; }
         internal ActorJoinOrigin? ActorJoinOrigin { get; set; }
-        internal CancellationToken Token => _timeout.Token;
+        internal CancellationToken Token { get; }
 
         internal bool TryComplete()
         {

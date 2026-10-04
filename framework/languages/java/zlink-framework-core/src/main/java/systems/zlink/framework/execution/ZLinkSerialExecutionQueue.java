@@ -1785,7 +1785,14 @@ public final class ZLinkSerialExecutionQueue {
                         systems.zlink.framework.runtime.internal.handlers
                                 .ZLinkSuspendInvocationContext.enterApplicationExecution(
                                 application)) {
-            command.run();
+            SerialTurn turn = currentTurn();
+            try (var job =
+                    ZLinkApplicationJobContext.enterQueued(
+                            turn == null || turn.entry == null
+                                    ? null
+                                    : turn.entry.applicationJobOwnership)) {
+                command.run();
+            }
         } finally {
             setOrRemove(CURRENT, previous);
             setOrRemove(CURRENT_GATE, previousGate);

@@ -3,6 +3,7 @@
 
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/dispatch/application_record.hpp"
+#include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/dispatch/blocking_task.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -1141,6 +1142,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     mutable runtime::state_lane_t _local_dispatch_completion_lane{
       _local_dispatch_completion_lane_executor};
     std::deque<local_application_dispatch_t> _local_application_dispatches;
+    void
+    admit_local_application (local_application_dispatch_t dispatch,
+                             const std::shared_ptr<application_job_queue_t::waiter_t> &waiter = {});
+    std::function<void ()>
+    local_request_wait_cleanup (const std::shared_ptr<application_job_queue_t::waiter_t> &waiter);
     std::map<std::string, stateful::object_ref_t> _spots;
     std::map<std::string, std::pair<std::string, stateful::object_ref_t>> _actors;
     runtime::offload_executor_t _spot_actor_index_lane_executor;

@@ -29,6 +29,150 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkApplicationJobQueueTest {
     @Test
+    void inlineAcquireContinuationDoesNotBlockAnotherGrant() throws Exception {
+        try (var queue = queue(2)) {
+            var heldFirst = queue.acquire().toCompletableFuture().join();
+            var heldSecond = queue.acquire().toCompletableFuture().join();
+            var entered = new CountDownLatch(1);
+            var proceed = new CountDownLatch(1);
+            var first = queue.acquire().toCompletableFuture();
+            first.thenAccept(
+                    permit -> {
+                        entered.countDown();
+                        try {
+                            assertTrue(proceed.await(5, TimeUnit.SECONDS));
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError(interrupted);
+                        } finally {
+                            permit.close();
+                        }
+                    });
+            var second = queue.acquire().toCompletableFuture();
+            var release = CompletableFuture.runAsync(heldFirst::close);
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                heldSecond.close();
+                assertTrue(
+                        second.isDone(), "another grant must not wait for an inline continuation");
+                second.join().close();
+            } finally {
+                proceed.countDown();
+                release.get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void publicationStaysInGrantOrderAcrossConcurrentReturnsAndHandlerEntry() {
+        try (var queue = queue(2)) {
+            var heldFirst = queue.acquire().toCompletableFuture().join();
+            var heldSecond = queue.acquire().toCompletableFuture().join();
+            var deliveries = new java.util.ArrayDeque<Runnable>();
+            var published = new ArrayList<Integer>();
+            var first =
+                    queue.acquireAndPublish(
+                            task -> {
+                                deliveries.add(task);
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            permit -> {
+                                permit.handlerStarted();
+                                assertTrue(
+                                        published.isEmpty(),
+                                        "the destination must not run the next publication inside"
+                                                + " this turn");
+                                published.add(1);
+                                return CompletableFuture.completedFuture(null);
+                            });
+            var second =
+                    queue.acquireAndPublish(
+                            task -> {
+                                deliveries.add(task);
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            permit -> {
+                                published.add(2);
+                                permit.handlerStarted();
+                                return CompletableFuture.completedFuture(null);
+                            });
+            heldFirst.close();
+            heldSecond.close();
+            assertEquals(
+                    2,
+                    deliveries.size(),
+                    "all available grants must be posted before publication runs");
+            assertFalse(second.toCompletableFuture().isDone());
+            deliveries.removeFirst().run();
+            assertEquals(List.of(1), published);
+            deliveries.removeFirst().run();
+            first.toCompletableFuture().join();
+            second.toCompletableFuture().join();
+            assertEquals(List.of(1, 2), published);
+            assertEquals(0, queue.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
+    void cancelledScheduledPublicationReturnsItsGrantBeforeNextPublication() {
+        try (var queue = queue(1)) {
+            var deliveries = new java.util.ArrayDeque<Runnable>();
+            var first =
+                    queue.acquireAndPublish(
+                                    task -> {
+                                        deliveries.add(task);
+                                        return CompletableFuture.completedFuture(null);
+                                    },
+                                    permit -> {
+                                        throw new AssertionError("cancelled publication ran");
+                                    })
+                            .toCompletableFuture();
+            var second =
+                    queue.acquireAndPublish(
+                                    task -> {
+                                        deliveries.add(task);
+                                        return CompletableFuture.completedFuture(null);
+                                    },
+                                    permit -> {
+                                        permit.handlerStarted();
+                                        return CompletableFuture.completedFuture(null);
+                                    })
+                            .toCompletableFuture();
+            assertTrue(first.cancel(false));
+            assertEquals(1, queue.snapshot().permitsInUse());
+            deliveries.removeFirst().run();
+            deliveries.removeFirst().run();
+            second.join();
+            assertEquals(0, queue.snapshot().capacityWaiters());
+            assertEquals(0, queue.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
+    void destinationCloseReturnsScheduledPublicationEvenIfItDropsTheTask() {
+        var queue = queue(1);
+        var deliveries = new java.util.ArrayDeque<Runnable>();
+        var posted = new CompletableFuture<Void>();
+        var result =
+                queue.acquireAndPublish(
+                                task -> {
+                                    deliveries.add(task);
+                                    return posted;
+                                },
+                                permit -> {
+                                    throw new AssertionError("closed publication ran");
+                                })
+                        .toCompletableFuture();
+        queue.close();
+        posted.completeExceptionally(
+                new java.util.concurrent.RejectedExecutionException("destination closed"));
+        assertTrue(result.isCompletedExceptionally());
+        assertEquals(0, queue.snapshot().permitsInUse());
+        deliveries.removeFirst().run();
+        assertEquals(0, queue.snapshot().permitsInUse());
+    }
+
+    @Test
     void resolvesTheExactProfileMatrixAndManualOverride() {
         for (int processors : List.of(4, 8, 16)) {
             var candidates = candidates(processors);
