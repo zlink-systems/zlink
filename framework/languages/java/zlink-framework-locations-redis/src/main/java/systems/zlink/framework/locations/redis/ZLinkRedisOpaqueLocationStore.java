@@ -88,6 +88,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
     private static final int SCAN_WORK_MULTIPLIER = 4;
     private static final int MINIMUM_SCAN_WORK = 128;
     private static final int ENCODED_ITEM_OVERHEAD_BYTES = 128;
+    private static final int UTF8_PREFIX_UPPER_BOUND_BYTE = 0xff;
 
     private enum ScriptToken {
         MISSING("missing"),
@@ -152,9 +153,26 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                     }
                     """);
 
+    private static final String PRUNE_HISTORY_HELPER =
+            """
+            local function pruneHistory(recordKey, minimumBoundary)
+                if minimumBoundary then
+                    local anchor = redis.call(
+                        'ZREVRANGEBYSCORE', recordKey,
+                        minimumBoundary, '-inf', 'WITHSCORES', 'LIMIT', 0, 1)
+                    if #anchor == 2 then
+                        redis.call('ZREMRANGEBYSCORE', recordKey, '-inf', '(' .. anchor[2])
+                    end
+                else
+                    redis.call('ZREMRANGEBYRANK', recordKey, 0, -2)
+                end
+            end
+            """;
+
     private static final String WRITE_SCRIPT =
             script(
                     UNPACK_TAGGED_HELPER
+                            + PRUNE_HISTORY_HELPER
                             + """
                     if redis.replicate_commands then redis.replicate_commands() end
                     local conditionCount = tonumber(ARGV[1])
@@ -198,15 +216,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                             redis.call('HDEL', mapKey, original)
                             redis.call('ZREM', cleanupKey, original)
                         elseif minimumBoundary then
-                            local anchor = redis.call(
-                                'ZREVRANGEBYSCORE', recordKey,
-                                minimumBoundary, '-inf', 'WITHSCORES',
-                                'LIMIT', 0, 1)
-                            if #anchor == 2 then
-                                redis.call(
-                                    'ZREMRANGEBYSCORE',
-                                    recordKey, '-inf', '(' .. anchor[2])
-                            end
+                            pruneHistory(recordKey, minimumBoundary)
                             redis.call('ZADD', cleanupKey, nowMs + ${CLEANUP_DELAY_MILLIS}, original)
                         else
                             local record = unpackTagged(members[1])
@@ -218,7 +228,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                                 redis.call('HDEL', mapKey, original)
                                 redis.call('ZREM', cleanupKey, original)
                             else
-                                redis.call('ZREMRANGEBYRANK', recordKey, 0, -2)
+                                pruneHistory(recordKey, minimumBoundary)
                                 if expiresAt > 0 then
                                     redis.call(
                                         'ZADD', cleanupKey,
@@ -258,6 +268,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                     local checkArg = arg
                     for i = 1, mutationCount do
                         local keyIndex = tonumber(ARGV[checkArg])
+                        pruneHistory(KEYS[keyIndex], minimumBoundary)
                         if redis.call('ZCARD', KEYS[keyIndex]) >= ${MAXIMUM_VERSION_HISTORY} then
                             return { '${BACKLOG}', nowMs }
                         end
@@ -313,6 +324,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
     private static final String SCAN_SCRIPT =
             script(
                     UNPACK_TAGGED_HELPER
+                            + PRUNE_HISTORY_HELPER
                             + """
                     if redis.replicate_commands then redis.replicate_commands() end
                     local prefix = ARGV[1]
@@ -358,15 +370,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                             redis.call('HDEL', KEYS[2], original)
                             redis.call('ZREM', cleanupKey, original)
                         elseif minimumBoundary then
-                            local anchor = redis.call(
-                                'ZREVRANGEBYSCORE', recordKey,
-                                minimumBoundary, '-inf', 'WITHSCORES',
-                                'LIMIT', 0, 1)
-                            if #anchor == 2 then
-                                redis.call(
-                                    'ZREMRANGEBYSCORE',
-                                    recordKey, '-inf', '(' .. anchor[2])
-                            end
+                            pruneHistory(recordKey, minimumBoundary)
                             redis.call('ZADD', cleanupKey, nowMs + ${CLEANUP_DELAY_MILLIS}, original)
                         else
                             local record = unpackTagged(members[1])
@@ -378,7 +382,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                                 redis.call('HDEL', KEYS[2], original)
                                 redis.call('ZREM', cleanupKey, original)
                             else
-                                redis.call('ZREMRANGEBYRANK', recordKey, 0, -2)
+                                pruneHistory(recordKey, minimumBoundary)
                                 if expiresAt > 0 then
                                     redis.call(
                                         'ZADD', cleanupKey,
@@ -422,11 +426,13 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                     end
                     local snapshotNow = tonumber(metadata[1])
                     local boundary = tonumber(metadata[2])
-                    local lower = '-'
+                    local lower = '[' .. prefix
+                    -- Valid UTF-8 key suffixes sort below the range terminator byte.
+                    local upper = '[' .. prefix .. string.char(${UTF8_PREFIX_UPPER_BOUND_BYTE})
                     if string.len(lastKey) > 0 then lower = '(' .. lastKey end
                     local workLimit = math.max(limit * ${SCAN_WORK_MULTIPLIER}, ${MINIMUM_SCAN_WORK})
                     local originals = redis.call(
-                        'ZRANGEBYLEX', KEYS[1], lower, '+',
+                        'ZRANGEBYLEX', KEYS[1], lower, upper,
                         'LIMIT', 0, workLimit + 1)
                     local emitted = 0
                     local encodedBytes = 0
@@ -437,34 +443,32 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                         and emitted < limit do
                         local original = originals[examined + 1]
                         examined = examined + 1
-                        if string.sub(original, 1, string.len(prefix)) == prefix then
-                            local recordKey = redis.call('HGET', KEYS[2], original)
-                            if recordKey then
-                                local members = redis.call(
-                                    'ZREVRANGEBYSCORE',
-                                    recordKey, boundary, '-inf',
-                                    'LIMIT', 0, 1)
-                                if #members > 0 then
-                                    local record = unpackTagged(members[1])
-                                    local expiresAt = tonumber(record[4])
-                                    if record[1] == original
-                                        and record[5] ~= true
-                                        and (expiresAt == 0 or expiresAt > snapshotNow) then
-                                        local itemBytes = string.len(original)
-                                            + string.len(record[2])
-                                            + string.len(record[3]) + ${ENCODED_ITEM_OVERHEAD_BYTES}
-                                        if emitted > 0
-                                            and encodedBytes + itemBytes > ${MAXIMUM_ENCODED_PAGE_BYTES} then
-                                            examined = examined - 1
-                                            break
-                                        end
-                                        table.insert(result, original)
-                                        table.insert(result, record[2])
-                                        table.insert(result, record[3])
-                                        table.insert(result, tostring(expiresAt))
-                                        encodedBytes = encodedBytes + itemBytes
-                                        emitted = emitted + 1
+                        local recordKey = redis.call('HGET', KEYS[2], original)
+                        if recordKey then
+                            local members = redis.call(
+                                'ZREVRANGEBYSCORE',
+                                recordKey, boundary, '-inf',
+                                'LIMIT', 0, 1)
+                            if #members > 0 then
+                                local record = unpackTagged(members[1])
+                                local expiresAt = tonumber(record[4])
+                                if record[1] == original
+                                    and record[5] ~= true
+                                    and (expiresAt == 0 or expiresAt > snapshotNow) then
+                                    local itemBytes = string.len(original)
+                                        + string.len(record[2])
+                                        + string.len(record[3]) + ${ENCODED_ITEM_OVERHEAD_BYTES}
+                                    if emitted > 0
+                                        and encodedBytes + itemBytes > ${MAXIMUM_ENCODED_PAGE_BYTES} then
+                                        examined = examined - 1
+                                        break
                                     end
+                                    table.insert(result, original)
+                                    table.insert(result, record[2])
+                                    table.insert(result, record[3])
+                                    table.insert(result, tostring(expiresAt))
+                                    encodedBytes = encodedBytes + itemBytes
+                                    emitted = emitted + 1
                                 end
                             end
                         end
@@ -909,6 +913,9 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                 .replace("${MAXIMUM_ACTIVE_SNAPSHOTS}", Long.toString(MAXIMUM_ACTIVE_SNAPSHOTS))
                 .replace("${SCAN_WORK_MULTIPLIER}", Long.toString(SCAN_WORK_MULTIPLIER))
                 .replace("${MINIMUM_SCAN_WORK}", Long.toString(MINIMUM_SCAN_WORK))
+                .replace(
+                        "${UTF8_PREFIX_UPPER_BOUND_BYTE}",
+                        Integer.toString(UTF8_PREFIX_UPPER_BOUND_BYTE))
                 .replace(
                         "${ENCODED_ITEM_OVERHEAD_BYTES}",
                         Long.toString(ENCODED_ITEM_OVERHEAD_BYTES))
