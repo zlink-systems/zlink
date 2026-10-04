@@ -91,6 +91,19 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
     bool participates_in_drain_propagation () const noexcept override { return true; }
 
+    void seal_application_dispatch () noexcept override
+    {
+        if (_client_server && _client_server_started)
+            _client_server->seal_application_dispatch ();
+    }
+
+    bool wait_for_accepted_callbacks_until (
+      std::chrono::steady_clock::time_point deadline) noexcept override
+    {
+        return !_client_server || !_client_server_started
+               || _client_server->wait_for_accepted_callbacks_until (deadline);
+    }
+
     bool publish_descriptor_state (framework_runtime_state_t state) noexcept override
     {
         bool published = true;

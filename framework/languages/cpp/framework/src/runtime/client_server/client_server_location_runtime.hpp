@@ -16,6 +16,7 @@
 #include <zlink/framework/contracts/handlers/handler_registry.hpp>
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/contracts/monitoring/client_server_runtime.hpp>
+#include <boost/asio/awaitable.hpp>
 
 #include <atomic>
 #include <condition_variable>
@@ -66,6 +67,9 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     client_server_location_runtime_t &operator= (const client_server_location_runtime_t &) = delete;
 
     void start ();
+    void seal_application_dispatch () noexcept;
+    bool
+    wait_for_accepted_callbacks_until (std::chrono::steady_clock::time_point deadline) noexcept;
     void stop ();
     bool empty () const noexcept;
     bool publish_descriptor_state (framework_runtime_state_t state) noexcept;
@@ -107,7 +111,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     client_server_channel_snapshot_t
     publish_snapshot_locked (client_server_channel_snapshot_t current,
                              const std::shared_ptr<observer_t> &initial_observer = {}) const;
-    task_t<void> dispatch_server (std::shared_ptr<raw_client_server_server_t> owner);
+    boost::asio::awaitable<result_t<void>>
+    drain_server_owner (std::shared_ptr<raw_client_server_server_t> server, std::string owner);
     void stop_servers ();
     void stop_clients ();
 
@@ -181,6 +186,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::condition_variable _descriptor_publish_changed;
     bool _descriptor_publish_pending = false;
     bool _descriptor_publish_result = false;
+    std::size_t _active_application_drains = 0;
     std::thread _thread;
 };
 

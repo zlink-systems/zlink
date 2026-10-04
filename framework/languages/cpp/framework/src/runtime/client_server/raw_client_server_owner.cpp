@@ -571,13 +571,22 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                                           }};
     //  One owner turn admits the record: the connection check and the mailbox
     //  enqueue read the same connection state.
-    co_return co_await _lane.run_task ([this, &record] {
+    const auto queued = co_await _lane.run_task ([this, &record] {
         if (_connections.find (record.source_routing_id) == _connections.end ())
             return client_server_pump_result_t::protocol_error;
         return _mailbox.try_enqueue (std::move (record))
                  ? client_server_pump_result_t::application
                  : client_server_pump_result_t::backpressured;
     });
+    if (queued == client_server_pump_result_t::backpressured) {
+        if (record.reply_token) {
+            const framework_exception_t error (
+              framework_error_kind_t::shutting_down,
+              "ClientServer is shutting down and rejects application work");
+            (void) co_await reply (record, error);
+        }
+    }
+    co_return queued;
 }
 
 task_t<mesh::service_liveness_tick_t> raw_client_server_server_t::tick_liveness (
