@@ -4399,18 +4399,54 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         } catch (ZLinkFrameworkException rejected) {
             return CompletableFuture.failedFuture(rejected);
         }
-        return applicationJobQueue.acquireAndPublish(
-                infrastructureExecutor,
-                permit -> {
-                    try (var ignored =
-                            systems.zlink.framework.runtime.internal.dispatch
-                                    .ZLinkApplicationJobContext.enter(permit)) {
-                        return runQueuedApplicationJob(
-                                systems.zlink.framework.runtime.internal.dispatch
-                                        .ZLinkApplicationJobContext.transferToQueuedJob(),
-                                operation);
+        var acquisition = applicationJobQueue.acquire().toCompletableFuture();
+        CompletableFuture<T> completion =
+                new CompletableFuture<>() {
+                    @Override
+                    public boolean cancel(boolean mayInterruptIfRunning) {
+                        return acquisition.cancel(mayInterruptIfRunning);
                     }
-                });
+                };
+        acquisition
+                .thenCompose(permit -> publishApplicationJob(permit, operation))
+                .whenComplete(
+                        (value, failure) -> {
+                            if (failure == null) completion.complete(value);
+                            else completion.completeExceptionally(failure);
+                        });
+        return completion;
+    }
+
+    <T> CompletionStage<T> admitNewApplicationJob(
+            SpotDispatchLine destination, Supplier<CompletionStage<T>> operation) {
+        Objects.requireNonNull(operation, "operation");
+        try {
+            ensureOwnerAdmissionOpen();
+        } catch (ZLinkFrameworkException rejected) {
+            return CompletableFuture.failedFuture(rejected);
+        }
+        return applicationJobQueue.acquireAndPublish(
+                task ->
+                        destination.enqueueInfrastructureDispatch(
+                                () -> {
+                                    task.run();
+                                    return CompletableFuture.completedFuture(null);
+                                }),
+                permit -> publishApplicationJob(permit, operation));
+    }
+
+    private <T> CompletionStage<T> publishApplicationJob(
+            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
+                    permit,
+            Supplier<CompletionStage<T>> operation) {
+        try (var ignored =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
+                        permit)) {
+            return runQueuedApplicationJob(
+                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                            .transferToQueuedJob(),
+                    operation);
+        }
     }
 
     systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit

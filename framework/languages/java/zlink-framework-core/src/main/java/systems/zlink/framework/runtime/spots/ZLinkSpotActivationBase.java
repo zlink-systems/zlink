@@ -239,6 +239,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                     // of another Actor's turn.
                     var dispatched =
                             host.admitNewApplicationJob(
+                                    context,
                                     () ->
                                             admission.apply(
                                                     () ->
@@ -693,7 +694,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                     tail =
                             reuseIngressPermit && index == 0
                                     ? job.get()
-                                    : host.admitNewApplicationJob(job);
+                                    : host.admitNewApplicationJob(context, job);
                 }
             } else {
                 host.reportSpotSubscriptionDropped(

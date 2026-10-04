@@ -162,6 +162,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         CompletionStage<Void> dispatched =
                 host.admitNewApplicationJob(
+                        context,
                         () -> {
                             var hostRejection = host.spotHostAdmissionFailure(context.spotId());
                             if (hostRejection != null)

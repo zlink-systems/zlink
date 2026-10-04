@@ -158,6 +158,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         var dispatched =
                 host.admitNewApplicationJob(
+                        context,
                         () -> {
                             ZLinkFrameworkException hostRejection =
                                     host.spotHostAdmissionFailure(context.spotId());
