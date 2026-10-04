@@ -1739,6 +1739,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       --http-submit-only
     LABELS "framework-unit;framework-regression;framework-http"
     TIMEOUT 30)
+  if(WIN32)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_windows_break_shutdown
+      COMMAND test_cpp_framework_app_host --windows-break-shutdown
+      LABELS "framework-unit;framework-regression;framework-host"
+      TIMEOUT 30)
+  endif()
   if(ZLINK_FRAMEWORK_CPP_REQUIRE_HTTP_PERF_REPORT)
     zlink_framework_cpp_add_test(
       NAME test_cpp_framework_http_perf_gate

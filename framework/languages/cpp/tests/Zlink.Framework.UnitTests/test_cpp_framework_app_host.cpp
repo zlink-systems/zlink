@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -1081,6 +1082,28 @@ bool verify_source_waiter_host_ownership (bool completion_first = false,
 
 int main (int test_argc, char **test_argv)
 {
+#ifdef _WIN32
+    if (test_argc == 2 && std::string (test_argv[1]) == "--windows-break-shutdown") {
+        auto signal_app = zlink::framework::app_t::create ();
+        auto signal_service = std::make_unique<blocking_stop_service_t> ();
+        auto *signal_service_ptr = signal_service.get ();
+        signal_service_ptr->release_stop ();
+        signal_app.add_hosted_service (std::move (signal_service));
+        int signal_exit_code = -1;
+        std::thread signal_thread ([&] { signal_exit_code = signal_app.run (1, test_argv); });
+        if (!signal_service_ptr->wait_started (std::chrono::seconds (1))) {
+            signal_app.stop ();
+            signal_thread.join ();
+            return 79;
+        }
+        std::raise (SIGBREAK);
+        const bool drained = signal_service_ptr->wait_stop_entered (std::chrono::seconds (1));
+        if (!drained)
+            signal_app.stop ();
+        signal_thread.join ();
+        return drained && signal_exit_code == 0 ? 0 : 80;
+    }
+#endif
     if (test_argc == 2 && std::string (test_argv[1]) == "--bounded-source-cleanup-repro")
         return verify_source_waiter_host_ownership (false, true) ? 0 : 78;
     const bool http_submit_only =
