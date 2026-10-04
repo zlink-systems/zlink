@@ -321,6 +321,11 @@ def export_section(lang: str, section: str, ref: str, root: pathlib.Path) -> int
 
 
 def export_root_files(lang: str, ref: str, root: pathlib.Path) -> None:
+    if lang == "cpp":
+        name = "samples/windows-process-common.ps1"
+        src = "framework/languages/dotnet/" + name
+        data = run(["git", "-c", "core.autocrlf=false", "show", "%s:%s" % (ref, src)])
+        write(root / name, normalize(name, data), 0o644)
     for name in ROOT_FILES:
         data = run(["git", "-c", "core.autocrlf=false", "show", "%s:%s" % (ref, name)])
         write(root / name, normalize(name, data), 0o644)
