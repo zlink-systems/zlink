@@ -5,6 +5,7 @@ param(
 
 Set-StrictMode -Version Latest
 . "$PSScriptRoot/../../redis-common.ps1"
+. "$PSScriptRoot/../../../../dotnet/samples/windows-process-common.ps1"
 $ErrorActionPreference = "Stop"
 
 $SampleDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -89,7 +90,8 @@ function Start-ManagedProcess {
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [switch]$ArchiveExisting
+        [switch]$ArchiveExisting,
+        [switch]$DedicatedConsole
     )
     $outputPath = Get-CurrentLogPath $Name
     $errorPath = Get-CurrentErrorLogPath $Name
@@ -102,10 +104,15 @@ function Start-ManagedProcess {
             Move-Item -LiteralPath $errorPath -Destination (Join-Path $LogDir "$Name.$suffix.err.log")
         }
     }
-    $argumentLine = ($Arguments | ForEach-Object { ConvertTo-ZlinkSampleProcessArgument $_ }) -join " "
-    $process = Start-ZlinkSampleProcess -FilePath $Executable -ArgumentList $argumentLine `
-            -WorkingDirectory $SampleDir -RedirectStandardOutput $outputPath `
-            -RedirectStandardError $errorPath
+    if ($IsWindows -and $DedicatedConsole) {
+        $process = [Zlink.SampleWindowsProcessGroup]::StartConsole(
+            $Executable, $Arguments, $SampleDir, $outputPath, $errorPath)
+    } else {
+        $argumentLine = ($Arguments | ForEach-Object { ConvertTo-ZlinkSampleProcessArgument $_ }) -join " "
+        $process = Start-ZlinkSampleProcess -FilePath $Executable -ArgumentList $argumentLine `
+                -WorkingDirectory $SampleDir -RedirectStandardOutput $outputPath `
+                -RedirectStandardError $errorPath
+    }
     $Processes.Add($process)
     return $process
 }
@@ -116,7 +123,9 @@ function Start-Role {
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
-    $process = Start-ManagedProcess $Name $Executable $Arguments -ArchiveExisting
+    $dedicatedConsole = $Name -like "zone-node-*"
+    $process = Start-ManagedProcess $Name $Executable $Arguments -ArchiveExisting `
+        -DedicatedConsole:$dedicatedConsole
     $NodeProcesses[$Name] = $process
     Write-Host "    started $Name pid=$($process.Id)"
     return $process
@@ -126,9 +135,20 @@ function Stop-Node {
     param([Parameter(Mandatory = $true)][string]$Name, [string]$Mode = "KILL")
     if (-not $NodeProcesses.ContainsKey($Name)) { return }
     $process = $NodeProcesses[$Name]
-    if (-not $process.HasExited) { Stop-ZlinkSampleProcessTree -Process $process }
-    $process.WaitForExit()
-    $NodeProcesses.Remove($Name)
+    if ($Mode -eq "TERM") {
+        if ($process.HasExited) {
+            throw "$Name exited before graceful shutdown."
+        }
+        if (-not [Zlink.SampleWindowsProcessGroup]::SendCtrlC($process.Id)) {
+            throw "$Name did not exit after graceful shutdown."
+        }
+        Assert-ZlinkSampleFrameworkTermination -LogDir $LogDir -RoleLogs @("$Name.log")
+    } else {
+        if (-not $process.HasExited) { Stop-ZlinkSampleProcessTree -Process $process }
+        $process.WaitForExit()
+    }
+    [void]$Processes.Remove($process)
+    [void]$NodeProcesses.Remove($Name)
 }
 
 function Wait-Log {

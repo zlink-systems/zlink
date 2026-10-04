@@ -11,15 +11,24 @@ namespace Zlink
     public static class SampleWindowsProcessGroup
     {
         private const uint CreateNewProcessGroup = 0x00000200;
+        private const uint CreateNewConsole = 0x00000010;
+        private const uint CtrlCEvent = 0;
         private const uint CtrlBreakEvent = 1;
+        // Match the JVM sample runner's existing 900 x 100 ms shutdown wait on Linux.
+        private const int JvmShutdownWaitMilliseconds = 90000;
+        private const uint GenericRead = 0x80000000;
         private const uint GenericWrite = 0x40000000;
         private const uint FileShareRead = 0x00000001;
         private const uint FileShareWrite = 0x00000002;
         private const uint FileShareDelete = 0x00000004;
         private const uint CreateAlways = 2;
+        private const uint OpenExisting = 3;
         private const uint FileAttributeNormal = 0x00000080;
         private const uint StartfUseStdHandles = 0x00000100;
+        private const uint StartfUseShowWindow = 0x00000001;
         private const int StdInputHandle = -10;
+        private const int StdOutputHandle = -11;
+        private const int StdErrorHandle = -12;
         private static readonly IntPtr InvalidHandleValue = new IntPtr(-1);
 
         [StructLayout(LayoutKind.Sequential)]
@@ -95,7 +104,26 @@ namespace Zlink
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetStdHandle(int standardHandle, IntPtr handle);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GenerateConsoleCtrlEvent(uint controlEvent, uint processGroupId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AttachConsole(uint processId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool FreeConsole();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetConsoleCtrlHandler(IntPtr handler, [MarshalAs(UnmanagedType.Bool)] bool add);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint GetConsoleProcessList([Out] uint[] processList, uint processCount);
 
         public static Process Start(
             string filePath,
@@ -104,6 +132,29 @@ namespace Zlink
             string standardOutputPath,
             string standardErrorPath)
         {
+            return StartProcess(filePath, arguments, workingDirectory,
+                standardOutputPath, standardErrorPath, false);
+        }
+
+        public static Process StartConsole(
+            string filePath,
+            string[] arguments,
+            string workingDirectory,
+            string standardOutputPath,
+            string standardErrorPath)
+        {
+            return StartProcess(filePath, arguments, workingDirectory,
+                standardOutputPath, standardErrorPath, true);
+        }
+
+        private static Process StartProcess(
+            string filePath,
+            string[] arguments,
+            string workingDirectory,
+            string standardOutputPath,
+            string standardErrorPath,
+            bool separateConsole)
+        {
             SecurityAttributes security = new SecurityAttributes
             {
                 Length = Marshal.SizeOf(typeof(SecurityAttributes)),
@@ -111,15 +162,25 @@ namespace Zlink
             };
             IntPtr standardOutput = OpenLog(standardOutputPath, ref security);
             IntPtr standardError = IntPtr.Zero;
+            IntPtr standardInput = IntPtr.Zero;
             ProcessInformation processInformation = new ProcessInformation();
             try
             {
                 standardError = OpenLog(standardErrorPath, ref security);
+                if (separateConsole)
+                {
+                    standardInput = CreateFile("NUL", GenericRead, FileShareRead | FileShareWrite,
+                        ref security, OpenExisting, FileAttributeNormal, IntPtr.Zero);
+                    if (standardInput == InvalidHandleValue)
+                        throw new Win32Exception(Marshal.GetLastWin32Error(),
+                            "Failed to open NUL for the sample console.");
+                }
                 StartupInfo startupInfo = new StartupInfo
                 {
                     Size = Marshal.SizeOf(typeof(StartupInfo)),
-                    Flags = (int)StartfUseStdHandles,
-                    StandardInput = GetStdHandle(StdInputHandle),
+                    Flags = (int)(StartfUseStdHandles | (separateConsole ? StartfUseShowWindow : 0)),
+                    ShowWindow = 0,
+                    StandardInput = separateConsole ? standardInput : GetStdHandle(StdInputHandle),
                     StandardOutput = standardOutput,
                     StandardError = standardError
                 };
@@ -141,13 +202,16 @@ namespace Zlink
                     commandLine = BuildCommandLine(filePath, arguments);
                 }
 
+                if (separateConsole && !SetConsoleCtrlHandler(IntPtr.Zero, false))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(),
+                        "Failed to enable CTRL_C_EVENT for the sample console.");
                 if (!CreateProcess(
                     applicationName,
                     commandLine,
                     IntPtr.Zero,
                     IntPtr.Zero,
                     true,
-                    CreateNewProcessGroup,
+                    separateConsole ? CreateNewConsole : CreateNewProcessGroup,
                     IntPtr.Zero,
                     String.IsNullOrWhiteSpace(workingDirectory) ? null : workingDirectory,
                     ref startupInfo,
@@ -165,6 +229,7 @@ namespace Zlink
             {
                 if (processInformation.Thread != IntPtr.Zero) CloseHandle(processInformation.Thread);
                 if (processInformation.Process != IntPtr.Zero) CloseHandle(processInformation.Process);
+                if (standardInput != IntPtr.Zero && standardInput != InvalidHandleValue) CloseHandle(standardInput);
                 if (standardError != IntPtr.Zero && standardError != InvalidHandleValue) CloseHandle(standardError);
                 if (standardOutput != IntPtr.Zero && standardOutput != InvalidHandleValue) CloseHandle(standardOutput);
             }
@@ -176,6 +241,80 @@ namespace Zlink
             {
                 throw new Win32Exception(Marshal.GetLastWin32Error(),
                     "Failed to send CTRL_BREAK_EVENT to sample process group " + processGroupId + ".");
+            }
+        }
+
+        public static bool SendCtrlC(int processId)
+        {
+            lock (typeof(SampleWindowsProcessGroup))
+            {
+                IntPtr originalInput = GetStdHandle(StdInputHandle);
+                IntPtr originalOutput = GetStdHandle(StdOutputHandle);
+                IntPtr originalError = GetStdHandle(StdErrorHandle);
+                uint[] consoleProcesses = new uint[64];
+                uint count = GetConsoleProcessList(consoleProcesses, (uint)consoleProcesses.Length);
+                if (count > consoleProcesses.Length)
+                {
+                    consoleProcesses = new uint[count];
+                    count = GetConsoleProcessList(consoleProcesses, (uint)consoleProcesses.Length);
+                }
+                uint originalConsoleProcess = 0;
+                DateTime oldestProcess = DateTime.MaxValue;
+                for (int index = 0; index < count && index < consoleProcesses.Length; index++)
+                {
+                    if (consoleProcesses[index] != (uint)Process.GetCurrentProcess().Id)
+                    {
+                        try
+                        {
+                            DateTime started = Process.GetProcessById((int)consoleProcesses[index]).StartTime;
+                            if (started < oldestProcess)
+                            {
+                                oldestProcess = started;
+                                originalConsoleProcess = consoleProcesses[index];
+                            }
+                        }
+                        catch (ArgumentException) { }
+                    }
+                }
+                bool hadConsole = count != 0;
+                bool stopped;
+                if (hadConsole && originalConsoleProcess == 0)
+                    throw new InvalidOperationException("Cannot restore a console owned only by the sample runner.");
+                try
+                {
+                    if (hadConsole && !FreeConsole())
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to detach the sample runner console.");
+                    try
+                    {
+                        if (!AttachConsole(unchecked((uint)processId)))
+                            throw new Win32Exception(Marshal.GetLastWin32Error(),
+                                "Failed to attach to sample console " + processId + ".");
+                        if (!SetConsoleCtrlHandler(IntPtr.Zero, true))
+                            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to ignore CTRL_C_EVENT.");
+                        Process target = Process.GetProcessById(processId);
+                        if (!GenerateConsoleCtrlEvent(CtrlCEvent, 0))
+                            throw new Win32Exception(Marshal.GetLastWin32Error(),
+                                "Failed to send CTRL_C_EVENT to sample console " + processId + ".");
+                        stopped = target.WaitForExit(JvmShutdownWaitMilliseconds);
+                    }
+                    finally
+                    {
+                        FreeConsole();
+                        bool restored = !hadConsole || AttachConsole(originalConsoleProcess);
+                        int restoreError = restored ? 0 : Marshal.GetLastWin32Error();
+                        SetStdHandle(StdInputHandle, originalInput);
+                        SetStdHandle(StdOutputHandle, originalOutput);
+                        SetStdHandle(StdErrorHandle, originalError);
+                        if (!restored)
+                            throw new Win32Exception(restoreError,
+                                "Failed to restore the sample runner console.");
+                    }
+                }
+                finally
+                {
+                    SetConsoleCtrlHandler(IntPtr.Zero, false);
+                }
+                return stopped;
             }
         }
 
