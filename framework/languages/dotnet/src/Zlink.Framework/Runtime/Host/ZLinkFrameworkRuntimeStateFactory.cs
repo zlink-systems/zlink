@@ -51,7 +51,8 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
                 frameworkRuntime.PrepareErrorSink(),
                 frameworkRuntime.ExecutionOwner,
                 applicationJobQueueCapacity,
-                listenerRecords
+                listenerRecords,
+                frameworkRuntime.DrainAcceptedTargetAttemptsAsync
             );
             await channels.InitializeInboundChannelsAsync(state).ConfigureAwait(false);
             await channels.InitializePublisherChannelsAsync(state).ConfigureAwait(false);

@@ -10,6 +10,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
     private readonly ZLinkStateLane _stateLane = new();
     private readonly IDisposable _pressureMetricRegistration;
     private Task? _disposeTask;
+    private readonly Func<CancellationToken, ValueTask>? _drainRelocationTargets;
     private int _operationFenced;
 
     public ZLinkFrameworkComponentState(
@@ -19,10 +20,12 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         ZLinkRuntimeErrorSink errorSink,
         object executionOwner,
         ZLinkApplicationJobQueueCapacity applicationJobQueueCapacity,
-        ZLinkListenerRecords listenerRecords
+        ZLinkListenerRecords listenerRecords,
+        Func<CancellationToken, ValueTask>? drainRelocationTargets = null
     )
     {
         ListenerRecords = listenerRecords;
+        _drainRelocationTargets = drainRelocationTargets;
         Context = context;
         Registration = registration;
         ErrorSink = errorSink;
@@ -214,6 +217,10 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             )
             .ConfigureAwait(false);
         var failures = new List<Exception>();
+        // Cancellation of observers is not target terminal completion. Drain
+        // the attempt owners before cancelling their Store and transport work.
+        if (_drainRelocationTargets is not null)
+            await _drainRelocationTargets(forceStopToken).ConfigureAwait(false);
         if (!forceStopToken.CanBeCanceled)
         {
             foreach (var node in resources.SpotNodes)

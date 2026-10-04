@@ -552,9 +552,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         });
     }
 
-    internal Task WaitForAcceptedOperationsForDrainAsync()
+    internal async Task WaitForAcceptedOperationsForDrainAsync()
     {
-        return AwaitStateLane(
+        var operationsDrained = AwaitStateLane(
             _stateLane.RunAsync(() =>
                 _activeOperations == 0
                     ? Task.CompletedTask
@@ -565,6 +565,23 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                     ).Task
             )
         );
+        await operationsDrained.ConfigureAwait(false);
+        if (_drainAdmission.IsSealedForShutdown)
+            await DrainAcceptedTargetAttemptsAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+
+    internal async ValueTask DrainAcceptedTargetAttemptsAsync(CancellationToken cancellationToken)
+    {
+        var actorDrain = _standaloneActorRelocationRuntime
+            .SealAndDrainTargetAttemptsAsync(cancellationToken)
+            .AsTask();
+        var spotDrain =
+            Services
+                .GetService<ZLinkSpotRetireTargetRuntime>()
+                ?.DrainTargetAttemptsAsync(cancellationToken)
+                .AsTask()
+            ?? Task.CompletedTask;
+        await Task.WhenAll(actorDrain, spotDrain).ConfigureAwait(false);
     }
 
     internal ZLinkRuntimeOperationAdmissionSnapshot SnapshotOperationAdmissions()
@@ -1268,6 +1285,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Stopping);
             try
             {
+                SealApplicationAdmissionsForDrain(cancellationToken);
                 var operationsDrained = await StopAcceptingOperationsAsync().ConfigureAwait(false);
                 stateToDispose?.CancelActiveSpotOperations();
                 await operationsDrained.ConfigureAwait(false);
@@ -1315,6 +1333,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Stopping);
             try
             {
+                SealApplicationAdmissionsForDrain(cancellationToken);
                 await _stateLane.RunAsync(() => _acceptingOperations = false).ConfigureAwait(false);
                 stateToDispose?.FenceOperations();
                 stateToDispose?.CancelActiveSpotOperations();

@@ -902,6 +902,17 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         CancellationToken cancellationToken
     )
     {
+        var admission = (
+            await runtime.TryAdmitInboundOperationAsync(countAsRequest: false).ConfigureAwait(false)
+        ).EnterInbound();
+        if (!admission.Accepted)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "SPOT relocation target admission is sealed for drain."
+            );
+        // The existing operation drain keeps an accepted prepare alive until
+        // its stage is registered; the target owner then settles the seal.
+        using var operationLease = admission.Lease;
         if (prepare.Object.Kind == 1)
             throw new InvalidOperationException(
                 "Standalone Actor relocation must be handled by the Actor maintenance owner."
@@ -1099,11 +1110,10 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 //  The publish gate orders this read after any running target
                 //  commit of the same stage, so the target never reads its own
                 //  commit in progress as a moved fence.
-                bool settled;
                 await stage.PublishGate.WaitAsync(runtime.ShutdownToken).ConfigureAwait(false);
                 try
                 {
-                    settled =
+                    var settled =
                         Volatile.Read(ref stage.AuthorityPublished) == 0
                         && (
                             !IsStageOwnerLeaseValid(stage)
@@ -1115,16 +1125,15 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                                 .ConfigureAwait(false)
                                 == ZLinkRelocationTargetFenceReading.FenceChanged
                         );
+                    if (
+                        await EndUnverifiedTargetAsync(fence, stage, settled, runtime.ShutdownToken)
+                            .ConfigureAwait(false)
+                    )
+                        return;
                 }
                 finally
                 {
                     stage.PublishGate.Release();
-                }
-                if (settled)
-                {
-                    _ = await DiscardUnpublishedStageAsync(fence, stage, runtime.ShutdownToken)
-                        .ConfigureAwait(false);
-                    return;
                 }
                 await Task.Delay(
                         registration.Locations.Options.PollingInterval,
@@ -1138,6 +1147,62 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         {
             ZLinkFrameworkDebugLog.TaskFailure("canonical-relocation-target-fence", exception);
         }
+    }
+
+    internal async ValueTask DrainTargetAttemptsAsync(CancellationToken cancellationToken)
+    {
+        foreach (var pair in _staged.ToArray())
+        {
+            if (pair.Value is not TargetStage stage)
+                continue;
+            await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                _ = await EndUnverifiedTargetAsync(
+                        pair.Key,
+                        stage,
+                        fenceSettled: false,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                stage.PublishGate.Release();
+            }
+        }
+    }
+
+    // Common relocation §4.4: this decision runs under the stage publish gate,
+    // before verification. An in-flight CAS owns that gate through publication.
+    private async ValueTask<bool> EndUnverifiedTargetAsync(
+        ZLinkAggregateFence fence,
+        TargetStage stage,
+        bool fenceSettled,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!_staged.TryGetValue(fence, out var current) || !ReferenceEquals(current, stage))
+            return true;
+        if (Volatile.Read(ref stage.AuthorityPublished) != 0)
+            return false;
+        if (runtime.DrainAdmission.IsSealedForShutdown)
+        {
+            return await stage
+                .RunAbortCleanupAsync(
+                    async () =>
+                    {
+                        // Local disposal neither changes Store authority nor resumes the source.
+                        await AbortTargetStageAsync(stage).ConfigureAwait(false);
+                        return TryCompleteStage(fence, stage, TargetStageTerminalOutcome.Aborted);
+                    },
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        return fenceSettled
+            && await DiscardUnpublishedStageAsync(fence, stage, cancellationToken)
+                .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1214,57 +1279,47 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             return;
         }
 
-        Exception? settledAgainstTarget = null;
+        var fence = new ZLinkAggregateFence(
+            DecodeRelocationId(cutover.RelocationId),
+            cutover.TargetAttemptGeneration
+        );
         await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (Volatile.Read(ref stage.AuthorityPublished) != 0)
-            {
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"late_cutover object=spot reason=already_committed"
-                );
+            if (
+                await EndUnverifiedTargetAsync(fence, stage, fenceSettled: false, cancellationToken)
+                    .ConfigureAwait(false)
+            )
                 return;
-            }
-            //  Relocation flow §4.5: the target CAS runs only after the
-            //  received cutover verifies the whole boundary batch.
+            if (Volatile.Read(ref stage.AuthorityPublished) != 0)
+                return;
             stage.ValidateBoundary(cutover);
-            await CommitWireTargetAggregateAsync(stage, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await CommitWireTargetAggregateAsync(stage, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ZLinkRelocationTargetSettledException)
+            {
+                _ = await DiscardUnpublishedStageAsync(fence, stage, cancellationToken)
+                    .ConfigureAwait(false);
+                throw;
+            }
             Volatile.Write(ref stage.AuthorityPublished, 1);
-        }
-        catch (ZLinkRelocationTargetSettledException exception)
-        {
-            settledAgainstTarget = exception;
+            var resumeStartedTimestamp = Stopwatch.GetTimestamp();
+            await FinalizeStageCoreAsync(stage, normalizeAuthority: false, cancellationToken)
+                .ConfigureAwait(false);
+            ZLinkRuntimeMetrics.RecordRelocationTargetResume(
+                Stopwatch.GetElapsedTime(resumeStartedTimestamp),
+                cutover.Object.Kind == (byte)ServiceWireCodec.StatefulObjectKind.InstanceSpot
+                    ? ZLinkRuntimeMetrics.NormalizedInstanceSpotKind
+                    : ZLinkRuntimeMetrics.NormalizedUserSpotKind
+            );
         }
         finally
         {
             stage.PublishGate.Release();
         }
-        if (settledAgainstTarget is not null)
-        {
-            //  Location runtime §10: a definitive conflict, a changed source
-            //  fence or the end of the target lease discards the staging.
-            _ = await DiscardUnpublishedStageAsync(
-                    new ZLinkAggregateFence(
-                        DecodeRelocationId(cutover.RelocationId),
-                        cutover.TargetAttemptGeneration
-                    ),
-                    stage,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(settledAgainstTarget);
-        }
-        //  Spec 25 §5: target-local S2 (CAS confirmed) → S3 (dispatch open).
-        var resumeStartedTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
-        await FinalizeStageAsync(stage, normalizeAuthority: false, cancellationToken)
-            .ConfigureAwait(false);
-        ZLinkRuntimeMetrics.RecordRelocationTargetResume(
-            System.Diagnostics.Stopwatch.GetElapsedTime(resumeStartedTimestamp),
-            cutover.Object.Kind == (byte)ServiceWireCodec.StatefulObjectKind.InstanceSpot
-                ? ZLinkRuntimeMetrics.NormalizedInstanceSpotKind
-                : ZLinkRuntimeMetrics.NormalizedUserSpotKind
-        );
-        runtime.ScheduleRelocationSessionRouteConvergence(stage);
     }
 
     private TargetStage RequireWireStage(
@@ -1851,10 +1906,28 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         CancellationToken cancellationToken
     )
     {
+        await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await FinalizeStageCoreAsync(stage, normalizeAuthority, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            stage.PublishGate.Release();
+        }
+    }
+
+    private async ValueTask FinalizeStageCoreAsync(
+        TargetStage stage,
+        bool normalizeAuthority,
+        CancellationToken cancellationToken
+    )
+    {
         if (!await IsAuthorityNormalizedAsync(stage, cancellationToken).ConfigureAwait(false))
             await ValidatePublishedRootAsync(stage, cancellationToken).ConfigureAwait(false);
         await runtime
-            .PublishInboundSpotAggregateAsync(
+            .PublishInboundSpotAggregateCoreAsync(
                 stage,
                 normalizeAuthority ? token => NormalizeAuthorityAsync(stage, token) : null,
                 cancellationToken
@@ -1869,18 +1942,10 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         // before direct ingress. Source cleanup, one-way session route update,
         // and steady normalization converge asynchronously and never gate
         // admission.
-        await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await runtime
-                .CompleteInboundSpotAggregateReplayAsync(stage, cancellationToken)
-                .ConfigureAwait(false);
-            await runtime.OpenInboundSpotAggregateAdmissionAsync(stage).ConfigureAwait(false);
-        }
-        finally
-        {
-            stage.PublishGate.Release();
-        }
+        await runtime
+            .CompleteInboundSpotAggregateReplayAsync(stage, cancellationToken)
+            .ConfigureAwait(false);
+        await runtime.OpenInboundSpotAggregateAdmissionAsync(stage).ConfigureAwait(false);
     }
 
     private async ValueTask ValidatePublishedRootAsync(
