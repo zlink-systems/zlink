@@ -12,6 +12,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSocket;
@@ -378,13 +379,8 @@ final class ZLinkChannelSocketRegistry {
                                                                 result.completeExceptionally(
                                                                         failure);
                                                         });
-                                                result.whenComplete(
-                                                        (value, failure) -> {
-                                                            if (result.isCancelled())
-                                                                operation
-                                                                        .toCompletableFuture()
-                                                                        .cancel(false);
-                                                        });
+                                                ZLinkCompletionBridge.forwardCancellation(
+                                                        result, operation);
                                             }
                                             return null;
                                         })
@@ -413,10 +409,7 @@ final class ZLinkChannelSocketRegistry {
                 });
         long remaining = sendTimeout.toNanos() - (System.nanoTime() - started);
         admission.orTimeout(Math.max(0, remaining), TimeUnit.NANOSECONDS);
-        result.whenComplete(
-                (unused, failure) -> {
-                    if (result.isCancelled()) admission.cancel(false);
-                });
+        ZLinkCompletionBridge.forwardCancellation(result, admission);
         return result;
     }
 
@@ -510,42 +503,20 @@ final class ZLinkChannelSocketRegistry {
                     }
                 };
         if (stateLane.isOnLane()) return work.get();
-        var result = new java.util.concurrent.CompletableFuture<T>();
-        CompletionStage<CompletionStage<T>> turn;
         try {
-            turn = stateLane.runNowOrQueue(() -> result.isCancelled() ? null : work.get());
+            // Callers hold no external gate that this turn reacquires; selection and first submit
+            // run here. ZLinkStateLane publishes pending completion off-lane, so continuations
+            // cannot reenter its current turn. JVM submit must finish the first attempt before
+            // return.
+            return stateLane.runNowOrQueue(work::get).toCompletableFuture().join();
         } catch (RuntimeException | Error failure) {
-            turn = java.util.concurrent.CompletableFuture.failedFuture(failure);
+            Throwable cause =
+                    failure instanceof CompletionException && failure.getCause() != null
+                            ? failure.getCause()
+                            : failure;
+            rejectSubmission(flow, rejectedSubmission, cause);
+            return java.util.concurrent.CompletableFuture.failedFuture(cause);
         }
-        CompletionStage<CompletionStage<T>> submissionTurn = turn;
-        turn.whenComplete(
-                (operation, failure) -> {
-                    if (failure != null || operation == null) {
-                        Throwable rejection =
-                                failure == null
-                                        ? new java.util.concurrent.CancellationException()
-                                        : failure;
-                        rejectSubmission(flow, rejectedSubmission, rejection);
-                        result.completeExceptionally(rejection);
-                    } else {
-                        operation.whenComplete(
-                                (value, operationFailure) -> {
-                                    if (operationFailure == null) result.complete(value);
-                                    else result.completeExceptionally(operationFailure);
-                                });
-                    }
-                });
-        result.whenComplete(
-                (unused, failure) -> {
-                    if (result.isCancelled()) {
-                        submissionTurn.whenComplete(
-                                (operation, turnFailure) -> {
-                                    if (operation != null)
-                                        operation.toCompletableFuture().cancel(false);
-                                });
-                    }
-                });
-        return result;
     }
 
     private static void rejectSubmission(

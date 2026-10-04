@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 
@@ -54,12 +55,7 @@ final class ZLinkActorBoundSessionSender {
             return CompletableFuture.failedFuture(failure);
         }
         CompletableFuture<Void> result = new CompletableFuture<>();
-        result.whenComplete(
-                (ignored, failure) -> {
-                    if (result.isCancelled()) {
-                        submission.toCompletableFuture().cancel(true);
-                    }
-                });
+        ZLinkCompletionBridge.forwardCancellation(result, submission);
         submission.whenComplete(
                 (ignored, failure) -> {
                     frame.close();

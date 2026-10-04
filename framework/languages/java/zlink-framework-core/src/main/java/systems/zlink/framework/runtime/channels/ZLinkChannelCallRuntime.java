@@ -6,6 +6,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -206,17 +207,24 @@ final class ZLinkChannelCallRuntime {
         return current;
     }
 
-    static <T> CompletionStage<T> preserveCurrentFlow(CompletionStage<T> request) {
+    static CompletionStage<ZLinkBackendReceived> preserveCurrentFlow(
+            CompletionStage<ZLinkBackendReceived> request) {
         ZLinkFlowContext.State captured = ZLinkFlowContext.current();
         if (captured == null) {
             return request;
         }
-        CompletableFuture<T> contextual = new CompletableFuture<>();
+        CompletableFuture<ZLinkBackendReceived> contextual = new CompletableFuture<>();
+        ZLinkCompletionBridge.forwardCancellation(contextual, request);
         request.whenComplete(
                 (reply, failure) -> {
                     try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(captured)) {
                         if (failure == null) {
-                            contextual.complete(reply);
+                            ZLinkCompletionBridge.completeOrDiscard(
+                                    contextual,
+                                    reply,
+                                    late -> {
+                                        if (late != null) late.close();
+                                    });
                         } else {
                             contextual.completeExceptionally(unwrap(failure));
                         }
