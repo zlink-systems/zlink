@@ -60,7 +60,7 @@ struct raw_mesh_node_options_t
     std::optional<std::chrono::milliseconds> receive_timeout;
     zlink::auto_hwm_profile auto_hwm_profile = zlink::auto_hwm_profile::balanced;
     std::shared_ptr<application_job_queue_t> application_jobs;
-    std::shared_ptr<const std::atomic_bool> shutdown_admission_seal;
+    std::shared_ptr<std::atomic_bool> shutdown_admission_seal;
     dispatch_options_t dispatch;
     std::vector<std::string> metric_channel_names;
     std::string metric_source = "manual";

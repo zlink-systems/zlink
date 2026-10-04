@@ -604,6 +604,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                           const std::string &endpoint) noexcept;
     node_status_t status () const;
     std::size_t pending_operation_count () const noexcept;
+    task_t<void> seal_relocation_targets ();
     void set_channel_weight (const std::string &channel_name, std::uint32_t weight);
     mesh::raw_mesh_node_owner_t &transport () noexcept;
     task_t<bool> send_message_follow (const std::vector<std::uint8_t> &target_routing_id,
@@ -1042,7 +1043,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         // RelocationCutoverWaitTimeout Warning and later authority reads that
         // only end staging; after cutover the next target CAS submission.
         std::chrono::steady_clock::time_point next_finalize_at{};
-        bool target_finalized = false;
+        // Publication or staging cleanup completes the same terminal awaited by shutdown.
+        std::shared_ptr<task_completion_source_t<void>> terminal;
         /* The cutover_timeout Warning was recorded (once per attempt). */
         bool cutover_warned = false;
         /* Pre-boundary relay records in receive order, each kept as its own
@@ -1104,6 +1106,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool stage_relocation_record (const stateful::object_ref_t &target,
                                   const protocol::relocation_data_t &data);
     void poll_relocation_target_attempts ();
+    static bool relocation_target_terminal (const relocation_target_attempt_t &attempt);
+    static std::optional<relocation_target_attempt_t>
+    take_relocation_target_discard (relocation_target_attempt_t &attempt);
+    void discard_unverified_relocation_targets (
+      const std::vector<relocation_attempt_key_t> &observed = {});
     void
     discard_relocation_target_attempts (std::vector<relocation_target_attempt_t> attempts) noexcept;
     std::map<relocation_attempt_key_t, relocation_target_attempt_t> _relocation_target_attempts;

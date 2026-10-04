@@ -16,7 +16,7 @@ namespace
 {
 mesh::raw_mesh_node_options_t options (char rid,
                                        std::string endpoint = "tcp://127.0.0.1:0",
-                                       std::shared_ptr<const std::atomic_bool> seal = {})
+                                       std::shared_ptr<std::atomic_bool> seal = {})
 {
     mesh::raw_mesh_node_options_t result;
     result.descriptor = {

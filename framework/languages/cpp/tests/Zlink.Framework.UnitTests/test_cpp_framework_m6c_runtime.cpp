@@ -1898,8 +1898,11 @@ class memory_authority_store_t final : public authority_relocation_port_t
           .target_owner = std::move (target_owner),
           .application_payload = std::move (target_application_payload)};
         rows[authority_key (source.kind, source.key)] = reference;
-        if (throw_after_publish)
+        if (throw_after_publish) {
+            if (fail_read_after_publish)
+                throw_on_read = true;
             throw std::runtime_error ("response lost after authority commit");
+        }
         return {authority_publish_status_t::published, reference};
     }
 
@@ -1947,6 +1950,7 @@ class memory_authority_store_t final : public authority_relocation_port_t
     std::vector<std::string> log;
     bool force_conflict = false;
     bool throw_after_publish = false;
+    bool fail_read_after_publish = false;
     bool throw_on_read = false;
     bool throw_before_publish = false;
     bool source_preserved = false;
@@ -3228,6 +3232,246 @@ void test_public_authority_store_adapter (test_context_t &test)
 
 /* A relocation target driven by a raw source peer, so the test controls the
  * relay batch and the cutover (28 §4.4-4.5, 01 §10). */
+void test_relocation_target_shutdown (test_context_t &test, int mode)
+{
+    const auto initial_failures = test.failures;
+    using namespace std::chrono_literals;
+    namespace detail = zlink::framework::detail;
+    namespace framework = zlink::framework;
+    namespace protocol = zlink::framework::runtime::protocol;
+    namespace mesh = zlink::framework::runtime::mesh;
+    const auto text_bytes = [] (std::string_view value) {
+        return std::vector<std::uint8_t> (value.begin (), value.end ());
+    };
+
+    namespace host = framework::runtime::host;
+    auto roots = std::make_shared<memory_relocation_repository_t> ();
+    auto authority = std::make_shared<memory_authority_store_t> ();
+    host::host_options_t options;
+    options.mesh.descriptor = {"production-relocation-mesh",
+                               text_bytes ("settlement-target"),
+                               1,
+                               1,
+                               "tcp://127.0.0.1:0",
+                               {},
+                               mesh::service_node_state_t::preparing};
+    options.object_stable_types = {"production.actor"};
+    auto target_owner = std::make_shared<host::public_host_runtime_t> (options);
+    auto &target = *target_owner;
+    target.objects ().configure_relocation_state (
+      [] (const auto &, const auto &, std::stop_token) { return std::vector<std::uint8_t>{}; },
+      [] (const auto &, const auto &, std::stop_token) { return true; });
+    target.configure_maintenance ({authority,
+                                   std::make_shared<memory_aggregate_authority_t> (authority),
+                                   roots, std::make_shared<target_preflight_t> ()});
+    target.configure_stateful_dispatch ([] (const accepted_record_authority_query_t &query)
+                                          -> std::optional<accepted_record_authority_t> {
+        return std::nullopt; // The Store still names the source; the exact attempt owns admission.
+    });
+    target.configure_session_route_owner (
+      [] { return std::optional<framework::location_owner_token_t>{{"target-owner", 9}}; });
+    target.start ();
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{{"production-relocation-mesh",
+                                     text_bytes ("settlement-source"),
+                                     1,
+                                     1,
+                                     "tcp://127.0.0.1:0",
+                                     {},
+                                     mesh::service_node_state_t::preparing}});
+    source.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto target_descriptor = target.transport ().topology ().local_descriptor ();
+    (void) source.connect_peer (target.status ().local_endpoint (), target_descriptor);
+
+    std::mutex delivered_mutex;
+    std::vector<std::uint64_t> delivered;
+    std::atomic<bool> stop{false};
+    std::thread target_dispatch ([&] {
+        while (!stop.load (std::memory_order_acquire)) {
+            (void) target
+              .dispatch_ready ([&] (const auto &, const auto &record, auto) {
+                  {
+                      std::lock_guard lock (delivered_mutex);
+                      delivered.push_back (record.operation_id.low);
+                  }
+                  if (record.complete_stateful_dispatch)
+                      record.complete_stateful_dispatch ();
+              })
+              .result ();
+            std::this_thread::yield ();
+        }
+    });
+    const auto pump_until = [&] (const std::function<bool ()> &done,
+                                 std::chrono::milliseconds limit) {
+        const auto deadline = std::chrono::steady_clock::now () + limit;
+        while (!done () && std::chrono::steady_clock::now () < deadline) {
+            const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+            (void) await_task (source.pump_one (now));
+            std::this_thread::yield ();
+        }
+        return done ();
+    };
+    const auto admitted = pump_until (
+      [&] {
+          return source.topology ().peer (target_descriptor.node_routing_id).has_value ()
+                 && target.transport ()
+                      .topology ()
+                      .peer (source_descriptor.node_routing_id)
+                      .has_value ();
+      },
+      5s);
+    test.require (admitted, "the raw relocation source must be admitted by the target");
+
+    const protocol::relocation_coordinator_fence_t coordinator{
+      "source-owner", 1, source_descriptor.node_routing_id, source_descriptor.lifecycle_generation,
+      "authority-v1"};
+    /* Restores one Actor on the target and returns the attempt's wire
+     * identity once the target replied relay-ready. */
+    const auto prepare = [&] (std::string actor_id, protocol::relocation_id_t relocation) {
+        const object_ref_t source_actor{
+          object_kind_t::actor,
+          actor_id,
+          1,
+          1,
+          "production-relocation-mesh",
+          zlink::routing_id_t::from ("settlement-source").to_string ()};
+        {
+            std::lock_guard lock (authority->mutex);
+            authority->participant_identities = {
+              relocation_participant_identity_t{source_actor, "production.actor", std::nullopt}};
+        }
+        const protocol::relocation_object_t object{protocol::relocation_object_kind_t::actor,
+                                                   "production.actor", actor_id, 1, 1};
+        const auto payload = maintenance_runtime_t::encode_envelope (
+          {frozen_object_state_t{source_actor, "production.actor", {}, {}, {}}}, relocation, 1);
+        const auto manifest = plan_relocation_payload (payload, 1024);
+        const protocol::relocation_prepare_t request{relocation,
+                                                     target_descriptor.lifecycle_generation,
+                                                     coordinator,
+                                                     {target_descriptor.node_routing_id,
+                                                      target_descriptor.lifecycle_generation,
+                                                      "target-owner", 9},
+                                                     protocol::relocation_role_t::source,
+                                                     object,
+                                                     source_descriptor.node_routing_id,
+                                                     source_descriptor.lifecycle_generation,
+                                                     manifest.total_length,
+                                                     manifest.chunk_count,
+                                                     manifest.checksum_crc32c,
+                                                     1};
+        auto ready =
+          source.request_relocation_prepare (target_descriptor.node_routing_id, request, 5s);
+        for (std::uint32_t ordinal = 0; ordinal != manifest.chunk_count; ++ordinal) {
+            (void) await_task (source.send_relocation_control (
+              target_descriptor.node_routing_id,
+              make_relocation_state_chunk (relocation, target_descriptor.lifecycle_generation,
+                                           coordinator, object, payload, ordinal, 1024)));
+        }
+        (void) pump_until ([&] { return ready.await_ready (); }, 5s);
+        const auto &response = ready.result ();
+        return std::pair{object, response && response.value ().ready.has_value ()};
+    };
+    const auto record = [&] (const protocol::relocation_object_t &object,
+                             protocol::relocation_id_t relocation, std::uint64_t operation) {
+        protocol::frozen_application_record_t accepted;
+        accepted.kind = protocol::frozen_record_kind_t::actor_send;
+        accepted.source_kind = protocol::frozen_source_kind_t::node;
+        accepted.source = {"source-owner", 1, source_descriptor.node_routing_id,
+                           source_descriptor.lifecycle_generation};
+        accepted.operation = {operation, operation};
+        accepted.body = protocol::frozen_actor_application_body_t{
+          {object.object_id, object.object_generation, target_descriptor.node_routing_id,
+           target_descriptor.lifecycle_generation, object.expected_authority_owner_generation, 9},
+          protocol::application_payload_t::from_parts ([] {
+              protocol::application_payload_t::multipart_t parts;
+              parts.push_back (zlink::message_t::from (std::string ("same bytes")));
+              return parts;
+          }())};
+        return protocol::relocation_data_t{
+          relocation,  target_descriptor.lifecycle_generation,
+          coordinator, protocol::relocation_role_t::source,
+          object,      protocol::encode_frozen_application_record (accepted)};
+    };
+    const auto cutover = [&] (const protocol::relocation_object_t &object,
+                              protocol::relocation_id_t relocation,
+                              const std::vector<protocol::relocation_data_t> &batch) {
+        relocation_crc32c_accumulator_t checksum;
+        for (const auto &data : batch)
+            checksum.update (protocol::encode_relocation_control (data));
+        protocol::relocation_cutover_t value{relocation, target_descriptor.lifecycle_generation,
+                                             coordinator, protocol::relocation_role_t::source,
+                                             object};
+        value.boundary_record_count = batch.size ();
+        value.boundary_checksum_crc32c = checksum.value ();
+        (void) await_task (
+          source.send_relocation_control (target_descriptor.node_routing_id, value));
+    };
+    const auto publishes = [&] {
+        std::lock_guard lock (authority->mutex);
+        return authority->publish_count;
+    };
+    const auto staged = [&] (const std::string &actor_id) {
+        const auto objects = target.objects ().inventory ();
+        return std::any_of (objects.begin (), objects.end (), [&] (const object_inventory_t &item) {
+            return item.owner.key == actor_id;
+        });
+    };
+
+    const auto [object, ready] = prepare ("shutdown-target", {0x71, 0x10});
+    test.require (ready && staged ("shutdown-target"), "shutdown fixture must reach READY");
+    if (mode != 0) {
+        {
+            std::lock_guard lock (authority->mutex);
+            authority->throw_before_publish = mode == 1;
+            authority->throw_after_publish = mode == 2;
+            authority->fail_read_after_publish = mode == 2;
+        }
+        cutover (object, {0x71, 0x10}, {});
+        test.require (pump_until ([&] { return publishes () != 0; }, 3s),
+                      "verified cutover must enter CAS before seal");
+    }
+    auto shutdown = target.termination ()->terminate (termination_intent_t::shutdown);
+    if (mode == 0) {
+        test.require (pump_until ([&] { return shutdown.await_ready (); }, 2s),
+                      "seal before cutover must finish shutdown within deadline");
+        test.require (!staged ("shutdown-target"), "seal must discard READY staging");
+        cutover (object, {0x71, 0x10}, {});
+        (void) pump_until ([&] { return publishes () != 0; }, 100ms);
+        test.require (publishes () == 0, "late cutover after seal must never start CAS");
+    } else {
+        test.require (!shutdown.await_ready (), "shutdown must wait for verified target terminal");
+        test.require (staged ("shutdown-target"), "seal must retain verified staging");
+        {
+            std::lock_guard lock (authority->mutex);
+            authority->throw_before_publish = false;
+            authority->throw_after_publish = false;
+            authority->throw_on_read = false;
+            authority->fail_read_after_publish = false;
+        }
+        test.require (pump_until ([&] { return shutdown.await_ready (); }, 3s),
+                      "CAS settlement must finish target shutdown");
+        const auto active = target.objects ().inventory ();
+        test.require (std::any_of (active.begin (), active.end (),
+                                   [] (const auto &item) {
+                                       return item.owner.key == "shutdown-target"
+                                              && item.state == object_state_t::ready;
+                                   }),
+                      "verified target must publish after seal");
+    }
+    if (shutdown.await_ready ()) {
+        const auto result = shutdown.result ();
+        test.require (result && result.value ().outcome == termination_outcome_t::stopped,
+                      "target terminal must finish as Stopped");
+    }
+    stop.store (true, std::memory_order_release);
+    target_dispatch.join ();
+    source.close ();
+    target.close ();
+    std::cout << "relocation-shutdown mode=" << mode
+              << " failures=" << test.failures - initial_failures << '\n';
+}
+
 void test_relocation_target_cutover_and_authority_settlement (test_context_t &test)
 {
     using namespace std::chrono_literals;
@@ -6422,7 +6666,7 @@ void test_actor_join_wire_gate_records_target_authority (test_context_t &test)
     node.stop ();
 }
 
-int main ()
+int main (int argc, char **argv)
 {
     zlink::framework::runtime::configure_handler_coroutine_executor (4);
     struct executor_shutdown_t
@@ -6433,6 +6677,13 @@ int main ()
         }
     } executor_shutdown;
     test_context_t test;
+    if (argc == 2 && std::string_view (argv[1]) == "--relocation-shutdown") {
+        for (int mode = 0; mode != 3; ++mode)
+            test_relocation_target_shutdown (test, mode);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    for (int mode = 0; mode != 3; ++mode)
+        test_relocation_target_shutdown (test, mode);
     test_spot_lifecycle_domain_rejects_invalid_kind_combinations (test);
     test_generation_barrier_quiesces_yield_spot_and_timer (test);
     test_relocation_ready_completion_runs_once_on_spot_turn (test);

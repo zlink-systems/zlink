@@ -747,7 +747,8 @@ class host_maintenance_runtime_t
                                 stream_session_registry_t &sessions,
                                 maintenance_runtime_t &relocation,
                                 std::shared_ptr<target_preflight_port_t> targets,
-                                observer_t observer = {});
+                                observer_t observer = {},
+                                std::function<task_t<void> ()> seal_targets = {});
 
     void mark_serving ();
     void mark_error ();
@@ -762,7 +763,7 @@ class host_maintenance_runtime_t
     task_t<termination_result_t> run_retire ();
     task_t<termination_result_t> run_termination_attempt (termination_intent_t intent,
                                                           std::uint64_t attempt);
-    termination_result_t run_shutdown (termination_intent_t effective_intent);
+    task_t<termination_result_t> run_shutdown (termination_intent_t effective_intent);
     void complete_attempt (std::uint64_t attempt, const termination_result_t &result);
 
     stateful_object_runtime_t &_objects;
@@ -770,6 +771,7 @@ class host_maintenance_runtime_t
     maintenance_runtime_t &_relocation;
     std::shared_ptr<target_preflight_port_t> _targets;
     observer_t _observer;
+    std::function<task_t<void> ()> _seal_targets;
     offload_executor_t _lane_executor;
     mutable state_lane_t _lane;
     maintenance_admission_state_t _state = maintenance_admission_state_t::preparing;
