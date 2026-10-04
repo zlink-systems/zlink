@@ -14,6 +14,135 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SessionActorCoordinatorTests
 {
     [Fact]
+    public async Task Actor_Request_Yields_While_Registry_State_Is_Busy()
+    {
+        var registry = new ZLinkActorSessionRegistry();
+        var router = new ZLinkActorDispatchRouter(
+            CreateRuntime(),
+            registry,
+            static (_, _) => throw new InvalidOperationException()
+        );
+        var lane = (ZLinkStateLane)
+            typeof(ZLinkActorSessionRegistry)
+                .GetField(
+                    "_lane",
+                    System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.NonPublic
+                )!
+                .GetValue(registry)!;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = lane.RunAsync(async () =>
+            {
+                entered.SetResult();
+                await release.Task;
+            })
+            .AsTask();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        using var payload = Message.From(new byte[] { 1 });
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Request,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.HasRequestSeq,
+            new ZlinkStreamRequestSeq(1),
+            "ActorPingReq",
+            ZlinkStreamMetadata.Empty
+        );
+        var yielded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var request = Task.Run(async () =>
+        {
+            var operation = router.SubmitForReplyAsync(
+                "missing",
+                header,
+                payload,
+                false,
+                CancellationToken.None
+            );
+            yielded.SetResult();
+            await operation;
+        });
+        try
+        {
+            await yielded.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(request.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await held;
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => request);
+            Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+        }
+    }
+
+    [Fact]
+    public async Task Bound_Actor_Relay_Yields_While_Binding_State_Is_Busy()
+    {
+        var runtime = CreateRuntime();
+        var context = CreateSessionContext(runtime, "session-busy-binding");
+        var actor = new ZLinkSessionActor(
+            context,
+            "actor-busy-binding",
+            RoutingId.From("session-busy-binding"),
+            "missing"
+        );
+        const System.Reflection.BindingFlags fields =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var coordinator = typeof(ZLinkFrameworkRuntime)
+            .GetField("_actorBoundSessionCoordinator", fields)!
+            .GetValue(runtime)!;
+        var bindings = coordinator
+            .GetType()
+            .GetField("_sessionBindings", fields)!
+            .GetValue(coordinator)!;
+        var lane = (ZLinkStateLane)
+            bindings.GetType().GetField("_lane", fields)!.GetValue(bindings)!;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = lane.RunAsync(async () =>
+            {
+                entered.SetResult();
+                await release.Task;
+            })
+            .AsTask();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        using var payload = Message.From(new byte[] { 1 });
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Request,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.HasRequestSeq,
+            new ZlinkStreamRequestSeq(1),
+            "ActorPingReq",
+            ZlinkStreamMetadata.Empty
+        );
+        var yielded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var request = Task.Run(async () =>
+        {
+            var operation = context.ActorCoordinator.RelayToActorAsync(
+                actor,
+                header,
+                payload,
+                static (_, _, _) => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
+            yielded.SetResult();
+            await operation;
+        });
+        try
+        {
+            await yielded.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(request.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await held;
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => request);
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+        }
+    }
+
+    [Fact]
     public async Task BindingSlotsAreStableUniqueAndPopulateDispatchActor()
     {
         var runtime = CreateRuntime();

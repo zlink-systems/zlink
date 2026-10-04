@@ -297,6 +297,9 @@ channel이다. 현재 연결이 준비되고 publish topic이 등록한 topic �
   subscriber는 같은 ChannelName의 live publisher를 모두 연결하고 다른 ChannelName이나 다른
   [descriptor](02-glossary.ko.md#descriptor) kind는 연결하지 않는다. Manual subscriber는 명시한
   endpoint만 연결한다.
+- **Publisher는 host startup 중에 자신의 endpoint를 bind한다.** 첫 publish를 기다리지 않는다.
+  Bind가 실패하면 startup이 실패한다. 따라서 startup이 끝난 publisher에는 subscriber가 첫
+  publish 전에도 연결할 수 있다.
 
 Logical Multicast와 classic fanout은 모두 publish/subscribe 사용 경험을 제공하지만 전달 대상과
 보장이 다르므로 별도 기능으로 등록한다.

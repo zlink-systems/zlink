@@ -77,7 +77,7 @@ internal abstract partial class ZLinkSpotActivation
             _runtime.Registration.Codecs,
             _runtime.Registration.StreamCompressionCodec,
             this,
-            ResolveActorHandlerInstances
+            _runtime.ResolveActorHandlerInstancesAsync
         );
     }
 
@@ -99,7 +99,7 @@ internal abstract partial class ZLinkSpotActivation
             _runtime.Registration.Codecs,
             _runtime.Registration.StreamCompressionCodec,
             this,
-            ResolveActorHandlerInstances
+            _runtime.ResolveActorHandlerInstancesAsync
         );
     }
 
@@ -211,11 +211,5 @@ internal abstract partial class ZLinkSpotActivation
     {
         return _actorHandlers
             ?? throw new InvalidOperationException("SPOT actor registry is not initialized.");
-    }
-
-    private ZLinkScopedHandlerInstanceOwner ResolveActorHandlerInstances(IZLinkActor actor)
-    {
-        var state = _runtime.GetOrCreateActorState(actor.Context.ActorId);
-        return state.HandlerInstances;
     }
 }

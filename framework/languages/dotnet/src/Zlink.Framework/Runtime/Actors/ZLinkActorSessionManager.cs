@@ -475,6 +475,9 @@ internal sealed partial class ZLinkActorSessionManager(
         return _actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
     }
 
+    internal ValueTask<ZLinkActorRuntimeState> GetOrCreateStateAsync(string actorId) =>
+        _actorSessions.GetOrCreateAsync(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+
     internal bool TryGetState(string actorId, out ZLinkActorRuntimeState state)
     {
         return _actorSessions.TryGet(

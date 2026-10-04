@@ -131,7 +131,8 @@ public sealed class SpotHandlerInvokerTests
             "test-mesh",
             new ZLinkCodecRegistryBuilder(),
             ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec(),
-            actorHandlerInstances: actor => states[actor.Context.ActorId].HandlerInstances
+            actorHandlerInstances: actor =>
+                ValueTask.FromResult(states[actor.Context.ActorId].HandlerInstances)
         );
         var first = new MemberLifecycleActor("player-1");
         var second = new MemberLifecycleActor("player-2");

@@ -533,17 +533,22 @@ internal sealed class ZLinkSessionActorCoordinator(
                 "Actor ref was not created by this framework runtime."
             );
 
-        var contextLive =
-            runtime.TryGetSessionActorContext(
-                actorRef.ActorId,
-                actorRef.BindingToken,
-                out var currentContext
-            ) && ReferenceEquals(currentContext, actorRef.Context);
+        var currentContext = await runtime
+            .GetSessionActorContextAsync(actorRef.ActorId, actorRef.BindingToken)
+            .ConfigureAwait(false);
+        var contextLive = ReferenceEquals(currentContext, actorRef.Context);
         //  This guard checks the binding token only. An Actor destroyed and
         //  recreated keeps the same token, so a stale incarnation passes here.
-        Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"session_relay_entry actor={actorRef.ActorId} context_live={contextLive} has_route={actorRef.TryGetRoute(out var relayRoute)} route_authority_gen={relayRoute.AuthorityOwnerGeneration} route_node_gen={relayRoute.TargetNodeGeneration}"
-        );
+        if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
+        {
+            var observedRoute = await runtime
+                .GetSessionActorRouteAsync(actorRef.ActorId, actorRef.BindingToken, actorRef)
+                .ConfigureAwait(false);
+            var relayRoute = observedRoute.GetValueOrDefault();
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"session_relay_entry actor={actorRef.ActorId} context_live={contextLive} has_route={observedRoute.HasValue} route_authority_gen={relayRoute.AuthorityOwnerGeneration} route_node_gen={relayRoute.TargetNodeGeneration}"
+            );
+        }
         if (!contextLive)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
@@ -574,7 +579,9 @@ internal sealed class ZLinkSessionActorCoordinator(
                                 using var retained = Message.From(body);
                                 if (
                                     stream is ZLinkManagedStream
-                                    && !IsLocalActorRef(actorRef.Route)
+                                    && !IsLocalActorRef(
+                                        await actorRef.GetRouteAsync().ConfigureAwait(false)
+                                    )
                                 )
                                     await ForwardToRemoteActorAsync(
                                             actorRef,
@@ -587,9 +594,11 @@ internal sealed class ZLinkSessionActorCoordinator(
                                         .ConfigureAwait(false);
                                 else
                                 {
-                                    runtime
-                                        .GetOrCreateActorState(actorRef.ActorId)
-                                        .RecordBoundSessionAccepted(actorRef.BindingToken);
+                                    (
+                                        await runtime
+                                            .GetOrCreateActorStateAsync(actorRef.ActorId)
+                                            .ConfigureAwait(false)
+                                    ).RecordBoundSessionAccepted(actorRef.BindingToken);
                                     await DispatchLocalAsync(
                                             actorRef,
                                             header,
@@ -664,13 +673,10 @@ internal sealed class ZLinkSessionActorCoordinator(
             // A relocation seal is an infrastructure boundary, not an
             // application rejection. Keep this frame in the current stream
             // operation until the session owner publishes the new route.
-            while (
-                !runtime.TryAcceptSessionActorFrame(
-                    actorRef.ActorId,
-                    actorRef.BindingToken,
-                    out acceptedHighWater
-                )
-            )
+            var acceptance = await runtime
+                .AcceptSessionActorFrameAsync(actorRef.ActorId, actorRef.BindingToken)
+                .ConfigureAwait(false);
+            while (!acceptance.Accepted)
             {
                 if (
                     !await runtime
@@ -686,7 +692,11 @@ internal sealed class ZLinkSessionActorCoordinator(
                         $"Actor '{actorRef.ActorId}' session binding changed before frame admission.",
                         ZLinkRetryAdvice.RetryAfterBackoff
                     );
+                acceptance = await runtime
+                    .AcceptSessionActorFrameAsync(actorRef.ActorId, actorRef.BindingToken)
+                    .ConfigureAwait(false);
             }
+            acceptedHighWater = acceptance.AcceptedHighWater;
             acceptedFrame = true;
         }
 
@@ -694,7 +704,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         {
             if (stream is ZLinkManagedStream)
             {
-                var route = actorRef.Route;
+                var route = await actorRef.GetRouteAsync().ConfigureAwait(false);
                 if (!IsLocalActorRef(route))
                 {
                     var requestId =
@@ -726,7 +736,7 @@ internal sealed class ZLinkSessionActorCoordinator(
                         if (requestId is { } failedRequestId)
                             runtime.CompleteRemoteSessionActorRequest(
                                 actorRef.ActorId,
-                                actorRef.Ref.ObjectGeneration,
+                                route.Ref.ObjectGeneration,
                                 actorRef.BindingToken,
                                 failedRequestId.Value
                             );
@@ -737,16 +747,18 @@ internal sealed class ZLinkSessionActorCoordinator(
             }
 
             if (!isBindingControlFrame)
-                runtime
-                    .GetOrCreateActorState(actorRef.ActorId)
-                    .RecordBoundSessionAccepted(actorRef.BindingToken);
+                (
+                    await runtime.GetOrCreateActorStateAsync(actorRef.ActorId).ConfigureAwait(false)
+                ).RecordBoundSessionAccepted(actorRef.BindingToken);
             await DispatchLocalAsync(actorRef, header, payload, replyRawAsync, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
         {
             if (acceptedFrame)
-                runtime.CompleteAcceptedSessionActorFrame(actorRef.ActorId, actorRef.BindingToken);
+                await runtime
+                    .CompleteAcceptedSessionActorFrameAsync(actorRef.ActorId, actorRef.BindingToken)
+                    .ConfigureAwait(false);
         }
     }
 
@@ -767,7 +779,7 @@ internal sealed class ZLinkSessionActorCoordinator(
             throw new InvalidOperationException(
                 "Actor session relay requires a stream routing id."
             );
-        var route = actorRef.Route;
+        var route = await actorRef.GetRouteAsync().ConfigureAwait(false);
         var sessionNode = runtime.GetMeshNodeRuntime(route.MeshName.Value);
         var sessionNodeRid = sessionNode.Node.RoutingId;
         // EncodeHeader returns a freshly allocated buffer; Message.From accepts
@@ -808,7 +820,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         var handoffMetadata = ZLinkActorBoundSessionHandoffMetadata.Encode(
             new ZLinkActorBoundSessionHandoffFence(
                 actorRef.ActorId,
-                actorRef.Ref.ObjectGeneration,
+                route.Ref.ObjectGeneration,
                 sessionRid,
                 actorRef.BindingToken,
                 sessionBinding.BindingGeneration,
