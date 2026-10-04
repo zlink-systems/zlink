@@ -547,6 +547,13 @@ Framework에 노출하지 않는다.
 않는다. 게시가 끝나는 시점은 host의 실행 모델을 따른다. 호출자는 호출이 반환한 시점에 새
 Revision이 Store에 저장되어 있다고 가정하지 않는다.
 
+**운영 projection의 변화는 게시를 시작하지 않는다.** `capacity`의 count와
+`activationConcurrency.active`는 운영자가 상태를 확인하기 위한 복사본이다(§4). 다른 host가
+이 값을 읽어 target 후보를 고르더라도 최종 수락은 target의 수용 공간 record와 target 자신의 activation
+admission이 정한다. Host는 이 값이 바뀌었다는
+이유만으로 새 Revision을 게시하지 않는다. Automatic discovery 주기마다 현재 값이 마지막으로 게시한
+값과 다르면 다음 Revision으로 게시한다. 다른 내용 변경으로 게시할 때에도 그 시점의 값을 함께 담는다.
+
 Host는 startup 중 descriptor 전체를 먼저 만든다. 크기 제한을 넘으면 일부를 자르거나 나누어
 게시하지 않고 startup 전체를 실패시킨다. Application state의 format과 version은 descriptor에
 넣지 않는다.

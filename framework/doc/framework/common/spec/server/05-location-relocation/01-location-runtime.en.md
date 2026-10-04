@@ -599,6 +599,15 @@ which a host reads descriptors other hosts published, and it doesn't set when a 
 publishes its own change. When the publication completes follows the host's execution
 model. A caller doesn't assume the new Revision is stored by the time the call returns.
 
+**A change in an operational projection doesn't start a publication.** The `capacity`
+counts and `activationConcurrency.active` are copies for operators to check status (§4).
+Another host may read these values to choose a target candidate, but the target's capacity
+record and the target's own activation admission make the final acceptance. A
+host doesn't publish a new Revision only because one of these values changed. On each
+automatic discovery cycle, if a current value differs from the last published value, the host
+publishes it in the next Revision. A publication for another content change also carries the
+values at that time.
+
 The host builds the whole descriptor during startup first. If it exceeds the size limit,
 it doesn't publish a truncated or split version — the whole startup fails instead. The
 format and version of application state aren't put in the descriptor.
