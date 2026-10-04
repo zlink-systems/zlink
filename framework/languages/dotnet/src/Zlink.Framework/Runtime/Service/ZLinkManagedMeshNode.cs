@@ -11355,60 +11355,54 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var terminal = operation?.Token ?? CancellationToken.None;
         var shutdown = _stop?.Token ?? CancellationToken.None;
-        StartDetached(async () =>
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(terminal, shutdown);
+        var transferred = false;
+        // Register on the submitting turn; the queue posts publications in
+        // grant order without waiting for the destination lane.
+        var acquisition = _applicationJobQueue!.AcquireAndPostAsync(
+            cancellation.Token,
+            _operationLane,
+            admission =>
+            {
+                if (
+                    cancellation.IsCancellationRequested
+                    || (
+                        operation is not null
+                        && (
+                            !_operations.TryGetValue(operation.OperationId.Low, out var current)
+                            || !ReferenceEquals(current, operation)
+                        )
+                    )
+                )
+                {
+                    admission.Dispose();
+                    return;
+                }
+                var owner = new ZLinkApplicationJobQueueRecordOwner(payloadOwner, admission);
+                transferred = true;
+                EnqueueOwned(key, record, parts, admitApplication: true, payloadOwner: owner);
+            }
+        );
+        _ = FinishAdmissionAsync();
+
+        async Task FinishAdmissionAsync()
         {
-            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
-                terminal,
-                shutdown
-            );
-            ZLinkApplicationJobQueueLease? admission = null;
-            var transferred = false;
             try
             {
-                admission = await _applicationJobQueue!
-                    .AcquireAsync(cancellation.Token)
-                    .ConfigureAwait(false);
-                await _operationLane
-                    .RunAsync(() =>
-                    {
-                        if (cancellation.IsCancellationRequested)
-                            return;
-                        if (
-                            operation is not null
-                            && (
-                                !_operations.TryGetValue(operation.OperationId.Low, out var current)
-                                || !ReferenceEquals(current, operation)
-                            )
-                        )
-                            return;
-                        var owner = new ZLinkApplicationJobQueueRecordOwner(
-                            payloadOwner,
-                            admission
-                        );
-                        admission = null;
-                        transferred = true;
-                        EnqueueOwned(
-                            key,
-                            record,
-                            parts,
-                            admitApplication: true,
-                            payloadOwner: owner
-                        );
-                    })
-                    .ConfigureAwait(false);
+                await acquisition.ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
             catch (ObjectDisposedException) when (shutdown.IsCancellationRequested) { }
             finally
             {
-                admission?.Dispose();
                 if (!transferred)
                 {
                     DisposeParts(parts);
                     payloadOwner?.Dispose();
                 }
+                cancellation.Dispose();
             }
-        });
+        }
     }
 
     private bool EnqueueOwned(

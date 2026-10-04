@@ -118,6 +118,57 @@ TEST (ZLinkFrameworkApplicationJobQueue, LocalRequestsDoNotPublishWithoutSharedP
     EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
 }
 
+TEST (ZLinkFrameworkApplicationJobQueue, LocalRequestsPreserveSubmissionOrderAcrossPermitWait)
+{
+    namespace host = zlink::framework::runtime::host;
+    for (const bool actor_request : {false, true}) {
+        auto queue = std::make_shared<queue_t> (limit_one_configuration ());
+        auto native = local_admission_host (queue);
+        auto spot = native->get_or_create_spot ("local-spot");
+        auto actor = native->create_actor ("player", "local-actor");
+        auto held = queue->try_reserve_supply ();
+        ASSERT_TRUE (held);
+        std::vector<host::pending_operation_t> operations (64);
+        const std::vector<zlink::message_t> parts;
+        for (auto &operation : operations) {
+            ASSERT_EQ (zlink::submit_result_t::ok,
+                       actor_request
+                         ? actor
+                             .request_to (actor.ref (), parts, operation, zlink::send_flags_t::none,
+                                          std::chrono::seconds (5))
+                             .result ()
+                             .value ()
+                         : spot
+                             .request_to_spot (native->status ().routing_id (), "local-spot", 1,
+                                               parts, operation, zlink::send_flags_t::none,
+                                               std::chrono::seconds (5))
+                             .result ()
+                             .value ());
+        }
+        ASSERT_EQ (operations.size (), queue->snapshot ().capacity_waiters);
+        EXPECT_FALSE (native->next_dispatch_activity_async ().result ().value ().first);
+        held.reset ();
+        std::size_t received = 0;
+        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+        while (received < operations.size ()) {
+            ASSERT_LT (std::chrono::steady_clock::now (), deadline);
+            (void) native
+              ->dispatch_ready (
+                [&] (const auto &, const auto &record, auto) {
+                    ASSERT_LT (received, operations.size ());
+                    EXPECT_EQ (operations[received++].id, record.operation_id);
+                    ASSERT_TRUE (record.before_application_handler);
+                    record.before_application_handler ();
+                },
+                false)
+              .result ()
+              .value ();
+        }
+        EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
+        native->close ();
+    }
+}
+
 
 TEST (ZLinkFrameworkApplicationJobQueue, ImmediateLocalRequestPublishesOnItsOwningLane)
 {

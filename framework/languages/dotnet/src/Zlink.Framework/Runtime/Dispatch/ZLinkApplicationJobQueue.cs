@@ -192,6 +192,47 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     internal ValueTask<ZLinkApplicationJobQueueLease> AcquireAsync(
         CancellationToken cancellationToken
+    ) => AcquireAsyncCore(cancellationToken, null);
+
+    internal async Task AcquireAndPostAsync(
+        CancellationToken cancellationToken,
+        ZLinkStateLane destination,
+        Action<ZLinkApplicationJobQueueLease> publish
+    )
+    {
+        ValueTask publication = default;
+        var admission = await AcquireAsyncCore(
+                cancellationToken,
+                granted =>
+                {
+                    // Only enqueue on the reservation turn. The consumer runs
+                    // on the destination lane, in the order of the queue's grants.
+                    publication = destination.RunAsync(
+                        (Func<ValueTask>)(
+                            () =>
+                            {
+                                publish(granted);
+                                return ValueTask.CompletedTask;
+                            }
+                        )
+                    );
+                }
+            )
+            .ConfigureAwait(false);
+        try
+        {
+            await publication.ConfigureAwait(false);
+            admission = null;
+        }
+        finally
+        {
+            admission?.Dispose();
+        }
+    }
+
+    private ValueTask<ZLinkApplicationJobQueueLease> AcquireAsyncCore(
+        CancellationToken cancellationToken,
+        Action<ZLinkApplicationJobQueueLease>? onGranted
     )
     {
         if (cancellationToken.IsCancellationRequested)
@@ -209,12 +250,14 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
                     _reservedSupplyPermits = checked(_reservedSupplyPermits + 1);
                     ObservePeakUnderLock();
                     var immediateLease = new ZLinkApplicationJobQueueLease(this);
+                    onGranted?.Invoke(immediateLease);
                     return new AcquireResult(null, immediateLease, UpdatePressureStateOnLane());
                 }
                 var waiter = new Waiter(
                     cancellationToken,
                     _timeProvider.GetTimestamp(),
-                    _measurementEpoch
+                    _measurementEpoch,
+                    onGranted
                 );
                 waiter.Node = _waiters.AddLast(waiter);
                 _capacityWaiters = checked(_capacityWaiters + 1);
@@ -469,11 +512,9 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             RecordCompletedWaitUnderLock(candidate);
             _reservedSupplyPermits = checked(_reservedSupplyPermits + 1);
             ObservePeakUnderLock();
-            return new ReleaseResult(
-                candidate,
-                new ZLinkApplicationJobQueueLease(this),
-                UpdatePressureStateOnLane()
-            );
+            var admittedLease = new ZLinkApplicationJobQueueLease(this);
+            candidate.OnGranted?.Invoke(admittedLease);
+            return new ReleaseResult(candidate, admittedLease, UpdatePressureStateOnLane());
         }
         return new ReleaseResult(null, null, UpdatePressureStateOnLane());
     }
@@ -686,12 +727,14 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
     private sealed class Waiter(
         CancellationToken cancellationToken,
         long startedTimestamp,
-        ulong measurementEpoch
+        ulong measurementEpoch,
+        Action<ZLinkApplicationJobQueueLease>? onGranted
     )
     {
         internal CancellationToken CancellationToken { get; } = cancellationToken;
         internal long StartedTimestamp { get; } = startedTimestamp;
         internal ulong MeasurementEpoch { get; } = measurementEpoch;
+        internal Action<ZLinkApplicationJobQueueLease>? OnGranted { get; } = onGranted;
         internal TaskCompletionSource<ZLinkApplicationJobQueueLease> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal LinkedListNode<Waiter>? Node { get; set; }
