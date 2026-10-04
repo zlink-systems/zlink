@@ -547,6 +547,11 @@ Framework에 노출하지 않는다.
 않는다. 게시가 끝나는 시점은 host의 실행 모델을 따른다. 호출자는 호출이 반환한 시점에 새
 Revision이 Store에 저장되어 있다고 가정하지 않는다.
 
+`capacity`의 count와 `activationConcurrency.active`는 후보 선택과 운영 조회에 쓰는 복사본이며,
+수락을 보장하지 않는다. 수용 공간은 Location Store의 atomic reservation이 확보하고, activation
+수락은 target MeshNode가 자신의 admission으로 정한다. **이 count가 바뀐 것만으로 descriptor 게시나
+Revision 증가를 시작하지 않는다.**
+
 Host는 startup 중 descriptor 전체를 먼저 만든다. 크기 제한을 넘으면 일부를 자르거나 나누어
 게시하지 않고 startup 전체를 실패시킨다. Application state의 format과 version은 descriptor에
 넣지 않는다.
