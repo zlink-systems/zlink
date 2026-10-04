@@ -234,8 +234,9 @@ try {
     if ($closingGeneration -eq $replayGeneration) { throw "Close replay must execute in a new runtime ObjectGeneration." }
 
     $ownerClient = Start-Role "owner-unavailable-client" "Client" "Client" $ownerUnavailableConfig
-    Wait-LogCount @((Join-Path $LogDir "mission-a.log"), (Join-Path $LogDir "mission-b.log")) "gamequest-owner-ready player=player-owner-unavailable" 1
-    $ownerNode = if ((Get-LogCount @((Join-Path $LogDir "mission-a.log")) "gamequest-owner-ready player=player-owner-unavailable node=mission-a") -eq 1) { "mission-a" } else { "mission-b" }
+    Wait-LogCount @((Join-Path $LogDir "owner-unavailable-client.log")) "gamequest-owner-join-completed" 1
+    Wait-LogCount @((Join-Path $LogDir "mission-a.log"), (Join-Path $LogDir "mission-b.log")) "gamequest-owner-initialized player=player-owner-unavailable" 1
+    $ownerNode = if ((Get-LogCount @((Join-Path $LogDir "mission-a.log")) "gamequest-owner-initialized player=player-owner-unavailable node=mission-a") -eq 1) { "mission-a" } else { "mission-b" }
     Stop-ZlinkSampleProcessTree -Process $RoleProcesses[$ownerNode]
     $ownerClientRelease = New-Item -ItemType File -Path $releaseFile -Force
     $ownerClient.WaitForExit()

@@ -416,6 +416,7 @@ public final class GameQuestClientScenario {
                 .submit(Messages.JoinSessionRes.class)
                 .toCompletableFuture()
                 .join();
+        System.out.println(SampleNames.OwnerJoinCompletedMarker);
         waitForApplicationRelease();
         try {
             apiAStream

@@ -7,6 +7,7 @@ public final class SampleNames {
     public static final String PlayerSessionActorType = "gamequest.player-session";
     public static final String CompletedMarker = "gamequest=completed";
     public static final String ServerEvidenceMarker = "gamequest-server-evidence=completed";
+    public static final String OwnerJoinCompletedMarker = "gamequest-owner-join-completed";
 
     private SampleNames() {}
 }

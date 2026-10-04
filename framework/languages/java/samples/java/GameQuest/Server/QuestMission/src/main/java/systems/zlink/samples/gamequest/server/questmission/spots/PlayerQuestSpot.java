@@ -36,7 +36,7 @@ public final class PlayerQuestSpot implements ZLinkInstanceSpot {
         }
         if ("player-owner-unavailable".equals(playerId)) {
             System.out.printf(
-                    "gamequest-owner-ready player=%s node=%s%n", playerId, store.nodeId());
+                    "gamequest-owner-initialized player=%s node=%s%n", playerId, store.nodeId());
         }
         return CompletableFuture.completedFuture(null);
     }
