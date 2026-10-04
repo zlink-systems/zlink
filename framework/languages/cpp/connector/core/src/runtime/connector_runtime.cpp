@@ -124,8 +124,12 @@ class shared_operation_runner_t : public std::enable_shared_from_this<shared_ope
         }
     }
 
-    ~shared_operation_runner_t ()
+    ~shared_operation_runner_t () { stop (); }
+
+    void stop ()
     {
+        _work.reset ();
+        _io_context.stop ();
         for (auto &worker : _workers) {
             if (worker.joinable ()) {
                 if (worker.get_id () == std::this_thread::get_id ()) {
@@ -135,12 +139,6 @@ class shared_operation_runner_t : public std::enable_shared_from_this<shared_ope
                 }
             }
         }
-    }
-
-    void stop ()
-    {
-        _work.reset ();
-        _io_context.stop ();
     }
 
     void post (std::function<void ()> operation)
@@ -1006,11 +1004,18 @@ connector_t::connector_t (connector_options_t options) :
 {
     auto state = detail::state_from (_state);
     _external_owner = std::shared_ptr<void> (state.get (), [state] (void *) {
-        detail::post_connect_operation (state, [state] {
+        auto dispose = [state] {
             (void) close_state (state);
             std::lock_guard<std::mutex> lock (state->delivery_mutex);
             state->delivery_queue.clear ();
-        });
+        };
+        // A callback cannot wait for close work. Outside it, finish disposal
+        // before releasing the last external owner to process teardown.
+        if (detail::callback_scope_t::running_callback_of (*state)) {
+            detail::post_connect_operation (state, std::move (dispose));
+        } else {
+            dispose ();
+        }
     });
     /* Only the built-in default is dropped here. A codec the caller installed
    * on a configuration whose compression is off stays as written, so
