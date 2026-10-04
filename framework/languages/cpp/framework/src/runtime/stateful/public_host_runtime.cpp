@@ -676,7 +676,7 @@ zlink::submit_result_t spot_handle_t::publish (const std::string &channel_name,
     local.source_node_rid = _host->status ().routing_id ();
     _host->_local_dispatch_completion_lane
       .run ([&] {
-          _host->_local_application_dispatches.push_back (
+          _host->admit_local_application (
             local_application_dispatch_t{std::move (owner), std::move (local), parts});
       })
       .get ();
@@ -1053,9 +1053,9 @@ void public_host_runtime_t::close () noexcept
           _session_journal_terminals.clear ();
       })
       .get ();
-    _local_dispatch_completion_lane.run ([&] { _local_application_dispatches.clear (); }).get ();
     _sessions.drop_held_relays (message_flow_reason_t::shutdown);
     _transport->close ();
+    _local_dispatch_completion_lane.run ([&] { _local_application_dispatches.clear (); }).get ();
     _lifecycle_configuration_lane.run ([&] { _closing = false; }).get ();
 }
 
@@ -5871,13 +5871,17 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
         bool application_dispatch_started = pumped == mesh::raw_mesh_pump_result_t::application
                                             && _transport->mailbox ().has_application_dispatch ();
 
-        if (accept_application_receive && !application_dispatch_started) {
+        if (!application_dispatch_started) {
             for (;;) {
                 std::optional<local_application_dispatch_t> pending;
                 bool skip = false;
                 _local_dispatch_completion_lane
                   .run ([&] {
                       if (_local_application_dispatches.empty ())
+                          return;
+                      if (!accept_application_receive
+                          && !_local_application_dispatches.front ()
+                                .record.before_application_handler)
                           return;
                       pending = std::move (_local_application_dispatches.front ());
                       _local_application_dispatches.pop_front ();
@@ -6524,8 +6528,14 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
               return fail (classified.first, classified.second);
           }
 
+          auto waiter = _options.mesh.application_jobs
+                          ? std::make_shared<application_job_queue_t::waiter_t> ()
+                          : nullptr;
           register_local_completion (operation, timeout, {},
-                                     [host = shared_from_this (), membership] {
+                                     [host = shared_from_this (), membership,
+                                      cleanup = local_request_wait_cleanup (waiter)] {
+                                         if (cleanup)
+                                             cleanup ();
                                          (void) host->_objects.abort_membership_move (membership);
                                      });
 
@@ -6553,8 +6563,9 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
           _local_dispatch_completion_lane
             .run ([&] {
                 try {
-                    _local_application_dispatches.push_back (
-                      local_application_dispatch_t{std::move (owner), std::move (record), parts});
+                    admit_local_application (
+                      local_application_dispatch_t{std::move (owner), std::move (record), parts},
+                      waiter);
                 }
                 catch (...) {
                     _transport->unregister_local_operation (operation.id);
@@ -6618,6 +6629,60 @@ bool public_host_runtime_t::complete_local_actor_join (pending_operation_t opera
       });
 }
 
+std::function<void ()> public_host_runtime_t::local_request_wait_cleanup (
+  const std::shared_ptr<application_job_queue_t::waiter_t> &waiter)
+{
+    if (!waiter)
+        return {};
+    std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
+    return [weak, waiter] {
+        if (auto host = weak.lock ())
+            host->_local_dispatch_completion_lane.try_post ([waiter] { (void) waiter->cancel (); });
+    };
+}
+
+void public_host_runtime_t::admit_local_application (
+  local_application_dispatch_t dispatch,
+  const std::shared_ptr<application_job_queue_t::waiter_t> &waiter)
+{
+    if (!_options.mesh.application_jobs) {
+        _local_application_dispatches.push_back (std::move (dispatch));
+        return;
+    }
+    auto pending = waiter ? waiter : std::make_shared<application_job_queue_t::waiter_t> ();
+    std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
+    *pending = _options.mesh.application_jobs->wait_for_supply (
+      [weak, waiter = pending, dispatch = std::move (dispatch)] (
+        std::optional<application_job_queue_t::permit_t> reserved) mutable {
+          auto waiting = std::move (waiter);
+          if (!reserved)
+              return;
+          auto host = weak.lock ();
+          if (!host)
+              return;
+          auto permit = std::make_shared<application_job_queue_t::permit_t> (std::move (*reserved));
+          auto publish = [weak, waiting, permit, dispatch = std::move (dispatch)] () mutable {
+              *waiting = {};
+              auto host = weak.lock ();
+              if (!host || !host->_transport->started ())
+                  return;
+              if (dispatch.record.operation_id != call_id_t{}
+                  && !host->_transport->operation_pending (dispatch.record.operation_id))
+                  return;
+              permit->mark_queued ();
+              dispatch.record.before_application_handler = [permit] {
+                  permit->release_for_handler_entry ();
+              };
+              host->_local_application_dispatches.push_back (std::move (dispatch));
+              host->_transport->signal_activity ();
+          };
+          if (host->_local_dispatch_completion_lane.is_on_lane ())
+              publish ();
+          else
+              host->_local_dispatch_completion_lane.try_post (std::move (publish));
+      });
+}
+
 zlink::submit_result_t public_host_runtime_t::enqueue_local_actor_message (
   const actor_ref_t &target,
   record_kind_t kind,
@@ -6659,8 +6724,12 @@ zlink::submit_result_t public_host_runtime_t::enqueue_local_actor_message (
             }
             return _local_dispatch_completion_lane
               .run ([&] {
+                  auto waiter = _options.mesh.application_jobs
+                                  ? std::make_shared<application_job_queue_t::waiter_t> ()
+                                  : nullptr;
                   if (operation) {
-                      register_local_completion (*operation, timeout, {}, {},
+                      register_local_completion (*operation, timeout, {},
+                                                 local_request_wait_cleanup (waiter),
                                                  mesh_request_surface_t::actor);
                       record.operation_id = operation->id;
                       std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
@@ -6673,8 +6742,9 @@ zlink::submit_result_t public_host_runtime_t::enqueue_local_actor_message (
                         };
                   }
                   try {
-                      _local_application_dispatches.push_back (
-                        local_application_dispatch_t{std::move (owner), std::move (record), parts});
+                      admit_local_application (
+                        local_application_dispatch_t{std::move (owner), std::move (record), parts},
+                        waiter);
                   }
                   catch (...) {
                       if (operation)
@@ -6714,21 +6784,20 @@ public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence
     record.source_node_rid = local.routing_id ();
     record.spot_route = target;
 
-    const auto submitted =
-      _lifecycle_configuration_lane
-        .run ([&] {
-            if (!_started || _closing) {
-                return zlink::submit_result_t::terminated;
-            }
-            return _local_dispatch_completion_lane
-              .run ([&] {
-                  _local_application_dispatches.push_back (
-                    local_application_dispatch_t{std::move (owner), std::move (record), parts});
-                  return zlink::submit_result_t::ok;
-              })
-              .get ();
-        })
-        .get ();
+    const auto submitted = _lifecycle_configuration_lane
+                             .run ([&] {
+                                 if (!_started || _closing) {
+                                     return zlink::submit_result_t::terminated;
+                                 }
+                                 return _local_dispatch_completion_lane
+                                   .run ([&] {
+                                       admit_local_application (local_application_dispatch_t{
+                                         std::move (owner), std::move (record), parts});
+                                       return zlink::submit_result_t::ok;
+                                   })
+                                   .get ();
+                             })
+                             .get ();
     if (submitted == zlink::submit_result_t::ok)
         _transport->signal_activity ();
     return submitted;
@@ -6768,7 +6837,11 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
             }
             return _local_dispatch_completion_lane
               .run ([&] {
-                  register_local_completion (operation, timeout, std::move (completion), {},
+                  auto waiter = _options.mesh.application_jobs
+                                  ? std::make_shared<application_job_queue_t::waiter_t> ()
+                                  : nullptr;
+                  register_local_completion (operation, timeout, std::move (completion),
+                                             local_request_wait_cleanup (waiter),
                                              mesh_request_surface_t::spot);
                   record.operation_id = operation.id;
                   std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
@@ -6783,8 +6856,9 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
                     };
 
                   try {
-                      _local_application_dispatches.push_back (
-                        local_application_dispatch_t{std::move (owner), std::move (record), parts});
+                      admit_local_application (
+                        local_application_dispatch_t{std::move (owner), std::move (record), parts},
+                        waiter);
                   }
                   catch (...) {
                       _transport->unregister_local_operation (operation.id);
