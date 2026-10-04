@@ -32,11 +32,16 @@ function createFixture(limit) {
     routingId: `application-batch-node-${suffix}`,
     applicationJobQueue: queue
   });
-  const channel = `application-batch-channel-${suffix}`;
   node.setBind(`inproc://application-batch-${suffix}`);
-  node.addChannelName(channel);
   node.start();
-  return { context, queue, node, channel };
+  const spot = node.entrySpot();
+  // Channel messaging §2 excludes self. Local Spot admission still uses the
+  // same shared permit and mailbox whose batch ownership these tests verify.
+  return {
+    context, queue, node,
+    send: parts => spot.sendToSpot(node.status().routingId, node.status().routingId,
+      node.status().lifecycleGeneration, parts, { entrySpot: true })
+  };
 }
 
 async function closeFixture(fixture, pump) {
@@ -110,7 +115,7 @@ test('raw MeshNode drains 130 pre-admitted records as 64, 64, 2 and re-arms from
   observeApplicationResidue(fixture.node, residues);
   try {
     for (let index = 0; index < 130; index += 1) {
-      await fixture.node.sendToChannel(fixture.channel, Buffer.from(String(index)));
+      await fixture.send(Buffer.from(String(index)));
     }
     pump = new backend.ZLinkMeshDispatchPump(fixture.node, {
       applicationJobQueue: fixture.queue,
@@ -164,7 +169,7 @@ test('raw MeshNode keeps pre-admitted batch depth within the fixed permit limit'
     pump.start();
     const submissions = Array.from(
       { length: 128 },
-      (_, index) => fixture.node.sendToChannel(fixture.channel, Buffer.from(String(index)))
+      (_, index) => fixture.send(Buffer.from(String(index)))
     );
     await thirdPermit.promise;
     await firstHandler.promise;
@@ -204,7 +209,7 @@ test('part-cap partial receive re-arms from claim release when drainReady report
   observeApplicationResidue(fixture.node, residues);
   try {
     for (const payload of payloads) {
-      await fixture.node.sendToChannel(fixture.channel, payload);
+      await fixture.send(payload);
     }
     pump = new backend.ZLinkMeshDispatchPump(fixture.node, {
       applicationJobQueue: fixture.queue,
@@ -243,7 +248,7 @@ test('dispatch failure returns every pre-admitted lease and closes every batch p
   );
   try {
     for (let index = 0; index < 64; index += 1) {
-      await fixture.node.sendToChannel(fixture.channel, Buffer.from(String(index)));
+      await fixture.send(Buffer.from(String(index)));
     }
     pump = new backend.ZLinkMeshDispatchPump(fixture.node, {
       applicationJobQueue: fixture.queue,
@@ -271,7 +276,7 @@ test('dispatch failure returns every pre-admitted lease and closes every batch p
   }
 });
 
-test('raw channel send preserves a normal sibling after the first record fails', async () => {
+test('raw local Spot send preserves a normal sibling after the first record fails', async () => {
   const fixture = createFixture();
   const claimReleased = deferred();
   const observed = [];
@@ -285,8 +290,8 @@ test('raw channel send preserves a normal sibling after the first record fails',
     claimReleased.resolve
   );
   try {
-    await fixture.node.sendToChannel(fixture.channel, Buffer.from('first'));
-    await fixture.node.sendToChannel(fixture.channel, Buffer.from('second'));
+    await fixture.send(Buffer.from('first'));
+    await fixture.send(Buffer.from('second'));
     pump = new backend.ZLinkMeshDispatchPump(fixture.node, {
       applicationJobQueue: fixture.queue,
       dispatch(_owner, record) {
@@ -322,7 +327,7 @@ test('dispose during a pre-admitted batch returns unstarted leases and closes th
   observeClaims(fixture.node, records => trackReceivedRecordCleanup(records, observed));
   try {
     for (let index = 0; index < 64; index += 1) {
-      await fixture.node.sendToChannel(fixture.channel, Buffer.from(String(index)));
+      await fixture.send(Buffer.from(String(index)));
     }
     pump = new backend.ZLinkMeshDispatchPump(fixture.node, {
       applicationJobQueue: fixture.queue,

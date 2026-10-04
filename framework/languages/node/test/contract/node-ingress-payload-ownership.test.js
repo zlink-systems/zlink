@@ -82,11 +82,12 @@ test('completion retention keeps owned framework buffers and copies only native 
 
 test('generic channel send writes one valid multipart application frame before source close', async () => {
   let replyFrame;
+  let sentParts;
   const router = {
     setRoutingId() {}, setReceiveFlowState() {}, bind() {}, unbind() {}, connect() {}, disconnect() {},
     connectToRoutingId() {}, disconnectRid() {}, close() {}, localEndpoint: () => 'inproc://source-node',
     monitor: () => ({ statusReady: () => true, drain: () => 0, close() {} }),
-    receive: () => undefined, send: async () => {},
+    receive: () => undefined, send: async (_target, parts) => { sentParts = parts; },
     request: async (_target, parts) => [
       encodeReplyHeader(decodeNodeRequestHeader(parts[0])), replyFrame
     ]
@@ -97,7 +98,8 @@ test('generic channel send writes one valid multipart application frame before s
     bindingPort: { createHost: () => ({ createRouter: () => router, shutdown() {}, close() {} }) }
   });
   raw.start();
-  const target = descriptor('target-node');
+  // Channel messaging §2 requires an admitted remote channel target.
+  const target = descriptor('target-node', [{ name: 'orders', weight: 100 }]);
   raw.topology.admit(target, 'connection');
   raw.liveness.admit(target.nodeRoutingId, 'connection', 0);
   raw.liveness.requestProbe(target.nodeRoutingId, 'connection', 0);
@@ -114,10 +116,9 @@ test('generic channel send writes one valid multipart application frame before s
   } finally {
     source.close();
   }
-  const claim = raw.mailbox.tryClaim('application', 1, 1024);
   try {
-    assert.ok(claim);
-    const frame = claim.records[0].parts[1];
+    assert.ok(sentParts);
+    const frame = sentParts[1];
     const application = decodeApplicationPayloadView(frame);
     assert.equal(application.packetName, 'ZLinkFrameworkMultipart');
     assert.equal(application.contentType, 'application/x-zlink-multipart');
@@ -135,13 +136,6 @@ test('generic channel send writes one valid multipart application frame before s
     assert.strictEqual(reply.payload.payload.buffer, replyFrame.buffer);
     assert.equal(reply.payload.payload.toString(), 'view');
   } finally {
-    if (claim !== undefined) {
-      for (const record of claim.records) {
-        raw.mailbox.releaseClaimedPayload(record);
-        record.applicationJob?.close();
-      }
-      raw.mailbox.release(claim);
-    }
     raw.close();
   }
 });

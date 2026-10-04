@@ -8,9 +8,9 @@ const {
 const {
   SmoothWeightedSelection
 } = require('../../packages/framework/dist/runtime/foundation/service-weighted-selection');
-const { SERVICE_WIRE_REQUIRED_CAPABILITY } = require(
-  '../../packages/framework/dist/runtime/foundation/service-wire-constants.generated'
-);
+const {
+  SERVICE_WIRE_REQUIRED_CAPABILITY
+} = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
 
 function serviceNode(nodeRoutingId, weight) {
   return {
@@ -47,31 +47,65 @@ function clientServer(serverRoutingId, weight, state = 'serving', revision = 1n)
   };
 }
 
+test('RouteMesh excludes its own serving node from selectable and known targets', () => {
+  const topology = new ServiceTopologyRegistry(serviceNode('local', 100));
+  assert.equal(topology.selectChannel('orders'), undefined);
+  assert.equal(topology.hasKnownChannelTarget('orders'), false);
+});
+
+test('RouteMesh selects only the admitted peer when its own node has higher weight', () => {
+  const topology = new ServiceTopologyRegistry(serviceNode('local', 10000));
+  assert.equal(topology.admit(serviceNode('peer', 1), 'peer-connection'), 'admitted');
+  for (let index = 0; index < 10; index++) {
+    assert.equal(topology.selectChannel('orders')?.descriptor.nodeRoutingId, 'peer');
+  }
+  assert.equal(topology.hasKnownChannelTarget('orders'), true);
+});
+
 test('RouteMesh weighted selection uses smooth cumulative credit with RID tiebreak', () => {
-  const topology = new ServiceTopologyRegistry(serviceNode('node-a', 5));
+  // Channel messaging §2 excludes the requesting node from select-one targets.
+  const topology = new ServiceTopologyRegistry(serviceNode('local', 0));
+  assert.equal(topology.admit(serviceNode('node-a', 5), 'connection-a'), 'admitted');
   assert.equal(topology.admit(serviceNode('node-b', 1), 'connection-b'), 'admitted');
 
-  const selected = Array.from({ length: 12 }, () =>
-    topology.selectChannel('orders').descriptor.nodeRoutingId
+  const selected = Array.from(
+    { length: 12 },
+    () => topology.selectChannel('orders').descriptor.nodeRoutingId
   );
 
   assert.deepEqual(selected, [
-    'node-a', 'node-a', 'node-a', 'node-b',
-    'node-a', 'node-a', 'node-a', 'node-a',
-    'node-a', 'node-b', 'node-a', 'node-a'
+    'node-a',
+    'node-a',
+    'node-a',
+    'node-b',
+    'node-a',
+    'node-a',
+    'node-a',
+    'node-a',
+    'node-a',
+    'node-b',
+    'node-a',
+    'node-a'
   ]);
 });
 
 test('weighted selection keeps its cumulative state across descriptor updates', () => {
-  const topology = new ServiceTopologyRegistry(serviceNode('node-a', 1));
+  const topology = new ServiceTopologyRegistry(serviceNode('local', 0));
+  assert.equal(topology.admit(serviceNode('node-a', 1), 'connection-a'), 'admitted');
   assert.equal(topology.admit(serviceNode('node-b', 1), 'connection-b'), 'admitted');
 
   assert.equal(topology.selectChannel('orders').descriptor.nodeRoutingId, 'node-a');
-  topology.publishLocal({
-    ...topology.localDescriptor(),
-    descriptorRevision: 2n,
-    activeCapacityUsed: 1
-  });
+  assert.equal(
+    topology.admit(
+      {
+        ...serviceNode('node-a', 1),
+        descriptorRevision: 2n,
+        activeCapacityUsed: 1
+      },
+      'connection-a'
+    ),
+    'admitted'
+  );
   assert.equal(topology.selectChannel('orders').descriptor.nodeRoutingId, 'node-b');
 });
 
@@ -100,7 +134,10 @@ test('ClientServer selection invalidates its cached eligible set on disconnect',
   assert.equal(discovery.admitClientServer(clientServer('server-b', 1), 'connection-b'), true);
 
   // Populate the candidate cache before the state transition.
-  assert.equal(discovery.selectClientServerConnection('orders')?.descriptor.serverRoutingId, 'server-a');
+  assert.equal(
+    discovery.selectClientServerConnection('orders')?.descriptor.serverRoutingId,
+    'server-a'
+  );
   assert.equal(discovery.markClientServerDisconnected('orders', 'server-b', 'connection-b'), true);
 
   assert.equal(
@@ -124,7 +161,9 @@ test('weighted selection falls back without precomputing a cycle proportional to
   assert.equal(discovery.admitClientServer(clientServer('A', 4_999), 'connection-a'), true);
   assert.equal(discovery.admitClientServer(clientServer('B', 5_000), 'connection-b'), true);
 
-  const selected = Array.from({ length: 8 }, () =>
-    discovery.selectClientServerConnection('orders').descriptor.serverRoutingId);
+  const selected = Array.from(
+    { length: 8 },
+    () => discovery.selectClientServerConnection('orders').descriptor.serverRoutingId
+  );
   assert.deepEqual(selected, ['B', 'A', 'B', 'A', 'B', 'A', 'B', 'A']);
 });

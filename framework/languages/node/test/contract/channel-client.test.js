@@ -944,7 +944,7 @@ test('ZLinkRouteClient applies RouteMesh request timeout before registration def
   ]);
 });
 
-test('RouteMesh ready weight-zero channel reports Unavailable for send and request', async () => {
+test('RouteMesh with only its own weight-zero server reports NotFound for send and request', async () => {
   class NoticeHandler { handle() {} }
   const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
     builder.addRouteMesh('zero-mesh').listen('tcp://127.0.0.1:0').routingId('zero-node')
@@ -954,10 +954,11 @@ test('RouteMesh ready weight-zero channel reports Unavailable for send and reque
   const client = new framework.DefaultZLinkRouteClient(registration, runtime.routeTransport, runtime.spotRouterChannelIdForMesh);
   try {
     await runtime.start();
+    // Channel messaging §2 excludes the only server here: the requesting node.
     await assert.rejects(() => client.sendToChannel('zero-channel', typedPacket('Notice', { id: 1 })).submit(),
-      { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+      { kind: framework.ZLinkFrameworkErrorKind.NotFound });
     await assert.rejects(() => client.requestToChannel('zero-channel', typedPacket('Question', { id: 2 })).submit(),
-      { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+      { kind: framework.ZLinkFrameworkErrorKind.NotFound });
   } finally {
     await runtime.stop();
   }
@@ -980,7 +981,9 @@ for (const state of ['preparing', 'stopped', 'error', 'retiring', 'draining']) {
     runtime.start();
     try {
       const current = runtime.topology.localDescriptor();
-      runtime.topology.publishLocal({ ...current, state, descriptorRevision: current.descriptorRevision + 1n });
+      // Channel messaging §2: the snapshot must describe a remote target.
+      assert.equal(runtime.topology.admit({ ...current, nodeRoutingId: 'remote-selection',
+        advertisedEndpoint: 'tcp://127.0.0.1:1', state }, 'remote-connection'), 'admitted');
       const unavailable = state === 'retiring' || state === 'draining';
       const payload = { packetName: 'Notice', contentType: 'application/json', payload: Buffer.from('{}') };
       assert.equal(await runtime.sendToChannel('api', payload), unavailable ? zlink.SubmitResult.NotConnected : zlink.SubmitResult.NotFound);
