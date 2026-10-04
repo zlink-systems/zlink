@@ -13,7 +13,7 @@ namespace perf
 inline json create_actors (role_t &role, const std::atomic<bool> &stopping)
 {
     const auto &config = role.config;
-    wait_for_public (role, stopping, [&] { return role.mesh.load () != nullptr && role.mesh.load ()->snapshot (*config.mesh_name).ready_peer_count > 0; },
+    wait_for_public (role, stopping, [&] { return role.mesh.load ()->snapshot (*config.mesh_name).ready_peer_count > 0; },
                      "a ready Actor node peer");
     auto &manager = role.service<fw::actor_manager_t> ();
     std::mutex gate;

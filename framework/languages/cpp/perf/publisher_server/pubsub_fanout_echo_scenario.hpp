@@ -31,7 +31,7 @@ class pubsub_fanout_echo_scenario_t
     // one per Subscriber process) is the prepared state.
     void prepare (const std::atomic<bool> &stopping)
     {
-        wait_for_public (_role, stopping, [&] { return _role.runtime.load () != nullptr && _role.runtime.load ()->status ().is_ready; }, "the Publisher host");
+        wait_for_public (_role, stopping, [&] { return _role.runtime.load ()->status ().is_ready; }, "the Publisher host");
         const auto status = _role.runtime.load ()->status ();
         _role.objects->set (true, "", json::array ({{{"kind", "publisherHostReady"}, {"source", "framework_runtime_t.status"},
                                                      {"observedValue", {{"state", static_cast<int> (status.state)}, {"isReady", status.is_ready}, {"acceptingWork", status.accepting_work}}}}}));
