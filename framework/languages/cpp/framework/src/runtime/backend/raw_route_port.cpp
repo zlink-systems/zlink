@@ -113,7 +113,7 @@ observe_send_completion (zlink::async_result_t<void> pending,
 }
 
 raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
-                                    std::mutex *shared_socket_mutex,
+                                    std::shared_ptr<std::mutex> shared_socket_mutex,
                                     zlink::poll_event_flag_t receive_events,
                                     zlink::poller_t *shared_poller,
                                     std::uintptr_t poller_slot) :
@@ -121,7 +121,8 @@ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
     _poller (shared_poller != nullptr ? shared_poller : _owned_poller.get ()),
     _poller_slot (poller_slot == 0 ? 1 : poller_slot),
     _socket (&socket),
-    _socket_mutex (shared_socket_mutex != nullptr ? shared_socket_mutex : &_owned_socket_mutex),
+    _socket_mutex (shared_socket_mutex ? std::move (shared_socket_mutex)
+                                       : std::make_shared<std::mutex> ()),
     _receive_events (receive_events)
 {
     _poller->add (socket,
@@ -455,22 +456,18 @@ bool raw_route_port_t::reply (const raw_received_t &request, raw_message_t parts
     }
 }
 
-void raw_route_port_t::close () noexcept
+void raw_route_port_t::close ()
 {
     _wake_timer.signal ();
     std::scoped_lock lock (_poller_mutex, *_socket_mutex);
     _wake_timer.detach ();
     auto *socket = _socket;
+    if (_owned_poller) {
+        _owned_poller->close ();
+    } else if (socket != nullptr) {
+        _poller->remove (*socket);
+    }
     _socket = nullptr;
-    try {
-        if (_owned_poller) {
-            _owned_poller->close ();
-        } else if (socket != nullptr) {
-            _poller->remove (*socket);
-        }
-    }
-    catch (...) {
-    }
 }
 
 } // namespace zlink::framework::detail::backend

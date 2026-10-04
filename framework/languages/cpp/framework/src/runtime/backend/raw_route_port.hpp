@@ -83,7 +83,7 @@ class raw_route_port_t
   public:
     explicit raw_route_port_t (
       zlink::router_socket_t &socket,
-      std::mutex *shared_socket_mutex = nullptr,
+      std::shared_ptr<std::mutex> shared_socket_mutex = {},
       zlink::poll_event_flag_t receive_events = zlink::poll_event_flag_t::pollin,
       zlink::poller_t *shared_poller = nullptr,
       std::uintptr_t poller_slot = 1);
@@ -104,7 +104,7 @@ class raw_route_port_t
     std::optional<raw_received_t> receive_if_ready (zlink::poll_event_flag_t revents);
     std::optional<raw_received_t> try_receive ();
     bool reply (const raw_received_t &request, raw_message_t parts);
-    void close () noexcept;
+    void close ();
 
   private:
     std::unique_ptr<zlink::poller_t> _owned_poller;
@@ -114,8 +114,7 @@ class raw_route_port_t
     // Poller registration/wait/close have their own resource lifetime. A
     // blocking wait must not hold the independent socket submission gate.
     std::mutex _poller_mutex;
-    std::mutex _owned_socket_mutex;
-    std::mutex *_socket_mutex;
+    std::shared_ptr<std::mutex> _socket_mutex;
     zlink::poll_event_flag_t _receive_events;
     runtime::eventing::runtime_wake_timer_t _wake_timer;
     // Keep the binding receive envelope across polls so its message storage

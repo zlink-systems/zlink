@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/host/runtime_failure_collector.hpp"
 #include "runtime/backend/raw_dealer_port.hpp"
 #include "runtime/backend/raw_route_port.hpp"
 #include "runtime/execution/state_lane.hpp"
@@ -71,6 +72,7 @@ struct raw_client_server_server_options_t
     zlink::poller_t *transport_poller = nullptr;
     std::uintptr_t transport_poller_slot = 0;
     std::shared_ptr<application_job_queue_t> application_jobs;
+    std::shared_ptr<runtime_failure_collector_t> runtime_failures;
 };
 
 class raw_client_server_server_t
@@ -81,7 +83,7 @@ class raw_client_server_server_t
     ~raw_client_server_server_t () noexcept;
 
     void start ();
-    void close () noexcept;
+    void close ();
     std::string endpoint () const;
     protocol::client_server_server_admission_t descriptor () const;
     task_t<protocol::client_server_server_admission_t> descriptor_task () const;
@@ -124,7 +126,7 @@ class raw_client_server_server_t
     raw_client_server_server_options_t _options;
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
-    std::mutex _socket_mutex;
+    std::shared_ptr<std::mutex> _socket_mutex = std::make_shared<std::mutex> ();
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
     application_job_queue_t::receive_flow_registration_t _receive_flow_registration;
@@ -149,6 +151,7 @@ struct raw_client_server_client_options_t
     std::uintptr_t transport_poller_slot = 0;
     std::shared_ptr<application_job_queue_t> application_jobs;
     std::optional<std::chrono::milliseconds> send_timeout;
+    std::shared_ptr<runtime_failure_collector_t> runtime_failures;
 };
 
 class raw_client_server_client_t
@@ -160,7 +163,7 @@ class raw_client_server_client_t
 
     void start ();
     task_t<void> start_task ();
-    void close () noexcept;
+    void close ();
     task_t<void> close_task ();
     bool ready () const;
     task_t<bool> ready_task () const;
@@ -204,7 +207,7 @@ class raw_client_server_client_t
     raw_client_server_client_options_t _options;
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
-    std::mutex _socket_mutex;
+    std::shared_ptr<std::mutex> _socket_mutex = std::make_shared<std::mutex> ();
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::dealer_socket_t> _dealer;
     application_job_queue_t::receive_flow_registration_t _receive_flow_registration;

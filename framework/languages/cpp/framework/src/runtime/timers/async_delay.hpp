@@ -4,99 +4,56 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include "runtime/timers/core_timer_drain_loop.hpp"
 
+#include <array>
 #include <chrono>
 #include <memory>
-#include <mutex>
 #include <thread>
-#include <unordered_map>
-#include <utility>
 
 namespace zlink::framework::detail
 {
 
-/*
- * A coroutine-native replacement for std::this_thread::sleep_for inside a
- * task_t<T> body. Callers that need a bounded, non-blocking retry delay
- * (e.g. actor_client_t::request_erased) `co_await` this instead of parking
- * the executing thread, so a serial lane or worker thread stays free for
- * other work while the delay elapses.
- *
- * There is no spot_context_t available at every call site that needs this
- * (actor_client is not Spot-scoped), so this helper cannot reuse
- * timer_runtime_t::dispatch_fire_count_async. It is built directly on the
- * core zlink::timer_t primitive that the same "fire on a background thread"
- * pattern already uses elsewhere in this codebase (see
- * remote_actor_commit_deadline_t in spot_runtime.cpp).
- */
-class async_delay_timer_t
-{
-  public:
-    static task_t<void> start (std::chrono::milliseconds duration)
-    {
-        auto source = std::make_shared<task_completion_source_t<void>> ();
-        auto pending = source->task ();
-        auto timer = std::make_shared<async_delay_timer_t> ();
-        void *const key = timer.get ();
-        {
-            std::lock_guard lock (registry_mutex ());
-            registry ()[key] = timer;
-        }
-        timer->_timer.start (
-          duration > std::chrono::milliseconds::zero () ? duration : std::chrono::milliseconds (1),
-          1, [key, source] (std::uint64_t) mutable {
-              /* Resuming the coroutine synchronously on the drain loop
-             * would run the rest of request_erased's retry loop (another
-             * network submit, possibly another delay) on that thread,
-             * and destroying this owner from the drain thread would
-             * self-join. A fresh, throwaway thread avoids both hazards. */
-              std::thread ([key, source] () mutable {
-                  source->complete (result_t<void>::success ());
-                  std::shared_ptr<async_delay_timer_t> owner;
-                  {
-                      std::lock_guard lock (registry_mutex ());
-                      auto it = registry ().find (key);
-                      if (it != registry ().end ()) {
-                          owner = std::move (it->second);
-                          registry ().erase (it);
-                      }
-                  }
-                  // owner (and its zlink::timer_t) destructs here.
-              }).detach ();
-          });
-        return pending;
-    }
-
-  private:
-    /*
-     * The detached completion thread below reaches these two after it wakes,
-     * and a timer that is still pending when main returns wakes during static
-     * destruction. Function-local statics would be gone by then, and the
-     * thread would read a destroyed map. Both are therefore allocated once and
-     * never destroyed; the map holds only pending timers, each erased as it
-     * completes.
-     */
-    static std::mutex &registry_mutex ()
-    {
-        static auto *const mutex = new std::mutex ();
-        return *mutex;
-    }
-
-    static std::unordered_map<void *, std::shared_ptr<async_delay_timer_t>> &registry ()
-    {
-        static auto *const registry =
-          new std::unordered_map<void *, std::shared_ptr<async_delay_timer_t>> ();
-        return *registry;
-    }
-
-    core_timer_drain_loop_t _timer;
-};
-
-/* co_await zlink::framework::detail::delay(50ms); suspends the calling
- * coroutine and resumes it once the duration elapses, without blocking the
- * thread it was running on. */
+// The one-shot worker owns its native resources until cleanup finishes. The
+// waiting task observes both timer operation failures and cleanup failures.
 inline task_t<void> delay (std::chrono::milliseconds duration)
 {
-    return async_delay_timer_t::start (duration);
+    auto source = std::make_shared<task_completion_source_t<void>> ();
+    auto pending = source->task ();
+    std::thread ([source, duration] {
+        runtime::runtime_failure_collector_t failures;
+        std::unique_ptr<zlink::timer_t> timer;
+        std::unique_ptr<zlink::poller_t> poller;
+        failures.capture ([&] {
+            timer = std::make_unique<zlink::timer_t> ();
+            poller = std::make_unique<zlink::poller_t> ();
+            poller->add (*timer, 1);
+            const auto interval = duration > std::chrono::milliseconds::zero ()
+                                    ? duration
+                                    : std::chrono::milliseconds (1);
+            timer->start (interval, 1);
+            std::array<zlink::poll_event_t, 1> events{};
+            for (;;) {
+                if (poller->wait (events.data (), events.size (),
+                                  core_timer_drain_loop_t::poll_interval)
+                    == 0)
+                    continue;
+                if (const auto count = timer->recv (); count && *count)
+                    break;
+            }
+        });
+        if (poller)
+            failures.capture ([&] { poller->close (); });
+        if (timer)
+            failures.capture ([&] { timer->close (); });
+        auto result = result_t<void>::success ();
+        try {
+            failures.rethrow_if_failed ();
+        }
+        catch (const std::exception &) {
+            result = current_exception_result<void> ();
+        }
+        source->complete (std::move (result));
+    }).detach ();
+    return pending;
 }
 
 } // namespace zlink::framework::detail

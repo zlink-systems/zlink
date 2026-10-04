@@ -1010,7 +1010,6 @@ export class RawServiceMeshRuntime {
 
   close(): void {
     if (this.closed) return;
-    this.closed = true;
     this.applicationJobStop.abort(
       new Error('Raw service runtime application job admission stopped.')
     );
@@ -1022,9 +1021,10 @@ export class RawServiceMeshRuntime {
       this.applicationJobQueue.unregisterReceiveFlowTarget?.(router);
     }
     const host = this.host;
+    if (host !== undefined) host.close();
     this.router = undefined;
     this.host = undefined;
-    if (host !== undefined) host.close();
+    this.closed = true;
   }
 
   private requestToTarget(

@@ -1,3 +1,4 @@
+#include "../support/runtime_failure_fixture.hpp"
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "runtime/diagnostics/monitoring_runtime.hpp"
@@ -17,7 +18,7 @@ namespace
 
 bool unsubscribed_metrics_remain_disabled ()
 {
-    auto state = std::make_shared<zlink::framework::detail::monitoring_runtime_state_t> ();
+    auto state = zlink::framework::test::runtime_failure_monitoring ();
     const zlink::framework::runtime::runtime_metrics_t metrics (state);
 
     for (std::size_t index = 0; index < 10'000; ++index) {
@@ -31,7 +32,7 @@ bool unsubscribed_metrics_remain_disabled ()
 // OBS-B4: a no-op standard provider must not retain instrumentation storage.
 bool unsubscribed_metric_storage_unchanged ()
 {
-    auto state = std::make_shared<zlink::framework::detail::monitoring_runtime_state_t> ();
+    auto state = zlink::framework::test::runtime_failure_monitoring ();
     const zlink::framework::runtime::runtime_metrics_t metrics (state);
 
     const long baseline_owners = state.use_count ();
@@ -94,7 +95,7 @@ bool standard_provider_records_without_logging ()
 {
     namespace fw = zlink::framework;
     metric_test::provider_t provider;
-    auto state = std::make_shared<fw::detail::monitoring_runtime_state_t> ();
+    auto state = zlink::framework::test::runtime_failure_monitoring ();
     fw::logging_builder_t logging;
     std::size_t logs = 0;
     logging.use_provider ("metrics-test", [&] (const fw::log_record_t &) { ++logs; });
@@ -127,7 +128,7 @@ bool capacity_collection_preserves_epoch_without_status_queries ()
     namespace fw = zlink::framework;
     metric_test::provider_t provider;
     fw::logging_builder_t logging;
-    auto monitoring = std::make_shared<fw::detail::monitoring_runtime_state_t> ();
+    auto monitoring = zlink::framework::test::runtime_failure_monitoring ();
     monitoring->diagnostics_logger = logging.create_logger ("capacity-test");
     auto context = std::make_shared<zlink::context_t> ();
     auto jobs = std::make_shared<fw::runtime::application_job_queue_t> (

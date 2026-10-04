@@ -13,7 +13,7 @@ internal sealed class ZLinkDotNetBackendRuntimeContext : IZLinkBackendRuntimeCon
     private readonly IContext _context;
     private readonly ILogger<ZLinkManagedMeshNode>? _meshNodeLogger;
     private ZLinkApplicationJobQueue? _applicationJobQueue;
-    private int _disposed;
+    private Task? _disposeTask;
 
     public ZLinkDotNetBackendRuntimeContext(ILogger<ZLinkManagedMeshNode>? meshNodeLogger = null)
     {
@@ -142,16 +142,17 @@ internal sealed class ZLinkDotNetBackendRuntimeContext : IZLinkBackendRuntimeCon
         );
     }
 
-    public ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            return ValueTask.CompletedTask;
-        return _context.DisposeAsync();
-    }
+    public ValueTask DisposeAsync() =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                () => _context.DisposeAsync().AsTask()
+            )
+        );
 
     private void ThrowIfDisposed()
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeTask) is not null, this);
     }
 }
 

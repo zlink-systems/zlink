@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
@@ -78,7 +79,11 @@ void verify_stateful_claim_releases_after_one_shot_reply_terminal ()
 {
     auto context = std::make_shared<zlink::context_t> ();
     mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("reply-claim-target")}, context);
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("reply-claim-target"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      context);
     target.start ();
     const auto target_descriptor = target.topology ().local_descriptor ();
 
@@ -184,7 +189,10 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
                                                           "default",
                                                           16 * 1024 * 1024,
                                                           "tcp://127.0.0.1:0"};
-    client_server::raw_client_server_server_t server ({{descriptor}}, context);
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{descriptor}),
+      context);
     server.start ();
 
     const std::string source_routing_id_text = "client-server-reply-claim-source";
@@ -252,7 +260,11 @@ void verify_stateful_ingest_rejection_releases_on_one_shot_terminal ()
 {
     auto context = std::make_shared<zlink::context_t> ();
     mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("ingest-reply-target")}, context);
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("ingest-reply-target"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      context);
     target.start ();
 
     stateful::stateful_object_runtime_t objects;

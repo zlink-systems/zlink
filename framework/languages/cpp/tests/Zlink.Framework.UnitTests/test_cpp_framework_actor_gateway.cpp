@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -355,7 +356,7 @@ int bound_actors_are_current_ordered_snapshot ()
     if (!manager.bound ().empty ())
         return 1;
 
-    zlink_builder_t builder;
+    zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.stream ("bound-snapshot").bind ("tcp://127.0.0.1:0");
     auto runtime = stream_runtime_t::from (builder);
     auto stream = runtime.open_session ("bound-snapshot");
@@ -401,7 +402,7 @@ int bind_or_get_reuses_same_physical_session_generation ()
     auto state = std::make_shared<actor_gateway_state_t> ();
     actor_gateway_runtime_t gateway (state);
     auto manager = gateway.manager ();
-    zlink_builder_t old_builder;
+    zlink_builder_t old_builder = zlink::framework::test::runtime_failure_builder ();
     old_builder.stream ("bind-or-get-idempotent").bind ("tcp://127.0.0.1:0");
     auto old_runtime = stream_runtime_t::from (old_builder);
     auto old_stream = old_runtime.open_session ("bind-or-get-idempotent");
@@ -428,7 +429,7 @@ int bind_or_get_reuses_same_physical_session_generation ()
 
     const auto reused_token = state->sync (
       [&] { return state->actors_by_id.at ("bind-or-get-idempotent-actor").binding_token; });
-    zlink_builder_t new_builder;
+    zlink_builder_t new_builder = zlink::framework::test::runtime_failure_builder ();
     new_builder.stream ("bind-or-get-idempotent").bind ("tcp://127.0.0.1:0");
     auto new_runtime = stream_runtime_t::from (new_builder);
     auto new_stream = new_runtime.open_session ("bind-or-get-idempotent");
@@ -467,7 +468,7 @@ int bind_or_get_completion_can_reenter_same_manager ()
     auto state = std::make_shared<actor_gateway_state_t> ();
     actor_gateway_runtime_t gateway (state);
     auto manager = gateway.manager ();
-    zlink_builder_t builder;
+    zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.stream ("bind-or-get-reentrant").bind ("tcp://127.0.0.1:0");
     auto runtime = stream_runtime_t::from (builder);
     session_actor_manager_access_t::attach (manager,
@@ -519,7 +520,7 @@ int bind_or_get_all_exit_paths_complete_within_deadline ()
 
     actor_gateway_runtime_t reuse_gateway;
     auto reuse_manager = reuse_gateway.manager ();
-    zlink_builder_t reuse_builder;
+    zlink_builder_t reuse_builder = zlink::framework::test::runtime_failure_builder ();
     reuse_builder.stream ("finite-reuse").bind ("tcp://127.0.0.1:0");
     auto reuse_runtime = stream_runtime_t::from (reuse_builder);
     session_actor_manager_access_t::attach (reuse_manager,
@@ -539,7 +540,7 @@ int bind_or_get_all_exit_paths_complete_within_deadline ()
 
     actor_gateway_runtime_t success_gateway;
     auto success_manager = success_gateway.manager ();
-    zlink_builder_t success_builder;
+    zlink_builder_t success_builder = zlink::framework::test::runtime_failure_builder ();
     success_builder.stream ("finite-native-success").bind ("tcp://127.0.0.1:0");
     auto success_runtime = stream_runtime_t::from (success_builder);
     session_actor_manager_access_t::attach (success_manager,
@@ -558,7 +559,7 @@ int bind_or_get_all_exit_paths_complete_within_deadline ()
 
     actor_gateway_runtime_t failure_gateway;
     auto failure_manager = failure_gateway.manager ();
-    zlink_builder_t failure_builder;
+    zlink_builder_t failure_builder = zlink::framework::test::runtime_failure_builder ();
     failure_builder.stream ("finite-native-failure").bind ("tcp://127.0.0.1:0");
     auto failure_runtime = stream_runtime_t::from (failure_builder);
     session_actor_manager_access_t::attach (failure_manager,
@@ -579,7 +580,7 @@ int bind_or_get_all_exit_paths_complete_within_deadline ()
 
     actor_gateway_runtime_t exception_gateway;
     auto exception_manager = exception_gateway.manager ();
-    zlink_builder_t exception_builder;
+    zlink_builder_t exception_builder = zlink::framework::test::runtime_failure_builder ();
     exception_builder.stream ("finite-native-exception").bind ("tcp://127.0.0.1:0");
     auto exception_runtime = stream_runtime_t::from (exception_builder);
     session_actor_manager_access_t::attach (
@@ -610,7 +611,7 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
     actor_gateway_runtime_t gateway (state);
     auto old_session = gateway.manager ();
     auto new_session = gateway.manager ();
-    zlink_builder_t builder;
+    zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.stream ("direct-rebind").bind ("tcp://127.0.0.1:0");
     auto runtime = stream_runtime_t::from (builder);
     auto old_stream = runtime.open_session ("direct-rebind");
@@ -730,7 +731,7 @@ int destroyed_or_recreated_actor_ignores_stale_disconnect_handle ()
     actor_gateway_runtime_t gateway (state);
     auto old_session = gateway.manager ();
     auto new_session = gateway.manager ();
-    zlink_builder_t builder;
+    zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.stream ("destroy-recreate").bind ("tcp://127.0.0.1:0");
     auto runtime = stream_runtime_t::from (builder);
     session_actor_manager_access_t::attach (old_session, runtime.open_session ("destroy-recreate"));
@@ -845,7 +846,7 @@ int get_or_create_refreshes_foreign_session_record ()
                                  "session-old", 11);
     auto manager = gateway.manager ();
 
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.stream ("foreign-session-test").bind ("tcp://127.0.0.1:0");
     auto runtime = stream_runtime_t::from (builder);
     auto stream = runtime.open_session ("foreign-session-test");
@@ -2031,7 +2032,7 @@ int authority_only_route_update_keeps_physical_session_current ()
 
     auto local_state = std::make_shared<actor_gateway_state_t> ();
     actor_gateway_runtime_t local_gateway (local_state);
-    zlink_builder_t builder;
+    zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.stream ("authority-stream-sink").bind ("tcp://127.0.0.1:0");
     auto runtime = stream_runtime_t::from (builder);
     auto stream = runtime.open_session ("authority-stream-sink");
@@ -2182,10 +2183,12 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
     namespace protocol = zlink::framework::runtime::protocol;
 
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("bound-session-target");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("bound-session-target");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "bound-session-target");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
     const auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
@@ -2204,7 +2207,8 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
     spot->spot_id = spot_id_t ("bound-session-spot");
     spot->spot_name = "bound-session-spot";
     spot->spot_instance = std::make_shared<int> (1);
-    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     spot->channel_runtime->serializers = &serializers;
     spot->serial_executor = node->worker_executor;
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
@@ -2641,10 +2645,12 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
     namespace runtime = zlink::framework::runtime;
 
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-send-admission-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-send-admission-node");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "actor-send-admission");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
     auto spot = std::make_shared<spot_context_state_t> ();
@@ -2653,7 +2659,8 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
     spot->spot_id = spot_id_t ("actor-send-admission-spot");
     spot->spot_name = "actor-send-admission";
     spot->spot_instance = std::make_shared<int> (1);
-    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     spot->channel_runtime->serializers = &serializers;
     spot->serial_executor = node->worker_executor;
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
@@ -2758,9 +2765,11 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
     // of failing with "actor spot context is not registered" and, worse,
     // materializing a duplicate local Actor instance on the old owner.
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "actor-a-worker");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
     std::atomic_int local_materializations{0};
@@ -2858,10 +2867,12 @@ int returned_owner_serves_locally_past_retained_message_follow_route ()
     // locally originated packet carries no follow fence, so relay_actor_packet
     // synthesizes the retained source fence; that must not reopen the old edge.
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "returned-owner-worker");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
     auto spot = std::make_shared<spot_context_state_t> ();
@@ -2870,7 +2881,8 @@ int returned_owner_serves_locally_past_retained_message_follow_route ()
     spot->spot_id = spot_id_t ("actor-a-returned");
     spot->spot_name = "returned";
     spot->spot_instance = std::make_shared<int> (1);
-    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     spot->channel_runtime->serializers = &serializers;
     spot->serial_executor = node->worker_executor;
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
@@ -2961,7 +2973,8 @@ int source_cleanup_waits_for_leave_completion_before_erasing_actor ()
     // and erased the instance first; OnLeave's own dispatch then found it
     // gone and silently no-op'd -- relocation still completed end to end,
     // but the "leave" evidence never fired.
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
 
     const auto actor = test_actor_ref ("actor-a", "player", "leave-race-actor", 1);
     const auto key = std::string ("player:leave-race-actor");
@@ -3041,7 +3054,8 @@ int sweep_preserves_pending_leave_added_after_snapshot ()
     using namespace zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     const auto actor = test_actor_ref ("actor-a", "player", "sweep-race-actor", 7);
     const auto pending = [&] (std::string transfer_id) {
         return spot_node_builder_state_t::pending_remote_actor_leave_t{
@@ -3115,7 +3129,8 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
     // after accepted relay-ready and an unknown cutover result, a visible
     // target commit adopts the target route and forward-drains the backlog.
     // Source dispatch must never reopen.
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "reconcile-adopt-worker");
     service_collection_t services;
@@ -3231,10 +3246,12 @@ int relocation_barrier_fences_late_actor_fifo_admission ()
     namespace runtime = zlink::framework::runtime;
 
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "handoff-fence-worker");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
     auto spot = std::make_shared<spot_context_state_t> ();
@@ -3243,7 +3260,8 @@ int relocation_barrier_fences_late_actor_fifo_admission ()
     spot->spot_id = spot_id_t ("actor-a-entry");
     spot->spot_name = "entry";
     spot->spot_instance = std::make_shared<int> (1);
-    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     spot->channel_runtime->serializers = &serializers;
     spot->serial_executor = node->worker_executor;
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
@@ -3375,10 +3393,12 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     namespace runtime = zlink::framework::runtime;
 
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "handoff-fence-request-worker");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
     auto spot = std::make_shared<spot_context_state_t> ();
@@ -3387,7 +3407,8 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     spot->spot_id = spot_id_t ("actor-a-entry");
     spot->spot_name = "entry";
     spot->spot_instance = std::make_shared<int> (1);
-    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     spot->channel_runtime->serializers = &serializers;
     spot->serial_executor = node->worker_executor;
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
@@ -3488,10 +3509,12 @@ int reconcile_deadline_fast_fails_without_target_commit (
     // continue its CAS within Restore validity. At the reconciliation deadline,
     // held requests must end Unavailable and the source must stay sealed.
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "reconcile-indeterminate-worker");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
     auto spot = std::make_shared<spot_context_state_t> ();
@@ -3500,7 +3523,8 @@ int reconcile_deadline_fast_fails_without_target_commit (
     spot->spot_id = spot_id_t ("actor-a-entry");
     spot->spot_name = "entry";
     spot->spot_instance = std::make_shared<int> (1);
-    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     spot->channel_runtime->serializers = &serializers;
     spot->serial_executor = node->worker_executor;
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
@@ -3751,10 +3775,12 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
     serializer_registry_t serializers;
 
     // SOURCE node ("actor-a"): the Entry Spot the Actor left from.
-    auto source_node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto source_node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     source_node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "leave-notify-source");
-    source_node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    source_node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     source_node->channel_runtime->serializers = &serializers;
 
     auto entry_spot = std::make_shared<spot_context_state_t> ();
@@ -3763,7 +3789,8 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
     entry_spot->spot_id = spot_id_t ("actor-a-entry");
     entry_spot->spot_name = "entry";
     entry_spot->spot_instance = std::make_shared<int> (1);
-    entry_spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    entry_spot->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     entry_spot->channel_runtime->serializers = &serializers;
     entry_spot->serial_executor = source_node->worker_executor;
     // spot_handle_t::status() only reads the object_ref_t it was
@@ -3867,7 +3894,8 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
 
     // TARGET node ("actor-b"): only needs enough to hold the
     // on_actor_leave_notification sender under test.
-    auto target_node = std::make_shared<spot_node_builder_state_t> ("actor-b");
+    auto target_node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-b");
 
     spot_node_runtime_t source_spots (source_node);
     spot_node_runtime_t target_spots (target_node);
@@ -3975,7 +4003,8 @@ int known_generation_source_leave_claims_transfer ()
     using namespace zlink::framework::detail;
     namespace stateful = zlink::framework::runtime::stateful;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     auto entry_spot = std::make_shared<spot_context_state_t> ();
     entry_spot->node = node;
     entry_spot->node_rid = node_rid_t::from_string ("actor-a");
@@ -4037,7 +4066,8 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
     // source-cleanup record that resolves the generation. The command must
     // be retained and applied exactly once after the completion registration.
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     // Message Follow may be disabled independently of membership lifecycle.
     // The early OnLeave must still survive until the source transfer completes.
     node->message_follow_duration = std::chrono::milliseconds (0);
@@ -4066,7 +4096,8 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
         }
         return code;
     };
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
     auto entry_spot = std::make_shared<spot_context_state_t> ();
@@ -4075,7 +4106,8 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
     entry_spot->spot_id = spot_id_t ("actor-a-entry");
     entry_spot->spot_name = "entry";
     entry_spot->spot_instance = std::make_shared<int> (1);
-    entry_spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    entry_spot->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     entry_spot->channel_runtime->serializers = &serializers;
     entry_spot->serial_executor = node->worker_executor;
     runtime::serial_execution_queue_options_t serial_options;
@@ -4706,7 +4738,8 @@ int local_bound_session_refreshes_cached_route_before_fast_path ()
 {
     using namespace zlink::framework;
 
-    auto state = std::make_shared<detail::mesh_node_builder_state_t> ("bound-session-refresh-mesh");
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("bound-session-refresh-mesh");
     detail::mesh_node_runtime_t runtime (state);
     const auto actor = detail::actor_ref_access_t::make (
       node_rid_t::from_string ("current-actor-owner"), "PlayerActor", "reconnected-player", 7);
@@ -4922,10 +4955,12 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
     const auto run = [] (scenario_t scenario,
                          std::atomic_int &admission_calls) -> result_t<spot_actor_join_result_t> {
         serializer_registry_t serializers;
-        auto node = std::make_shared<spot_node_builder_state_t> ("actor-join-target");
+        auto node = zlink::framework::test::runtime_failure_fixture<
+          zlink::framework::detail::spot_node_builder_state_t> ("actor-join-target");
         node->worker_executor =
           std::make_shared<runtime::offload_executor_t> (1, "actor-join-store-resolution");
-        node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+        node->channel_runtime =
+          zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
         node->channel_runtime->serializers = &serializers;
 
         auto spot = std::make_shared<spot_context_state_t> ();
@@ -4934,7 +4969,8 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
         spot->spot_id = spot_id_t ("actor-join-target-spot");
         spot->spot_name = "actor-join-target";
         spot->spot_instance = std::make_shared<int> (1);
-        spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+        spot->channel_runtime =
+          zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
         spot->channel_runtime->serializers = &serializers;
         spot->serial_executor = node->worker_executor;
         node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
@@ -5089,10 +5125,12 @@ int remote_actor_join_store_read_does_not_wait_for_handler_workers ()
     using namespace std::chrono_literals;
 
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-join-infrastructure");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-join-infrastructure");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "actor-join-infrastructure");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
     provider_thread_location_store_t provider;
@@ -5170,7 +5208,8 @@ int local_relay_failure_returns_without_waiting_for_handoff_deadline ()
     using namespace zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     service_collection_t services;
     services.add_singleton<actor_gateway_runtime_t> ();
     services.add_singleton<serializer_registry_t> ();
@@ -5201,7 +5240,8 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
     using namespace zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "local-relay-route-worker");
     service_collection_t services;
@@ -5364,10 +5404,12 @@ int parked_request_reply_case (const std::string &requester_rid,
     // terminal route named the requester, so a cross-node requester's
     // terminal never found the pending entry and the reply was lost.
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "parked-replay-worker");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
     auto spot = std::make_shared<spot_context_state_t> ();
@@ -5376,7 +5418,8 @@ int parked_request_reply_case (const std::string &requester_rid,
     spot->spot_id = spot_id_t ("actor-a-user");
     spot->spot_name = "user";
     spot->spot_instance = std::make_shared<int> (1);
-    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     spot->channel_runtime->serializers = &serializers;
     spot->serial_executor = node->worker_executor;
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
@@ -5601,7 +5644,8 @@ int same_operation_from_distinct_source_lifecycles_has_distinct_pending_terminal
     using namespace zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
 
-    auto node = std::make_shared<spot_node_builder_state_t> ("parking-node");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("parking-node");
     const auto actor = test_actor_ref ("parking-node", "player", "same-operation", 1);
     const auto first_fence = runtime::protocol::actor_route_fence_t{
       "same-operation", 1, zlink::routing_id_t::from ("owner-a").to_bytes (), 4, 9, 12};
@@ -5663,10 +5707,12 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
     // relayed reply was discarded and the requester's wire operation timed
     // out.
     serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto node = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "follow-relay-worker");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
     service_collection_t services;
@@ -5982,7 +6028,7 @@ int actor_unbound_waits_for_accepted_push_fifo ()
     serializer_registry_t serializers;
     state->serializers = &serializers;
     actor_gateway_runtime_t gateway (state);
-    zlink_builder_t builder;
+    zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.stream ("actor-unbound-fifo").bind ("tcp://127.0.0.1:0");
     auto runtime = stream_runtime_t::from (builder);
     auto stream = runtime.open_session ("actor-unbound-fifo");
@@ -6050,7 +6096,7 @@ int session_disconnect_uses_actor_slot_issue_order ()
     auto state = std::make_shared<actor_gateway_state_t> ();
     actor_gateway_runtime_t gateway (state);
     auto manager = gateway.manager ();
-    zlink_builder_t builder;
+    zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     builder.stream ("disconnect-slot-order").bind ("tcp://127.0.0.1:0");
     auto runtime = stream_runtime_t::from (builder);
     auto stream = runtime.open_session ("disconnect-slot-order");

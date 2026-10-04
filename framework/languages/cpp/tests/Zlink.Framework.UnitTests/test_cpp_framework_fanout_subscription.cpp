@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -181,7 +182,7 @@ std::vector<std::string> configured_subscription_topics (std::vector<std::string
         channel.subscribe (std::move (topic));
     }
 
-    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     options->keyed_zlink_actions.at ("fanout_channel:events") (zlink);
     const auto channels =
       zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ()).channel_snapshots ();
@@ -232,10 +233,14 @@ void publish (fanout::raw_fanout_publisher_t &publisher, const std::string &topi
 
 TEST (CppFrameworkFanoutSubscription, NoApplicationSubscriptionReceivesDifferentTopics)
 {
-    fanout::raw_fanout_publisher_t publisher ("tcp://127.0.0.1:0");
+    fanout::raw_fanout_publisher_t publisher (
+      "tcp://127.0.0.1:0", {}, false, std::nullopt,
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     publisher.start ();
     const auto publisher_id = bytes ("publisher-default");
-    fanout::raw_fanout_subscriber_t subscriber (nullptr, configured_subscription_topics ({}));
+    fanout::raw_fanout_subscriber_t subscriber (
+      nullptr, configured_subscription_topics ({}),
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     ASSERT_TRUE (subscriber.connect_manual (publisher_id, publisher.endpoint ()));
     const auto receive_now = std::chrono::steady_clock::now ();
     wait_for_beacon (publisher, subscriber, publisher_id, receive_now);
@@ -261,11 +266,14 @@ TEST (CppFrameworkFanoutSubscription, NoApplicationSubscriptionReceivesDifferent
 
 TEST (CppFrameworkFanoutSubscription, PrefixSubscriptionReceivesMatchingTopicAndRejectsOtherTopic)
 {
-    fanout::raw_fanout_publisher_t publisher ("tcp://127.0.0.1:0");
+    fanout::raw_fanout_publisher_t publisher (
+      "tcp://127.0.0.1:0", {}, false, std::nullopt,
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     publisher.start ();
     const auto publisher_id = bytes ("publisher-prefix");
-    fanout::raw_fanout_subscriber_t subscriber (nullptr,
-                                                configured_subscription_topics ({"order"}));
+    fanout::raw_fanout_subscriber_t subscriber (
+      nullptr, configured_subscription_topics ({"order"}),
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     ASSERT_TRUE (subscriber.connect_manual (publisher_id, publisher.endpoint ()));
     const auto receive_now = std::chrono::steady_clock::now ();
     wait_for_beacon (publisher, subscriber, publisher_id, receive_now);
@@ -289,11 +297,14 @@ TEST (CppFrameworkFanoutSubscription, PrefixSubscriptionReceivesMatchingTopicAnd
 
 TEST (CppFrameworkFanoutSubscription, RestrictedAutomaticSubscriberStaysReadyFromBeacon)
 {
-    fanout::raw_fanout_publisher_t publisher ("tcp://127.0.0.1:0");
+    fanout::raw_fanout_publisher_t publisher (
+      "tcp://127.0.0.1:0", {}, false, std::nullopt,
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     publisher.start ();
     const auto publisher_id = bytes ("publisher-liveness");
-    fanout::raw_fanout_subscriber_t subscriber (nullptr,
-                                                configured_subscription_topics ({"order"}));
+    fanout::raw_fanout_subscriber_t subscriber (
+      nullptr, configured_subscription_topics ({"order"}),
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     subscriber.reconcile_automatic ({fanout::fanout_publisher_intent_t{
       publisher_id, 1, publisher.endpoint (), mesh::service_node_state_t::serving}});
     const auto receive_now = std::chrono::steady_clock::now ();
@@ -322,7 +333,7 @@ TEST (CppFrameworkFanoutSubscription, ReservedPrefixIsRejectedByPublishAndSubscr
     ASSERT_TRUE (options->fanout_subscription_topics.contains ("events"));
     EXPECT_EQ (options->fanout_subscription_topics.at ("events").size (), 2u);
 
-    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     auto publisher = zlink.publisher ();
     EXPECT_TRUE (rejects_as_call_argument (
       [&] { (void) publisher.publish ("events", reserved, std::string ("value")); }));

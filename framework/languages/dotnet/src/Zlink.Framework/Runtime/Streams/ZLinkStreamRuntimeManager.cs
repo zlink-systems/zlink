@@ -4,8 +4,31 @@ internal sealed class ZLinkStreamRuntimeManager(
     IServiceProvider services,
     IZLinkBackendAdapterFactory backendAdapterFactory,
     ZLinkFrameworkRegistration registration
-)
+) : IAsyncDisposable
 {
+    private readonly HashSet<IZLinkBackendStreamSocket> _unattachedSockets = [];
+    private Task? _disposeTask;
+
+    public ValueTask DisposeAsync() =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                async () =>
+                {
+                    var failures = new ZLinkFailureCollector();
+                    foreach (var socket in _unattachedSockets.ToArray())
+                        await failures
+                            .CaptureAsync(async () =>
+                            {
+                                await socket.DisposeAsync().ConfigureAwait(false);
+                                _unattachedSockets.Remove(socket);
+                            })
+                            .ConfigureAwait(false);
+                    failures.ThrowIfAny();
+                }
+            )
+        );
+
     /// <summary>
     ///     Creates each STREAM node. The node is recorded in <paramref name="state" /> as soon
     ///     as its socket exists and receives the monitor and endpoints as they are created, so
@@ -18,6 +41,7 @@ internal sealed class ZLinkStreamRuntimeManager(
         if (registration.StreamNodes.Count == 0)
             return;
 
+        state.StreamRuntimeManager = this;
         var monitoringAdapter = backendAdapterFactory.CreateMonitoringAdapter();
 
         foreach (var streamNodeRegistration in registration.StreamNodes.Values)
@@ -26,6 +50,7 @@ internal sealed class ZLinkStreamRuntimeManager(
                 streamNodeRegistration.StreamNodeName,
                 actorDispatchNode: null
             );
+            _unattachedSockets.Add(socket);
             ZLinkStreamNodeRuntime runtime;
             try
             {
@@ -42,11 +67,20 @@ internal sealed class ZLinkStreamRuntimeManager(
                     applicationJobQueue: state.ApplicationJobQueue
                 );
             }
-            catch
+            catch (Exception error)
             {
-                await socket.DisposeAsync().ConfigureAwait(false);
+                var failures = new ZLinkFailureCollector(error);
+                await failures
+                    .CaptureAsync(async () =>
+                    {
+                        await socket.DisposeAsync().ConfigureAwait(false);
+                        _unattachedSockets.Remove(socket);
+                    })
+                    .ConfigureAwait(false);
+                failures.ThrowIfAny();
                 throw;
             }
+            _unattachedSockets.Remove(socket);
             state.StreamNodes.Add(streamNodeRegistration.StreamNodeName, runtime);
 
             if (streamNodeRegistration.TlsServer is { } tlsServer)

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
@@ -55,7 +56,10 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
     std::promise<void> delivered;
     auto delivery = delivered.get_future ();
     auto session_owner = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{test_descriptor ("seal-session-owner")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("seal-session-owner"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     const auto connection = session_owner->sessions ().open ("seal-session-rid");
     const stateful::object_ref_t session_actor{
       stateful::object_kind_t::actor, "seal-actor", actor.object_generation (),
@@ -160,7 +164,10 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
 TEST (FrameworkRelocationSealContract, failed_publication_keeps_owner_binding_and_projections)
 {
     auto owner = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{test_descriptor ("publication-owner")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("publication-owner"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     const auto actor_node = zlink::routing_id_t::from ("publication-actor");
     const auto actor = actor_ref_access_t::make (node_rid_t::from_string (actor_node.to_string ()),
                                                  "player", "publication-actor", 7);
@@ -251,7 +258,10 @@ TEST (FrameworkRelocationSealContract, failed_publication_keeps_owner_binding_an
 TEST (FrameworkRelocationSealContract, relay_drain_keeps_seal_until_native_submissions_are_ordered)
 {
     auto owner = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{test_descriptor ("fifo-owner")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("fifo-owner"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     const auto connection = owner->sessions ().open ("fifo-session");
     const stateful::object_ref_t actor{
       stateful::object_kind_t::actor, "fifo-actor", 7, 11, "mesh", "fifo-target"};
@@ -314,7 +324,10 @@ TEST (FrameworkRelocationSealContract, terminal_hook_failure_does_not_veto_commi
     for (const bool commit : {false, true}) {
         SCOPED_TRACE (commit ? "commit" : "abort");
         auto owner = std::make_shared<host::public_host_runtime_t> (
-          host::host_options_t{mesh::raw_mesh_node_options_t{test_descriptor ("hook-owner")}});
+          host::host_options_t{mesh::raw_mesh_node_options_t{
+            .descriptor = test_descriptor ("hook-owner"),
+            .runtime_failures =
+              std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
         const auto connection = owner->sessions ().open ("hook-session");
         const stateful::object_ref_t actor{
           stateful::object_kind_t::actor, "hook-actor", 7, 11, "mesh", "hook-source"};
@@ -386,7 +399,10 @@ TEST (FrameworkRelocationSealContract, terminal_hook_failure_does_not_veto_commi
 TEST (FrameworkRelocationSealContract, drain_failure_only_settles_failed_actor_with_original_reason)
 {
     auto owner = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{test_descriptor ("failed-drain-owner")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("failed-drain-owner"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     const auto connection = owner->sessions ().open ("failed-drain-session");
     const stateful::object_ref_t actor{
       stateful::object_kind_t::actor, "failed-drain-actor", 7, 11, "mesh", "failed-drain-target"};
@@ -474,7 +490,10 @@ TEST (FrameworkRelocationSealContract,
                                                                           reported.set_value ();
                                                                       });
     auto owner = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{test_descriptor ("settlement-owner")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("settlement-owner"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     const auto connection = owner->sessions ().open ("settlement-session");
     const stateful::object_ref_t actor{
       stateful::object_kind_t::actor, "settlement-actor", 7, 11, "mesh", "settlement-target"};
@@ -529,7 +548,10 @@ TEST (FrameworkRelocationSealContract,
 TEST (FrameworkRelocationSealContract, old_drain_failure_preserves_new_binding_seal)
 {
     auto owner = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{test_descriptor ("rebound-drain-owner")}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("rebound-drain-owner"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     const stateful::object_ref_t actor{
       stateful::object_kind_t::actor, "rebound-drain-actor", 7, 11, "mesh", "rebound-drain-target"};
     const auto first_connection = owner->sessions ().open ("first-drain-session");

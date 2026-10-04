@@ -86,6 +86,7 @@ class spot_node_builder_state_t
     {
     }
     ~spot_node_builder_state_t ();
+    std::shared_ptr<runtime::runtime_failure_collector_t> runtime_failures () const;
 
     // Builder configuration is synchronously admitted through this lane.  The
     // MeshNode start path takes its configuration projection only after those

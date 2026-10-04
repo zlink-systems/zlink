@@ -54,7 +54,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly ZLinkStateLane _remoteUserSpotLane = new();
     private readonly ZLinkStateLane _remoteActorCreateLane = new();
     private readonly object _socketGate = new();
-    private readonly object _disposeGate = new();
     private readonly ConcurrentExclusiveSchedulerPair _routedSubmitScheduler;
     private readonly Func<ISocketMonitor, ISocketMonitor>? _decorateSocketMonitor;
     private readonly Dictionary<ZLinkChannelName, uint> _channels = new();
@@ -204,7 +203,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private ZLinkApplicationJobQueueLease? _reservedRawApplicationAdmission;
     private int _rawApplicationAdmissionWaitActive;
     private int _readyPosted;
-    private int _disposed;
+    private bool IsDisposing => Volatile.Read(ref _disposeTask) is not null;
     private bool _inboundOperationAdmissionClosed;
     private ulong _activeSocketGeneration;
 
@@ -426,34 +425,24 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             }
             catch (Exception error)
             {
-                var ownedPoller = _poller;
-                _poller = null;
-                var ownedRegistration = _receiveFlowRegistration;
-                _receiveFlowRegistration = null;
-                var ownedMonitor = _socketMonitor;
-                _socketMonitor = null;
-                _socket = null;
+                _socket = socket;
+                _poller ??= poller;
+                _receiveFlowRegistration ??= receiveFlowRegistration;
+                _socketMonitor ??= socketMonitor;
                 _activeSocketGeneration = 0;
                 _state = MeshNodeState.Error;
                 cleanupFailure = async () =>
                 {
                     var failures = new ZLinkFailureCollector(error);
-                    failures.Capture(() => ownedPoller?.Dispose());
-                    failures.Capture(() => poller?.Dispose());
-                    await failures
-                        .CaptureAsync(() =>
-                            ZLinkReceiveFlowController.DisposeRegistrationAsync(ownedRegistration)
-                        )
-                        .ConfigureAwait(false);
+                    failures.Capture(() => _poller?.Dispose());
                     await failures
                         .CaptureAsync(() =>
                             ZLinkReceiveFlowController.DisposeRegistrationAsync(
-                                receiveFlowRegistration
+                                _receiveFlowRegistration
                             )
                         )
                         .ConfigureAwait(false);
-                    failures.Capture(() => ownedMonitor?.Dispose());
-                    failures.Capture(() => socketMonitor?.Dispose());
+                    failures.Capture(() => _socketMonitor?.Dispose());
                     failures.Capture(socket.Dispose);
                     failures.ThrowIfAny();
                 };
@@ -3295,23 +3284,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        Task disposal;
-        lock (_disposeGate)
-            disposal = _disposeTask ??= DisposeWithDefaultBoundAsync();
-        await disposal.ConfigureAwait(false);
-    }
+    public ValueTask DisposeAsync() =>
+        new(ZLinkRuntimeTaskRunner.RunDisposal(ref _disposeTask, DisposeWithDefaultBoundAsync));
 
-    public async ValueTask ForceStopAsync(CancellationToken cancellationToken)
-    {
-        Task disposal;
-        lock (_disposeGate)
-            disposal = _disposeTask ??= cancellationToken.CanBeCanceled
-                ? DisposeCoreAsync(cancellationToken)
-                : DisposeWithDefaultBoundAsync();
-        await disposal.ConfigureAwait(false);
-    }
+    public ValueTask ForceStopAsync(CancellationToken cancellationToken) =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                () =>
+                    cancellationToken.CanBeCanceled
+                        ? DisposeCoreAsync(cancellationToken)
+                        : DisposeWithDefaultBoundAsync()
+            )
+        );
 
     private async Task DisposeWithDefaultBoundAsync()
     {
@@ -3321,9 +3306,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private async Task DisposeCoreAsync(CancellationToken shutdownToken)
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            return;
-
         var receiveLoop = RunState(() =>
         {
             _state = MeshNodeState.Stopped;
@@ -3371,10 +3353,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             receiveFlowRegistration = _receiveFlowRegistration;
             socketMonitor = _socketMonitor;
             poller = _poller;
-            _socket = null;
-            _receiveFlowRegistration = null;
-            _socketMonitor = null;
-            _poller = null;
         }
 
         var pendingOperations = RunOperation(() =>
@@ -3406,6 +3384,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         poller?.Dispose();
         socketMonitor?.Dispose();
         socket?.Dispose();
+        lock (_socketGate)
+        {
+            _socket = null;
+            _receiveFlowRegistration = null;
+            _socketMonitor = null;
+            _poller = null;
+        }
         _stop?.Dispose();
         Publish(MeshMonitorEventKind.StateChanged);
         RunState(() =>
@@ -12069,7 +12054,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (accepted && key.Command == ServiceWireConstants.Command.Admit)
                     RunState(() =>
                     {
-                        if (_disposed != 0 || cancellationToken.IsCancellationRequested)
+                        if (IsDisposing || cancellationToken.IsCancellationRequested)
                             return;
                         var peer = _peersByRid.Values.FirstOrDefault(candidate =>
                             candidate.PhysicalRoutingId == key.Target
@@ -12491,8 +12476,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         });
     }
 
-    private void ThrowIfDisposed() =>
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(IsDisposing, this);
 
     private T RunState<T>(Func<T> operation) => AwaitStateLane(_lane.RunAsync(operation));
 

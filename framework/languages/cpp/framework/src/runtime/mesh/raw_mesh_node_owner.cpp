@@ -472,7 +472,17 @@ raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
     for (auto &registration : _peer_metrics)
         registration.instrument->RemoveCallback (&publish_peer_metrics, &registration);
     _drop_metric->RemoveCallback (&publish_drop_metrics, this);
-    close ();
+    if (!_options.runtime_failures->capture ([&] { close (); })) {
+        _options.runtime_failures->retain (
+          [context = std::move (_context), socket_mutex = std::move (_socket_mutex),
+           router = std::move (_router), poller = std::move (_ingress_poller),
+           port = std::move (_port)] () mutable {
+              (void) context;
+              (void) socket_mutex;
+              runtime_failure_collector_t::close_resources (port);
+              runtime_failure_collector_t::close_resources (poller, router);
+          });
+    }
 }
 
 void raw_mesh_node_owner_t::start ()
@@ -514,7 +524,7 @@ void raw_mesh_node_owner_t::start ()
           // The ingress poller is this ROUTER's one route observer: POLLROUTE
           // wakes the host and pump_one reads the selected-route snapshot.
           _port = std::make_shared<detail::backend::raw_route_port_t> (
-            *router, &_socket_mutex,
+            *router, _socket_mutex,
             zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollroute,
             ingress_poller.get (), 1);
           _ingress_poller = std::move (ingress_poller);
@@ -570,44 +580,36 @@ void raw_mesh_node_owner_t::send_descriptor_update_on_lane (
     }
 }
 
-void raw_mesh_node_owner_t::close () noexcept
+void raw_mesh_node_owner_t::close ()
 {
-    std::shared_ptr<detail::backend::raw_route_port_t> port;
-    std::unique_ptr<zlink::router_socket_t> router;
-    std::unique_ptr<zlink::poller_t> ingress_poller;
-    application_job_queue_t::receive_flow_registration_t receive_flow_registration;
+    auto resources =
+      _lane
+        .run ([this] {
+            if (!_closed) {
+                _receive_flow_registration.close ();
+                _mailbox.close ();
+                _operations->shutdown ();
+            }
+            return std::tuple{std::move (_port), std::move (_ingress_poller), std::move (_router)};
+        })
+        .get ();
+    std::exception_ptr failure;
     try {
-        _lane
-          .run ([this, &port, &router, &ingress_poller, &receive_flow_registration] {
-              std::lock_guard lifecycle_lock (_lifecycle_mutex);
-              if (_closed) {
-                  return;
-              }
-              _closed = true;
-              port = std::move (_port);
-              ingress_poller = std::move (_ingress_poller);
-              receive_flow_registration = std::move (_receive_flow_registration);
-              router = std::move (_router);
-          })
-          .get ();
+        auto &[port, poller, router] = resources;
+        runtime_failure_collector_t::close_resources (port);
+        runtime_failure_collector_t::close_resources (poller, router);
     }
-    catch (...) {
-        return;
+    catch (const std::exception &) {
+        failure = std::current_exception ();
     }
-    receive_flow_registration.close ();
-    _mailbox.close ();
-    _operations->shutdown ();
-    if (port) {
-        port->close ();
-    }
-    if (ingress_poller) {
-        try {
-            ingress_poller->close ();
-        }
-        catch (...) {
-        }
-    }
-    router.reset ();
+    _lane
+      .run ([this, &resources, &failure] {
+          std::tie (_port, _ingress_poller, _router) = std::move (resources);
+          _closed = !failure;
+      })
+      .get ();
+    if (failure)
+        std::rethrow_exception (failure);
 }
 
 bool raw_mesh_node_owner_t::started () const noexcept
@@ -667,7 +669,7 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint)
               return false;
           }
           try {
-              std::lock_guard socket_lock (_socket_mutex);
+              std::lock_guard socket_lock (*_socket_mutex);
               trace_mesh ("connect endpoint=" + endpoint);
               _router->connect (endpoint);
               _outbound_endpoints.insert (endpoint);
@@ -699,7 +701,7 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
           const auto endpoint_retargeted =
             std::any_of (_expected_peers.begin (), _expected_peers.end (), is_stale_same_endpoint);
           try {
-              std::lock_guard socket_lock (_socket_mutex);
+              std::lock_guard socket_lock (*_socket_mutex);
               trace_mesh ("connect endpoint=" + endpoint
                           + " expected=" + owner_key (expected_descriptor.node_routing_id));
               if (endpoint_retargeted && _outbound_endpoints.contains (endpoint)) {
@@ -794,7 +796,7 @@ bool raw_mesh_node_owner_t::disconnect_peer (const std::vector<std::uint8_t> &ex
                       }
                   }
                   if (!expected_routing_id.empty ()) {
-                      std::lock_guard socket_lock (_socket_mutex);
+                      std::lock_guard socket_lock (*_socket_mutex);
                       try {
                           _router->disconnect_rid (zlink::routing_id_t::from (expected_routing_id));
                       }
@@ -806,7 +808,7 @@ bool raw_mesh_node_owner_t::disconnect_peer (const std::vector<std::uint8_t> &ex
                   }
                   if (!endpoint_in_use_by_other) {
                       try {
-                          std::lock_guard socket_lock (_socket_mutex);
+                          std::lock_guard socket_lock (*_socket_mutex);
                           // Remove the configured endpoint after terminating the current
                           // RID. Otherwise the binding may reconnect the same stale
                           // endpoint. This step must still run when the RID index is stale.
@@ -2735,7 +2737,7 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                       .run ([this, &descriptor] {
                           std::lock_guard lifecycle_lock (_lifecycle_mutex);
                           try {
-                              std::lock_guard socket_lock (_socket_mutex);
+                              std::lock_guard socket_lock (*_socket_mutex);
                               if (_router)
                                   _router->disconnect (descriptor.advertised_endpoint);
                           }
@@ -3483,7 +3485,7 @@ std::size_t raw_mesh_node_owner_t::apply_route_snapshot ()
                   return changes;
               std::vector<zlink::router_route_t> snapshot;
               {
-                  std::lock_guard socket_lock (_socket_mutex);
+                  std::lock_guard socket_lock (*_socket_mutex);
                   snapshot = _router->routes_snapshot ();
               }
               decltype (_routes) observed;

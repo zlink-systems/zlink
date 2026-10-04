@@ -302,13 +302,13 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
             .RunAsync(() =>
             {
                 var started = _sessionStarted ? _session : null;
-                _session = null;
                 return started;
             })
             .ConfigureAwait(false);
 
         if (session is not null)
             await session.DisposeAsync().ConfigureAwait(false);
+        await _lane.RunAsync(() => _session = null).ConfigureAwait(false);
         await _socket.DisposeAsync().ConfigureAwait(false);
 
         // The shared framework MeshNode is owned by its spot node runtime; only a

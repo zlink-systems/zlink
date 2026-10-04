@@ -12,7 +12,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
     private IPoller? _receivePoller;
     private readonly PollEvent[] _receiveEvents = new PollEvent[1];
     private bool _started;
-    private bool _disposed;
+    private Task? _disposeTask;
 
     internal ZLinkRawRouterServicePort(IContext context, RoutingId routingId, string bindEndpoint)
     {
@@ -165,23 +165,19 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         }
     }
 
-    public void Dispose()
-    {
-        if (_disposed)
-            return;
-        _disposed = true;
-        _receivePoller?.Dispose();
-        _socket.Dispose();
-    }
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed)
-            return;
-        _disposed = true;
-        _receivePoller?.Dispose();
-        await _socket.DisposeAsync().ConfigureAwait(false);
-    }
+    public ValueTask DisposeAsync() =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                async () =>
+                {
+                    _receivePoller?.Dispose();
+                    await _socket.DisposeAsync().ConfigureAwait(false);
+                }
+            )
+        );
 
     private void EnsureStarted()
     {
@@ -192,7 +188,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
 
     private void ThrowIfDisposed()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeTask) is not null, this);
     }
 
     internal static Message[] CreateMessages(IReadOnlyList<ReadOnlyMemory<byte>> parts)

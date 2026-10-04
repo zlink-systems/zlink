@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "metric_test_reader.hpp"
 
@@ -226,7 +227,10 @@ void verify_topology_metrics_and_selection_reasons ()
 
     metric_test::provider_t provider;
     auto source_options = mesh::raw_mesh_node_options_t{
-      descriptor (std::string (mesh_name), "metrics-topology-source", {{"server-self", 100}})};
+      .descriptor =
+        descriptor (std::string (mesh_name), "metrics-topology-source", {{"server-self", 100}}),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()};
     source_options.metric_channel_names = {"alpha", "empty", "zero"};
     source_options.metric_source = "manual_and_redis";
     mesh::raw_mesh_node_owner_t source (std::move (source_options));
@@ -460,8 +464,10 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     target.start ();
 
     metric_test::provider_t provider;
-    auto source_options =
-      mesh::raw_mesh_node_options_t{descriptor ("metrics-requests", "metrics-request-source")};
+    auto source_options = mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("metrics-requests", "metrics-request-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()};
     source_options.metric_channel_names = {"work"};
     mesh::raw_mesh_node_owner_t source (std::move (source_options));
     source.start ();
@@ -753,8 +759,8 @@ void verify_remaining_terminal_outcomes ()
 
 std::shared_ptr<zlink::framework::detail::mesh_node_builder_state_t> make_public_node_state ()
 {
-    auto state = std::make_shared<zlink::framework::detail::mesh_node_builder_state_t> (
-      "metrics-local-public");
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("metrics-local-public");
     state->core_context = std::make_shared<zlink::context_t> ();
     state->listen_endpoint = "tcp://127.0.0.1:0";
     state->listen_port.reset ();

@@ -17,6 +17,45 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SharedAsyncDisposalTests
 {
     [Fact]
+    public async Task FrameworkRuntimeState_Reports_Close_Failure_And_Retains_Context()
+    {
+        await using var services = new ServiceCollection().BuildServiceProvider();
+        var context = DispatchProxy.Create<IZLinkBackendRuntimeContext, BlockingContextProxy>();
+        var proxy = (BlockingContextProxy)(object)context;
+        var failure = new Systems.Zlink.ZlinkCloseException(
+            Systems.Zlink.ZlinkCloseException.ErrorCode.Busy
+        );
+        proxy.DisposeFailure = failure;
+        proxy.Release.TrySetResult();
+        using var errors = new ZLinkRuntimeErrorSink();
+        var reported = new List<Exception>();
+        errors.UnhandledCallbackException += reported.Add;
+        var state = new ZLinkFrameworkComponentState(
+            context,
+            new ZLinkFrameworkRegistration(),
+            services,
+            errors,
+            new object(),
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                8,
+                1
+            ),
+            new ZLinkListenerRecords()
+        );
+        Assert.Same(
+            failure,
+            await Assert.ThrowsAsync<Systems.Zlink.ZlinkCloseException>(async () =>
+                await state.DisposeAsync()
+            )
+        );
+        Assert.Same(failure, Assert.Single(reported));
+        proxy.DisposeFailure = null;
+        await state.DisposeAsync();
+        Assert.Equal(2, proxy.DisposeCount);
+    }
+
+    [Fact]
     public async Task AutoConnectHost_Repeated_Dispose_Callers_Share_Finalization()
     {
         var store = new ZLinkInMemoryLocationStore();

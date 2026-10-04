@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -461,8 +462,8 @@ bool receive_completion (zlink::framework::detail::mesh_node_runtime_t &node,
 std::shared_ptr<zlink::framework::detail::mesh_node_builder_state_t>
 make_node (std::string endpoint, std::string routing_id)
 {
-    auto state =
-      std::make_shared<zlink::framework::detail::mesh_node_builder_state_t> ("vertical-mesh");
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("vertical-mesh");
     state->core_context = std::make_shared<zlink::context_t> ();
     state->listen_endpoint = std::move (endpoint);
     state->listen_port.reset ();
@@ -478,8 +479,8 @@ make_node (std::string endpoint, std::string routing_id)
 std::shared_ptr<zlink::framework::detail::mesh_node_builder_state_t>
 make_named_node (std::string mesh_name, std::string routing_id)
 {
-    auto state =
-      std::make_shared<zlink::framework::detail::mesh_node_builder_state_t> (std::move (mesh_name));
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> (std::move (mesh_name));
     state->core_context = std::make_shared<zlink::context_t> ();
     state->listen_endpoint = "tcp://127.0.0.1:0";
     state->routing_id = zlink::routing_id_t::from (std::move (routing_id));
@@ -493,8 +494,8 @@ make_named_node (std::string mesh_name, std::string routing_id)
 
 void verify_unselected_object_role_defaults_to_none ()
 {
-    auto state = std::make_shared<zlink::framework::detail::mesh_node_builder_state_t> (
-      "unselected-object-role");
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("unselected-object-role");
     zlink::framework::detail::mesh_node_runtime_t runtime (state);
 
     assert (state->object_role == zlink::framework::object_role_t::none);
@@ -618,7 +619,9 @@ void verify_route_internal_packets_precede_application_dispatch ()
     auto provider = services.build_provider ();
     auto &location_runtime = provider.get_required<runtime::location_runtime_t> ();
     location_runtime.start (*registration->routing_id);
-    runtime::mesh_node_host_service_t service ({registration}, serializers);
+    runtime::mesh_node_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
+      serializers);
     service.start (provider);
     const auto node = service.nodes ().front ();
     auto native_spot = std::make_shared<host::spot_handle_t> (
@@ -826,7 +829,9 @@ void verify_actor_route_resolver_preserves_unavailable ()
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
     provider.get_required<runtime::location_runtime_t> ().start (*registration->routing_id);
-    runtime::mesh_node_host_service_t service ({registration}, serializers);
+    runtime::mesh_node_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
+      serializers);
     service.start (provider);
     const auto claimed = store.claim_owner_lease ("expired-actor-owner", 200ms).result ().value ();
     const auto *owner = std::get_if<owner_lease_claimed_t> (&claimed);
@@ -879,7 +884,7 @@ void verify_actor_route_resolver_preserves_unavailable ()
     const auto expired_lease = store.read_owner_lease (owner->token.owner_id).result ().value ();
     assert (std::get_if<owner_lease_missing_t> (&expired_lease));
     handler_registry_t handlers;
-    zlink_builder_t stream_zlink;
+    zlink_builder_t stream_zlink = zlink::framework::test::runtime_failure_builder ();
     detail::configure_stream_dispatch_executor ();
     zlink_framework_options_t stream_options (services, handlers, serializers, stream_zlink);
     stream_options.add_stream_node ("expired-actor-stream")
@@ -892,7 +897,8 @@ void verify_actor_route_resolver_preserves_unavailable ()
     assert (stream_snapshots.front ().packet_session_name == "expired-actor-session");
     auto stream_listeners = std::make_shared<runtime::listener_status_registry_t> ();
     runtime::stream_host_service_t stream_host (
-      stream_runtime, stream_snapshots,
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), stream_runtime,
+      stream_snapshots,
       {{"expired-actor-session",
         [] (service_provider_t &scope) -> packet_stream_session_t & {
             return scope.get_required<expired_actor_bind_session_t> ();
@@ -955,7 +961,9 @@ void verify_server_descriptor_publishes_framework_entry_spot_without_application
     provider.get_required<zlink::framework::runtime::location_runtime_t> ().start (
       *registration->routing_id);
 
-    zlink::framework::runtime::mesh_node_host_service_t service ({registration}, serializers);
+    zlink::framework::runtime::mesh_node_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
+      serializers);
     service.start (provider);
     const auto nodes = store.list_mesh_nodes ("descriptor-entry").result ().value ();
     assert (nodes.items.size () == 1);
@@ -985,7 +993,9 @@ void verify_descriptor_retire_order_and_pre_seal_rollback ()
     auto provider = services.build_provider ();
     provider.get_required<zlink::framework::runtime::location_runtime_t> ().start (
       *first->routing_id);
-    zlink::framework::runtime::mesh_node_host_service_t service ({first, second}, serializers);
+    zlink::framework::runtime::mesh_node_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {first, second},
+      serializers);
     service.start (provider);
 
     assert (read_mesh_state (store, "vertical-order", *first->routing_id)
@@ -1126,6 +1136,7 @@ void verify_local_node_submit_bridge ()
       zlink::framework::runtime::application_job_queue_configuration_t{
         zlink::framework::application_job_queue_profile_t::balanced, std::uint32_t{1}, 1, 1});
     zlink::framework::runtime::mesh_node_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       {registration, independent_registration}, serializers, {}, {}, application_jobs);
     service.start (provider);
     const auto node = service.nodes ().front ();
@@ -1283,8 +1294,9 @@ void verify_direct_target_falls_through_absent_location_store_entry ()
     auto application_jobs = std::make_shared<zlink::framework::runtime::application_job_queue_t> (
       zlink::framework::runtime::application_job_queue_configuration_t{
         zlink::framework::application_job_queue_profile_t::balanced, std::uint32_t{1}, 1, 1});
-    zlink::framework::runtime::mesh_node_host_service_t service ({registration}, serializers, {},
-                                                                 {}, application_jobs);
+    zlink::framework::runtime::mesh_node_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
+      serializers, {}, {}, application_jobs);
     service.start (provider);
     const auto node = service.nodes ().front ();
 
@@ -1343,8 +1355,9 @@ void verify_request_to_never_admitted_target_reports_not_found ()
     auto application_jobs = std::make_shared<zlink::framework::runtime::application_job_queue_t> (
       zlink::framework::runtime::application_job_queue_configuration_t{
         zlink::framework::application_job_queue_profile_t::balanced, std::uint32_t{1}, 1, 1});
-    zlink::framework::runtime::mesh_node_host_service_t service ({registration}, serializers, {},
-                                                                 {}, application_jobs);
+    zlink::framework::runtime::mesh_node_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
+      serializers, {}, {}, application_jobs);
     service.start (provider);
     const auto node = service.nodes ().front ();
 
@@ -1818,7 +1831,7 @@ void verify_location_store_blocks_placement ()
 
 void verify_automatic_identity_and_port_builder ()
 {
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto mesh = builder.add_route_mesh ("automatic-builder-mesh");
     mesh.set_bind_host ("127.0.0.1")
       .listen (std::uint16_t{0})
@@ -1847,7 +1860,8 @@ void verify_automatic_identity_and_port_builder ()
     }
     assert (rejected_fixed_id);
 
-    zlink::framework::zlink_builder_t invalid_builder;
+    zlink::framework::zlink_builder_t invalid_builder =
+      zlink::framework::test::runtime_failure_builder ();
     auto invalid_mesh = invalid_builder.add_route_mesh ("invalid-builder-mesh");
     bool rejected_prefix = false;
     try {
@@ -1996,7 +2010,9 @@ void verify_host_shutdown_seal_reaches_raw_mesh ()
     zlink::framework::detail::mesh_node_runtime_t node (registration);
     node.start ();
     auto remote_options = mesh::raw_mesh_node_options_t{
-      node.native_node ().transport ().topology ().local_descriptor ()};
+      .descriptor = node.native_node ().transport ().topology ().local_descriptor (),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()};
     remote_options.descriptor.node_routing_id = {'s', 'i', 'l', 'e', 'n', 't'};
     remote_options.descriptor.advertised_endpoint = "tcp://127.0.0.1:0";
     remote_options.descriptor.state = mesh::service_node_state_t::preparing;
@@ -2030,7 +2046,9 @@ void verify_fixed_drain_callback_barrier ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "drain-barrier");
     zlink::framework::serializer_registry_t serializers;
-    zlink::framework::runtime::mesh_node_host_service_t service ({registration}, serializers);
+    zlink::framework::runtime::mesh_node_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
+      serializers);
     const auto node = service.nodes ().front ();
 
     node->application_work_enqueued ();

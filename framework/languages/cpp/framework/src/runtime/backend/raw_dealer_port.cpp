@@ -20,14 +20,15 @@
 namespace zlink::framework::detail::backend
 {
 raw_dealer_port_t::raw_dealer_port_t (zlink::dealer_socket_t &socket,
-                                      std::mutex *shared_socket_mutex,
+                                      std::shared_ptr<std::mutex> shared_socket_mutex,
                                       zlink::poller_t *shared_poller,
                                       std::uintptr_t poller_slot) :
     _owned_poller (shared_poller == nullptr ? std::make_unique<zlink::poller_t> () : nullptr),
     _poller (shared_poller != nullptr ? shared_poller : _owned_poller.get ()),
     _poller_slot (poller_slot == 0 ? 1 : poller_slot),
     _socket (&socket),
-    _socket_mutex (shared_socket_mutex != nullptr ? shared_socket_mutex : &_owned_socket_mutex)
+    _socket_mutex (shared_socket_mutex ? std::move (shared_socket_mutex)
+                                       : std::make_shared<std::mutex> ())
 {
     _poller->add (socket,
                   zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollout
@@ -131,20 +132,16 @@ std::optional<raw_message_t> raw_dealer_port_t::try_receive ()
     return parts;
 }
 
-void raw_dealer_port_t::close () noexcept
+void raw_dealer_port_t::close ()
 {
     std::lock_guard lock (*_socket_mutex);
     auto *socket = _socket;
+    if (_owned_poller) {
+        _owned_poller->close ();
+    } else if (socket != nullptr) {
+        _poller->remove (*socket);
+    }
     _socket = nullptr;
-    try {
-        if (_owned_poller) {
-            _owned_poller->close ();
-        } else if (socket != nullptr) {
-            _poller->remove (*socket);
-        }
-    }
-    catch (...) {
-    }
 }
 
 } // namespace zlink::framework::detail::backend

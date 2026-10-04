@@ -842,6 +842,7 @@ class stream_host_service_t::listener_t
                 std::atomic_bool &stop,
                 std::shared_ptr<std::atomic_bool> drain_flag,
                 std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring,
+                std::shared_ptr<runtime_failure_collector_t> runtime_failures,
                 std::shared_ptr<detail::mesh_node_runtime_t> mesh_node,
                 std::shared_ptr<application_job_queue_t> application_jobs,
                 std::chrono::milliseconds session_replacement_callback_timeout,
@@ -854,6 +855,7 @@ class stream_host_service_t::listener_t
         _stop (&stop),
         _drain_flag (std::move (drain_flag)),
         _monitoring (std::move (monitoring)),
+        _runtime_failures (std::move (runtime_failures)),
         _mesh_node (std::move (mesh_node)),
         _application_jobs (std::move (application_jobs)),
         _session_replacement_callback_timeout (session_replacement_callback_timeout),
@@ -1297,9 +1299,11 @@ class stream_host_service_t::listener_t
         }
         catch (const std::exception &error) {
             mark_start_failed (error.what ());
+            _runtime_failures->report (std::current_exception ());
         }
         catch (...) {
             mark_start_failed ("STREAM listener failed with an unknown exception: " + _stream.name);
+            _runtime_failures->report (std::current_exception ());
         }
     }
 
@@ -1516,7 +1520,8 @@ class stream_host_service_t::listener_t
             _core_socket->bind (_stream.bind_endpoint);
             _bound_endpoint = _core_socket->options ().last_endpoint ();
             mark_started ();
-            zlink::poller_t poller;
+            _core_poller = std::make_unique<zlink::poller_t> ();
+            auto &poller = *_core_poller;
             poller.add (*_core_socket,
                         zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollout
                           | zlink::poll_event_flag_t::pollcompletion,
@@ -1624,9 +1629,22 @@ class stream_host_service_t::listener_t
         }
         catch (const std::exception &error) {
             mark_start_failed (error.what ());
+            _runtime_failures->report (std::current_exception ());
         }
+        catch (...) {
+            _runtime_failures->report (std::current_exception ());
+        }
+    }
+
+  public:
+    void close_core_resources ()
+    {
         drain_pending_core_disconnects ();
         close_core_sessions ();
+        if (_core_poller) {
+            _core_poller->close ();
+            _core_poller.reset ();
+        }
         if (_core_monitor) {
             _core_monitor->close ();
             _core_monitor.reset ();
@@ -1640,6 +1658,7 @@ class stream_host_service_t::listener_t
         }
     }
 
+  private:
     bool
     begin_actor_binding_replacement (const std::shared_ptr<replacement_session_state_t> &state,
                                      const runtime::protocol::bound_session_replaced_t &replacement)
@@ -3615,6 +3634,7 @@ class stream_host_service_t::listener_t
     std::atomic_bool *_stop;
     std::shared_ptr<std::atomic_bool> _drain_flag;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
+    std::shared_ptr<runtime_failure_collector_t> _runtime_failures;
     std::shared_ptr<detail::mesh_node_runtime_t> _mesh_node;
     std::shared_ptr<application_job_queue_t> _application_jobs;
     std::chrono::milliseconds _session_replacement_callback_timeout;
@@ -3633,6 +3653,7 @@ class stream_host_service_t::listener_t
     std::mutex _core_socket_mutex;
     std::unique_ptr<zlink::stream_socket_t> _core_socket;
     std::unique_ptr<zlink::socket_monitor_t> _core_monitor;
+    std::unique_ptr<zlink::poller_t> _core_poller;
     eventing::runtime_wake_timer_t _core_wake_timer;
     std::unique_ptr<application_supply_slot_t> _core_application_supply;
     std::mutex _core_pending_disconnects_mutex;
@@ -3661,6 +3682,7 @@ class stream_host_service_t::listener_t
 };
 
 stream_host_service_t::stream_host_service_t (
+  std::shared_ptr<runtime_failure_collector_t> failures,
   detail::stream_runtime_t runtime,
   std::vector<stream_snapshot_t> streams,
   std::map<std::string, detail::stream_session_factory_t> session_factories,
@@ -3669,6 +3691,7 @@ stream_host_service_t::stream_host_service_t (
   std::map<std::string, std::optional<std::string>> advertise_hosts,
   std::shared_ptr<listener_status_registry_t> listener_statuses,
   std::shared_ptr<application_job_queue_t> application_jobs) :
+    hosted_service_lifecycle_t (std::move (failures)),
     _runtime (std::move (runtime)),
     _streams (std::move (streams)),
     _session_factories (std::move (session_factories)),
@@ -3708,7 +3731,8 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
             validate_stream_listener_identity (stream, advertise_host);
             auto listener = std::make_unique<listener_t> (
               _runtime, stream, advertise_host, factory->second, services, _stop, _drain_flag,
-              _monitoring, _mesh_node, _application_jobs, _session_replacement_callback_timeout,
+              _monitoring, _runtime_failures, _mesh_node, _application_jobs,
+              _session_replacement_callback_timeout,
               [this] { asio::post (_liveness_io, [this] { refresh_heartbeat_deadline (); }); });
             auto *raw = listener.get ();
             _listeners.push_back (std::move (listener));
@@ -3737,6 +3761,7 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
                           error.exception = std::current_exception ();
                           return error;
                       });
+                    _runtime_failures->report (std::current_exception ());
                     request_stop ();
                 }
             });
@@ -3758,6 +3783,7 @@ void stream_host_service_t::notify_sessions_closing (stream_close_reason_t reaso
                 listener->notify_sessions_closing (reason, diagnostic);
             }
             catch (...) {
+                _runtime_failures->report (std::current_exception ());
             }
         }
     }
@@ -3772,6 +3798,7 @@ void stream_host_service_t::force_close_sessions (stream_close_reason_t reason,
                 listener->force_close_sessions (reason, diagnostic);
             }
             catch (...) {
+                _runtime_failures->report (std::current_exception ());
             }
         }
     }
@@ -3787,6 +3814,7 @@ bool stream_host_service_t::drain_sessions_until (
             listener->begin_drain_sessions ();
         }
         catch (...) {
+            _runtime_failures->report (std::current_exception ());
             return false;
         }
     }
@@ -3842,24 +3870,24 @@ void stream_host_service_t::request_stop () noexcept
 void stream_host_service_t::stop () noexcept
 {
     request_stop ();
-    if (_liveness_thread.joinable ()) {
-        _liveness_thread.join ();
-    }
-    for (auto &listener : _listeners) {
-        listener->stop_connections ();
-    }
-    for (auto &thread : _threads) {
-        if (thread.joinable ()) {
-            thread.join ();
-        }
-    }
-    _threads.clear ();
-    for (auto &listener : _listeners) {
-        listener->stop_connections ();
+    if (_liveness_thread.joinable ())
+        _runtime_failures->capture ([&] { _liveness_thread.join (); });
+    for (auto &listener : _listeners)
+        _runtime_failures->capture ([&] { listener->stop_connections (); });
+    for (auto &thread : _threads)
+        if (thread.joinable ())
+            _runtime_failures->capture ([&] { thread.join (); });
+    std::erase_if (_threads, [] (auto &thread) { return !thread.joinable (); });
+    std::erase_if (_listeners, [&] (auto &listener) {
+        const bool connections_closed =
+          _runtime_failures->capture ([&] { listener->stop_connections (); });
+        const bool resources_closed =
+          _runtime_failures->capture ([&] { listener->close_core_resources (); });
         if (_listener_statuses)
-            _listener_statuses->remove (listener_kind_t::stream, listener->name ());
-    }
-    _listeners.clear ();
+            _runtime_failures->capture (
+              [&] { _listener_statuses->remove (listener_kind_t::stream, listener->name ()); });
+        return connections_closed && resources_closed;
+    });
     _services = nullptr;
 }
 

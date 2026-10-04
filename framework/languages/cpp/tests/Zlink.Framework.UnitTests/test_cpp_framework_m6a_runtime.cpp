@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "metric_test_reader.hpp"
 
@@ -188,10 +189,14 @@ void complete_bound_session_bind (
 void verify_bound_session_bind_retries_until_route_is_admitted ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("bind-delay-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("bind-delay-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("bind-delay-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("bind-delay-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto target_descriptor = target.topology ().local_descriptor ();
@@ -215,8 +220,10 @@ void verify_bound_session_bind_retries_until_route_is_admitted ()
 void verify_bound_session_bind_permanent_absence_is_bounded ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("bind-timeout-source")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("bind-timeout-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     auto target_descriptor = descriptor ("bind-timeout-target", "tcp://127.0.0.1:1");
     target_descriptor.state = mesh::service_node_state_t::serving;
@@ -239,10 +246,14 @@ void verify_bound_session_bind_permanent_absence_is_bounded ()
 void verify_bound_session_bind_reply_completes_registered_operation ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("bind-reply-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("bind-reply-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("bind-reply-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("bind-reply-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto target_descriptor = target.topology ().local_descriptor ();
@@ -265,10 +276,14 @@ void verify_bound_session_bind_reply_completes_registered_operation ()
 void verify_actor_create_retries_until_route_is_admitted ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("startup-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("startup-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("startup-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("startup-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -405,8 +420,10 @@ void verify_actor_create_intent_removal_ends_operation ()
 void verify_actor_create_retry_timeout_is_unavailable ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("timeout-source")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("timeout-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
     auto target_descriptor = descriptor ("timeout-target", "tcp://127.0.0.1:1");
@@ -435,8 +452,10 @@ void verify_actor_create_retry_timeout_is_unavailable ()
 
 void verify_actor_create_from_dispatch_thread_does_not_block ()
 {
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("dispatch-source")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("dispatch-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
     auto target_descriptor = descriptor ("dispatch-target", "tcp://127.0.0.1:1");
@@ -600,10 +619,14 @@ void verify_lifecycle_token_requires_current_discovery_expectation ()
 
 void verify_stale_rid_disconnect_preserves_same_endpoint_replacement ()
 {
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("replacement-source")});
-    auto old_target = std::make_unique<mesh::raw_mesh_node_owner_t> (
-      mesh::raw_mesh_node_options_t{descriptor ("replacement-old")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("replacement-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    auto old_target = std::make_unique<mesh::raw_mesh_node_owner_t> (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("replacement-old"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     old_target->start ();
     const auto old_descriptor = old_target->topology ().local_descriptor ();
@@ -624,8 +647,10 @@ void verify_stale_rid_disconnect_preserves_same_endpoint_replacement ()
     assert (!source.topology ().peer (old_descriptor.node_routing_id));
 
     auto replacement_options = descriptor ("replacement-new", endpoint);
-    auto replacement = std::make_unique<mesh::raw_mesh_node_owner_t> (
-      mesh::raw_mesh_node_options_t{std::move (replacement_options)});
+    auto replacement = std::make_unique<mesh::raw_mesh_node_owner_t> (mesh::raw_mesh_node_options_t{
+      .descriptor = std::move (replacement_options),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     replacement->start ();
     const auto replacement_descriptor = replacement->topology ().local_descriptor ();
     admit_pair (source, *replacement, replacement_descriptor);
@@ -654,8 +679,14 @@ void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()
      * pair. Core selects one route per RID (RID duplicate policy); each side
      * admits the route it observes, and late handshakes must not replace
      * that admission. */
-    mesh::raw_mesh_node_owner_t lower (mesh::raw_mesh_node_options_t{descriptor ("bilateral-aa")});
-    mesh::raw_mesh_node_owner_t higher (mesh::raw_mesh_node_options_t{descriptor ("bilateral-zz")});
+    mesh::raw_mesh_node_owner_t lower (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("bilateral-aa"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t higher (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("bilateral-zz"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     lower.start ();
     higher.start ();
     const auto lower_descriptor = lower.topology ().local_descriptor ();
@@ -701,8 +732,14 @@ void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()
 
 void verify_raw_admission_rejects_lifecycle_mismatch ()
 {
-    mesh::raw_mesh_node_owner_t first (mesh::raw_mesh_node_options_t{descriptor ("lifecycle-a")});
-    mesh::raw_mesh_node_owner_t second (mesh::raw_mesh_node_options_t{descriptor ("lifecycle-b")});
+    mesh::raw_mesh_node_owner_t first (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("lifecycle-a"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t second (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("lifecycle-b"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     first.start ();
     second.start ();
     auto expected_second = second.topology ().local_descriptor ();
@@ -1161,9 +1198,12 @@ void verify_location_descriptor_cas_snapshot_and_watch ()
 
 void verify_manual_and_automatic_classic_fanout ()
 {
-    fanout::raw_fanout_publisher_t publisher ("tcp://127.0.0.1:0");
+    fanout::raw_fanout_publisher_t publisher (
+      "tcp://127.0.0.1:0", {}, false, std::nullopt,
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     publisher.start ();
-    fanout::raw_fanout_subscriber_t manual;
+    fanout::raw_fanout_subscriber_t manual (
+      nullptr, {}, std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     const auto publisher_id = bytes ("publisher-a");
     assert (manual.connect_manual (publisher_id, publisher.endpoint ()));
 
@@ -1205,7 +1245,8 @@ void verify_manual_and_automatic_classic_fanout ()
             == std::vector<std::vector<std::uint8_t>>{publisher_id});
     assert (!manual.ready (publisher_id));
 
-    fanout::raw_fanout_subscriber_t automatic;
+    fanout::raw_fanout_subscriber_t automatic (
+      nullptr, {}, std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     fanout::fanout_publisher_intent_t automatic_descriptor{publisher_id, 1, publisher.endpoint (),
                                                            mesh::service_node_state_t::serving};
     automatic.reconcile_automatic ({automatic_descriptor});
@@ -1263,7 +1304,8 @@ void verify_client_server_stale_admission_reply_is_discarded ()
       16u * 1024u * 1024u,
       "tcp://127.0.0.1:0"};
     auto server = std::make_unique<client_server::raw_client_server_server_t> (
-      client_server::raw_client_server_server_options_t{{server_descriptor}});
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{{server_descriptor}}));
     server->start ();
     auto expected_server = server->descriptor ();
     auto manual_server = expected_server;
@@ -1271,9 +1313,11 @@ void verify_client_server_stale_admission_reply_is_discarded ()
     manual_server.lifecycle_generation = 0;
     manual_server.descriptor_revision = 0;
     client_server::raw_client_server_client_t client (
-      {bytes ("client-s"),
-       {expected_server.channel_name, "security-s", 16u * 1024u * 1024u},
-       std::move (manual_server)});
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_client_options_t{
+          bytes ("client-s"),
+          {expected_server.channel_name, "security-s", 16u * 1024u * 1024u},
+          std::move (manual_server)}));
     client.start ();
 
     /* Fire the hello request and let the server answer it, without ever
@@ -1303,7 +1347,8 @@ void verify_client_server_stale_admission_reply_is_discarded ()
     auto replacement_descriptor = server_descriptor;
     replacement_descriptor.advertised_endpoint = endpoint;
     auto replacement = std::make_unique<client_server::raw_client_server_server_t> (
-      client_server::raw_client_server_server_options_t{{replacement_descriptor}});
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{{replacement_descriptor}}));
     replacement->start ();
     /* Drain the client so it observes the disconnect and the reconnect to
      * the replacement (new physical pair; fires a fresh hello the
@@ -1342,7 +1387,9 @@ void verify_client_server_plain_hello_is_rejected ()
       "security-p",
       16u * 1024u * 1024u,
       "tcp://127.0.0.1:0"};
-    client_server::raw_client_server_server_t server ({{server_descriptor}});
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{server_descriptor}));
     server.start ();
 
     auto context = std::make_shared<zlink::context_t> ();
@@ -1394,7 +1441,9 @@ void verify_client_server_independent_raw_path ()
       "security-a",
       16u * 1024u * 1024u,
       "tcp://127.0.0.1:0"};
-    client_server::raw_client_server_server_t server ({{server_descriptor}});
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{server_descriptor}));
     server.start ();
     auto expected_server = server.descriptor ();
     auto manual_server = expected_server;
@@ -1405,6 +1454,8 @@ void verify_client_server_independent_raw_path ()
       bytes ("client-a"),
       {expected_server.channel_name, "security-a", 16u * 1024u * 1024u},
       std::move (manual_server)};
+    client_options.runtime_failures =
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
     client_server::raw_client_server_client_t client (std::move (client_options));
     client.start ();
     const auto deadline = std::chrono::steady_clock::now () + 5s;
@@ -1578,18 +1629,21 @@ void verify_client_server_admits_before_monitor_drain ()
       "security-monitor-order",
       1024 * 1024,
       "tcp://127.0.0.1:0"};
-    client_server::raw_client_server_server_t server ({{server_descriptor}});
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{server_descriptor}));
     server.start ();
     const auto expected_server = server.descriptor ();
 
     std::vector<std::unique_ptr<client_server::raw_client_server_client_t>> clients;
     for (const auto &client_id : {"client-monitor-a", "client-monitor-b"}) {
         clients.push_back (std::make_unique<client_server::raw_client_server_client_t> (
-          client_server::raw_client_server_client_options_t{
-            bytes (client_id),
-            {expected_server.channel_name, expected_server.security_identity,
-             expected_server.effective_max_message_bytes},
-            expected_server}));
+          zlink::framework::test::runtime_failure_options (
+            client_server::raw_client_server_client_options_t{
+              bytes (client_id),
+              {expected_server.channel_name, expected_server.security_identity,
+               expected_server.effective_max_message_bytes},
+              expected_server})));
         clients.back ()->start ();
     }
 
@@ -1763,7 +1817,7 @@ void verify_raw_owner_node_send_and_liveness (
         for (const auto &field : record.fields)
             fields.emplace (field.key, field.value);
     });
-    auto monitoring = std::make_shared<fw::detail::monitoring_runtime_state_t> ();
+    auto monitoring = zlink::framework::test::runtime_failure_monitoring ();
     monitoring->diagnostics_logger = logging.create_logger ("owner-rejection-test");
     fw::dispatch_options_t dispatch;
     dispatch.message_flow (mode).trace_sample_rate (0);
@@ -1773,11 +1827,19 @@ void verify_raw_owner_node_send_and_liveness (
     auto second_context = std::make_shared<zlink::context_t> ();
     first_context->options ().auto_hwm_enabled (false);
     second_context->options ().auto_hwm_enabled (false);
-    mesh::raw_mesh_node_owner_t first (mesh::raw_mesh_node_options_t{descriptor ("raw-a")},
-                                       first_context);
+    mesh::raw_mesh_node_owner_t first (
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("raw-a"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      first_context);
     metric_test::provider_t metric_provider;
     mesh::raw_mesh_node_owner_t second (
-      mesh::raw_mesh_node_options_t{.descriptor = descriptor ("raw-b"), .dispatch = dispatch},
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("raw-b"),
+        .dispatch = dispatch,
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
       second_context);
     assert (first.topology ().local_descriptor ().state == mesh::service_node_state_t::preparing);
     assert (second.topology ().local_descriptor ().state == mesh::service_node_state_t::preparing);
@@ -2375,10 +2437,14 @@ relocation_prepare_request (const mesh::service_node_descriptor_t &source_descri
 // fast explicit rejection and its wire failure_code.
 void verify_relocation_prepare_failed_reply_resolves_promptly_with_identity_fencing ()
 {
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("relocation-fence-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("relocation-fence-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("relocation-fence-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("relocation-fence-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -2676,10 +2742,14 @@ void verify_actor_join_ends_after_unexpected_admitted_peer_loss (bool monitor_di
 // (dd23fb0b36's receiveChunkLimitBytes consumption) depends on.
 void verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ()
 {
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("actor-join-accept-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("actor-join-accept-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("actor-join-accept-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("actor-join-accept-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -2751,10 +2821,14 @@ void verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ()
 // as a timeout/no-result and not as accepted.
 void verify_actor_join_rejected_reply_completes_typed_failure ()
 {
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("actor-join-reject-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("actor-join-reject-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("actor-join-reject-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("actor-join-reject-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -2816,10 +2890,14 @@ void verify_actor_join_rejected_reply_completes_typed_failure ()
 // actorCreate/userSpotCreate/userSpotClose/relocationPrepare fence checks.
 void verify_actor_join_wrong_source_generation_is_fenced ()
 {
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("actor-join-fence-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("actor-join-fence-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("actor-join-fence-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("actor-join-fence-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -2877,10 +2955,14 @@ void verify_actor_join_wrong_source_generation_is_fenced ()
 // never as accepted/rejected and never as a plain timeout.
 void verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ()
 {
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("actor-join-mismatch-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("actor-join-mismatch-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("actor-join-mismatch-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("actor-join-mismatch-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -2930,10 +3012,14 @@ void verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ()
 // which owns the target/owner fence terminal.
 void verify_actor_join_target_fence_reaches_admission ()
 {
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("actor-join-thin-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("actor-join-thin-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("actor-join-thin-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("actor-join-thin-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -2979,10 +3065,14 @@ void verify_actor_join_target_fence_reaches_admission ()
 // neither ready nor failed.
 void verify_relocation_prepare_failed_reply_with_mismatched_identity_is_fenced ()
 {
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{descriptor ("relocation-mismatch-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{descriptor ("relocation-mismatch-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("relocation-mismatch-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("relocation-mismatch-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -47,7 +48,7 @@ struct fanout_test_runtime_t
     }
 
     zlink::framework::serializer_registry_t serializers;
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     zlink::framework::detail::channel_runtime_t runtime =
       zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
 };

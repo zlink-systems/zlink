@@ -34,14 +34,15 @@ export interface ZLinkRuntimeStopParts {
 }
 
 export async function rollbackRuntimeStart(parts: ZLinkRuntimeStartRollbackParts): Promise<void> {
-  await Promise.allSettled([
-    parts.streamRuntime?.dispose(),
-    parts.spotNodeRuntime?.dispose(),
-    parts.channelRuntime?.dispose()
-  ]);
-  await parts.startedLocationRuntime?.stop(parts.shutdownSignal).catch(() => undefined);
-  await parts.context.dispose().catch(() => undefined);
-  await disposeOwnedStores(parts.ownedStores);
+  const errors: unknown[] = [];
+  await runShutdownStep(errors, () => parts.streamRuntime?.dispose());
+  await runShutdownStep(errors, () => parts.spotNodeRuntime?.dispose());
+  await runShutdownStep(errors, () => parts.channelRuntime?.dispose());
+  await runShutdownStep(errors, () => parts.startedLocationRuntime?.stop(parts.shutdownSignal));
+  if (errors.length === 0) await runShutdownStep(errors, () => parts.context.dispose());
+  await disposeOwnedStores(parts.ownedStores, errors);
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'Framework start rollback failed.');
 }
 
 export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<void> {
@@ -56,9 +57,12 @@ export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<vo
   await runShutdownStep(errors, () => parts.locationSnapshot.lifecycle?.dispose());
   await runShutdownStep(errors, () => parts.locationSnapshot.runtime?.stop(parts.shutdownSignal));
   await Promise.allSettled(state.listenerTasks);
-  await runShutdownStep(errors, () => state.dispose());
+  if (errors.every(isShutdownAbort)) await runShutdownStep(errors, () => state.dispose());
   await disposeOwnedStores(parts.ownedStores, errors);
   const failures = errors.filter((error) => !isShutdownAbort(error));
+  for (const failure of failures) {
+    state.errorSink.reportRuntimeTaskException('framework shutdown', failure);
+  }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) {
     throw new AggregateError(failures, 'Framework runtime shutdown failed.');
@@ -67,21 +71,12 @@ export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<vo
 
 async function disposeOwnedStores(
   stores: readonly ZLinkRuntimeOwnedStore[] | undefined,
-  errors?: unknown[]
+  errors: unknown[]
 ): Promise<void> {
   const disposed = new Set<ZLinkRuntimeOwnedStore>();
   for (const store of stores ?? []) {
     if (disposed.has(store)) continue;
     disposed.add(store);
-    if (errors === undefined) {
-      try {
-        await store.dispose?.();
-      } catch {
-        // Rollback is already handling the original start failure. Store
-        // cleanup remains best effort in this path.
-      }
-      continue;
-    }
     await runShutdownStep(errors, () => store.dispose?.());
   }
 }

@@ -612,17 +612,21 @@ test('production ClientServer outbound socket selection uses admitted descriptor
   await sockets.dispose();
 });
 
-test('ClientServer socket creation releases the Poller and dealer when monitor setup fails', async () => {
+test('ClientServer creation cleanup retains only the failed dealer', async () => {
   const registration = internal.createFrameworkRegistration({
     channels: { orders: { client: { manualConnections: [] } } },
     locations: { useInMemoryStores: true }
   });
   const dealer = fakeDealer('monitor-failure');
   let dealerDisposed = false;
+  let dealerCloseAttempts = 0;
+  const closeFailure = new Error('first startup close failed');
   dealer.dispose = async () => {
+    if (++dealerCloseAttempts === 1) throw closeFailure;
     dealerDisposed = true;
   };
   let pollerDisposed = 0;
+  const reported = [];
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
@@ -646,7 +650,8 @@ test('ClientServer socket creation releases the Poller and dealer when monitor s
       openSocketMonitor() {
         throw new Error('monitor setup failed');
       }
-    }
+    },
+    (error) => reported.push(error)
   );
 
   assert.throws(
@@ -658,10 +663,14 @@ test('ClientServer socket creation releases the Poller and dealer when monitor s
     ),
     /monitor setup failed/
   );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reported, [closeFailure]);
+  assert.equal(dealerDisposed, false);
   assert.equal(pollerDisposed, 1);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(dealerDisposed, true);
   await sockets.dispose();
+  assert.equal(dealerDisposed, true);
+  assert.equal(dealerCloseAttempts, 2);
+  assert.equal(pollerDisposed, 1);
 });
 
 test('automatic and manual ClientServer sources share one physical connection until the last alias closes', async () => {

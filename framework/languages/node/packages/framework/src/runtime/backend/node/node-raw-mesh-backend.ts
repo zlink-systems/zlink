@@ -481,7 +481,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   close(): void {
     if (this.closed) return;
-    this.closed = true;
     if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
     this.maintenanceTimer = undefined;
     this.stateful?.close();
@@ -489,6 +488,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.runtime?.close();
     this.runtime = undefined;
     this.clearCompletions();
+    this.closed = true;
   }
 
   addChannelName(name: string): void {

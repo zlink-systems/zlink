@@ -57,6 +57,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 {
   public:
     location_auto_connect_host_service_t (
+      std::shared_ptr<runtime_failure_collector_t> failures,
       message_bus_t bus,
       std::vector<channel_snapshot_t> channels,
       handler_registry_t &handlers,
@@ -70,6 +71,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         nullptr,
       std::shared_ptr<fanout::fanout_location_runtime_t> fanout_runtime = nullptr,
       std::shared_ptr<listener_status_registry_t> listener_statuses = nullptr) :
+        hosted_service_lifecycle_t (std::move (failures)),
         _bus (std::move (bus)),
         _channels (std::move (channels)),
         _handlers (&handlers),
@@ -232,23 +234,24 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     void stop () noexcept override
     {
         _stop.store (true, std::memory_order_release);
-        if (_client_server) {
-            _client_server->stop ();
+        if (_client_server && _runtime_failures->capture ([&] { _client_server->stop (); })) {
             _client_server_started = false;
             _client_server.reset ();
         }
-        if (_fanout) {
-            _fanout->stop ();
+        if (_fanout && _runtime_failures->capture ([&] { _fanout->stop (); }))
             _fanout.reset ();
-        }
         for (auto &loop : _loops) {
             if (loop.thread.joinable ())
-                loop.thread.join ();
-            for (const auto &[_, target] : loop.active)
-                stop_target (loop, target);
+                _runtime_failures->capture ([&] { loop.thread.join (); });
+            std::erase_if (loop.active, [&] (const auto &entry) {
+                return _runtime_failures->capture ([&] { disconnect (loop, entry.second); });
+            });
         }
-        _loops.clear ();
-        detail::channel_runtime_t::from (_bus).close_manual_channel_publishers ();
+        std::erase_if (_loops, [] (const auto &loop) {
+            return !loop.thread.joinable () && loop.active.empty ();
+        });
+        _runtime_failures->capture (
+          [&] { detail::channel_runtime_t::from (_bus).close_manual_channel_publishers (); });
     }
 
   private:
@@ -359,20 +362,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         }
     }
 
-    void stop_target (loop_t &loop, const target_t &target) noexcept
-    {
-        try {
-            disconnect (loop, target);
-        }
-        catch (const std::exception &error) {
-            trace_failure ("stop-disconnect-failed", loop.mesh_name, target.endpoint,
-                           error.what ());
-        }
-        catch (...) {
-            trace_failure ("stop-disconnect-failed", loop.mesh_name, target.endpoint,
-                           "unknown exception");
-        }
-    }
 
     void tick (loop_t &loop)
     {

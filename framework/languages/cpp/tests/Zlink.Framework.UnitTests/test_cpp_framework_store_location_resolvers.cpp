@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
@@ -778,6 +779,11 @@ struct options_fixture_t
     zlink::framework::handler_registry_t handlers;
     zlink::framework::serializer_registry_t serializers;
     zlink::framework::zlink_builder_t zlink;
+    options_fixture_t ()
+    {
+        zlink::framework::detail::bind_zlink_monitoring (
+          zlink, zlink::framework::test::runtime_failure_monitoring ());
+    }
     zlink::framework::zlink_framework_options_t make_options ()
     {
         return zlink::framework::zlink_framework_options_t (services, handlers, serializers, zlink);
@@ -1903,7 +1909,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
                      .owner = owner}}});
 
     store_location_resolvers_t resolvers (store);
-    zlink::framework::zlink_builder_t builder;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_spot_address_resolver (resolvers);
 
@@ -2704,7 +2710,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostPublishesAndCleansLoc
     auto runtime = std::make_shared<location_runtime_t> (*store, options, "owner-auto");
     runtime->start (zlink::routing_id_t::from ("node-auto"));
 
-    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     auto orders = zlink.channel ("orders");
     orders.enable_server ()
       .set_routing_id (zlink::routing_id_t::from ("orders-router"))
@@ -2743,6 +2749,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostPublishesAndCleansLoc
     zlink::framework::handler_registry_t handlers;
     zlink::framework::serializer_registry_t serializers;
     location_auto_connect_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ()).channel_snapshots (),
       handlers, serializers);
@@ -3212,17 +3219,18 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ClientServerPortZeroPublishesAdverti
     namespace mesh = zlink::framework::runtime::mesh;
 
     client_server::raw_client_server_server_t server (
-      client_server::raw_client_server_server_options_t{
-        protocol::client_server_server_admission_t{
-          .channel_name = "orders",
-          .server_routing_id = {'o', 'r', 'd', 'e', 'r', 's'},
-          .lifecycle_generation = 1,
-          .weight = 100,
-          .state = mesh::service_node_state_t::preparing,
-          .security_identity = "test",
-          .effective_max_message_bytes = 1024,
-          .advertised_endpoint = "tcp://127.0.0.1:*"},
-        std::string ("service.example")});
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{
+          protocol::client_server_server_admission_t{
+            .channel_name = "orders",
+            .server_routing_id = {'o', 'r', 'd', 'e', 'r', 's'},
+            .lifecycle_generation = 1,
+            .weight = 100,
+            .state = mesh::service_node_state_t::preparing,
+            .security_identity = "test",
+            .effective_max_message_bytes = 1024,
+            .advertised_endpoint = "tcp://127.0.0.1:*"},
+          std::string ("service.example")}));
     server.start ();
     const auto endpoint = server.endpoint ();
     EXPECT_TRUE (endpoint.starts_with ("tcp://service.example:"));
@@ -3325,7 +3333,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
         co_return std::move (message);
     };
 
-    zlink::framework::zlink_builder_t mesh_first_builder;
+    zlink::framework::zlink_builder_t mesh_first_builder =
+      zlink::framework::test::runtime_failure_builder ();
     auto mesh_first =
       zlink::framework::detail::channel_runtime_t::from (mesh_first_builder.message_bus ());
     mesh_first.bind_mesh_channel_transport ("orders", mesh_send, mesh_request);
@@ -3333,7 +3342,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       mesh_first.bind_client_server_transport ("orders", client_server_send, client_server_request),
       zlink::framework::framework_exception_t);
 
-    zlink::framework::zlink_builder_t client_server_first_builder;
+    zlink::framework::zlink_builder_t client_server_first_builder =
+      zlink::framework::test::runtime_failure_builder ();
     auto client_server_first = zlink::framework::detail::channel_runtime_t::from (
       client_server_first_builder.message_bus ());
     client_server_first.bind_client_server_transport ("orders", client_server_send,
@@ -3433,7 +3443,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostReconcilesRouteMeshCo
                     "inproc://route-invalid-dealer",
                     zlink::framework::framework_runtime_state_t::stopped);
 
-    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     zlink.route_channel ("route.mesh")
       .set_routing_id (zlink::routing_id_t::from ("route-z-local-node"))
       .connect ("inproc://route-manual");
@@ -3461,6 +3471,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostReconcilesRouteMeshCo
     zlink::framework::handler_registry_t handlers;
     zlink::framework::serializer_registry_t serializers;
     location_auto_connect_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ()).channel_snapshots (),
       handlers, serializers);
@@ -3515,7 +3526,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectSameEndpointReplacementPr
     seed_mesh_node (*store, "owner-route-replacement-self-stale", "route.replacement",
                     "route-z-replacement-self-stale", "inproc://route-replacement-local");
 
-    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     zlink.route_channel ("route.replacement")
       .bind ("inproc://route-replacement-local")
       .set_routing_id (zlink::routing_id_t::from ("route-0-replacement-local"));
@@ -3543,6 +3554,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectSameEndpointReplacementPr
     zlink::framework::handler_registry_t handlers;
     zlink::framework::serializer_registry_t serializers;
     location_auto_connect_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ()).channel_snapshots (),
       handlers, serializers);
@@ -3592,7 +3604,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     seed_mesh_node (*store, "owner-route-drain-remote", "route.drain", "route-z-drain-remote",
                     "inproc://route-drain-remote");
 
-    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     zlink.route_channel ("route.drain")
       .bind ("inproc://route-drain-local")
       .set_routing_id (zlink::routing_id_t::from ("route-a-drain-local"));
@@ -3620,6 +3632,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     zlink::framework::handler_registry_t handlers;
     zlink::framework::serializer_registry_t serializers;
     location_auto_connect_host_service_t service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ()).channel_snapshots (),
       handlers, serializers);
@@ -3669,7 +3682,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostUsesRouteMeshInitiato
     seed_mesh_node (*store, "owner-route-higher-remote", "route.lower", "route-z-remote-node",
                     "inproc://route-higher-remote");
 
-    zlink::framework::zlink_builder_t lower_zlink;
+    zlink::framework::zlink_builder_t lower_zlink =
+      zlink::framework::test::runtime_failure_builder ();
     lower_zlink.route_channel ("route.lower")
       .bind ("inproc://route-lower-local")
       .set_routing_id (zlink::routing_id_t::from ("route-a-local-node"));
@@ -3697,6 +3711,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostUsesRouteMeshInitiato
     zlink::framework::handler_registry_t lower_handlers;
     zlink::framework::serializer_registry_t lower_serializers;
     location_auto_connect_host_service_t lower_service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       lower_zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (lower_zlink.message_bus ())
         .channel_snapshots (),
@@ -3727,7 +3742,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostUsesRouteMeshInitiato
     seed_mesh_node (*store, "owner-route-lower-remote", "route.higher", "route-a-remote-node",
                     "inproc://route-lower-remote");
 
-    zlink::framework::zlink_builder_t higher_zlink;
+    zlink::framework::zlink_builder_t higher_zlink =
+      zlink::framework::test::runtime_failure_builder ();
     higher_zlink.route_channel ("route.higher")
       .bind ("inproc://route-higher-local")
       .set_routing_id (zlink::routing_id_t::from ("route-z-local-node"));
@@ -3755,6 +3771,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostUsesRouteMeshInitiato
     zlink::framework::handler_registry_t higher_handlers;
     zlink::framework::serializer_registry_t higher_serializers;
     location_auto_connect_host_service_t higher_service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       higher_zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (higher_zlink.message_bus ())
         .channel_snapshots (),

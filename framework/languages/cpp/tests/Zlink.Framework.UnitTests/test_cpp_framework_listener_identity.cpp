@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/client_server/raw_client_server_owner.hpp"
@@ -92,7 +93,9 @@ mesh_options (std::string rid, std::string endpoint, framework::dispatch_options
                                                     .advertised_endpoint = std::move (endpoint),
                                                     .channels = {{"contract", 100}},
                                                     .state = mesh::service_node_state_t::preparing},
-      .dispatch = std::move (dispatch)};
+      .dispatch = std::move (dispatch),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()};
 }
 
 void pump (mesh::raw_mesh_node_owner_t &node)
@@ -160,17 +163,18 @@ TEST (ListenerIdentity, WildcardClientServerPublishesLoopback)
 {
     namespace client_server = framework::runtime::client_server;
     client_server::raw_client_server_server_t server (
-      client_server::raw_client_server_server_options_t{
-        .descriptor =
-          protocol::client_server_server_admission_t{.channel_name = "listener-identity",
-                                                     .server_routing_id = bytes ("client-server"),
-                                                     .lifecycle_generation = 1,
-                                                     .descriptor_revision = 1,
-                                                     .weight = 100,
-                                                     .state = mesh::service_node_state_t::preparing,
-                                                     .security_identity = "test",
-                                                     .effective_max_message_bytes = 1024,
-                                                     .advertised_endpoint = "tcp://0.0.0.0:0"}});
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{
+          .descriptor = protocol::client_server_server_admission_t{
+            .channel_name = "listener-identity",
+            .server_routing_id = bytes ("client-server"),
+            .lifecycle_generation = 1,
+            .descriptor_revision = 1,
+            .weight = 100,
+            .state = mesh::service_node_state_t::preparing,
+            .security_identity = "test",
+            .effective_max_message_bytes = 1024,
+            .advertised_endpoint = "tcp://0.0.0.0:0"}}));
     server.start ();
     EXPECT_TRUE (server.endpoint ().starts_with ("tcp://127.0.0.1:"));
     server.close ();

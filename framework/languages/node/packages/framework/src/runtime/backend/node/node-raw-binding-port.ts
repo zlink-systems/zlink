@@ -95,24 +95,25 @@ class NodeRawHostPort implements ZLinkRawHostPort {
     if (this.state === 'closed') return;
     this.state = 'stopping';
     const failures: unknown[] = [];
-    for (const resource of this.resources.splice(0).reverse()) {
+    for (const resource of [...this.resources].reverse()) {
       try {
         resource.close();
+        this.resources.splice(this.resources.indexOf(resource), 1);
       } catch (error) {
         failures.push(error);
       }
     }
-    if (this.ownsContext) {
+    if (this.ownsContext && failures.length === 0) {
       try {
         this.context.close();
       } catch (error) {
         failures.push(error);
       }
     }
-    this.state = 'closed';
     if (failures.length > 0) {
       throw new AggregateError(failures, 'Raw binding host cleanup failed.');
     }
+    this.state = 'closed';
   }
 
   private own<T extends { close(): void }>(resource: T): T {
@@ -211,17 +212,16 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
         failures.push(error);
       }
     }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Raw socket cleanup failed.');
+    }
     this.endpoints.clear();
     try {
       this.socket.close();
     } catch (error) {
-      failures.push(error);
+      throw new AggregateError([error], 'Raw socket cleanup failed.');
     }
     this.closed = true;
-    if (failures.length > 0) {
-      console.error('Raw socket cleanup causes:', failures);
-      throw new AggregateError(failures, 'Raw socket cleanup failed.');
-    }
   }
 
   protected requireOpen(): void {
@@ -404,9 +404,9 @@ class NodeRawMonitorPort implements ZLinkRawMonitorPort {
 
   close(): void {
     if (this.closed) return;
+    this.monitor.close();
     this.closed = true;
     this.release();
-    this.monitor.close();
   }
 }
 

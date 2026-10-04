@@ -10,6 +10,41 @@ internal sealed class ZLinkRuntimeTaskRunner
             return start();
     }
 
+    internal static Task RunDisposal(ref Task? task, Func<Task> close)
+    {
+        while (true)
+        {
+            var previous = Volatile.Read(ref task);
+            if (previous is not null && !previous.IsFaulted)
+                return previous;
+            var completion = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            if (Interlocked.CompareExchange(ref task, completion.Task, previous) != previous)
+                continue;
+            _ = WithoutExecutionContextFlow(() => CompleteDisposalAsync(close, completion));
+            return completion.Task;
+        }
+    }
+
+    private static async Task CompleteDisposalAsync(
+        Func<Task> close,
+        TaskCompletionSource completion
+    )
+    {
+        // Publish the elected task before closing, and leave any caller's state lane.
+        await Task.Yield();
+        try
+        {
+            await close().ConfigureAwait(false);
+            completion.TrySetResult();
+        }
+        catch (Exception error)
+        {
+            completion.TrySetException(error);
+        }
+    }
+
     private static readonly AsyncLocal<ExecutionLease?> AmbientExecution = new();
     private readonly HashSet<Task> _active = [];
     private readonly IZLinkRuntimeFailureReporter _errorSink;

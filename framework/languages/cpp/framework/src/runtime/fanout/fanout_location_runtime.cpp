@@ -134,7 +134,24 @@ fanout_location_runtime_t::fanout_location_runtime_t (
 
 fanout_location_runtime_t::~fanout_location_runtime_t () noexcept
 {
-    stop ();
+    auto failures = _channel_runtime.runtime_failures ();
+    if (!failures->capture ([&] { stop (); })) {
+        for (const auto &[name, _] : _publishers)
+            _channel_runtime.unbind_fanout_transport (name);
+        failures->retain ([poller = std::move (_subscriber_poller),
+                           publishers = std::move (_publishers),
+                           subscribers = std::move (_subscribers),
+                           supply = std::move (_application_supply)] () mutable {
+            runtime_failure_collector_t failures;
+            failures.capture ([&] { runtime_failure_collector_t::close_resources (supply); });
+            for (auto &[_, subscriber] : subscribers)
+                failures.capture ([&] { subscriber->owner->close (); });
+            for (auto &[_, publisher] : publishers)
+                failures.capture ([&] { publisher->owner->close (); });
+            failures.rethrow_if_failed ();
+            runtime_failure_collector_t::close_resources (poller);
+        });
+    }
 }
 
 bool fanout_location_runtime_t::empty () const noexcept
@@ -184,7 +201,8 @@ void fanout_location_runtime_t::start_publisher (const channel_snapshot_t &chann
           "discovery fanout publisher requires one routing id and one bind endpoint");
     auto raw = std::make_shared<raw_fanout_publisher_t> (
       channel.publisher.bind_endpoints.front (), _channel_runtime.core_context (),
-      channel.publisher.no_drop, channel.publisher.send_timeout);
+      channel.publisher.no_drop, channel.publisher.send_timeout,
+      _channel_runtime.runtime_failures ());
     raw->start ();
     std::optional<std::string> advertise_host;
     if (const auto found = _publisher_advertise_hosts.find (channel.name);
@@ -233,7 +251,7 @@ void fanout_location_runtime_t::start_subscriber (const channel_snapshot_t &chan
     entry->channel_name = channel.name;
     entry->owner = std::make_unique<raw_fanout_subscriber_t> (
       _channel_runtime.core_context (), _subscriber_poller.get (),
-      channel.subscriber.subscription_topics);
+      channel.subscriber.subscription_topics, _channel_runtime.runtime_failures ());
     _subscribers.emplace (channel.name, std::move (entry));
 }
 
@@ -635,17 +653,15 @@ task_t<void> fanout_location_runtime_t::publish (const std::string &channel_name
     co_await publisher->publish (channel_name, topic, encoded);
 }
 
-void fanout_location_runtime_t::stop () noexcept
+void fanout_location_runtime_t::stop ()
 {
+    runtime_failure_collector_t failures;
     const bool was_stopped = _stop.exchange (true, std::memory_order_acq_rel);
     _wake_timer.signal ();
     if (_thread.joinable ())
-        _thread.join ();
-    if (_application_supply) {
-        _application_supply->close ();
-        _application_supply.reset ();
-    }
-    _wake_timer.detach ();
+        failures.capture ([&] { _thread.join (); });
+    failures.capture ([&] { runtime_failure_collector_t::close_resources (_application_supply); });
+    failures.capture ([&] { _wake_timer.detach (); });
     std::vector<std::string> publisher_channels;
     bool has_publishers = false;
     bool has_subscribers = false;
@@ -658,54 +674,58 @@ void fanout_location_runtime_t::stop () noexcept
         has_subscribers = !_subscribers.empty ();
     }
     if (!was_stopped || has_publishers || has_subscribers) {
-        stop_subscribers ();
-        stop_publishers ();
+        has_subscribers = !failures.capture ([&] { stop_subscribers (); });
+        has_publishers = !failures.capture ([&] { stop_publishers (); });
     }
     /* Keep the automatic binding until its owner has rejected and completed
      * every pending retry. Removing it first lets the generic publish path
      * fall through to the manual publisher during shutdown. */
     for (const auto &channel_name : publisher_channels)
-        _channel_runtime.unbind_fanout_transport (channel_name);
-    if (_subscriber_poller) {
-        try {
-            _subscriber_poller->close ();
-        }
-        catch (...) {
-        }
-    }
-    {
+        failures.capture ([&] { _channel_runtime.unbind_fanout_transport (channel_name); });
+    if (!has_subscribers && !has_publishers && failures.capture ([&] {
+            if (_subscriber_poller)
+                _subscriber_poller->close ();
+        })) {
         std::lock_guard lock (_gate);
         _subscriber_poller.reset ();
     }
     if (!was_stopped || has_publishers || has_subscribers)
-        publish_snapshot_changes ();
+        failures.capture ([&] { publish_snapshot_changes (); });
+    failures.rethrow_if_failed ();
 }
 
-void fanout_location_runtime_t::stop_subscribers () noexcept
+void fanout_location_runtime_t::stop_subscribers ()
 {
-    std::map<std::string, std::unique_ptr<subscriber_entry_t>> subscribers;
+    runtime_failure_collector_t failures;
+    std::map<std::string, subscriber_entry_t *> subscribers;
     {
         std::lock_guard lock (_gate);
-        subscribers.swap (_subscribers);
+        for (auto &[name, subscriber] : _subscribers)
+            subscribers.emplace (name, subscriber.get ());
     }
     for (auto &[_, subscriber] : subscribers)
         subscriber->dispatch_queue.close ();
     for (auto &[_, subscriber] : subscribers)
-        subscriber->dispatch_queue.drain ();
+        failures.capture ([&] { subscriber->dispatch_queue.drain (); });
     for (auto &[_, subscriber] : subscribers)
-        subscriber->owner->close ();
+        failures.capture ([&] { subscriber->owner->close (); });
+    failures.rethrow_if_failed ();
+    std::lock_guard lock (_gate);
+    _subscribers.clear ();
 }
 
-void fanout_location_runtime_t::stop_publishers () noexcept
+void fanout_location_runtime_t::stop_publishers ()
 {
-    std::map<std::string, std::unique_ptr<publisher_entry_t>> publishers;
+    runtime_failure_collector_t failures;
+    std::map<std::string, publisher_entry_t *> publishers;
     {
         std::lock_guard lock (_gate);
-        publishers.swap (_publishers);
+        for (auto &[name, publisher] : _publishers)
+            publishers.emplace (name, publisher.get ());
     }
     for (auto &[_, publisher] : publishers) {
-        publisher->owner->close ();
-        try {
+        failures.capture ([&] { publisher->owner->close (); });
+        failures.capture ([&] {
             auto draining = publisher->descriptor;
             if (draining.descriptor_revision
                 < static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())) {
@@ -718,19 +738,24 @@ void fanout_location_runtime_t::stop_publishers () noexcept
                 if (written.status == location_write_status_t::stored)
                     publisher->descriptor = std::move (draining);
             }
+        });
+        failures.capture ([&] {
             (void) _store
               ->remove_fanout_publisher (
                 {publisher->descriptor.channel_name, publisher->descriptor.publisher_rid},
                 {publisher->descriptor.owner_id, publisher->descriptor.lease_generation})
               .result ()
               .value ();
-        }
-        catch (...) {
-        }
+        });
         if (_listener_statuses)
-            _listener_statuses->remove (listener_kind_t::fanout,
-                                        publisher->descriptor.channel_name);
+            failures.capture ([&] {
+                _listener_statuses->remove (listener_kind_t::fanout,
+                                            publisher->descriptor.channel_name);
+            });
     }
+    failures.rethrow_if_failed ();
+    std::lock_guard lock (_gate);
+    _publishers.clear ();
 }
 
 bool fanout_location_runtime_t::owner_is_live (

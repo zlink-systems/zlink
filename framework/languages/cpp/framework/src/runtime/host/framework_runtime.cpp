@@ -12,14 +12,21 @@
 namespace zlink::framework::runtime
 {
 
-framework_runtime_t::framework_runtime_t () :
-    _context (std::make_unique<zlink::context_t> ()), _offload (1)
+framework_runtime_t::framework_runtime_t (std::shared_ptr<runtime_failure_collector_t> failures) :
+    _runtime_failures (std::move (failures)),
+    _context (std::make_unique<zlink::context_t> ()),
+    _offload (1)
 {
 }
 
 framework_runtime_t::~framework_runtime_t ()
 {
-    drain ();
+    if (!_runtime_failures->capture ([&] { drain (); }))
+        _runtime_failures->retain ([context = std::move (_context), router = std::move (_router),
+                                    dealer = std::move (_dealer),
+                                    stream = std::move (_stream)] () mutable {
+            close_resources (context, router, dealer, stream);
+        });
 }
 
 bool framework_runtime_t::owns_native_context () const noexcept
@@ -53,42 +60,28 @@ zlink::stream_socket_t &framework_runtime_t::stream_socket ()
 
 void framework_runtime_t::drain ()
 {
-    if (_context) {
-        try {
-            _context->options ().blocky (false);
-        }
-        catch (...) {
-        }
-    }
-    if (_router) {
-        try {
-            _router->options ().linger (std::chrono::milliseconds (0));
-        }
-        catch (...) {
-        }
-    }
-    if (_dealer) {
-        try {
-            _dealer->options ().linger (std::chrono::milliseconds (0));
-        }
-        catch (...) {
-        }
-    }
-    if (_stream) {
-        try {
-            _stream->options ().linger (std::chrono::milliseconds (0));
-        }
-        catch (...) {
-        }
-    }
-    _offload.drain ();
-    _stream.reset ();
-    _dealer.reset ();
-    _router.reset ();
-    if (_context) {
-        _context->shutdown ();
-        _context->term ();
-        _context.reset ();
+    runtime_failure_collector_t failures;
+    if (_router)
+        failures.capture ([&] { _router->options ().linger (std::chrono::milliseconds (0)); });
+    if (_dealer)
+        failures.capture ([&] { _dealer->options ().linger (std::chrono::milliseconds (0)); });
+    if (_stream)
+        failures.capture ([&] { _stream->options ().linger (std::chrono::milliseconds (0)); });
+    failures.capture ([&] { _offload.drain (); });
+    failures.capture ([&] { close_resources (_context, _router, _dealer, _stream); });
+    failures.rethrow_if_failed ();
+}
+
+void framework_runtime_t::close_resources (std::unique_ptr<zlink::context_t> &context,
+                                           std::unique_ptr<zlink::router_socket_t> &router,
+                                           std::unique_ptr<zlink::dealer_socket_t> &dealer,
+                                           std::unique_ptr<zlink::stream_socket_t> &stream)
+{
+    runtime_failure_collector_t::close_resources (stream, dealer, router);
+    if (context) {
+        context->shutdown ();
+        context->term ();
+        context.reset ();
     }
 }
 

@@ -64,6 +64,7 @@ struct raw_mesh_node_options_t
     dispatch_options_t dispatch;
     std::vector<std::string> metric_channel_names;
     std::string metric_source = "manual";
+    std::shared_ptr<runtime_failure_collector_t> runtime_failures;
 };
 
 struct raw_mesh_byte_vector_less_t
@@ -123,7 +124,7 @@ class raw_mesh_node_owner_t
     raw_mesh_node_owner_t &operator= (const raw_mesh_node_owner_t &) = delete;
 
     void start ();
-    void close () noexcept;
+    void close ();
     bool started () const noexcept;
 
     std::string endpoint () const;
@@ -465,7 +466,7 @@ class raw_mesh_node_owner_t
     // section extends beyond a state turn (discovery 7).  Mutable owner state
     // itself is admitted through _lane.
     mutable std::mutex _lifecycle_mutex;
-    std::mutex _socket_mutex;
+    std::shared_ptr<std::mutex> _socket_mutex = std::make_shared<std::mutex> ();
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
     application_job_queue_t::receive_flow_registration_t _receive_flow_registration;

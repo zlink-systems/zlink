@@ -6,7 +6,6 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 {
-    private readonly object _disposeGate = new();
     private readonly ZLinkStateLane _stateLane = new();
     private readonly IDisposable _pressureMetricRegistration;
     private Task? _disposeTask;
@@ -107,6 +106,8 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
     public Dictionary<ZLinkStreamNodeName, ZLinkStreamNodeRuntime> StreamNodes { get; } = [];
 
+    internal ZLinkStreamRuntimeManager? StreamRuntimeManager { get; set; }
+
     // Bound listener records of this runtime generation, owned by the runtime.
     internal ZLinkListenerRecords ListenerRecords { get; }
 
@@ -185,15 +186,13 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         return BeginDispose(cancellationToken);
     }
 
-    private ValueTask BeginDispose(CancellationToken forceStopToken)
-    {
-        lock (_disposeGate)
-        {
-            // The gate only elects the single disposal task; the lane snapshot is awaited
-            // inside that task, outside the gate.
-            return new ValueTask(_disposeTask ??= DisposeCoreAsync(forceStopToken));
-        }
-    }
+    private ValueTask BeginDispose(CancellationToken forceStopToken) =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                () => DisposeCoreAsync(forceStopToken)
+            )
+        );
 
     private async Task DisposeCoreAsync(CancellationToken forceStopToken)
     {
@@ -269,15 +268,19 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
         await CaptureAsync(TimerScheduler.DisposeAsync).ConfigureAwait(false);
         Capture(_pressureMetricRegistration.Dispose);
-        Capture(ErrorSink.Dispose);
-        Capture(ForceStopTokenSource.Dispose);
-        Capture(StopTokenSource.Dispose);
-        await CaptureAsync(() => DisposeSafelyAsync(Context.DisposeAsync)).ConfigureAwait(false);
+        if (StreamRuntimeManager is { } streamManager)
+            await CaptureAsync(streamManager.DisposeAsync).ConfigureAwait(false);
+
+        if (failures.Count == 0)
+            await CaptureAsync(Context.DisposeAsync).ConfigureAwait(false);
 
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
         if (failures.Count > 1)
             throw new AggregateException(failures);
+        ErrorSink.Dispose();
+        ForceStopTokenSource.Dispose();
+        StopTokenSource.Dispose();
         return;
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)
@@ -288,6 +291,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             }
             catch (Exception exception)
             {
+                ErrorSink.ReportRuntimeTaskException(nameof(DisposeCoreAsync), exception);
                 failures.Add(exception);
             }
         }
@@ -300,6 +304,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             }
             catch (Exception exception)
             {
+                ErrorSink.ReportRuntimeTaskException(nameof(DisposeCoreAsync), exception);
                 failures.Add(exception);
             }
         }
@@ -316,7 +321,6 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         }
         catch (OperationCanceledException) { }
         catch (ObjectDisposedException) { }
-        catch (ZlinkCloseException) { }
     }
 
     private sealed record RuntimeResources(
@@ -338,7 +342,6 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             await dispose().ConfigureAwait(false);
         }
         catch (ObjectDisposedException) { }
-        catch (ZlinkCloseException) { }
     }
 
     private static ValueTask DisposeSpotNodeAsync(

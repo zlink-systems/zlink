@@ -147,7 +147,9 @@ timer_t spot_context_t::add_timer_erased (
         if (const auto coordinator = _state->ensure_spot_serial_executor ())
             state->serial_queue = coordinator->timer_queue (state->name);
     }
-    auto native_timer = std::make_unique<detail::core_timer_resource_t> ();
+    auto native_timer =
+      std::make_unique<detail::core_timer_resource_t> (detail::runtime_failures_for (
+        _state->state_lane_owner () ? _state->state_lane_owner ()->monitoring : nullptr));
     auto *native_timer_loop = &native_timer->loop ();
     state->native_timer = std::move (native_timer);
     auto context = _state;
