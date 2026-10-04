@@ -111,10 +111,11 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
             drainSubscriptions();
         }
         if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
-            return dispatchActorMessages(info.actorMessages())
-                    .whenComplete(
-                            (ignored, error) ->
-                                    info.actorMessages().forEach(ZLinkBackendActorReceived::close));
+            var dispatched = dispatchActorMessages(info.actorMessages());
+            dispatched.whenComplete(
+                    (ignored, error) ->
+                            info.actorMessages().forEach(ZLinkBackendActorReceived::close));
+            return dispatched;
         }
         for (ZLinkBackendActorReceived actorMessage : info.actorMessages()) {
             actorMessage.close();
@@ -159,37 +160,29 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
 
     CompletionStage<Void> admitRoute(
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
-        var permit = host.reserveApplicationJob();
-        if (permit == null) {
-            Thread.currentThread().interrupt();
-            received.close();
-            var failure = new IllegalStateException("application job reservation was interrupted");
-            if (admission != null) admission.completeExceptionally(failure);
-            return CompletableFuture.failedFuture(failure);
-        }
-        try (var ignored =
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
-                        permit)) {
-            var hostRejection = host.spotHostAdmissionFailure(context.spotId());
-            if (hostRejection != null) {
-                received.close();
-                if (admission != null) admission.completeExceptionally(hostRejection);
-                return CompletableFuture.failedFuture(hostRejection);
-            }
-            if (host.dispatchSpotRouteBridgePacket(received)) {
-                received.close();
-                if (admission != null) admission.complete(null);
-                return CompletableFuture.completedFuture(null);
-            }
-            dispatchRoute(received, admission);
-            return CompletableFuture.completedFuture(null);
-        } catch (RuntimeException | Error failure) {
-            if (admission != null) admission.completeExceptionally(failure);
-            received.close();
-            throw failure;
-        } finally {
-            permit.abandonReservation();
-        }
+        CompletionStage<Void> dispatched =
+                host.admitNewApplicationJob(
+                        context,
+                        () -> {
+                            var hostRejection = host.spotHostAdmissionFailure(context.spotId());
+                            if (hostRejection != null)
+                                return CompletableFuture.failedFuture(hostRejection);
+                            if (host.dispatchSpotRouteBridgePacket(received)) {
+                                received.close();
+                                if (admission != null) admission.complete(null);
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            dispatchRoute(received, admission);
+                            return CompletableFuture.completedFuture(null);
+                        });
+        dispatched.whenComplete(
+                (done, failure) -> {
+                    if (failure != null) {
+                        received.close();
+                        if (admission != null) admission.completeExceptionally(failure);
+                    }
+                });
+        return dispatched;
     }
 
     void drainPolledDispatchQueues() {

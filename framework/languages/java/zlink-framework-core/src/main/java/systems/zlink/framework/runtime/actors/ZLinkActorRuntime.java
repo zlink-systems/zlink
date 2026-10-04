@@ -4080,22 +4080,17 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
-        if (dispatches.isCurrent(actorId)) {
-            try {
-                return operation.get();
-            } catch (RuntimeException ex) {
-                return CompletableFuture.failedFuture(ex);
-            }
-        }
-        return prepareManagedActorDispatch(actorId, target)
-                .thenCompose(
-                        turn ->
-                                dispatches.enqueueLazyRecord(
-                                        turn,
-                                        acceptedJournalRecord,
-                                        acceptedJournalRecordSizeHint,
-                                        operation,
-                                        relocationRelease));
+        return submitActorDispatch(
+                target,
+                actorId,
+                operation,
+                turn ->
+                        dispatches.enqueueLazyRecord(
+                                turn,
+                                acceptedJournalRecord,
+                                acceptedJournalRecordSizeHint,
+                                operation,
+                                relocationRelease));
     }
 
     private CompletionStage<Void> submitActorDispatch(
@@ -4115,6 +4110,27 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             Long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
+        return submitActorDispatch(
+                target,
+                actorId,
+                operation,
+                turn -> {
+                    if (acceptedJournalRecord != null) {
+                        return dispatches.enqueue(
+                                turn, acceptedJournalRecord, operation, relocationRelease);
+                    }
+                    return payloadBytes == null
+                            ? dispatches.enqueue(turn, operation)
+                            : dispatches.enqueue(turn, payloadBytes, operation, relocationRelease);
+                });
+    }
+
+    private CompletionStage<Void> submitActorDispatch(
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            Supplier<CompletionStage<Void>> operation,
+            java.util.function.Function<ZLinkActorDispatchSerials.QueuedTurn, CompletionStage<Void>>
+                    enqueue) {
         if (dispatches.isCurrent(actorId)) {
             try {
                 return operation.get();
@@ -4122,18 +4138,29 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 return CompletableFuture.failedFuture(ex);
             }
         }
-        return prepareManagedActorDispatch(actorId, target)
-                .thenCompose(
-                        turn -> {
-                            if (acceptedJournalRecord != null) {
-                                return dispatches.enqueue(
-                                        turn, acceptedJournalRecord, operation, relocationRelease);
-                            }
-                            return payloadBytes == null
-                                    ? dispatches.enqueue(turn, operation)
-                                    : dispatches.enqueue(
-                                            turn, payloadBytes, operation, relocationRelease);
-                        });
+        var ownership =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                        .transferToQueuedJob();
+        CompletionStage<Void> submitted;
+        try {
+            submitted =
+                    prepareManagedActorDispatch(actorId, target)
+                            .thenCompose(
+                                    turn -> {
+                                        try (var ignored =
+                                                systems.zlink.framework.runtime.internal.dispatch
+                                                        .ZLinkApplicationJobContext.enterQueued(
+                                                        ownership)) {
+                                            return enqueue.apply(turn);
+                                        }
+                                    });
+        } catch (RuntimeException | Error failure) {
+            submitted = CompletableFuture.failedFuture(failure);
+        }
+        return submitted.whenComplete(
+                (done, failure) -> {
+                    if (ownership != null) ownership.close();
+                });
     }
 
     private CompletionStage<ZLinkActorDispatchSerials.QueuedTurn> prepareManagedActorDispatch(

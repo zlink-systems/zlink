@@ -108,18 +108,17 @@ final class ZLinkJavaDurableRequestTest {
     void admittedLostReplyExhaustsAsDeadlineExceeded(Operation operation) throws Exception {
         var failure = new ZlinkRequestException(RequestResult.TIMED_OUT);
         AtomicInteger attempts = new AtomicInteger();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
         List<byte[]> header = encode(operation);
         var completion =
-                new Source()
+                new Source(clock::get)
                         .request(
                                 () -> header,
                                 (frames, remaining) -> {
                                     attempts.incrementAndGet();
-                                    var pending = new CompletableFuture<List<byte[]>>();
-                                    CompletableFuture.delayedExecutor(
-                                                    remaining.toNanos(), TimeUnit.NANOSECONDS)
-                                            .execute(() -> pending.completeExceptionally(failure));
-                                    return pending;
+                                    // Binding consumes the whole admitted attempt budget.
+                                    clock.addAndGet(remaining.toNanos());
+                                    return CompletableFuture.failedFuture(failure);
                                 },
                                 () -> false,
                                 Duration.ofMillis(80));
@@ -431,7 +430,16 @@ final class ZLinkJavaDurableRequestTest {
     }
 
     private static final class Source {
+        private final java.util.function.LongSupplier nanoTime;
         private Runnable listener;
+
+        Source() {
+            this(System::nanoTime);
+        }
+
+        Source(java.util.function.LongSupplier nanoTime) {
+            this.nanoTime = nanoTime;
+        }
 
         AutoCloseable observe(Runnable signal) {
             listener = signal;
@@ -465,7 +473,8 @@ final class ZLinkJavaDurableRequestTest {
                             return CompletableFuture.failedStage(failure);
                         }
                     },
-                    timeout);
+                    timeout,
+                    nanoTime);
         }
     }
 
