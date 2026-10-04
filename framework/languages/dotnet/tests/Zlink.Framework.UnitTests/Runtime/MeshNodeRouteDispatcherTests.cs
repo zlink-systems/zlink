@@ -9,6 +9,202 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task MeshNode_Channel_Turn_Holds_Gate_Until_Async_Terminal(
+        bool firstIsRequest,
+        bool separateBatches
+    )
+    {
+        var capture = new MeshChannelTurnCapture();
+        await using var services = new ServiceCollection()
+            .AddSingleton(capture)
+            .AddTransient<MeshChannelTurnHandler>()
+            .BuildServiceProvider();
+        var registration = new ZLinkFrameworkRegistration
+        {
+            ImplicitHandlerAutoRegistrationEnabled = false,
+        };
+        registration.FreezeScannedHandlerCatalog();
+        var spotNode = new ZLinkSpotNodeRegistration
+        {
+            SpotNodeName = "mesh",
+            RoutingId = RoutingId.From("mesh-node"),
+        };
+        foreach (var name in new[] { "play", "other" })
+        {
+            var membership = new ZLinkMeshChannelMembership { ChannelName = name };
+            membership.SendHandlers.Add(
+                new ZLinkChannelHandlerRegistration(
+                    typeof(MeshChannelTurnHandler),
+                    typeof(MeshTurnMessage),
+                    null,
+                    "TurnSend"
+                )
+            );
+            membership.RequestHandlers.Add(
+                new ZLinkChannelHandlerRegistration(
+                    typeof(MeshChannelTurnHandler),
+                    typeof(MeshTurnMessage),
+                    typeof(MeshReply),
+                    "TurnRequest"
+                )
+            );
+            spotNode.ChannelMemberships.Add(membership);
+        }
+        var runtime = new ZLinkFrameworkRuntime(
+            services,
+            null!,
+            registration,
+            new ZLinkHandlerRegistry([]),
+            new ZLinkHandlerDispatcher(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                registration
+            )
+        );
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ThrowingRuntimeErrorSink(),
+            CancellationToken.None
+        );
+        await using var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+            ZLinkMeshNodeRouteDispatcher.Create(services, registration, spotNode, runtime, runner)
+        );
+        var batch = new[]
+        {
+            Record("play", "first", firstIsRequest),
+            Record("play", "send", false),
+            Record("play", "request", true),
+            Record("other", "other", true),
+        };
+        Task dispatch;
+        if (separateBatches)
+        {
+            var first = dispatcher.DispatchBatchAsync([batch[0]], CancellationToken.None).AsTask();
+            await capture.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            dispatch = Task.WhenAll(
+                first,
+                dispatcher.DispatchBatchAsync(batch[1..], CancellationToken.None).AsTask()
+            );
+        }
+        else
+            dispatch = dispatcher.DispatchBatchAsync(batch, CancellationToken.None).AsTask();
+        try
+        {
+            await capture.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await capture.OtherReplied.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { "first:start", "other" }, capture.Events.ToArray());
+            Assert.False(dispatch.IsCompleted);
+        }
+        finally
+        {
+            capture.Release.TrySetResult();
+            await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
+            await runner.StopAsync();
+        }
+        Assert.Equal(
+            new[] { "first:start", "other", "first:end", "send", "request" },
+            capture.Events.ToArray()
+        );
+
+        ZLinkBackendRouteReceived Record(string channel, string value, bool request)
+        {
+            var header = new ZLinkEnvelopeHeader(
+                request ? ZLinkMessageKind.Request : ZLinkMessageKind.Command,
+                channel,
+                request ? "TurnRequest" : "TurnSend",
+                ZLinkEnvelopeCodec.DefaultContentType,
+                request ? value : null,
+                null,
+                null,
+                null,
+                null
+            );
+            return new ZLinkBackendRouteReceived(
+                ZLinkEnvelopeCodec.EncodeParts(
+                    header,
+                    new MeshTurnMessage(value),
+                    typeof(MeshTurnMessage),
+                    null
+                ),
+                sourceNodeRid: RoutingId.From("source-node"),
+                spotId: null,
+                requestSeq: request ? 41 : null,
+                reply: request
+                    ? parts =>
+                    {
+                        Assert.Equal(
+                            ZLinkMessageKind.Response,
+                            ZLinkEnvelopeCodec.DecodeHeader(parts).Kind
+                        );
+                        if (value == "other")
+                            capture.OtherReplied.TrySetResult();
+                        return SubmitResult.Ok;
+                    }
+                    : null,
+                channelName: channel
+            );
+        }
+    }
+
+    private sealed record MeshTurnMessage(string Value);
+
+    private sealed class MeshChannelTurnCapture
+    {
+        internal ConcurrentQueue<string> Events { get; } = new();
+        internal TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource OtherReplied { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class MeshChannelTurnHandler(MeshChannelTurnCapture capture)
+        : IZLinkSendHandler<MeshTurnMessage>,
+            IZLinkRequestHandler<MeshTurnMessage, MeshReply>
+    {
+        async ValueTask IZLinkSendHandler<MeshTurnMessage>.HandleAsync(
+            MeshTurnMessage message,
+            IZLinkMessageContext context,
+            CancellationToken cancellationToken
+        )
+        {
+            await HandleTurnAsync(message, cancellationToken);
+        }
+
+        async ValueTask<MeshReply> IZLinkRequestHandler<MeshTurnMessage, MeshReply>.HandleAsync(
+            MeshTurnMessage message,
+            IZLinkMessageContext context,
+            CancellationToken cancellationToken
+        )
+        {
+            await HandleTurnAsync(message, cancellationToken);
+            return new MeshReply(message.Value);
+        }
+
+        private async ValueTask HandleTurnAsync(
+            MeshTurnMessage message,
+            CancellationToken cancellationToken
+        )
+        {
+            if (message.Value == "first")
+            {
+                capture.Events.Enqueue("first:start");
+                capture.Started.TrySetResult();
+                await capture.Release.Task.WaitAsync(cancellationToken);
+                capture.Events.Enqueue("first:end");
+            }
+            else
+            {
+                await capture.Started.Task.WaitAsync(cancellationToken);
+                capture.Events.Enqueue(message.Value);
+            }
+        }
+    }
+
     [Fact]
     public async Task MeshNode_Rid_Send_Decodes_The_Retained_Body_View_Directly()
     {
@@ -54,7 +250,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None
         );
-        var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+        await using var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
             ZLinkMeshNodeRouteDispatcher.Create(
                 services,
                 registration,
@@ -316,7 +512,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None
         );
-        var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+        await using var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
             ZLinkMeshNodeRouteDispatcher.Create(
                 services,
                 registration,

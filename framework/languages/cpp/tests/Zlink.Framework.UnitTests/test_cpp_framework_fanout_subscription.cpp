@@ -5,12 +5,15 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/fanout/fanout_subscription.hpp"
 #include "runtime/fanout/raw_fanout_owner.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
 
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
 #include <set>
@@ -25,6 +28,142 @@ namespace
 using namespace std::chrono_literals;
 namespace fanout = zlink::framework::runtime::fanout;
 namespace mesh = zlink::framework::runtime::mesh;
+
+struct gate_event_t
+{
+    static constexpr const char *packet_name = "fanout.gate.event";
+    int value{};
+};
+
+void to_json (nlohmann::json &json, const gate_event_t &event)
+{
+    json = nlohmann::json{{"value", event.value}};
+}
+
+void from_json (const nlohmann::json &json, gate_event_t &event)
+{
+    event.value = json.at ("value").get<int> ();
+}
+
+struct gate_state_t
+{
+    zlink::framework::task_completion_source_t<void> first_terminal;
+    std::promise<void> first_started;
+    std::promise<void> other_started;
+    std::atomic_int first_count{0};
+    std::atomic_int first_completed{0};
+    std::atomic_int other_count{0};
+    std::atomic_int later_started{0};
+};
+
+std::shared_ptr<gate_state_t> gate_state;
+
+class gate_handler_t
+{
+  public:
+    using event_type = gate_event_t;
+
+    zlink::framework::task_t<void> handle (const gate_event_t &event)
+    {
+        if (event.value == 1) {
+            if (gate_state->first_count.fetch_add (1, std::memory_order_acq_rel) == 0) {
+                gate_state->first_started.set_value ();
+                co_await gate_state->first_terminal.task ();
+                gate_state->first_completed.fetch_add (1, std::memory_order_acq_rel);
+                co_return;
+            }
+        }
+        if (event.value == 2)
+            gate_state->later_started.fetch_add (1, std::memory_order_acq_rel);
+        if (event.value == 3
+            && gate_state->other_count.fetch_add (1, std::memory_order_acq_rel) == 0)
+            gate_state->other_started.set_value ();
+        co_return;
+    }
+};
+
+class gate_publish_client_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    explicit gate_publish_client_t (zlink::framework::app_t &app) : _app (&app) {}
+
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
+    {
+        auto publisher = _app->advanced ().zlink ().publisher ();
+        auto &runtime = services.get_required<zlink::framework::framework_runtime_t> ();
+        auto first = gate_state->first_started.get_future ();
+        auto other = gate_state->other_started.get_future ();
+        for (int attempt = 0; attempt < 80 && !first_received; ++attempt) {
+            try {
+                co_await publisher.publish ("gate-a", "gate", gate_event_t{1}).async ();
+                first_submitted = true;
+            }
+            catch (const zlink::framework::framework_exception_t &error) {
+                last_error = error.what ();
+            }
+            first_received = first.wait_for (25ms) == std::future_status::ready;
+        }
+        if (first_received) {
+            try {
+                co_await publisher.publish ("gate-a", "gate", gate_event_t{2}).async ();
+                later_submitted = true;
+            }
+            catch (const zlink::framework::framework_exception_t &error) {
+                last_error = error.what ();
+            }
+            if (later_submitted) {
+                for (int attempt = 0; attempt < 80 && !later_received; ++attempt) {
+                    later_received =
+                      runtime.status ().capacity.application_job_queue.queued_application_jobs > 0;
+                    if (!later_received)
+                        std::this_thread::sleep_for (25ms);
+                }
+                try {
+                    co_await publisher.publish ("gate-b", "gate", gate_event_t{3}).async ();
+                    other_submitted = true;
+                }
+                catch (const zlink::framework::framework_exception_t &error) {
+                    last_error = error.what ();
+                }
+                other_completed =
+                  other_submitted && other.wait_for (2s) == std::future_status::ready;
+                if (other_completed) {
+                    std::this_thread::sleep_for (100ms);
+                    later_before_release =
+                      gate_state->later_started.load (std::memory_order_acquire);
+                }
+            }
+        }
+        _app->stop ();
+        terminal_completed_once =
+          gate_state->first_terminal.complete (zlink::framework::result_t<void>::success ());
+        terminal_repeated =
+          gate_state->first_terminal.complete (zlink::framework::result_t<void>::success ());
+        for (int attempt = 0;
+             attempt < 80 && gate_state->later_started.load (std::memory_order_acquire) == 0;
+             ++attempt)
+            std::this_thread::sleep_for (25ms);
+        later_completed = gate_state->later_started.load (std::memory_order_acquire) > 0;
+        co_return;
+    }
+
+    void stop () noexcept override {}
+
+    bool first_submitted = false;
+    bool first_received = false;
+    bool later_submitted = false;
+    bool later_received = false;
+    bool other_submitted = false;
+    bool other_completed = false;
+    int later_before_release = -1;
+    bool later_completed = false;
+    bool terminal_completed_once = false;
+    bool terminal_repeated = false;
+    std::string last_error;
+
+  private:
+    zlink::framework::app_t *_app;
+};
 
 std::vector<std::uint8_t> bytes (std::string value)
 {
@@ -204,4 +343,42 @@ TEST (CppFrameworkFanoutSubscription, DuplicateSubscriptionHasSameEffectiveTrans
     EXPECT_EQ (fanout::fanout_subscription_topics (once),
                fanout::fanout_subscription_topics (twice));
     EXPECT_EQ (fanout::fanout_subscription_topics (twice).size (), 2u);
+}
+
+TEST (CppFrameworkFanoutSubscription, AsyncHandlerKeepsChannelGateUntilTerminal)
+{
+    gate_state = std::make_shared<gate_state_t> ();
+    auto app = zlink::framework::app_t::create ();
+    auto store = std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
+    app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (store);
+        options.handlers ().group ("gate").add_publish<gate_handler_t> ();
+        options.add_fanout_channel ("gate-a")
+          .set_routing_id (zlink::routing_id_t::from ("gate-a-publisher"))
+          .enable_publisher ("tcp://127.0.0.1:0")
+          .enable_subscriber ()
+          .use_handler_group ("gate");
+        options.add_fanout_channel ("gate-b")
+          .set_routing_id (zlink::routing_id_t::from ("gate-b-publisher"))
+          .enable_publisher ("tcp://127.0.0.1:0")
+          .enable_subscriber ()
+          .use_handler_group ("gate");
+    });
+    auto service = std::make_unique<gate_publish_client_t> (app);
+    auto *client = service.get ();
+    app.add_hosted_service (std::move (service));
+
+    EXPECT_EQ (app.run (0, nullptr), 0);
+    EXPECT_TRUE (client->first_submitted);
+    EXPECT_TRUE (client->first_received);
+    EXPECT_TRUE (client->last_error.empty ()) << client->last_error;
+    EXPECT_TRUE (client->later_submitted);
+    EXPECT_TRUE (client->later_received);
+    EXPECT_TRUE (client->other_submitted);
+    EXPECT_TRUE (client->other_completed);
+    EXPECT_EQ (client->later_before_release, 0);
+    EXPECT_TRUE (client->later_completed);
+    EXPECT_TRUE (client->terminal_completed_once);
+    EXPECT_FALSE (client->terminal_repeated);
+    EXPECT_EQ (gate_state->first_completed.load (std::memory_order_acquire), 1);
 }

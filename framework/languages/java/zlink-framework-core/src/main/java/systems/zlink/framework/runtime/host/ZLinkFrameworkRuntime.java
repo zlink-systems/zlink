@@ -2139,7 +2139,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                     });
         }
         if (channels != null) {
-            shutdown.defer("channel_close", channels::close);
+            shutdown.deferCloseStage(
+                    "channel_close", () -> channels.closeAsync(terminationDeadline.get()));
         }
         if (locationAutoConnectHost != null) {
             shutdown.deferCloseStage("auto_connect_stop", locationAutoConnectHost::stop);

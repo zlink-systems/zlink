@@ -7,6 +7,7 @@
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
+#include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/eventing/runtime_wake_timer.hpp"
 #include "runtime/locations/location_runtime.hpp"
@@ -41,6 +42,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
                                service_provider_t &services,
                                serializer_registry_t &serializers,
                                const handler_registry_t &handlers,
+                               std::shared_ptr<offload_executor_t> dispatch_executor,
                                std::map<std::string, std::string> publisher_advertise_hosts = {},
                                std::shared_ptr<listener_status_registry_t> listener_statuses = {},
                                std::shared_ptr<application_job_queue_t> application_jobs = {});
@@ -107,6 +109,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     const handler_registry_t *_handlers;
     std::shared_ptr<application_job_queue_t> _application_jobs;
     std::unique_ptr<application_supply_slot_t> _application_supply;
+    std::shared_ptr<offload_executor_t> _dispatch_executor;
     std::unique_ptr<zlink::poller_t> _subscriber_poller;
     eventing::runtime_wake_timer_t _wake_timer;
     mutable std::mutex _gate;

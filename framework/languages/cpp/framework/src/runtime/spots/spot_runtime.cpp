@@ -3112,12 +3112,14 @@ void spot_context_state_t::defer_relocation_ready ()
         throw framework_exception_t (reserved.error_kind (),
                                      "relocation readiness barrier queue is closed");
     }
-    const auto complete_without_relocation = state_sync ([this, barrier = reserved.value ()] {
-        relocation_ready_deferred = true;
-        relocation_ready_barrier = barrier;
-        relocation_ready_turn = detail::capture_current_serial_turn ();
-        return !relocation_boundary_active;
-    });
+    const auto registering_turn = detail::capture_current_serial_turn ();
+    const auto complete_without_relocation =
+      state_sync ([this, barrier = reserved.value (), registering_turn] {
+          relocation_ready_deferred = true;
+          relocation_ready_barrier = barrier;
+          relocation_ready_turn = registering_turn;
+          return !relocation_boundary_active;
+      });
     if (complete_without_relocation)
         complete_relocation_ready (spot_relocation_ready_outcome_t::continued);
 }
@@ -3129,7 +3131,7 @@ void spot_context_state_t::ensure_relocation_turn_open () const
         return;
     const auto deferring_turn = state_sync ([this] { return relocation_ready_turn.lock (); });
     if (deferring_turn == current_turn) {
-        throw framework_exception_t (framework_error_kind_t::not_configured,
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                      "Framework operations are not allowed after relocation "
                                      "readiness is deferred in the current Spot turn");
     }
