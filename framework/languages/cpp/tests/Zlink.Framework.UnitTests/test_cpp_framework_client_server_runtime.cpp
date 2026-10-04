@@ -722,7 +722,9 @@ void verify_client_server_closed_reply_finishes_without_server_lane ()
       "default",
       16 * 1024 * 1024,
       "tcp://127.0.0.1:0"};
-    client_server::raw_client_server_server_t server ({{descriptor}});
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{descriptor}));
     server.start ();
 
     zlink::context_t context;
@@ -790,7 +792,9 @@ void verify_sealed_client_server_rejects_request ()
       "default",
       16 * 1024 * 1024,
       "tcp://127.0.0.1:0"};
-    client_server::raw_client_server_server_t server ({{descriptor}});
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{descriptor}));
     server.start ();
 
     zlink::context_t context;
