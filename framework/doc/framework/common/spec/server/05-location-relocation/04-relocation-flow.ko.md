@@ -239,6 +239,8 @@ boundary 전 relay 구간을 폐기하고 재전송된 batch 전체로 한 번�
 
 대기 시간이 끝나도 검증된 cutover 없이 CAS나 application dispatch를 시작하지 않는다. Target은 `cutover_timeout` Warning을 기록한다. 늦은 cutover와 duplicate cutover는 Store가 승인한 authority를 다시 바꾸지 않는다.
 
+**검증된 cutover 전의 target staging은 source `Preserve` 확인, target lease 만료, target host의 종료 [admission seal](../00-foundation/02-glossary.ko.md#admission-seal) 중 먼저 확정된 것으로 끝나고 staging을 폐기한다.** 종료 seal과 cutover 검증의 순서는 그 target attempt를 소유한 실행 경계에서 한 번만 확정한다. Seal이 먼저 확정되면 같은 attempt는 이후 CAS를 시작하지 않는다. Cutover 검증이 먼저 확정되면 종료는 그 attempt를 폐기하지 않으며, CAS 결과는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. 어느 경우에도 source는 `Preserve` 성공 전에는 재개하지 않는다.
+
 Source는 이 경계 뒤에도 이전 주소로 늦게 도착하는 message를 받을 수 있다. Owner 변경 전에는
 temporary queue로 relay하고, owner 변경 뒤에는 이전 owner가 그 message를 새 owner에게 대신
 전달하는 [Message Follow](../00-foundation/02-glossary.ko.md#message-follow) 경로로 target에 전달한다(§10).
