@@ -910,6 +910,9 @@ public sealed partial class RegressionTests
         var samplesRoot = Path.Combine(ResolveDotnetRoot(), "samples");
         var shellHelper = ReadSource(Path.Combine(samplesRoot, "redis-common.sh"));
         var powershellHelper = ReadSource(Path.Combine(samplesRoot, "sample_runner.ps1"));
+        var windowsProcessHelper = ReadSource(
+            Path.Combine(samplesRoot, "windows-process-common.ps1")
+        );
 
         Assert.Contains(
             "\"Sample role ${roles[${pid}]:-pid-${pid}} (pid ${pid}) exited during cleanup with status 137 (SIGKILL).\")",
@@ -980,17 +983,17 @@ public sealed partial class RegressionTests
         );
         Assert.Contains(
             "CreateNewProcessGroup = 0x00000200",
-            powershellHelper,
+            windowsProcessHelper,
             StringComparison.Ordinal
         );
         Assert.Contains(
             "GenerateConsoleCtrlEvent(CtrlBreakEvent, unchecked((uint)processGroupId))",
-            powershellHelper,
+            windowsProcessHelper,
             StringComparison.Ordinal
         );
         Assert.DoesNotContain(
             "GenerateConsoleCtrlEvent(CtrlBreakEvent, 0)",
-            powershellHelper,
+            windowsProcessHelper,
             StringComparison.Ordinal
         );
         Assert.Contains(
