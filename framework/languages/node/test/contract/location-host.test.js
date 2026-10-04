@@ -16,6 +16,48 @@ const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
 );
 const nestjs = require('../../packages/nestjs/dist');
 
+for (const emptyFirstPage of [true, false]) {
+  test(`Actor placement consumes continuation after ${emptyFirstPage ? 'empty page' : 'candidate and preserves Store failure'}`, async () => {
+    const provider = new framework.ZLinkInMemoryProviderLocationStore();
+    const host = new framework.ZLinkFrameworkRuntimeHost({
+      registration: framework.createFrameworkRegistration({
+        locations: { storeInstance: provider },
+        spotNodes: { play: { router: { bind: 'tcp://local-play', routingId: 'node-a' }, objectRole: 'client' } }
+      })
+    });
+    const descriptor = {
+      meshName: 'play', rid: 'node-a', lifecycleGeneration: 1n,
+      state: framework.ZLinkFrameworkRuntimeState.Serving, objectRole: 'server',
+      placementWeight: 100, entrySpotId: 'entry', ownerId: 'owner', leaseGeneration: 1n,
+      objectCapabilities: [{ objectKind: 'actor', stableType: 'SessionActor' }],
+      populationCapacity: { actors: { active: 0, reserved: 0, limit: 1000 } }
+    };
+    const calls = [];
+    const failure = new Error('descriptor continuation failed');
+    const store = host.locationOwner.locationStore();
+    store.listMeshNodes = async (meshName, page, signal) => {
+      calls.push({ meshName, page, signal });
+      if (page?.continuationToken === 'next') {
+        if (!emptyFirstPage) throw failure;
+        return { items: [descriptor] };
+      }
+      return { items: emptyFirstPage ? [] : [descriptor], continuationToken: 'next' };
+    };
+    host.createPublicSpotManager({});
+    host.spotNodeRuntime = { meshNode: () => ({ status: () => ({ routingId: 'node-a', lifecycleGeneration: 1n }) }) };
+    const signal = new AbortController().signal;
+    const select = () => host.actorPlacement.options.target('play', 'SessionActor', signal);
+    if (emptyFirstPage) {
+      assert.equal((await select()).nodeRid, 'node-a');
+    } else {
+      await assert.rejects(select, error => error === failure);
+    }
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].page.continuationToken, 'next');
+    assert.equal(calls[1].signal, signal);
+  });
+}
+
 test('bounded terminal replay refreshes recency and evicts only the oldest record', () => {
   assert.throws(() => new BoundedReplayMap(0), /positive safe integer/u);
   assert.throws(() => new BoundedReplayMap(1.5), /positive safe integer/u);
