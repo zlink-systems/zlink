@@ -82,12 +82,14 @@ struct contract_zmp_transport_state_t
         messages (messages_),
         encrypted (encrypted_),
         hold_writes (false),
+        sync_write_attempts (0),
         read_buffer (NULL),
         read_capacity (0)
     {
     }
     boost::asio::io_context *io;
     bool opened, messages, encrypted, hold_writes;
+    size_t sync_write_attempts;
     unsigned char *read_buffer;
     size_t read_capacity;
     zlink::i_asio_transport::completion_handler_t read_handler;
@@ -234,6 +236,7 @@ class contract_zmp_transport_t : public zlink::i_asio_transport
     }
     size_t write_some (const unsigned char *, size_t) ZLINK_OVERRIDE
     {
+        ++state->sync_write_attempts;
         errno = EAGAIN;
         return 0;
     }

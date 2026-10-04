@@ -19,11 +19,6 @@
 namespace zlink
 {
 
-#ifdef ZLINK_BUILD_TESTS
-size_t test_ws_write_buffer_bytes ();
-size_t test_ws_read_message_max ();
-#endif
-
 //  WebSocket transport implementation using Boost.Beast
 //
 //  This transport wraps a TCP socket with WebSocket framing.

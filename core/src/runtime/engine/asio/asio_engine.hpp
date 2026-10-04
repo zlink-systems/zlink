@@ -9,6 +9,7 @@
 #include <boost/asio.hpp>
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 #include <deque>
@@ -104,6 +105,12 @@ class asio_engine_t : public i_engine
 
     //  Start asynchronous write operation
     void start_async_write ();
+
+    //  A connection submits a new normal or terminal write only while its
+    //  previous transport write has completed.
+    bool write_turn_available () const;
+    bool defer_terminal_error (error_reason_t reason_);
+    bool terminal_error_pending () const { return _deferred_terminal_error.has_value (); }
 
     //  Speculative (synchronous) write attempt.
     //  Tries to write immediately using transport->write_some().
@@ -215,9 +222,9 @@ class asio_engine_t : public i_engine
     };
 
     //  Internal implementation of restart_input, in three steps that share
-    //  classify_drain_stop() as their single stop rule.
+    //  classify_input_result() as their single stop rule.
     bool restart_input_internal ();
-    drain_result_t classify_drain_stop (int rc_);
+    drain_result_t classify_input_result (int rc_);
     drain_result_t retry_stopped_message ();
     drain_result_t drain_current_input ();
     drain_result_t drain_pending_chunks ();
@@ -324,6 +331,7 @@ class asio_engine_t : public i_engine
       _connection_fastpath_policy;
     asio_engine_pipeline_t _pipeline;
     connection_facade_t _connection_facade;
+    std::optional<error_reason_t> _deferred_terminal_error;
 
   public:
     bool adaptive_encoder_write_target () const

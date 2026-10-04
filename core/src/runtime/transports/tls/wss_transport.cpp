@@ -15,18 +15,6 @@
 
 namespace zlink
 {
-#ifdef ZLINK_BUILD_TESTS
-size_t test_wss_write_buffer_bytes ()
-{
-    return ws_transport_common_internal::write_buffer_bytes ();
-}
-
-size_t test_wss_read_message_max ()
-{
-    return ws_transport_common_internal::read_message_max ();
-}
-#endif
-
 wss_transport_t::wss_transport_t (boost::asio::ssl::context &ssl_ctx,
                                   const std::string &path,
                                   const std::string &host) :

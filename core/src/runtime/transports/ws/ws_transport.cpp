@@ -12,18 +12,6 @@
 
 namespace zlink
 {
-#ifdef ZLINK_BUILD_TESTS
-size_t test_ws_write_buffer_bytes ()
-{
-    return ws_transport_common_internal::write_buffer_bytes ();
-}
-
-size_t test_ws_read_message_max ()
-{
-    return ws_transport_common_internal::read_message_max ();
-}
-#endif
-
 ws_transport_t::ws_transport_t (const std::string &path, const std::string &host) :
     _path (path),
     _host (host)

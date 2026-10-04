@@ -167,6 +167,11 @@ void zlink::asio_zmp_engine_t::set_last_error (uint8_t code_, const char *reason
 
 void zlink::asio_zmp_engine_t::send_error_frame (uint8_t code_, const char *reason_)
 {
+    // The connection writes ERROR after the previous write completes. A
+    // failed output cannot carry an ERROR and closes through engine_error().
+    if (!write_turn_available ())
+        return;
+
     i_asio_transport *tr = transport ();
     if (!tr || !tr->is_open ())
         return;
@@ -206,6 +211,9 @@ void zlink::asio_zmp_engine_t::send_error_frame (uint8_t code_, const char *reas
 void zlink::asio_zmp_engine_t::error (error_reason_t reason_,
                                     const boost::system::error_code &handshake_error_)
 {
+    if (terminal_error_pending () && reason_ != connection_error)
+        return;
+
     if (reason_ == timeout_error) {
         if (is_handshaking ())
             set_last_error (zmp_error_handshake_timeout, NULL);
@@ -220,6 +228,8 @@ void zlink::asio_zmp_engine_t::error (error_reason_t reason_,
     }
 
     if (reason_ == timeout_error || reason_ == protocol_error) {
+        if (defer_terminal_error (reason_))
+            return;
         const uint8_t code = _last_error_code ? _last_error_code : zmp_error_internal;
         send_error_frame (code, _last_error_reason.c_str ());
     }

@@ -185,6 +185,120 @@ void test_ws_batch_two_pointer_bodies_use_two_writes ()
     assert_ws_batch_operations ({64 * 1024, 64 * 1024}, {2, 2});
 }
 
+void test_terminated_pipe_input_does_not_send_error_frame ()
+{
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    {
+        contract_zmp_engine_t application (dealer);
+        application.handshake (test_zmp_wire::socket_router, "terminated-peer");
+        assert_ready_reply (application);
+        application.state->outgoing.clear ();
+        const unsigned char payload[] = {'d', 'a', 't', 'a'};
+        const std::vector<unsigned char> frame =
+          make_zmp_wire_frame (0, test_zmp_wire::zmp_kind_data, 0, payload, sizeof (payload));
+        application.feed (std::vector<unsigned char> (
+          frame.begin (), frame.begin () + test_zmp_wire::zmp_header_size));
+        application_pipe (application, true)->get_peer ()->terminate (false);
+        // Deliver the already received payload before the queued pipe-term
+        // command reaches the engine. The pipe itself is already inactive.
+        const zlink::i_asio_transport::completion_handler_t read_handler =
+          application.state->read_handler;
+        TEST_ASSERT_TRUE (bool (read_handler));
+        memcpy (application.state->read_buffer, payload, sizeof (payload));
+        application.state->read_handler = zlink::i_asio_transport::completion_handler_t ();
+        read_handler (boost::system::error_code (), sizeof (payload));
+        application.pump ();
+        TEST_ASSERT_FALSE (application.state->opened);
+        TEST_ASSERT_EQUAL_UINT (0, application.state->sync_write_attempts);
+    }
+    test_context_socket_close_zero_linger (dealer);
+}
+
+void test_malformed_input_waits_for_pending_write_before_error_frame ()
+{
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    {
+        contract_zmp_engine_t application (dealer, true);
+        application.handshake (test_zmp_wire::socket_router, "malformed-peer");
+        assert_ready_reply (application);
+        application.state->outgoing.clear ();
+        application.state->hold_writes = true;
+        application.session->test_output_enabled = true;
+        zlink::msg_t message;
+        TEST_ASSERT_SUCCESS_ERRNO (message.init_size (65536));
+        application.session->queue_test_output (message);
+        TEST_ASSERT_SUCCESS_ERRNO (message.close ());
+        application.engine->restart_output ();
+        application.pump ();
+        TEST_ASSERT_FALSE (application.state->writes.empty ());
+
+        std::vector<unsigned char> malformed =
+          make_zmp_wire_frame (0, test_zmp_wire::zmp_kind_data, 0, NULL, 0);
+        malformed[0] = 0;
+        application.feed (malformed);
+        TEST_ASSERT_EQUAL_UINT (0, application.state->sync_write_attempts);
+        TEST_ASSERT_TRUE (application.state->opened);
+        application.state->drain_writes ();
+        application.pump ();
+        TEST_ASSERT_FALSE (application.state->opened);
+        TEST_ASSERT_EQUAL_UINT (1, application.state->sync_write_attempts);
+    }
+    test_context_socket_close_zero_linger (dealer);
+}
+
+void test_malformed_input_without_pending_write_sends_error_frame ()
+{
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    {
+        contract_zmp_engine_t application (dealer);
+        application.handshake (test_zmp_wire::socket_router, "idle-malformed-peer");
+        assert_ready_reply (application);
+        application.state->outgoing.clear ();
+        std::vector<unsigned char> malformed =
+          make_zmp_wire_frame (0, test_zmp_wire::zmp_kind_data, 0, NULL, 0);
+        malformed[0] = 0;
+        application.feed (malformed);
+        TEST_ASSERT_FALSE (application.state->opened);
+        TEST_ASSERT_EQUAL_UINT (1, application.state->sync_write_attempts);
+    }
+    test_context_socket_close_zero_linger (dealer);
+}
+
+void test_pending_error_closes_when_output_is_aborted ()
+{
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    {
+        contract_zmp_engine_t application (dealer, true);
+        application.handshake (test_zmp_wire::socket_router, "aborted-output-peer");
+        assert_ready_reply (application);
+        application.state->hold_writes = true;
+        application.session->test_output_enabled = true;
+        zlink::msg_t message;
+        TEST_ASSERT_SUCCESS_ERRNO (message.init_size (65536));
+        application.session->queue_test_output (message);
+        TEST_ASSERT_SUCCESS_ERRNO (message.close ());
+        application.engine->restart_output ();
+        application.pump ();
+        TEST_ASSERT_FALSE (application.state->writes.empty ());
+
+        std::vector<unsigned char> malformed =
+          make_zmp_wire_frame (0, test_zmp_wire::zmp_kind_data, 0, NULL, 0);
+        malformed[0] = 0;
+        application.feed (malformed);
+        TEST_ASSERT_EQUAL_UINT (0, application.state->sync_write_attempts);
+
+        const zlink::i_asio_transport::completion_handler_t completion =
+          application.state->writes.front ().first;
+        application.state->writes.pop_front ();
+        boost::asio::post (application.io.get_io_context (),
+                           [completion] { completion (boost::asio::error::operation_aborted, 0); });
+        application.pump ();
+        TEST_ASSERT_FALSE (application.state->opened);
+        TEST_ASSERT_EQUAL_UINT (0, application.state->sync_write_attempts);
+    }
+    test_context_socket_close_zero_linger (dealer);
+}
+
 void test_raw_wire_peer_weight_bypasses_application_limit_and_consumes_malformed ()
 {
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -459,5 +573,9 @@ int main ()
     RUN_TEST (test_ws_batch_small_64k_small_is_one_three_buffer_write);
     RUN_TEST (test_ws_batch_over_max_uses_two_encoder_writes);
     RUN_TEST (test_ws_batch_two_pointer_bodies_use_two_writes);
+    RUN_TEST (test_terminated_pipe_input_does_not_send_error_frame);
+    RUN_TEST (test_malformed_input_waits_for_pending_write_before_error_frame);
+    RUN_TEST (test_malformed_input_without_pending_write_sends_error_frame);
+    RUN_TEST (test_pending_error_closes_when_output_is_aborted);
     return UNITY_END ();
 }
