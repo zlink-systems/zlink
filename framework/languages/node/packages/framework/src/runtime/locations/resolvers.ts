@@ -1,3 +1,4 @@
+import { listAllMeshNodeDescriptors } from './location-store-pages';
 import type { ActorRef, RoutingId, SpotId } from '../../contracts/Common';
 import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts/Errors';
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
@@ -226,7 +227,7 @@ export class ZLinkStoreLocationResolvers
   > {
     for (const meshName of meshNames) {
       const descriptors = await this.liveRows.filter(
-        (await this.options.stores.locationStore.listMeshNodes(meshName, undefined, signal)).items,
+        await listAllMeshNodeDescriptors(this.options.stores.locationStore, meshName, signal),
         (descriptor, signal) => this.options.leaseTracker.isOwnerTokenLive(descriptor, signal),
         signal
       );
@@ -260,9 +261,11 @@ export class ZLinkStoreLocationResolvers
     signal?: AbortSignal,
     excludedCandidateRids: ReadonlySet<string> = new Set()
   ): Promise<RoutingId | undefined> {
-    const descriptors = (
-      await this.options.stores.locationStore.listMeshNodes(meshName, undefined, signal)
-    ).items;
+    const descriptors = await listAllMeshNodeDescriptors(
+      this.options.stores.locationStore,
+      meshName,
+      signal
+    );
     const liveDescriptors = await this.liveRows.filter(
       descriptors,
       (descriptor, signal) => this.options.leaseTracker.isOwnerTokenLive(descriptor, signal),
@@ -600,8 +603,8 @@ export class ZLinkStoreLocationResolvers
     signal?: AbortSignal
   ): Promise<ZLinkFrameworkRuntimeState | undefined> {
     const descriptor = (
-      await this.options.stores.locationStore.listMeshNodes(meshName, undefined, signal)
-    ).items.find(
+      await listAllMeshNodeDescriptors(this.options.stores.locationStore, meshName, signal)
+    ).find(
       (candidate) =>
         routingIdsEqual(candidate.rid, nodeRid) &&
         (expectedLifecycleGeneration === undefined ||

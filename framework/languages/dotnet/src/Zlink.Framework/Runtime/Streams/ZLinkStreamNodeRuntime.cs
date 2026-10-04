@@ -265,7 +265,11 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _receivePoller ??= Socket.CreateReceivePoller();
         _receiveLoop = _taskRunner.RunLongRunning(
             $"stream-recv:{NodeName}",
-            runtimeToken => new ValueTask(RunReceiveLoopUntilStoppedAsync(runtimeToken))
+            runtimeToken =>
+            {
+                RunReceiveLoopUntilStopped(runtimeToken);
+                return ValueTask.CompletedTask;
+            }
         );
         _monitorLoop = _taskRunner.RunLongRunning(
             $"stream-monitor:{NodeName}",
@@ -301,7 +305,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         }
     }
 
-    private async Task RunReceiveLoopUntilStoppedAsync(CancellationToken runtimeToken)
+    private void RunReceiveLoopUntilStopped(CancellationToken runtimeToken)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(
             _stopSource.Token,
@@ -347,9 +351,13 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     ZLinkApplicationJobQueueLease? admission = null;
                     try
                     {
-                        admission = await _applicationJobQueue
+                        // This blocking poll owner stays on the existing dedicated
+                        // receive thread. Admission must not resume the poll loop
+                        // on an application ThreadPool worker.
+                        admission = _applicationJobQueue
                             .AcquireAsync(stop.Token)
-                            .ConfigureAwait(false);
+                            .GetAwaiter()
+                            .GetResult();
                         if (!Socket.RecvPacket(out received, RecvFlags.DontWait))
                         {
                             admission.Dispose();
@@ -389,7 +397,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             ApplicationJobAdmission = admission,
                         };
                         admission = null;
-                        if (!await TryAdmitFrameAsync(sourceRoutingId, frame).ConfigureAwait(false))
+                        if (!TryAdmitFrameAsync(sourceRoutingId, frame).GetAwaiter().GetResult())
                             throw new ZLinkStreamPeerAdmissionException(
                                 "STREAM packet could not enter the session queue."
                             );
@@ -401,8 +409,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                         admission?.Dispose();
                         if (routingId is { } sourceRoutingId)
                         {
-                            await HandlePeerReceiveFailureAsync(sourceRoutingId, exception)
-                                .ConfigureAwait(false);
+                            HandlePeerReceiveFailureAsync(sourceRoutingId, exception)
+                                .GetAwaiter()
+                                .GetResult();
                         }
                         else
                             throw;
@@ -436,7 +445,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 _errorSink.ReportRuntimeTaskException($"stream-recv:{NodeName}", exception);
                 try
                 {
-                    await failureBackoff.NoDataAsync(stop.Token).ConfigureAwait(false);
+                    failureBackoff.NoDataAsync(stop.Token).GetAwaiter().GetResult();
                 }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested)
                 {

@@ -3917,6 +3917,17 @@ internal sealed partial class ZLinkFrameworkRuntime
         return _actorSessionManager.GetOrCreateState(actorId);
     }
 
+    internal ValueTask<ZLinkActorRuntimeState> GetOrCreateActorStateAsync(string actorId) =>
+        _actorSessionManager.GetOrCreateStateAsync(actorId);
+
+    internal async ValueTask<Zlink.Framework.Runtime.Handlers.ZLinkScopedHandlerInstanceOwner> ResolveActorHandlerInstancesAsync(
+        IZLinkActor actor
+    )
+    {
+        var state = await GetOrCreateActorStateAsync(actor.Context.ActorId).ConfigureAwait(false);
+        return state.HandlerInstances;
+    }
+
     internal bool TryGetActorState(string actorId, out ZLinkActorRuntimeState state)
     {
         return _actorSessionManager.TryGetState(actorId, out state!);
@@ -3972,10 +3983,17 @@ internal sealed partial class ZLinkFrameworkRuntime
         out ulong acceptedHighWater
     )
     {
-        var acceptance = _actorBoundSessionCoordinator.AcceptSessionFrame(actorId, bindingToken);
-        acceptedHighWater = acceptance?.AcceptedHighWater ?? 0;
-        return acceptance?.Accepted ?? false;
+        var acceptance = ZLinkStateLaneWait.AwaitStateLane(
+            AcceptSessionActorFrameAsync(actorId, bindingToken)
+        );
+        acceptedHighWater = acceptance.AcceptedHighWater;
+        return acceptance.Accepted;
     }
+
+    internal ValueTask<ZLinkSessionFrameAcceptance> AcceptSessionActorFrameAsync(
+        string actorId,
+        string bindingToken
+    ) => _actorBoundSessionCoordinator.AcceptSessionFrameAsync(actorId, bindingToken);
 
     internal ValueTask<ZLinkSessionOneWayAcceptance> AcceptOneWaySessionActorFrameAsync(
         string actorId,
@@ -4030,7 +4048,14 @@ internal sealed partial class ZLinkFrameworkRuntime
         );
 
     internal void CompleteAcceptedSessionActorFrame(string actorId, string bindingToken) =>
-        _actorBoundSessionCoordinator.CompleteAcceptedSessionFrame(actorId, bindingToken);
+        ZLinkStateLaneWait.AwaitStateLane(
+            CompleteAcceptedSessionActorFrameAsync(actorId, bindingToken)
+        );
+
+    internal ValueTask CompleteAcceptedSessionActorFrameAsync(
+        string actorId,
+        string bindingToken
+    ) => _actorBoundSessionCoordinator.CompleteAcceptedSessionFrameAsync(actorId, bindingToken);
 
     internal string TrackRemoteSessionActorRequest(
         string actorId,
@@ -4751,6 +4776,17 @@ internal sealed partial class ZLinkFrameworkRuntime
         IReadOnlyList<Message> Parts
     );
 
+    internal ValueTask<ZLinkSessionContext?> GetSessionActorContextAsync(
+        string actorId,
+        string bindingToken
+    ) => _actorBoundSessionCoordinator.GetSessionActorContextAsync(actorId, bindingToken);
+
+    internal ValueTask<ZLinkSessionBindingRoute?> GetSessionActorRouteAsync(
+        string actorId,
+        string bindingToken,
+        ZLinkSessionActor actorRef
+    ) => _actorBoundSessionCoordinator.GetSessionRouteAsync(actorId, bindingToken, actorRef);
+
     internal bool TryGetSessionActorContext(
         string actorId,
         string bindingToken,
@@ -4778,18 +4814,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         var found = _actorBoundSessionCoordinator.GetSessionBinding(actorId, bindingToken);
         entry = found!;
         return found is not null;
-    }
-
-    internal bool TryGetSessionActorRoute(
-        string actorId,
-        string bindingToken,
-        ZLinkSessionActor actorRef,
-        out ZLinkSessionBindingRoute route
-    )
-    {
-        var found = _actorBoundSessionCoordinator.GetSessionRoute(actorId, bindingToken, actorRef);
-        route = found.GetValueOrDefault();
-        return found.HasValue;
     }
 
     internal bool TryGetSessionActorBinding(string actorId, out ZLinkSessionBindingEntry entry)

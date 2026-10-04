@@ -599,6 +599,12 @@ which a host reads descriptors other hosts published, and it doesn't set when a 
 publishes its own change. When the publication completes follows the host's execution
 model. A caller doesn't assume the new Revision is stored by the time the call returns.
 
+The `capacity` counts and `activationConcurrency.active` are copies used for candidate
+selection and operational queries; they don't guarantee acceptance. Atomic reservation in the
+Location Store secures capacity, and the target MeshNode decides activation acceptance through
+its own admission. **A change in these counts alone doesn't start a descriptor publication or a
+Revision increment.**
+
 The host builds the whole descriptor during startup first. If it exceeds the size limit,
 it doesn't publish a truncated or split version — the whole startup fails instead. The
 format and version of application state aren't put in the descriptor.

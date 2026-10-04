@@ -10,7 +10,6 @@ export interface ZLinkActivationConcurrency {
 }
 
 interface ZLinkActivationRecord {
-  readonly meshName: string;
   readonly limit: number;
   active: number;
 }
@@ -27,10 +26,7 @@ interface ZLinkActivationRecord {
 export class ZLinkActivationAdmission {
   private readonly records = new Map<string, ZLinkActivationRecord>();
 
-  constructor(
-    private readonly limitOf: (meshName: string) => number,
-    private readonly changed?: (meshName: string) => void
-  ) {}
+  constructor(private readonly limitOf: (meshName: string) => number) {}
 
   current(meshName: string): ZLinkActivationConcurrency {
     const record = this.records.get(meshName);
@@ -57,20 +53,18 @@ export class ZLinkActivationAdmission {
       );
     }
     record.active += 1;
-    this.changed?.(meshName);
     let released = false;
     return () => {
       if (released) return;
       released = true;
       record.active -= 1;
-      this.changed?.(meshName);
     };
   }
 
   private record(meshName: string): ZLinkActivationRecord {
     let record = this.records.get(meshName);
     if (record === undefined) {
-      record = { meshName, limit: this.limitOf(meshName), active: 0 };
+      record = { limit: this.limitOf(meshName), active: 0 };
       this.records.set(meshName, record);
     }
     return record;

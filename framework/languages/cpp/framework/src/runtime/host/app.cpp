@@ -2916,6 +2916,9 @@ try {
     g_stop_signal_requested = 0;
     std::signal (SIGINT, handle_process_signal);
     std::signal (SIGTERM, handle_process_signal);
+#ifdef _WIN32
+    std::signal (SIGBREAK, handle_process_signal);
+#endif
 
     auto provider = _state->services.build_provider ();
     {

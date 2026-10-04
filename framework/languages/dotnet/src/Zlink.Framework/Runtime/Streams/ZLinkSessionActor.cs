@@ -40,22 +40,20 @@ internal sealed class ZLinkSessionActor : IZLinkSessionActor
 
     public ActorRef Ref => Route.Ref;
 
-    internal ZLinkSessionBindingRoute Route
+    internal ZLinkSessionBindingRoute Route => ZLinkStateLaneWait.AwaitStateLane(GetRouteAsync());
+
+    internal async ValueTask<ZLinkSessionBindingRoute> GetRouteAsync()
     {
-        get
-        {
-            if (TryGetRoute(out var route))
-                return route;
-            throw new ZLinkFrameworkException(
+        var route = await Context
+            .Runtime.GetSessionActorRouteAsync(ActorId, BindingToken, this)
+            .ConfigureAwait(false);
+        return route
+            ?? throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{ActorId}' session binding is stale.",
                 ZLinkRetryAdvice.RetryAfterBackoff
             );
-        }
     }
-
-    internal bool TryGetRoute(out ZLinkSessionBindingRoute route) =>
-        Context.Runtime.TryGetSessionActorRoute(ActorId, BindingToken, this, out route);
 
     public ValueTask RelayAsync(ZLinkMessage payload, CancellationToken cancellationToken = default)
     {

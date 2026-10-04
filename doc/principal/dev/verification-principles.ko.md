@@ -51,6 +51,7 @@
 | 원본·병합 source를 실제로 다시 빌드했나 | source를 덮은 뒤 test 통과 또는 link 실패 | 보존된 수정 시각 때문에 MSBuild·Ninja가 이전 DLL·object를 재사용할 수 있다. source와 산출물의 해시·시각을 확인하고 변경된 source를 다시 빌드해 결과를 판정한다 | #1083 |
 | Node Store fixture가 lease 교체를 검증하나 | 가공한 claim 결과를 돌려준 뒤 test 통과 | Store에 lease를 기록하지 않으면 교체 경로가 실행되지 않는다. 기존 repository로 실제 lease를 확정하고 Store 상태와 결과를 함께 검사한다 | #1083 |
 | 종료 중 target CAS가 settlement를 마쳤나 | CAS 진입 횟수 1과 종료 성공 | CAS 제출만 확인하며 commit 확인과 definitive conflict를 구분하지 못한다. 검증 선행 시험은 실제 Store 결과를, 응답 유실 시험은 적용 성공 뒤 확인 read를 각각 검사한다 | #1082 |
+| Prefix scan이 무관한 key를 작업 한도에서 제외하나 | 무관한 key 130개와 page limit 100에서 통과 | 작업 한도는 page limit보다 클 수 있다. 무관한 key 수가 실제 작업 한도를 넘는 입력에서 수정 전 실패와 수정 후 통과를 확인한다 | #1082 |
 
 ## 4. 무엇이 실제로 답을 줬나
 

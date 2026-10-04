@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+$script:ZlinkSampleFrameworkLifecycleMarkerPattern = 'ZLINK_FRAMEWORK_(READY|TERMINATION)'
 
 if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
     $IsWindows = $env:OS -eq "Windows_NT"
@@ -45,13 +46,56 @@ function Write-ZlinkSampleFrameworkFailureEvidence {
             Write-Host "[$nodeName] $line"
         }
         Write-Host "--- termination markers node=$nodeName ---"
-        foreach ($line in @(
-            Get-Content -LiteralPath $log.FullName -ErrorAction SilentlyContinue |
-                Select-String -Pattern 'ZLINK_FRAMEWORK_(READY|TERMINATION)'
-        )) {
-            Write-Host "[$nodeName] $($line.Line)"
+        foreach ($path in @($log.FullName, (Join-Path $LogDir "$nodeName.err.log"))) {
+            foreach ($line in @(
+                Get-Content -LiteralPath $path -ErrorAction SilentlyContinue |
+                    Select-String -Pattern $script:ZlinkSampleFrameworkLifecycleMarkerPattern
+            )) {
+                Write-Host "[$nodeName] $($line.Line)"
+            }
         }
         Write-Host "=== End framework lifecycle failure evidence node=$nodeName ==="
+    }
+}
+
+function Assert-ZlinkSampleFrameworkTermination {
+    param(
+        [Parameter(Mandatory = $true)][string]$LogDir,
+        [Parameter(Mandatory = $true)][string[]]$RoleLogs,
+        [hashtable]$RoleLogOffsets = @{}
+    )
+
+    if ($RoleLogs.Count -eq 0) {
+        throw "Framework role logs are not configured for this sample: $LogDir"
+    }
+    foreach ($roleLog in $RoleLogs) {
+        $logFile = Join-Path $LogDir $roleLog
+        if (-not (Test-Path -LiteralPath $logFile -PathType Leaf)) {
+            throw "Framework role log is missing: $logFile"
+        }
+        $errorLog = Join-Path $LogDir ($roleLog -replace '\.log$', '.err.log')
+        $markers = [System.Collections.Generic.List[string]]::new()
+        foreach ($path in @($logFile, $errorLog)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            $fileName = [IO.Path]::GetFileName($path)
+            $firstLine = if ($RoleLogOffsets.ContainsKey($fileName)) { [int]$RoleLogOffsets[$fileName] } else { 1 }
+            foreach ($match in @(
+                Get-Content -LiteralPath $path | Select-Object -Skip ($firstLine - 1) |
+                    Select-String -Pattern $script:ZlinkSampleFrameworkLifecycleMarkerPattern
+            )) {
+                $markers.Add($match.Line)
+            }
+        }
+        $ready = @($markers | Where-Object { $_.Contains('ZLINK_FRAMEWORK_READY') }).Count
+        $termination = @($markers | Where-Object { $_.Contains('ZLINK_FRAMEWORK_TERMINATION outcome=') }).Count
+        $stopped = @($markers | Where-Object { $_.Contains('ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE') }).Count
+        $forceStopped = @($markers | Where-Object { $_.Contains('ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED') }).Count
+        $counts = "READY=$ready TERMINATION=$termination STOPPED_NONE=$stopped FORCE_STOPPED=$forceStopped"
+        if ($ready -ne 1 -or $termination -ne 1 -or $stopped -ne 1 -or $forceStopped -ne 0) {
+            Write-ZlinkSampleFrameworkFailureEvidence $LogDir
+            throw "Framework lifecycle evidence is incomplete: $logFile $counts"
+        }
+        Write-Host "Framework lifecycle verified role=$roleLog $counts"
     }
 }
 

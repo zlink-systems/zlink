@@ -2859,6 +2859,9 @@ class stream_host_service_t::listener_t
     {
         {
             const std::lock_guard<std::mutex> lock (_ready_mutex);
+            // Readiness completes startup; later worker errors belong to the runtime collector.
+            if (_started)
+                return;
             _start_failed = true;
             _start_error = std::move (message);
         }

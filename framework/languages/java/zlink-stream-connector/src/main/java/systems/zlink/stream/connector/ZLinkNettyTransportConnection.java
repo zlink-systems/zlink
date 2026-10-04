@@ -33,7 +33,7 @@ import java.util.concurrent.ThreadFactory;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLParameters;
 
-final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnection {
+final class ZLinkNettyTransportConnection implements ZLinkStreamTransportConnection {
     private static final int LIFECYCLE_OWNS_CONNECT_DEADLINE = 0;
     private static final EventLoopGroup EVENT_LOOP =
             new NioEventLoopGroup(0, new DaemonThreadFactory());
@@ -44,19 +44,26 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
     private volatile Channel channel;
     private volatile Throwable failure;
 
-    private ZLinkTlsTransportConnection() {}
+    private ZLinkNettyTransportConnection() {}
 
-    static CompletionStage<ZLinkTlsTransportConnection> connectStage(
-            URI endpoint, int maxReceivePayloadSize, boolean skipServerCertificateValidation) {
-        CompletableFuture<ZLinkTlsTransportConnection> result = new CompletableFuture<>();
-        ZLinkTlsTransportConnection connection = new ZLinkTlsTransportConnection();
+    static CompletionStage<ZLinkNettyTransportConnection> connectStage(
+            URI endpoint,
+            ZLinkStreamTransport transport,
+            int maxReceivePayloadSize,
+            boolean skipServerCertificateValidation) {
+        CompletableFuture<ZLinkNettyTransportConnection> result = new CompletableFuture<>();
+        ZLinkNettyTransportConnection connection = new ZLinkNettyTransportConnection();
         SslContext sslContext;
         try {
-            SslContextBuilder builder = SslContextBuilder.forClient();
-            if (skipServerCertificateValidation) {
-                builder.trustManager(InsecureTrustManagerFactory.INSTANCE);
+            if (transport == ZLinkStreamTransport.TLS) {
+                SslContextBuilder builder = SslContextBuilder.forClient();
+                if (skipServerCertificateValidation) {
+                    builder.trustManager(InsecureTrustManagerFactory.INSTANCE);
+                }
+                sslContext = builder.build();
+            } else {
+                sslContext = null;
             }
-            sslContext = builder.build();
         } catch (SSLException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -74,20 +81,23 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
                                 new ChannelInitializer<SocketChannel>() {
                                     @Override
                                     protected void initChannel(SocketChannel channel) {
-                                        channel.pipeline()
-                                                .addLast(
-                                                        createSslHandler(
-                                                                sslContext,
-                                                                channel.alloc(),
-                                                                endpoint.getHost(),
-                                                                port,
-                                                                skipServerCertificateValidation));
+                                        if (sslContext != null) {
+                                            channel.pipeline()
+                                                    .addLast(
+                                                            createSslHandler(
+                                                                    sslContext,
+                                                                    channel.alloc(),
+                                                                    endpoint.getHost(),
+                                                                    port,
+                                                                    skipServerCertificateValidation));
+                                        }
                                         channel.pipeline()
                                                 .addLast(new FrameDecoder(maxReceivePayloadSize));
                                         channel.pipeline().addLast(new InboundHandler(connection));
                                     }
                                 });
 
+        DefaultZLinkStreamConnector.trace(() -> "connector connect-start endpoint=" + endpoint);
         ChannelFuture connecting = bootstrap.connect(endpoint.getHost(), port);
         connection.channel = connecting.channel();
         result.whenComplete(
@@ -97,14 +107,25 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
         connecting.addListener(
                 connect -> {
                     if (!connect.isSuccess()) {
+                        DefaultZLinkStreamConnector.trace(
+                                () ->
+                                        "connector connect-failed endpoint="
+                                                + endpoint
+                                                + " error="
+                                                + connect.cause());
                         connection.fail(connect.cause());
                         result.completeExceptionally(connect.cause());
                         return;
                     }
+                    DefaultZLinkStreamConnector.trace(
+                            () -> "connector connect-complete endpoint=" + endpoint);
                     Channel connected = ((ChannelFuture) connect).channel();
-                    connected
-                            .pipeline()
-                            .get(SslHandler.class)
+                    SslHandler sslHandler = connected.pipeline().get(SslHandler.class);
+                    if (sslHandler == null) {
+                        if (!result.complete(connection)) connection.close();
+                        return;
+                    }
+                    sslHandler
                             .handshakeFuture()
                             .addListener(
                                     handshake -> {
@@ -156,7 +177,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
         Channel current = channel;
         if (current == null || !current.isActive()) {
             return CompletableFuture.failedFuture(
-                    ZLinkStreamException.disconnected("tls transport is not connected"));
+                    ZLinkStreamException.disconnected("stream transport is not connected"));
         }
         CompletableFuture<Void> result = new CompletableFuture<>();
         current.writeAndFlush(Unpooled.wrappedBuffer(frame))
@@ -194,7 +215,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
         } else if (current != null) {
             current.close();
         }
-        fail(new EOFException("tls transport closed"));
+        fail(new EOFException("stream transport closed"));
     }
 
     private void enqueue(ZLinkStreamWireProtocol.Frame frame) {
@@ -254,9 +275,9 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
     }
 
     private static final class InboundHandler extends ChannelInboundHandlerAdapter {
-        private final ZLinkTlsTransportConnection connection;
+        private final ZLinkNettyTransportConnection connection;
 
-        private InboundHandler(ZLinkTlsTransportConnection connection) {
+        private InboundHandler(ZLinkNettyTransportConnection connection) {
             this.connection = connection;
         }
 
@@ -267,7 +288,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
 
         @Override
         public void channelInactive(ChannelHandlerContext context) {
-            connection.fail(new EOFException("tls transport closed"));
+            connection.fail(new EOFException("stream transport closed"));
         }
 
         @Override
@@ -284,7 +305,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
     private static final class DaemonThreadFactory implements ThreadFactory {
         @Override
         public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable, "zlink-stream-connector-tls");
+            Thread thread = new Thread(runnable, "zlink-stream-connector-netty");
             thread.setDaemon(true);
             return thread;
         }

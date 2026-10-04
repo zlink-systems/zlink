@@ -1263,8 +1263,25 @@ int main ()
                                   .result ();
     assert (!cancelled_request && !cancelled_send);
     assert (cancelled_request.error () == nullptr && cancelled_send.error () == nullptr);
-    assert (cancelled_request.exception () == cancellation);
-    assert (cancelled_send.exception () == cancellation);
+    // C++ common runtime §7.4 preserves the exception; MSVC may copy it on rethrow.
+    try {
+        std::rethrow_exception (cancellation);
+    }
+    catch (const std::system_error &original) {
+        assert (original.code () == std::errc::operation_canceled);
+        for (const auto &exception :
+             {cancelled_request.exception (), cancelled_send.exception ()}) {
+            assert (exception);
+            try {
+                std::rethrow_exception (exception);
+            }
+            catch (const std::system_error &error) {
+                assert (typeid (error) == typeid (original));
+                assert (error.code () == original.code ());
+                assert (std::string (error.what ()) == original.what ());
+            }
+        }
+    }
 
     zlink::framework::detail::channel_runtime_t::from (outbound_only.message_bus ())
       .bind_serializers (serializers);

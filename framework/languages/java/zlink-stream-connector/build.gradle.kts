@@ -24,7 +24,9 @@ dependencies {
 
 val buildNodeStreamConnector by tasks.registering(Exec::class) {
     workingDir = rootProject.file("../node")
-    commandLine("npm", "run", "build")
+    // Windows의 npm은 npm.cmd이며, Exec는 PATHEXT를 적용하지 않는다.
+    val npm = if (System.getProperty("os.name").startsWith("Windows")) "npm.cmd" else "npm"
+    commandLine(npm, "run", "build")
 }
 
 tasks.named("test") {

@@ -23,7 +23,9 @@ internal sealed class ZLinkActorDispatchRouter(
         CancellationToken cancellationToken = default
     )
     {
-        var state = actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        var state = await actorSessions
+            .GetOrCreateAsync(ZLinkActorId.FromBoundary(actorId, nameof(actorId)))
+            .ConfigureAwait(false);
         var actor =
             state.Actor
             ?? throw new ZLinkFrameworkException(
@@ -43,7 +45,9 @@ internal sealed class ZLinkActorDispatchRouter(
         CancellationToken cancellationToken = default
     )
     {
-        var state = actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        var state = await actorSessions
+            .GetOrCreateAsync(ZLinkActorId.FromBoundary(actorId, nameof(actorId)))
+            .ConfigureAwait(false);
         var actor =
             state.Actor
             ?? throw new ZLinkFrameworkException(
@@ -71,9 +75,9 @@ internal sealed class ZLinkActorDispatchRouter(
         CancellationToken cancellationToken = default
     )
     {
-        var state = actorSessions.GetOrCreate(
-            ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor))
-        );
+        var state = await actorSessions
+            .GetOrCreateAsync(ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor)))
+            .ConfigureAwait(false);
 
         await Async(actor, state, header, payload, relocationReplay, cancellationToken, null)
             .ConfigureAwait(false);
@@ -139,7 +143,9 @@ internal sealed class ZLinkActorDispatchRouter(
             _dispatchErrors.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Lifecycle
         );
-        var state = actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        var state = await actorSessions
+            .GetOrCreateAsync(ZLinkActorId.FromBoundary(actorId, nameof(actorId)))
+            .ConfigureAwait(false);
         var actor =
             state.Actor
             ?? throw new ZLinkFrameworkException(
