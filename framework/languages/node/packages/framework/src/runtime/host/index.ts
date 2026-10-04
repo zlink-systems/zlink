@@ -809,6 +809,7 @@ export class ZLinkFrameworkRuntimeHost
     });
     this.serviceRelocation = new ZLinkHostServiceRelocationRuntime({
       registration: options.registration,
+      targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
       providerResolver: options.providerResolver,
       locationStore: () => this.locationOwner.currentStores?.locationStore,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
@@ -1950,6 +1951,7 @@ export class ZLinkFrameworkRuntimeHost
     } catch (error) {
       throw new ZLinkDrainingStatePublishError(error);
     }
+    await awaitWithDrainSignal(this.serviceRelocation.drainTargetAttempts(), signal);
   }
 
   private async cleanupOwnerForDrain(signal: AbortSignal): Promise<void> {

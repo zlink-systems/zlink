@@ -221,6 +221,7 @@ interface ZLinkHostRelocationOptions {
   readonly providerResolver?: ZLinkProviderResolver;
   readonly locationStore: () => ZLinkLocationStore | undefined;
   readonly currentOwner: () => ZLinkLocationOwnerToken | undefined;
+  readonly targetAdmissionSealed?: () => boolean;
   readonly liveDescriptors: (
     meshName: string,
     signal?: AbortSignal
@@ -525,17 +526,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   async dispose(): Promise<void> {
     this.disposed = true;
     const errors: unknown[] = [];
-    for (const stage of this.targetStages.values()) {
-      if (stage.fallback !== undefined) clearTimeout(stage.fallback);
-      try {
-        if (stage.finalize !== undefined) {
-          await stage.finalize;
-        } else if (stage.phase === 'ready') {
-          await this.abortTargetStage(stage);
-        }
-      } catch (error) {
-        errors.push(error);
-      }
+    try {
+      await this.drainTargetAttempts();
+    } catch (error) {
+      errors.push(error);
     }
     this.targetStages.clear();
     this.terminalTargets.clear();
@@ -571,6 +565,40 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     this.relocationAuthorityKeys.clear();
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Relocation runtime stop failed.');
+  }
+
+  /** Host shutdown waits for the existing attempt terminal before releasing its lease. */
+  async drainTargetAttempts(): Promise<void> {
+    const results = await Promise.allSettled(
+      [...this.targetStages.entries()].map(([stagingId, stage]) => {
+        if (stage.fallback !== undefined) clearTimeout(stage.fallback);
+        return stage.lane.finally(() => {
+          if (stage.phase === 'failed') return stage.finalize;
+          if (this.targetStageSealed(stage)) {
+            const terminal = this.discardTargetStage(stagingId, stage);
+            stage.finalize = terminal;
+            return terminal;
+          }
+          return this.beginTargetFinalize(
+            stage.offer.reservation.prepared.plan.targetDescriptor.meshName,
+            stagingId,
+            stage
+          );
+        });
+      })
+    );
+    const errors = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason as unknown] : []
+    );
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'Relocation target drain failed.');
+  }
+
+  /** Spec 28 §4.4: the target owner alone orders shutdown seal and verified cutover. */
+  private targetStageSealed(stage: LocalStage): boolean {
+    return (
+      !stage.cutoverReceived && (this.disposed || this.options.targetAdmissionSealed?.() === true)
+    );
   }
 
   completeActorJoinSourceCleanup(actorId: string): void {
@@ -2931,7 +2959,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const stagingId = relocationStagingId(request);
     const stage = this.targetStages.get(stagingId);
     if (stage === undefined) {
-      if (this.terminalTargets.get(stagingId) !== undefined) {
+      if (this.disposed || this.terminalTargets.get(stagingId) !== undefined) {
         if (request.kind === 'cutover') {
           console.warn('[zlink.runtime.relocation.late_cutover]', stagingId);
         }
@@ -2940,21 +2968,24 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       throw new Error(`Relocation staging '${stagingId}' is missing.`);
     }
     validateTargetOneWayControl(stage, request, sourceNodeRid);
-    // A verified cutover closes the boundary batch. A later record or cutover
-    // is a duplicate retransmission and never changes the staged batch.
-    if (stage.cutoverReceived || (stage.phase !== 'ready' && stage.phase !== 'finalizing')) {
-      if (request.kind === 'cutover') {
-        console.warn('[zlink.runtime.relocation.late_cutover]', stagingId);
+    stage.lane = stage.lane.then(() => {
+      // A verified cutover closes the boundary batch. A later record or cutover
+      // is a duplicate retransmission and never changes the staged batch.
+      if (stage.cutoverReceived || (stage.phase !== 'ready' && stage.phase !== 'finalizing')) {
+        if (request.kind === 'cutover') {
+          console.warn('[zlink.runtime.relocation.late_cutover]', stagingId);
+        }
+        return;
       }
-      return;
-    }
-    if (request.kind === 'data') {
-      stage.lane = stage.lane.then(() => this.stageBoundaryRelay(stage, request));
-      await stage.lane;
-      return;
-    }
-    this.reconcileBoundaryRelay(stage, request, stagingId);
-    stage.cutoverReceived = true;
+      if (request.kind === 'data') {
+        return this.stageBoundaryRelay(stage, request);
+      }
+      if (this.targetStageSealed(stage)) return;
+      this.reconcileBoundaryRelay(stage, request, stagingId);
+      stage.cutoverReceived = true;
+    });
+    await stage.lane;
+    if (request.kind === 'data') return;
     // A settlement started by the cutover wait Warning is still reading the
     // Store; it submits the CAS on its next round now that cutover verified.
     if (stage.finalize !== undefined) return;
@@ -3039,10 +3070,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     try {
       authority = await this.commitTargetReservation(stage, stage.offer.reservation, signal);
       if (authority === undefined) {
-        // Source Preserve, a definitive conflict or the target lease ended
-        // this staging before any target commit (Location runtime §10).
-        console.warn('[zlink.runtime.relocation.target_staging_discarded]', stagingId);
-        throw new Error(`Relocation '${stagingId}' target staging lost the authority settlement.`);
+        // The seal owner may have ended staging while a Store read was pending.
+        if ((stage as LocalStage).phase === 'failed') return;
+        return this.discardTargetStage(stagingId, stage, signal);
       }
       authorityCommitted = true;
       stage.releaseActivation();
@@ -3091,14 +3121,15 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       this.targetStages.delete(stagingId);
       this.targetAssemblies.delete(stagingId);
     } catch (error) {
-      stage.phase = 'failed';
       this.terminalTargets.remember(stagingId, stage.offer.prepareFingerprint);
       this.targetStages.delete(stagingId);
       this.targetAssemblies.delete(stagingId);
       if (!authorityCommitted) {
-        await this.abortTargetStage(stage).catch(() => undefined);
+        // abortTargetStage may already have assigned failed before throwing.
+        if ((stage as LocalStage).phase !== 'failed') await this.abortTargetStage(stage);
         throw error;
       }
+      stage.phase = 'failed';
       if (authority !== undefined) {
         throw new ServiceRelocationPostCommitError(authority, stage.staging, error);
       }
@@ -3909,6 +3940,22 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
+  private async discardTargetStage(
+    stagingId: string,
+    stage: LocalStage,
+    signal?: AbortSignal
+  ): Promise<void> {
+    stage.phase = 'failed';
+    console.warn('[zlink.runtime.relocation.target_staging_discarded]', stagingId);
+    try {
+      await this.abortTargetStage(stage, signal);
+    } finally {
+      this.terminalTargets.remember(stagingId, stage.offer.prepareFingerprint);
+      this.targetStages.delete(stagingId);
+      this.targetAssemblies.delete(stagingId);
+    }
+  }
+
   private async commitTargetReservation(
     stage: LocalStage,
     reservation: TargetRelocationReservation,
@@ -3935,8 +3982,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): Promise<ZLinkAuthoritySnapshot | undefined> {
     const target = stage.offer.prepare.target;
     for (;;) {
+      if (stage.phase === 'failed') return undefined;
       signal?.throwIfAborted();
-      if (this.disposed) throw new Error('Relocation runtime stopped.');
+      if (this.targetStageSealed(stage)) return undefined;
       let conflict = false;
       if (stage.cutoverReceived) {
         // The boundary relay span is applied to the temporary queue before
@@ -3958,6 +4006,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         conflict = result?.kind === 'stale';
       }
       const observed = await this.readAggregateForCommitRetry(prepared, signal);
+      if ((stage as LocalStage).phase === 'failed') return undefined;
       if (observed.kind === 'committed') {
         const primary = observed.authorities.get(stage.staging.primaryAuthorityKey.value);
         if (primary === undefined) {
