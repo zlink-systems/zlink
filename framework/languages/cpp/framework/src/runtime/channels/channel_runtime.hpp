@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
+#include <boost/asio/awaitable.hpp>
 
 #include <zlink/framework/contracts/channels/channel.hpp>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
@@ -275,6 +276,16 @@ class channel_runtime_t
                             zlink::message_t message,
                             detail::inbound_message_context_t inbound = {}) const;
 
+    boost::asio::awaitable<result_t<zlink::message_t>>
+    dispatch_request_on_handler_executor (std::string channel_name,
+                                          std::string topic,
+                                          std::string packet_name,
+                                          service_provider_t &services,
+                                          serializer_registry_t &serializers,
+                                          const handler_registry_t &handlers,
+                                          zlink::message_t message,
+                                          detail::inbound_message_context_t inbound) const;
+
     result_t<void> dispatch_send (std::string channel_name,
                                   std::string topic,
                                   std::string packet_name,
@@ -292,6 +303,16 @@ class channel_runtime_t
                                       const handler_registry_t &handlers,
                                       zlink::message_t message,
                                       detail::inbound_message_context_t inbound) const;
+
+    boost::asio::awaitable<void>
+    dispatch_send_on_handler_executor (std::string channel_name,
+                                       std::string topic,
+                                       std::string packet_name,
+                                       service_provider_t &services,
+                                       serializer_registry_t &serializers,
+                                       const handler_registry_t &handlers,
+                                       zlink::message_t message,
+                                       detail::inbound_message_context_t inbound) const;
 
     result_t<std::uint64_t> reserve_outbound_request (std::string channel_name);
     result_t<void> complete_outbound_reply (std::uint64_t request_seq);

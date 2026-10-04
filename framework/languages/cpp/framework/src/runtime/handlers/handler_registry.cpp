@@ -472,49 +472,15 @@ handler_registry_t::invoke_async (std::string_view channel_name,
                                   const zlink::message_t &message,
                                   const detail::inbound_message_context_t &inbound) const
 {
-    const auto *entry =
-      detail::find_handler_entry (_state->handlers, channel_name, topic, packet_name, true);
-    if (entry == nullptr) {
-        return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
-          framework_error_kind_t::not_found, "handler is not registered"));
-    }
-    auto owned_message = std::make_shared<zlink::message_t> (message);
-    auto owned_inbound =
-      detail::resolve_inbound_context (inbound, entry->descriptor, channel_name, packet_name);
-    auto invoke_body =
-      [this, entry, &services, &serializers, owned_message = std::move (owned_message),
-       owned_inbound = std::move (
-         owned_inbound)] () mutable -> boost::asio::awaitable<result_t<zlink::message_t>> {
-        result_t<zlink::message_t> result = result_t<zlink::message_t>::failure (
-          framework_error_kind_t::internal_failure, "handler failed");
-        try {
-            result = co_await runtime::await_task_result (invoke_filters_async (
-              dispatch_kind_for (entry->descriptor.kind), services, serializers,
-              owned_inbound.message,
-              [&services, &serializers, entry, owned_message, &owned_inbound] {
-                  if (owned_inbound.before_application_handler) {
-                      auto before = std::exchange (owned_inbound.before_application_handler, {});
-                      before ();
-                  }
-                  return entry->invoker (services, serializers, *owned_message, owned_inbound);
-              }));
-        }
-        catch (const framework_exception_t &error) {
-            result = detail::result_access_t::failure<zlink::message_t> (error);
-        }
-        catch (...) {
-            result = result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
-                                                          "handler threw an exception");
-        }
-        if (!result && result.error () != nullptr) {
-            emit_failure (entry->descriptor, *result.error ());
-        }
-        co_return result;
-    };
-
     try {
         return runtime::handler_coroutine_executor ().submit<zlink::message_t> (
-          std::move (invoke_body));
+          [this, channel_name = std::string (channel_name), topic = std::string (topic),
+           packet_name = std::string (packet_name), &services, &serializers, message,
+           inbound] () mutable -> boost::asio::awaitable<result_t<zlink::message_t>> {
+              co_return co_await runtime::await_task_result (invoke_on_handler_executor (
+                std::move (channel_name), std::move (topic), std::move (packet_name), services,
+                serializers, std::move (message), std::move (inbound)));
+          });
     }
     catch (const std::exception &error) {
         return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
@@ -524,6 +490,47 @@ handler_registry_t::invoke_async (std::string_view channel_name,
         return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
           framework_error_kind_t::internal_failure, "handler executor rejected invocation"));
     }
+}
+
+task_t<zlink::message_t>
+handler_registry_t::invoke_on_handler_executor (std::string channel_name,
+                                                std::string topic,
+                                                std::string packet_name,
+                                                service_provider_t &services,
+                                                serializer_registry_t &serializers,
+                                                zlink::message_t message,
+                                                detail::inbound_message_context_t inbound) const
+{
+    const auto *entry =
+      detail::find_handler_entry (_state->handlers, channel_name, topic, packet_name, true);
+    if (entry == nullptr)
+        co_return result_t<zlink::message_t>::failure (framework_error_kind_t::not_found,
+                                                       "handler is not registered");
+    auto owned_inbound =
+      detail::resolve_inbound_context (inbound, entry->descriptor, channel_name, packet_name);
+    result_t<zlink::message_t> result = result_t<zlink::message_t>::failure (
+      framework_error_kind_t::internal_failure, "handler failed");
+    try {
+        result = result_t<zlink::message_t>::success (co_await invoke_filters_async (
+          dispatch_kind_for (entry->descriptor.kind), services, serializers, owned_inbound.message,
+          [&services, &serializers, entry, &message, &owned_inbound] {
+              if (owned_inbound.before_application_handler) {
+                  auto before = std::exchange (owned_inbound.before_application_handler, {});
+                  before ();
+              }
+              return entry->invoker (services, serializers, message, owned_inbound);
+          }));
+    }
+    catch (const framework_exception_t &error) {
+        result = detail::result_access_t::failure<zlink::message_t> (error);
+    }
+    catch (...) {
+        result = result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
+                                                      "handler threw an exception");
+    }
+    if (!result && result.error () != nullptr)
+        emit_failure (entry->descriptor, *result.error ());
+    co_return result;
 }
 
 handler_registry_t &handler_registry_t::add_handler (handler_descriptor_t descriptor,

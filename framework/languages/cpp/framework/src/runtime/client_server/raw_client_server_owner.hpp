@@ -97,7 +97,10 @@ class raw_client_server_server_t
     task_t<client_server_pump_result_t>
     pump_one (mesh::service_liveness_registry_t::clock_t::time_point now,
               std::shared_ptr<application_job_queue_t::permit_t> application_permit = {},
-              receive_batch_budget_t *budget = nullptr);
+              receive_batch_budget_t *budget = nullptr,
+              std::vector<mesh::service_mailbox_record_t> *application_records = nullptr);
+    task_t<client_server_pump_result_t>
+    enqueue_application_records (std::vector<mesh::service_mailbox_record_t> &records);
     task_t<mesh::service_liveness_tick_t>
     tick_liveness (mesh::service_liveness_registry_t::clock_t::time_point now);
     task_t<std::optional<mesh::service_liveness_registry_t::clock_t::time_point>>
@@ -112,8 +115,9 @@ class raw_client_server_server_t
   private:
     task_t<client_server_pump_result_t> enqueue_application_record (
       detail::backend::raw_received_t received,
-      std::string channel_name,
-      std::shared_ptr<application_job_queue_t::permit_t> application_permit);
+      messaging::envelope_header_t envelope,
+      std::shared_ptr<application_job_queue_t::permit_t> application_permit,
+      std::vector<mesh::service_mailbox_record_t> *application_records);
 
   public:
   private:
@@ -132,6 +136,9 @@ class raw_client_server_server_t
     application_job_queue_t::receive_flow_registration_t _receive_flow_registration;
     std::unique_ptr<zlink::poller_t> _monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> _monitor;
+    //  start() sets _port on the lane before any record is received, and close()
+    //  keeps it: the port decides whether it is closed. A reply reads it off the
+    //  lane because its record passed through the mailbox mutex after start().
     std::shared_ptr<detail::backend::raw_route_port_t> _port;
     mesh::service_mailbox_t _mailbox;
     mesh::service_liveness_registry_t _liveness;

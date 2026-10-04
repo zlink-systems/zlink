@@ -18,6 +18,7 @@
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
@@ -539,6 +540,30 @@ channel_runtime_t::dispatch_request_async (std::string channel_name,
     }
 }
 
+boost::asio::awaitable<result_t<zlink::message_t>>
+channel_runtime_t::dispatch_request_on_handler_executor (
+  std::string channel_name,
+  std::string topic,
+  std::string packet_name,
+  service_provider_t &services,
+  serializer_registry_t &serializers,
+  const handler_registry_t &handlers,
+  zlink::message_t message,
+  detail::inbound_message_context_t inbound) const
+{
+    if (auto failure = request_capability_failure (*_state, channel_name))
+        co_return std::move (*failure);
+    try {
+        auto reply = co_await runtime::await_task_result (handlers.invoke_on_handler_executor (
+          std::move (channel_name), std::move (topic), std::move (packet_name), services,
+          serializers, std::move (message), std::move (inbound)));
+        co_return reply;
+    }
+    catch (const framework_exception_t &error) {
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
+    }
+}
+
 result_t<void>
 channel_runtime_t::dispatch_send (std::string channel_name,
                                   std::string topic,
@@ -571,6 +596,24 @@ channel_runtime_t::dispatch_send_async (std::string channel_name,
 {
     static_cast<void> (co_await handlers.invoke_async (channel_name, topic, packet_name, services,
                                                        serializers, message, inbound));
+    co_return;
+}
+
+boost::asio::awaitable<void> channel_runtime_t::dispatch_send_on_handler_executor (
+  std::string channel_name,
+  std::string topic,
+  std::string packet_name,
+  service_provider_t &services,
+  serializer_registry_t &serializers,
+  const handler_registry_t &handlers,
+  zlink::message_t message,
+  detail::inbound_message_context_t inbound) const
+{
+    auto result = co_await runtime::await_task_result (handlers.invoke_on_handler_executor (
+      std::move (channel_name), std::move (topic), std::move (packet_name), services, serializers,
+      std::move (message), std::move (inbound)));
+    if (!result)
+        result.value ();
     co_return;
 }
 

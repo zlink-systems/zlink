@@ -190,11 +190,11 @@ void raw_client_server_server_t::start ()
 {
     return _lane
       .run_checked ([this] {
-          if (_port) {
-              return;
-          }
           if (_closed) {
               throw std::logic_error ("ClientServer server cannot restart after close");
+          }
+          if (_port) {
+              return;
           }
           auto router = std::make_unique<zlink::router_socket_t> (*_context);
           router->options ().handover (true);
@@ -246,7 +246,9 @@ void raw_client_server_server_t::close ()
                        .run_checked ([this] {
                            _receive_flow_registration.close ();
                            _mailbox.close ();
-                           return std::tuple{std::move (_port), std::move (_monitor_poller),
+                           // _port stays published: off-lane readers (reply, receive) read it, and
+                           // the port itself rejects work once closed.
+                           return std::tuple{_port, std::move (_monitor_poller),
                                              std::move (_monitor), std::move (_router)};
                        })
                        .get ();
@@ -259,7 +261,7 @@ void raw_client_server_server_t::close ()
     }
     _lane
       .run_checked ([this, &resources, &failure] {
-          std::tie (_port, _monitor_poller, _monitor, _router) = std::move (resources);
+          std::tie (std::ignore, _monitor_poller, _monitor, _router) = std::move (resources);
           _closed = !failure;
       })
       .get ();
@@ -301,7 +303,11 @@ task_t<void> raw_client_server_server_t::update_descriptor_task (
             throw std::invalid_argument (
               "ClientServer descriptor update violates its immutable fence");
         }
-        _options.descriptor = std::move (descriptor);
+        // Keep channel_name's storage immutable for the receive path off the lane.
+        _options.descriptor.descriptor_revision = descriptor.descriptor_revision;
+        _options.descriptor.weight = descriptor.weight;
+        _options.descriptor.state = descriptor.state;
+        _options.descriptor.effective_max_message_bytes = descriptor.effective_max_message_bytes;
         _descriptor_update_pending = true;
         return true;
     });
@@ -388,15 +394,17 @@ task_t<std::size_t> raw_client_server_server_t::drain_monitor_events_task (
 task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
   mesh::service_liveness_registry_t::clock_t::time_point now,
   std::shared_ptr<application_job_queue_t::permit_t> application_permit,
-  receive_batch_budget_t *budget)
+  receive_batch_budget_t *budget,
+  std::vector<mesh::service_mailbox_record_t> *application_records)
 {
-    auto [port, channel_name] = co_await _lane.run_task (
-      [this] { return std::pair{_port, _options.descriptor.channel_name}; });
+    // start() publishes these before receive; updates preserve channel_name,
+    // and close() retains _port while in-flight receives finish.
+    auto port = _port;
+    const auto &channel_name = _options.descriptor.channel_name;
     if (!port) {
         co_return client_server_pump_result_t::no_data;
     }
-    std::optional<detail::backend::raw_received_t> received;
-    received = port->try_receive ();
+    auto received = port->receive_if_ready (zlink::poll_event_flag_t::pollin);
     if (!received) {
         co_return client_server_pump_result_t::no_data;
     }
@@ -406,15 +414,42 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
             bytes += part.size ();
         budget->account (bytes);
     }
-    if (received->parts.empty ()) {
+    const bool is_control =
+      !received->parts.empty () && is_service_control_frame (received->parts.front ());
+    std::optional<result_t<messaging::envelope_header_t>> application_header;
+    std::optional<messaging::envelope_header_t> rejection_context;
+    if (!is_control && received->parts.size () == 2) {
+        application_header.emplace (messaging::envelope_codec_t{}.decode_header (
+          zlink::message_t::from (received->parts.front ()), false, &rejection_context));
+        if (*application_header) {
+            const auto &envelope = application_header->value ();
+            if (envelope.channel_name == channel_name
+                && ((envelope.kind == messaging::message_kind_t::request && received->reply_token)
+                    || envelope.kind == messaging::message_kind_t::command)) {
+                co_return co_await enqueue_application_record (
+                  std::move (*received), std::move (application_header->value ()),
+                  std::move (application_permit), application_records);
+            }
+        }
+    }
+    if (application_records && !application_records->empty ())
+        (void) co_await enqueue_application_records (*application_records);
+    if (!is_control) {
+        if (application_header && !*application_header) {
+            const bool admitted = co_await _lane.run_task ([this, &received] {
+                return _connections.find (received->source_routing_id) != _connections.end ();
+            });
+            if (admitted && received->reply_token) {
+                mesh::service_mailbox_record_t rejected{
+                  channel_name, mesh::service_mailbox_domain_t::application,
+                  std::move (received->parts), std::move (received->source_routing_id),
+                  received->reply_token};
+                (void) co_await reply (rejected, *application_header->error (), &rejection_context);
+            }
+        }
         co_return client_server_pump_result_t::protocol_error;
     }
     try {
-        if (!is_service_control_frame (received->parts.front ())) {
-            //  Application record: [JSON channel-envelope header, payload].
-            co_return co_await enqueue_application_record (
-              std::move (*received), std::move (channel_name), std::move (application_permit));
-        }
         const auto header = protocol::decode_header (received->parts.front ());
         if (header.kind == protocol::command::hello) {
             //  Spec 51 §4 (ClientServer direction): the server sends only
@@ -512,37 +547,10 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
 
 task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_application_record (
   detail::backend::raw_received_t received,
-  std::string channel_name,
-  std::shared_ptr<application_job_queue_t::permit_t> application_permit)
+  messaging::envelope_header_t envelope,
+  std::shared_ptr<application_job_queue_t::permit_t> application_permit,
+  std::vector<mesh::service_mailbox_record_t> *application_records)
 {
-    if (received.parts.size () != 2) {
-        co_return client_server_pump_result_t::protocol_error;
-    }
-    std::optional<messaging::envelope_header_t> rejection_context;
-    const auto header = messaging::envelope_codec_t{}.decode_header (
-      zlink::message_t::from (received.parts.front ()), false, &rejection_context);
-    if (!header) {
-        const bool admitted = co_await _lane.run_task ([this, &received] {
-            return _connections.find (received.source_routing_id) != _connections.end ();
-        });
-        if (admitted && received.reply_token) {
-            mesh::service_mailbox_record_t rejected{
-              channel_name, mesh::service_mailbox_domain_t::application, std::move (received.parts),
-              std::move (received.source_routing_id), received.reply_token};
-            (void) co_await reply (rejected, *header.error (), &rejection_context);
-        }
-        co_return client_server_pump_result_t::protocol_error;
-    }
-    const auto &envelope = header.value ();
-    if (envelope.channel_name != channel_name)
-        co_return client_server_pump_result_t::protocol_error;
-    if (envelope.kind == messaging::message_kind_t::request) {
-        if (!received.reply_token) {
-            co_return client_server_pump_result_t::protocol_error;
-        }
-    } else if (envelope.kind != messaging::message_kind_t::command) {
-        co_return client_server_pump_result_t::protocol_error;
-    }
     trace_client_server_lazy ("server-received", [&] {
         return "channel=" + envelope.channel_name
                + " kind=" + std::to_string (static_cast<int> (envelope.kind))
@@ -567,15 +575,50 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                                               permit->release_for_handler_entry ();
                                               permit.reset ();
                                           }};
-    //  One owner turn admits the record: the connection check and the mailbox
-    //  enqueue read the same connection state.
-    co_return co_await _lane.run_task ([this, &record] {
-        if (_connections.find (record.source_routing_id) == _connections.end ())
-            return client_server_pump_result_t::protocol_error;
-        return _mailbox.try_enqueue (std::move (record))
-                 ? client_server_pump_result_t::application
-                 : client_server_pump_result_t::backpressured;
+    if (application_records) {
+        application_records->push_back (std::move (record));
+        co_return client_server_pump_result_t::application;
+    }
+    std::vector<mesh::service_mailbox_record_t> one;
+    one.push_back (std::move (record));
+    co_return co_await enqueue_application_records (one);
+}
+
+task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_application_records (
+  std::vector<mesh::service_mailbox_record_t> &records)
+{
+    if (records.empty ())
+        co_return client_server_pump_result_t::no_data;
+    // Connection admission and enqueue execute in the same owner turn.
+    auto results = co_await _lane.run_task ([this, &records] {
+        std::vector<client_server_pump_result_t> results;
+        results.reserve (records.size ());
+        for (auto &record : records) {
+            if (_connections.find (record.source_routing_id) == _connections.end ())
+                results.push_back (client_server_pump_result_t::protocol_error);
+            else
+                results.push_back (_mailbox.try_enqueue (std::move (record))
+                                     ? client_server_pump_result_t::application
+                                     : client_server_pump_result_t::backpressured);
+        }
+        return results;
     });
+    auto result = client_server_pump_result_t::application;
+    for (std::size_t index = 0; index < results.size (); ++index) {
+        if (results[index] == client_server_pump_result_t::protocol_error) {
+            result = client_server_pump_result_t::protocol_error;
+        } else if (results[index] == client_server_pump_result_t::backpressured) {
+            result = client_server_pump_result_t::backpressured;
+            if (records[index].reply_token) {
+                const framework_exception_t error (
+                  framework_error_kind_t::shutting_down,
+                  "ClientServer is shutting down and rejects application work");
+                (void) co_await reply (records[index], error);
+            }
+        }
+    }
+    records.clear ();
+    co_return result;
 }
 
 task_t<mesh::service_liveness_tick_t> raw_client_server_server_t::tick_liveness (
@@ -634,7 +677,7 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
     if (!request_header) {
         throw std::invalid_argument ("ClientServer reply requires a decodable request envelope");
     }
-    const auto port = co_await _lane.run_task ([this] { return _port; });
+    const auto port = _port;
     if (!port)
         co_return false;
     zlink::framework::detail::channel_reply_writer_t writer;
@@ -680,7 +723,7 @@ task_t<bool> raw_client_server_server_t::reply (
         decoded_context = &owned_header;
     }
     const auto &decoded_header = **decoded_context;
-    const auto port = co_await _lane.run_task ([this] { return _port; });
+    const auto port = _port;
     if (!port)
         co_return false;
     zlink::framework::detail::channel_reply_writer_t writer;

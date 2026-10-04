@@ -112,6 +112,236 @@ void verify_client_server_send_does_not_wait_on_infrastructure_worker ()
     app_thread.join ();
 }
 
+struct owner_gate_request_t
+{
+    static constexpr const char *packet_name = "owner-gate.request";
+};
+void to_json (nlohmann::json &json, const owner_gate_request_t &)
+{
+    json = nlohmann::json::object ();
+}
+void from_json (const nlohmann::json &, owner_gate_request_t &)
+{
+}
+
+struct owner_gate_send_t
+{
+    static constexpr const char *packet_name = "owner-gate.send";
+};
+void to_json (nlohmann::json &json, const owner_gate_send_t &)
+{
+    json = nlohmann::json::object ();
+}
+void from_json (const nlohmann::json &, owner_gate_send_t &)
+{
+}
+
+struct owner_gate_request_handler_t
+{
+    using request_type = owner_gate_request_t;
+    using reply_type = std::string;
+    zlink::framework::task_t<std::string> handle (const owner_gate_request_t &)
+    {
+        const auto turn = starts.fetch_add (1, std::memory_order_acq_rel) + 1;
+        if (turn == 1) {
+            auto result = co_await first->task ();
+            finished.fetch_add (1, std::memory_order_acq_rel);
+            co_return result;
+        }
+        co_return "second";
+    }
+    inline static std::atomic_int starts{0};
+    inline static std::atomic_int finished{0};
+    inline static std::shared_ptr<zlink::framework::task_completion_source_t<std::string>> first;
+};
+
+struct owner_gate_send_handler_t
+{
+    using message_type = owner_gate_send_t;
+    void handle (const owner_gate_send_t &)
+    {
+        std::this_thread::sleep_for (2ms);
+        calls.fetch_add (1, std::memory_order_acq_rel);
+    }
+    inline static std::atomic_int calls{0};
+};
+
+struct other_owner_request_t
+{
+    static constexpr const char *packet_name = "other-owner.request";
+};
+void to_json (nlohmann::json &json, const other_owner_request_t &)
+{
+    json = nlohmann::json::object ();
+}
+void from_json (const nlohmann::json &, other_owner_request_t &)
+{
+}
+
+struct other_owner_request_handler_t
+{
+    using request_type = other_owner_request_t;
+    using reply_type = std::string;
+    std::string handle (const other_owner_request_t &) { return "other"; }
+};
+
+struct budget_owner_send_t
+{
+    static constexpr const char *packet_name = "budget-owner.send";
+};
+void to_json (nlohmann::json &json, const budget_owner_send_t &)
+{
+    json = nlohmann::json::object ();
+}
+void from_json (const nlohmann::json &, budget_owner_send_t &)
+{
+}
+
+struct budget_owner_send_handler_t
+{
+    using message_type = budget_owner_send_t;
+    void handle (const budget_owner_send_t &)
+    {
+        std::this_thread::sleep_for (2ms);
+        calls.fetch_add (1, std::memory_order_acq_rel);
+    }
+    inline static std::atomic_int calls{0};
+};
+
+void verify_client_server_owner_gate_and_budget ()
+{
+    owner_gate_request_handler_t::starts.store (0);
+    owner_gate_request_handler_t::finished.store (0);
+    owner_gate_send_handler_t::calls.store (0);
+    budget_owner_send_handler_t::calls.store (0);
+    owner_gate_request_handler_t::first =
+      std::make_shared<zlink::framework::task_completion_source_t<std::string>> ();
+    auto app = zlink::framework::app_t::create ();
+    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.handlers ()
+          .group ("owner-gate-a")
+          .add<owner_gate_request_handler_t> ()
+          .add_send<owner_gate_send_handler_t> ();
+        options.handlers ().group ("owner-gate-b").add<other_owner_request_handler_t> ();
+        options.handlers ().group ("budget-owner").add_send<budget_owner_send_handler_t> ();
+        for (const auto &name : {"owner-gate-a", "owner-gate-b", "budget-owner"}) {
+            auto channel = options.add_client_server_channel (name);
+            channel.server ().listen ().add_handler_group (name);
+            channel.client ();
+        }
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime = provider.get_required<zlink::framework::client_server_runtime_t> ();
+    auto &channels = provider.get_required<zlink::framework::channel_client_t> ();
+    char program[] = "client-server-owner-gate";
+    char *arguments[] = {program, nullptr};
+    std::thread app_thread ([&] { (void) app.run (1, arguments); });
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while ((!runtime.is_ready ("owner-gate-a") || !runtime.is_ready ("owner-gate-b")
+            || !runtime.is_ready ("budget-owner"))
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (runtime.is_ready ("owner-gate-a") && runtime.is_ready ("owner-gate-b")
+            && runtime.is_ready ("budget-owner"));
+
+    auto first =
+      channels.request_to_channel ("owner-gate-a", owner_gate_request_t{}).async<std::string> ();
+    while (owner_gate_request_handler_t::starts.load (std::memory_order_acquire) == 0
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (owner_gate_request_handler_t::starts.load (std::memory_order_acquire) == 1);
+    auto second =
+      channels.request_to_channel ("owner-gate-a", owner_gate_request_t{}).async<std::string> ();
+    assert (channels.send ("owner-gate-a", owner_gate_send_t{}).async ().result ());
+    auto other =
+      channels.request_to_channel ("owner-gate-b", other_owner_request_t{}).async<std::string> ();
+    const auto other_result = other.result_for (5s);
+    assert (other_result && other_result->value () == "other");
+    assert (owner_gate_request_handler_t::starts.load (std::memory_order_acquire) == 1);
+    assert (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == 0);
+
+    constexpr int budget_records = 24;
+    for (int i = 0; i < budget_records; ++i)
+        assert (channels.send ("budget-owner", budget_owner_send_t{}).async ().result ());
+    while (budget_owner_send_handler_t::calls.load (std::memory_order_acquire) < budget_records
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (budget_owner_send_handler_t::calls.load (std::memory_order_acquire) == budget_records);
+
+    owner_gate_request_handler_t::first->complete (
+      zlink::framework::result_t<std::string>::success ("first"));
+    const auto first_result = first.result_for (5s);
+    const auto second_result = second.result_for (5s);
+    assert (first_result && first_result->value () == "first");
+    assert (second_result && second_result->value () == "second");
+    while (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == 0
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == 1);
+    app.stop ();
+    app_thread.join ();
+    owner_gate_request_handler_t::first.reset ();
+}
+
+void verify_client_server_stop_drains_budget_remainder ()
+{
+    owner_gate_request_handler_t::starts.store (0);
+    owner_gate_request_handler_t::finished.store (0);
+    owner_gate_send_handler_t::calls.store (0);
+    owner_gate_request_handler_t::first =
+      std::make_shared<zlink::framework::task_completion_source_t<std::string>> ();
+    auto app = zlink::framework::app_t::create ();
+    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.handlers ()
+          .group ("owner-gate-a")
+          .add<owner_gate_request_handler_t> ()
+          .add_send<owner_gate_send_handler_t> ();
+        auto channel = options.add_client_server_channel ("owner-gate-a");
+        channel.server ().listen ().add_handler_group ("owner-gate-a");
+        channel.client ();
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime = provider.get_required<zlink::framework::client_server_runtime_t> ();
+    auto &framework = provider.get_required<zlink::framework::framework_runtime_t> ();
+    auto &channels = provider.get_required<zlink::framework::channel_client_t> ();
+    char program[] = "client-server-stop-drain";
+    char *arguments[] = {program, nullptr};
+    std::thread app_thread ([&] { (void) app.run (1, arguments); });
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while (!runtime.is_ready ("owner-gate-a") && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (runtime.is_ready ("owner-gate-a"));
+    auto first =
+      channels.request_to_channel ("owner-gate-a", owner_gate_request_t{}).async<std::string> ();
+    while (owner_gate_request_handler_t::starts.load (std::memory_order_acquire) == 0
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (owner_gate_request_handler_t::starts.load (std::memory_order_acquire) == 1);
+
+    constexpr int queued_records = 24;
+    for (int i = 0; i < queued_records; ++i)
+        assert (channels.send ("owner-gate-a", owner_gate_send_t{}).async ().result ());
+    while (framework.status ().capacity.application_job_queue.queued_application_jobs
+             < queued_records
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (framework.status ().capacity.application_job_queue.queued_application_jobs
+            >= queued_records);
+
+    auto shutdown = app.shutdown ();
+    assert (!shutdown.result_for (20ms));
+    assert (owner_gate_request_handler_t::finished.load (std::memory_order_acquire) == 0);
+    owner_gate_request_handler_t::first->complete (
+      zlink::framework::result_t<std::string>::success ("first"));
+    assert (shutdown.result_for (5s));
+    app_thread.join ();
+    assert (owner_gate_request_handler_t::finished.load (std::memory_order_acquire) == 1);
+    assert (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == queued_records);
+    assert (framework.status ().capacity.application_job_queue.queued_application_jobs == 0);
+    owner_gate_request_handler_t::first.reset ();
+    (void) first;
+}
+
 struct metadata_send_handler_t
 {
     using message_type = network_probe_message_t;
@@ -422,7 +652,7 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
     for (std::size_t index = 0; index < queued_records; ++index) {
         const auto submitted = source.send ()
                                  .message (zlink::message_t::from (header))
-                                 .message (zlink::message_t::from ("{}"))
+                                 .message (zlink::message_t::from (std::to_string (index)))
                                  .async ();
         assert (submitted.result == ZLINK_SUBMIT_OK);
     }
@@ -454,6 +684,18 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
       .value ();
     const auto records =
       server->mailbox ().pending_messages (service_mailbox_domain_t::application);
+    assert (jobs->snapshot ().queued_application_jobs == records);
+    assert (jobs->snapshot ().permits_in_use == records);
+    const auto claim =
+      server->mailbox ().try_claim (service_mailbox_domain_t::application, records, 1024 * 1024);
+    assert (claim && claim->records.size () == records);
+    for (std::size_t index = 0; index < records; ++index) {
+        const auto &payload = claim->records[index].parts[1];
+        assert (std::string (payload.begin (), payload.end ()) == std::to_string (index));
+        claim->records[index].before_application_handler ();
+    }
+    assert (jobs->snapshot ().permits_in_use == 0);
+    assert (server->mailbox ().release (*claim));
     server->close ();
     return records;
 }
@@ -466,6 +708,144 @@ void verify_server_receive_turn_reads_queued_records ()
     assert (server_receive_turn_records (64, 3, 8) == 3);
     // Neither stops it: the turn reads every queued record.
     assert (server_receive_turn_records (64, 64, 8) == 8);
+}
+
+void verify_client_server_closed_reply_finishes_without_server_lane ()
+{
+    protocol::client_server_server_admission_t descriptor{
+      "closed-reply",
+      bytes ("closed-reply-server"),
+      1,
+      1,
+      100,
+      zlink::framework::runtime::mesh::service_node_state_t::serving,
+      "default",
+      16 * 1024 * 1024,
+      "tcp://127.0.0.1:0"};
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{descriptor}));
+    server.start ();
+
+    zlink::context_t context;
+    zlink::dealer_socket_t source (context);
+    source.set_routing_id (zlink::routing_id_t::from ("closed-reply-client"));
+    source.options ().linger (0ms);
+    zlink::framework::test::completion_poller_driver_t completions (source);
+    source.connect (server.endpoint ());
+
+    const auto pump = [&] (client_server::client_server_pump_result_t expected) {
+        const auto deadline = std::chrono::steady_clock::now () + 5s;
+        auto result = client_server::client_server_pump_result_t::no_data;
+        while (result != expected && std::chrono::steady_clock::now () < deadline) {
+            const auto now = std::chrono::steady_clock::now ();
+            (void) server.drain_monitor_events (now);
+            result = server.pump_one (now).result ().value ();
+            if (result == client_server::client_server_pump_result_t::no_data)
+                std::this_thread::sleep_for (1ms);
+        }
+        assert (result == expected);
+    };
+    const auto hello = protocol::encode_client_server_client_admission (
+      protocol::command::hello, {"closed-reply", "default", 16 * 1024 * 1024});
+    auto admission = await_metadata_wire_reply (
+      source.request ().message (zlink::message_t::from (hello)).timeout (5s).async ().reply);
+    pump (client_server::client_server_pump_result_t::infrastructure);
+    assert (admission.result ());
+
+    const std::string header =
+      R"({"formatMarker":242,"kind":1,"channelName":"closed-reply","messageName":"closed.request","correlationId":"closed-reply-test","contentType":"application/json"})";
+    auto pending = source.request ()
+                     .message (zlink::message_t::from (header))
+                     .message (zlink::message_t::from ("{}"))
+                     .timeout (5s)
+                     .async ();
+    pump (client_server::client_server_pump_result_t::application);
+    using zlink::framework::runtime::mesh::service_mailbox_domain_t;
+    const auto claim =
+      server.mailbox ().try_claim (service_mailbox_domain_t::application, 1, 1024 * 1024);
+    assert (claim && claim->records.size () == 1);
+    const auto request = claim->records.front ();
+    server.close ();
+
+    const protocol::application_payload_t payload{"closed.reply", "application/json", bytes ("{}")};
+    const zlink::framework::framework_exception_t error (
+      zlink::framework::framework_error_kind_t::protocol_error, "closed reply");
+    auto result = server.reply (request, payload);
+    assert (result.await_ready ());
+    assert (!result.result ().value ());
+    auto failure = server.reply (request, error);
+    assert (failure.await_ready ());
+    assert (!failure.result ().value ());
+    assert (server.mailbox ().release (*claim));
+}
+
+void verify_sealed_client_server_rejects_request ()
+{
+    protocol::client_server_server_admission_t descriptor{
+      "sealed-request",
+      bytes ("sealed-request-server"),
+      1,
+      1,
+      100,
+      zlink::framework::runtime::mesh::service_node_state_t::serving,
+      "default",
+      16 * 1024 * 1024,
+      "tcp://127.0.0.1:0"};
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{descriptor}));
+    server.start ();
+
+    zlink::context_t context;
+    zlink::dealer_socket_t source (context);
+    source.set_routing_id (zlink::routing_id_t::from ("sealed-request-client"));
+    source.options ().linger (0ms);
+    zlink::framework::test::completion_poller_driver_t completions (source);
+    source.connect (server.endpoint ());
+
+    const auto pump = [&] (client_server::client_server_pump_result_t expected) {
+        const auto deadline = std::chrono::steady_clock::now () + 5s;
+        auto result = client_server::client_server_pump_result_t::no_data;
+        while (result != expected && std::chrono::steady_clock::now () < deadline) {
+            const auto now = std::chrono::steady_clock::now ();
+            (void) server.drain_monitor_events (now);
+            result = server.pump_one (now).result ().value ();
+            if (result == client_server::client_server_pump_result_t::no_data)
+                std::this_thread::sleep_for (1ms);
+        }
+        assert (result == expected);
+    };
+    const auto hello = protocol::encode_client_server_client_admission (
+      protocol::command::hello, {"sealed-request", "default", 16 * 1024 * 1024});
+    auto admission = await_metadata_wire_reply (
+      source.request ().message (zlink::message_t::from (hello)).timeout (5s).async ().reply);
+    pump (client_server::client_server_pump_result_t::infrastructure);
+    assert (admission.result ());
+
+    server.mailbox ().close ();
+    const std::string header =
+      R"({"formatMarker":242,"kind":1,"channelName":"sealed-request","messageName":"sealed.request","correlationId":"sealed-request-test","contentType":"application/json"})";
+    auto pending = await_metadata_wire_reply (source.request ()
+                                                .message (zlink::message_t::from (header))
+                                                .message (zlink::message_t::from ("{}"))
+                                                .timeout (5s)
+                                                .async ()
+                                                .reply);
+    pump (client_server::client_server_pump_result_t::backpressured);
+    const auto response = pending.result ();
+    assert (response && response.value ().size () == 2);
+    const auto reply_header =
+      zlink::framework::runtime::messaging::envelope_codec_t{}.decode_header (
+        response.value ().front (), false);
+    assert (reply_header
+            && reply_header.value ().kind
+                 == zlink::framework::runtime::messaging::message_kind_t::error);
+    assert (reply_header.value ().error_code == "shutting_down");
+    assert (server.mailbox ().pending_messages (
+              zlink::framework::runtime::mesh::service_mailbox_domain_t::application)
+            == 0);
+    server.close ();
 }
 
 void verify_client_server_metadata_snapshot ()
@@ -1260,8 +1640,12 @@ int main ()
     verify_unready_peer_projection_reason ();
     verify_fanout_first_observation_is_complete ();
     verify_invalid_metadata_is_a_protocol_error ();
+    verify_client_server_closed_reply_finishes_without_server_lane ();
+    verify_sealed_client_server_rejects_request ();
     verify_client_server_metadata_snapshot ();
     verify_client_server_send_does_not_wait_on_infrastructure_worker ();
+    verify_client_server_owner_gate_and_budget ();
+    verify_client_server_stop_drains_budget_remainder ();
     verify_server_receive_turn_reads_queued_records ();
     verify_client_server_readiness_counts_local_ready_servers ();
     verify_network_defaults_are_deferred_until_apply ();
