@@ -48,7 +48,7 @@ export class RedisConnection {
   }
 
   async eval(
-    script: string,
+    script: RedisCommandValue,
     keys: readonly string[],
     args: readonly RedisCommandValue[],
     signal?: AbortSignal

@@ -1112,21 +1112,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const descriptorKey = meshKey(request.target.meshName, request.target.nodeRid);
       const leaseKey = ownerKey(request.target.owner.ownerId);
       const capacityRowKey = capacityKey(request.target.meshName, String(request.target.nodeRid));
-      const [
-        current,
-        descriptorRead,
-        leaseRead,
-        capacityRead,
-        objectGenerationRead,
-        authorityOwnerGenerationRead
-      ] = await Promise.all([
-        this.provider.read(rowKey, signal),
-        this.provider.read(descriptorKey, signal),
-        this.provider.read(leaseKey, signal),
-        this.provider.read(capacityRowKey, signal),
-        this.provider.read(OBJECT_COUNTER_KEY, signal),
-        this.provider.read(AUTHORITY_OWNER_COUNTER_KEY, signal)
-      ]);
+      const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'found') {
         const record = decodeAuthorityRecord(current.value.bytes);
         const snapshot = authoritySnapshot(
@@ -1202,10 +1188,19 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         );
         continue;
       }
+      const [descriptorRead, leaseRead] = await Promise.all([
+        this.provider.read(descriptorKey, signal),
+        this.provider.read(leaseKey, signal)
+      ]);
       const descriptor = liveTargetDescriptor(descriptorRead, leaseRead, request.target);
       if (descriptor === undefined) {
         return { kind: 'conflict', current: { kind: 'missing', storeNow: current.storeNow } };
       }
+      const [capacityRead, objectGenerationRead, authorityOwnerGenerationRead] = await Promise.all([
+        this.provider.read(capacityRowKey, signal),
+        this.provider.read(OBJECT_COUNTER_KEY, signal),
+        this.provider.read(AUTHORITY_OWNER_COUNTER_KEY, signal)
+      ]);
       const capacity =
         capacityRead.kind === 'missing'
           ? emptyCapacityRecord()
@@ -1460,10 +1455,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         signal,
         BigInt(request.completion.terminal.operationDeadline.getTime())
       );
-      const [current, existingTerminal] = await Promise.all([
-        this.provider.read(rowKey, signal),
-        this.provider.read(terminalRowKey, signal)
-      ]);
+      const existingTerminal = await this.provider.read(terminalRowKey, signal);
       if (existingTerminal.kind === 'found') {
         return {
           kind: 'alreadyCompleted',
@@ -1475,6 +1467,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           )
         };
       }
+      const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') return { kind: 'stale' };
       const record = decodeAuthorityRecord(current.value.bytes);
       if (
@@ -1488,14 +1481,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const descriptorKey = meshKey(request.target.meshName, request.target.nodeRid);
       const leaseKey = ownerKey(request.target.owner.ownerId);
       const capacityRowKey = capacityKey(request.target.meshName, request.target.nodeRid);
-      const [descriptorRead, leaseRead, capacityRead] = await Promise.all([
+      const [descriptorRead, leaseRead] = await Promise.all([
         this.provider.read(descriptorKey, signal),
-        this.provider.read(leaseKey, signal),
-        this.provider.read(capacityRowKey, signal)
+        this.provider.read(leaseKey, signal)
       ]);
       if (liveTargetDescriptor(descriptorRead, leaseRead, request.target) === undefined) {
         return { kind: 'stale' };
       }
+      const capacityRead = await this.provider.read(capacityRowKey, signal);
       const capacity =
         capacityRead.kind === 'missing'
           ? emptyCapacityRecord()
@@ -3480,7 +3473,7 @@ function decodeCanonicalDescriptorRecord<T extends OwnedDescriptor>(
 ): CanonicalDescriptorRecord<T> {
   const record = JSON.parse(decodeText(bytes)) as CanonicalDescriptorRecord<unknown>;
   requireRecordVersion(record, 'descriptor');
-  return reviveCanonical(record) as CanonicalDescriptorRecord<T>;
+  return record as CanonicalDescriptorRecord<T>;
 }
 
 function descriptorStoreGeneration(
