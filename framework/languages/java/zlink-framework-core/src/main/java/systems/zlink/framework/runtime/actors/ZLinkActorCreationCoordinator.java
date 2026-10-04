@@ -22,6 +22,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
@@ -710,17 +711,16 @@ public final class ZLinkActorCreationCoordinator
 
     private CompletionStage<ZLinkMeshNodeDescriptor> selectTarget(
             String actorType, long deadline, Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
-        return locations
-                .listMeshNodes(meshName, ZLinkPageRequest.firstPage())
+        return ZLinkStoreLocationResolvers.listMeshNodes(locations, meshName)
                 .toCompletableFuture()
                 .orTimeout(
                         Math.max(1L, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS)
                 .thenCompose(
-                        page -> {
+                        descriptors -> {
                             MeshNodeStatus localStatus = node.status();
                             List<MeshPeerEntry> peerSnapshot = node.peers();
                             List<ZLinkMeshNodeDescriptor> candidates =
-                                    page.items().stream()
+                                    descriptors.stream()
                                             .filter(
                                                     candidate ->
                                                             candidate.state()
@@ -760,7 +760,7 @@ public final class ZLinkActorCreationCoordinator
                                             .toList();
                             if (candidates.isEmpty()) {
                                 boolean capacityKnown =
-                                        page.items().stream()
+                                        descriptors.stream()
                                                 .filter(
                                                         candidate ->
                                                                 candidate.state()

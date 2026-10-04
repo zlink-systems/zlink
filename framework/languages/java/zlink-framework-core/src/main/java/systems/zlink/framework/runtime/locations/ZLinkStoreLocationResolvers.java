@@ -13,6 +13,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeerResolver;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
@@ -99,7 +100,7 @@ public final class ZLinkStoreLocationResolvers
                                                                     "Actor authority payload is"
                                                                             + " invalid: "
                                                                             + actorId));
-                            return listMeshNodes(authority.meshName(), null, new ArrayList<>())
+                            return listMeshNodes(authority.meshName())
                                     .thenApply(
                                             nodes ->
                                                     new DirectJoinSessionFence(
@@ -181,7 +182,7 @@ public final class ZLinkStoreLocationResolvers
     }
 
     public CompletionStage<List<ZLinkMeshNodeDescriptor>> listLiveMeshNodes(String meshName) {
-        return listMeshNodes(meshName, null, new ArrayList<>())
+        return listMeshNodes(meshName)
                 .thenCompose(
                         nodes -> {
                             List<CompletableFuture<Boolean>> liveness =
@@ -211,22 +212,30 @@ public final class ZLinkStoreLocationResolvers
                         });
     }
 
-    private CompletionStage<List<ZLinkMeshNodeDescriptor>> listMeshNodes(
-            String meshName, String continuation, List<ZLinkMeshNodeDescriptor> values) {
-        return stores.unifiedStore()
-                .listMeshNodes(
+    private static CompletionStage<List<ZLinkMeshNodeDescriptor>> listMeshNodes(
+            ZLinkLocationRepository store,
+            String meshName,
+            String continuation,
+            List<ZLinkMeshNodeDescriptor> values) {
+        return store.listMeshNodes(
                         meshName, new ZLinkPageRequest(DESCRIPTOR_SCAN_PAGE_ITEMS, continuation))
                 .thenCompose(
                         page -> {
                             values.addAll(page.items());
                             return page.continuationToken() == null
                                     ? CompletableFuture.completedFuture(List.copyOf(values))
-                                    : listMeshNodes(meshName, page.continuationToken(), values);
+                                    : listMeshNodes(
+                                            store, meshName, page.continuationToken(), values);
                         });
     }
 
     public CompletionStage<List<ZLinkMeshNodeDescriptor>> listMeshNodes(String meshName) {
-        return listMeshNodes(meshName, null, new ArrayList<>());
+        return listMeshNodes(stores.unifiedStore(), meshName);
+    }
+
+    public static CompletionStage<List<ZLinkMeshNodeDescriptor>> listMeshNodes(
+            ZLinkLocationRepository store, String meshName) {
+        return listMeshNodes(store, meshName, null, new ArrayList<>());
     }
 
     public void invalidateActorRoute(String actorId) {
