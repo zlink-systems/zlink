@@ -145,7 +145,7 @@ public sealed class AutoConnectReconcilerTests
     }
 
     [Fact]
-    public async Task RuntimeActivationConcurrencyPublishesTheCurrentActiveCount()
+    public async Task RuntimeActivationConcurrencyChangeDoesNotPublishOrIncreaseRevision()
     {
         var fixture = await FixtureAsync();
         await fixture.Reconciler.TickAsync();
@@ -161,8 +161,31 @@ public sealed class AutoConnectReconcilerTests
             (await fixture.Store.ListMeshNodesAsync("play", default)).Items,
             row => row.Rid.Equals(RoutingId.From("local"))
         );
-        Assert.Equal(7, updated.ActivationConcurrency.Active);
+        Assert.Equal(initial.DescriptorRevision, updated.DescriptorRevision);
+        Assert.Equal(initial.ActivationConcurrency.Active, updated.ActivationConcurrency.Active);
         Assert.Equal(128, updated.ActivationConcurrency.Limit);
+    }
+
+    [Fact]
+    public async Task RuntimeActivationConcurrencyIsIncludedWithAnotherDescriptorChange()
+    {
+        var fixture = await FixtureAsync();
+        await fixture.Reconciler.TickAsync();
+        var initial = Assert.Single(
+            (await fixture.Store.ListMeshNodesAsync("play", default)).Items,
+            row => row.Rid.Equals(RoutingId.From("local"))
+        );
+
+        fixture.Reconciler.SetLocalActivationConcurrency(7);
+        fixture.Reconciler.SetLocalPlacementWeight(10_000);
+        await fixture.Reconciler.TickAsync();
+
+        var updated = Assert.Single(
+            (await fixture.Store.ListMeshNodesAsync("play", default)).Items,
+            row => row.Rid.Equals(RoutingId.From("local"))
+        );
+        Assert.Equal(10_000, updated.PlacementWeight);
+        Assert.Equal(7, updated.ActivationConcurrency.Active);
         Assert.True(updated.DescriptorRevision > initial.DescriptorRevision);
     }
 

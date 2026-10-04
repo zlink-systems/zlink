@@ -414,9 +414,7 @@ internal sealed class ZLinkAutoConnectReconciler
                         {
                             Active = checked((int)pendingActivationConcurrency),
                         },
-                        DescriptorRevision = ++_localRevision,
                     };
-                    _localPublished = false;
                 }
             })
             .ConfigureAwait(false);
