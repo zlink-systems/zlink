@@ -403,7 +403,8 @@ export class ZLinkFrameworkRuntimeHost
         this.meshRouters.classifyManualNodeTarget(meshName, targetNodeRid),
       (meshName, sourceNodeRid, parts) => this.submitLocalMeshRoute(meshName, sourceNodeRid, parts),
       this.metrics,
-      () => this.flowCreationEnabled()
+      () => this.flowCreationEnabled(),
+      () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow
     );
     this.spotAddressTransport = new ZLinkHostSpotAddressTransport({
       resolver: () => this.createLocationSpotRouteResolver(),

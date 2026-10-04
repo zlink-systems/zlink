@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.Dispatch;
@@ -338,12 +339,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             CompletableFuture<ZLinkApplicationJobQueue.Permit> acquisition =
                     applicationJobQueue.acquire().toCompletableFuture();
             CompletableFuture<Integer> admission = new CompletableFuture<>();
-            admission.whenComplete(
-                    (ignored, failure) -> {
-                        if (admission.isCancelled()) {
-                            acquisition.cancel(false);
-                        }
-                    });
+            ZLinkCompletionBridge.forwardCancellation(admission, acquisition);
             acquisition.whenComplete(
                     (permit, failure) -> {
                         if (failure != null) {

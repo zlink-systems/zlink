@@ -538,7 +538,7 @@ function publishResult(status: ZLinkSubmitStatus): ZLinkSubmitResult {
   return { status };
 }
 
-function requestTerminalResult(
+export function requestTerminalResult(
   error: unknown,
   signal: AbortSignal | undefined
 ): ZLinkRuntimeMessageFlowResult {
@@ -549,7 +549,7 @@ function requestTerminalResult(
   return 'failed';
 }
 
-function isRemoteChannelErrorReply(error: unknown): boolean {
+export function isRemoteChannelErrorReply(error: unknown): boolean {
   return (
     error instanceof ZLinkFrameworkException &&
     'origin' in error &&

@@ -16,13 +16,11 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 final class ZLinkChannelReceiveLoops implements AutoCloseable {
     private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
     private static final long NO_RECORD = -1L;
-    private final BooleanSupplier running;
     private final ZLinkApplicationJobQueue applicationJobQueue;
     private volatile boolean closed;
     private final ConcurrentLinkedQueue<ReceiveLoop> receiveLoops = new ConcurrentLinkedQueue<>();
@@ -37,9 +35,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                         return thread;
                     });
 
-    ZLinkChannelReceiveLoops(
-            BooleanSupplier running, ZLinkApplicationJobQueue applicationJobQueue) {
-        this.running = running;
+    ZLinkChannelReceiveLoops(ZLinkApplicationJobQueue applicationJobQueue) {
         this.applicationJobQueue =
                 java.util.Objects.requireNonNull(applicationJobQueue, "applicationJobQueue");
     }
@@ -200,7 +196,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
             ownerThread = Thread.currentThread();
             ZLinkApplicationJobQueue.Permit first = granted;
             try {
-                while (running.getAsBoolean() && !closed) {
+                while (!closed) {
                     try {
                         if (first == null && !waitForReadable()) {
                             if (Thread.currentThread().isInterrupted()) {

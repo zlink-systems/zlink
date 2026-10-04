@@ -604,23 +604,24 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
         }
         catch (const zlink::framework::framework_exception_t &error) {
             close_rejected =
-              error.kind () == zlink::framework::framework_error_kind_t::not_configured;
+              error.kind () == zlink::framework::framework_error_kind_t::invalid_operation;
         }
         const auto found =
           manager_before_defer.find (zlink::framework::spot_id_t ("blocked-spot")).result ();
         manager_rejected =
-          !found && found.error_kind () == zlink::framework::framework_error_kind_t::not_configured;
+          !found
+          && found.error_kind () == zlink::framework::framework_error_kind_t::invalid_operation;
         const auto worker = worker_before_defer.async ().result ();
         worker_rejected =
           !worker
-          && worker.error_kind () == zlink::framework::framework_error_kind_t::not_configured;
+          && worker.error_kind () == zlink::framework::framework_error_kind_t::invalid_operation;
         const auto outbound =
           outbound_before_defer.send_to_channel ("blocked-channel", std::string ("blocked"))
             .async ()
             .result ();
         outbound_rejected =
           !outbound
-          && outbound.error_kind () == zlink::framework::framework_error_kind_t::not_configured;
+          && outbound.error_kind () == zlink::framework::framework_error_kind_t::invalid_operation;
     });
     const auto completion_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
     while (completions.load () == 0 && std::chrono::steady_clock::now () < completion_deadline)
@@ -692,7 +693,7 @@ void test_relocation_ready_defer_rejects_only_its_own_turn (test_context_t &test
             return true;
         }
         catch (const framework_exception_t &error) {
-            if (error.kind () != framework_error_kind_t::not_configured)
+            if (error.kind () != framework_error_kind_t::invalid_operation)
                 throw;
             return false;
         }

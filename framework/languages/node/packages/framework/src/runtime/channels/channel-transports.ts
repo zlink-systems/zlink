@@ -18,6 +18,14 @@ import {
 import { ZLinkConfigurationException } from '../configuration';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
 import { runWithOutboundFlow } from '../diagnostics/flow-context';
+import { flowIfEnabled, type ZLinkMessageFlowTracer } from '../diagnostics';
+import {
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
+  type ZLinkRuntimeMessageFlowResult
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import { isRemoteChannelErrorReply, requestTerminalResult } from './channel-outbound-operations';
 import { ServiceStaleGenerationError } from '../foundation/service-stateful-registry';
 import type {
   ServiceDirectSpotRouteFence,
@@ -49,6 +57,7 @@ import {
   ZLinkChannelMessageKind,
   decodeChannelReply,
   encodeChannelEnvelopeParts,
+  newChannelCorrelationId,
   type ZLinkChannelEnvelopeCodecRegistry
 } from './channel-envelope';
 
@@ -289,7 +298,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       parts: readonly MessageLike[]
     ) => ZLinkSubmitResult,
     private readonly metrics?: ZLinkRuntimeMetrics,
-    private readonly flowCreationEnabled: () => boolean = () => true
+    private readonly flowCreationEnabled: () => boolean = () => true,
+    private readonly outboundFlow: () => ZLinkMessageFlowTracer | undefined = () => undefined
   ) {}
 
   canRouteChannel(routerChannelId: string): boolean {
@@ -433,33 +443,92 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         metadata
       );
     }
-    throwIfAborted(signal);
-    if (node.isObjectClientNodeDirectTarget?.(toBackendRoutingId(targetNodeRid)) === true) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-        `MeshNode '${meshName}' target '${targetNodeRid}' is an Object Client.`
+    const correlationId = newChannelCorrelationId();
+    try {
+      throwIfAborted(signal);
+      if (node.isObjectClientNodeDirectTarget?.(toBackendRoutingId(targetNodeRid)) === true) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+          `MeshNode '${meshName}' target '${targetNodeRid}' is an Object Client.`
+        );
+      }
+      const parts = this.encodeMessage(
+        ZLinkChannelMessageKind.Request,
+        meshName,
+        packetName,
+        request,
+        timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        metadata,
+        correlationId
       );
+      const completion = await this.submitRequestOperation(
+        meshName,
+        timeoutMs,
+        signal,
+        `MeshNode '${meshName}' request to node '${targetNodeRid}'`,
+        (remainingTimeoutMs) => {
+          const operationId = node.requestToNode(toBackendRoutingId(targetNodeRid), parts, {
+            flags: 1,
+            timeoutMs: remainingTimeoutMs
+          });
+          this.traceNodeRequest(
+            ZLinkMessageFlowOutcome.Sent,
+            undefined,
+            meshName,
+            targetNodeRid,
+            packetName,
+            correlationId
+          );
+          return operationId;
+        }
+      );
+      const reply = this.decodeMeshReply<TReply>(meshName, completion);
+      this.traceNodeRequest(
+        ZLinkMessageFlowOutcome.ReplyReceived,
+        'succeeded',
+        meshName,
+        targetNodeRid,
+        packetName,
+        correlationId
+      );
+      return reply;
+    } catch (error) {
+      if (!isRemoteChannelErrorReply(error)) {
+        this.traceNodeRequest(
+          ZLinkMessageFlowOutcome.ReplyReceived,
+          requestTerminalResult(error, signal),
+          meshName,
+          targetNodeRid,
+          packetName,
+          correlationId,
+          error
+        );
+      }
+      throw error;
     }
-    const parts = this.encodeMessage(
-      ZLinkChannelMessageKind.Request,
+  }
+
+  private traceNodeRequest(
+    outcome: ZLinkMessageFlowOutcome,
+    result: ZLinkRuntimeMessageFlowResult | undefined,
+    meshName: string,
+    targetRid: string,
+    packetName: string | undefined,
+    correlationId: string,
+    error?: unknown
+  ): void {
+    if (!this.flowCreationEnabled()) return;
+    flowIfEnabled(this.outboundFlow(), outcome, result)?.trace({
+      outcome,
+      result,
+      surface: ZLinkDispatchErrorSurface.Node,
+      messageKind: ZLinkDispatchMessageKind.Request,
       meshName,
+      targetRid,
       packetName,
-      request,
-      timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      metadata
-    );
-    const completion = await this.submitRequestOperation(
-      meshName,
-      timeoutMs,
-      signal,
-      `MeshNode '${meshName}' request to node '${targetNodeRid}'`,
-      (remainingTimeoutMs) =>
-        node.requestToNode(toBackendRoutingId(targetNodeRid), parts, {
-          flags: 1,
-          timeoutMs: remainingTimeoutMs
-        })
-    );
-    return this.decodeMeshReply(meshName, completion);
+      correlationId,
+      ...(error instanceof Error ? { errorType: error.name, errorMessage: error.message } : {})
+    });
   }
 
   submitToChannel(
@@ -960,7 +1029,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     packetName: string | undefined,
     message: unknown,
     timeoutMs?: number,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    correlationId?: string
   ): readonly MessageLike[] {
     return encodeChannelEnvelopeParts(
       kind,
@@ -970,7 +1040,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       timeoutMs,
       undefined,
       this.codecs,
-      undefined,
+      correlationId,
       this.flowCreationEnabled(),
       metadata
     );

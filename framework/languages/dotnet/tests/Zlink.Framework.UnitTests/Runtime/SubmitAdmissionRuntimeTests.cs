@@ -23,6 +23,107 @@ public sealed class SubmitAdmissionRuntimeTests
     }
 
     [Fact]
+    public async Task BackpressuredRequestSubmission_WaitsForAdmissionBeforeReturningReply()
+    {
+        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var expectedReply = Array.Empty<Message>();
+        var reply = new TaskCompletionSource<IReadOnlyList<Message>>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var completion = ZLinkRequestSubmissionOutcome.AwaitReplyAsync(
+            SubmitResult.Backpressured,
+            admitted.Task,
+            reply.Task
+        );
+
+        reply.SetResult(expectedReply);
+        Assert.False(completion.IsCompleted);
+
+        admitted.SetResult();
+        Assert.Same(expectedReply, await completion);
+    }
+
+    [Fact]
+    public async Task BackpressuredRequestSubmission_PropagatesAdmissionFailure()
+    {
+        var expectedFailure = new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
+        var expectedReply = Array.Empty<Message>();
+        // Keep Reply successful so the admission failure must be observed independently.
+        var completion = ZLinkRequestSubmissionOutcome.AwaitReplyAsync(
+            SubmitResult.Backpressured,
+            Task.FromException(expectedFailure),
+            Task.FromResult<IReadOnlyList<Message>>(expectedReply)
+        );
+
+        var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => completion);
+
+        Assert.Same(expectedFailure, failure);
+    }
+
+    [Fact]
+    public async Task AcceptedRequestSubmission_UsesReplyWithoutWaitingForAdmission()
+    {
+        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var expectedReply = Array.Empty<Message>();
+        var reply = Task.FromResult<IReadOnlyList<Message>>(expectedReply);
+
+        var completion = ZLinkRequestSubmissionOutcome.AwaitReplyAsync(
+            SubmitResult.Ok,
+            admitted.Task,
+            reply
+        );
+
+        Assert.Same(reply, completion);
+        Assert.Same(expectedReply, await completion);
+        Assert.False(admitted.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task RequestSubmissionOutcome_SubmitsOnceAndReturnsOneTerminal()
+    {
+        using var pair = new AdmissionPair();
+        using var requestPart = Message.From("request-once");
+        using var replyPart = Message.From("reply-once");
+        var operation = new CountingRequestSubmitOperation(
+            pair.Client.Request().Message(requestPart).Timeout(TimeSpan.FromSeconds(5))
+        );
+
+        var completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(operation);
+
+        Assert.Equal(1, operation.SubmissionCount);
+        Assert.Equal(SubmitResult.Ok, operation.LastSubmission.Result);
+        using var received = Received.Create();
+        Assert.True(pair.Server.Recv(received));
+        Assert.Equal("request-once", received.SinglePartOrThrow().GetString());
+        received.Reply().Message(replyPart).Submit();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    pair.DrainCompletions();
+                    return completion.IsCompleted;
+                },
+                TimeSpan.FromSeconds(5)
+            )
+        );
+
+        var terminal = await completion;
+        try
+        {
+            Assert.Equal("reply-once", Assert.Single(terminal).GetString());
+        }
+        finally
+        {
+            foreach (var part in terminal)
+                part.Dispose();
+        }
+        Assert.Equal(1, operation.SubmissionCount);
+
+        using var extra = Received.Create();
+        Assert.False(pair.Server.Recv(extra, RecvFlags.DontWait));
+    }
+
+    [Fact]
     public async Task BackpressuredSend_StopsTheProducerUntilBindingAdmissionAndDeliversOnce()
     {
         using var pair = new AdmissionPair();
@@ -260,6 +361,38 @@ public sealed class SubmitAdmissionRuntimeTests
             Client.Dispose();
             Server.Dispose();
             _context.Dispose();
+        }
+    }
+
+    private sealed class CountingRequestSubmitOperation : RequestSubmitOperation
+    {
+        private readonly RequestSubmitOperation _inner;
+
+        internal CountingRequestSubmitOperation(RequestSubmitOperation inner) => _inner = inner;
+
+        internal int SubmissionCount { get; private set; }
+
+        internal RequestSubmission LastSubmission { get; private set; }
+
+        public RequestSubmitOperation Message(Message message)
+        {
+            _inner.Message(message);
+            return this;
+        }
+
+        public RequestSubmitOperation Timeout(TimeSpan timeout)
+        {
+            _inner.Timeout(timeout);
+            return this;
+        }
+
+        public IReadOnlyList<Message> Submit() => _inner.Submit();
+
+        public RequestSubmission Async(CancellationToken cancellationToken = default)
+        {
+            SubmissionCount++;
+            LastSubmission = _inner.Async(cancellationToken);
+            return LastSubmission;
         }
     }
 }
