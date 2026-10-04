@@ -6,6 +6,7 @@
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/handlers/handler_registry_runtime.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -36,22 +37,6 @@ std::shared_ptr<runtime::offload_executor_t> &handler_invocation_executor_ref ()
 {
     static std::shared_ptr<runtime::offload_executor_t> executor;
     return executor;
-}
-
-std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor ()
-{
-    std::lock_guard lock (handler_invocation_executor_mutex ());
-    if (!handler_invocation_executor_ref ()) {
-        handler_invocation_executor_ref () = std::make_shared<runtime::offload_executor_t> (
-          0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
-          std::chrono::milliseconds (100), "zlink-handler");
-    }
-    return handler_invocation_executor_ref ();
-}
-
-void ensure_handler_invocation_executor ()
-{
-    (void) handler_invocation_executor ();
 }
 
 handler_dispatch_kind_t dispatch_kind_for (handler_kind_t kind)
@@ -295,7 +280,18 @@ void cancel_handler_waits (handler_registry_t &registry) noexcept
 
 void configure_handler_invocation_executor ()
 {
-    ensure_handler_invocation_executor ();
+    (void) handler_invocation_executor ();
+}
+
+std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor ()
+{
+    std::lock_guard lock (handler_invocation_executor_mutex ());
+    if (!handler_invocation_executor_ref ()) {
+        handler_invocation_executor_ref () = std::make_shared<runtime::offload_executor_t> (
+          0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
+          std::chrono::milliseconds (100), "zlink-handler");
+    }
+    return handler_invocation_executor_ref ();
 }
 
 void shutdown_handler_invocation_executor () noexcept
@@ -447,7 +443,7 @@ handler_registry_t::invoke (std::string_view channel_name,
     auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
     auto task = completion->task ();
     try {
-        auto executor = handler_invocation_executor ();
+        auto executor = detail::handler_invocation_executor ();
         if (!executor) {
             return detail::boundary_failure<zlink::message_t> (
               detail::boundary_error_t::shutdown, "handler invocation executor is not running");

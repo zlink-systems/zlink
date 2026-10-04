@@ -2826,6 +2826,109 @@ bool verify_cancellable_serial_submission_lifecycle ()
     return true;
 }
 
+bool verify_relocation_ready_keeps_registering_turn_across_state_lane ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    runtime::offload_executor_t executor (2, "relocation-ready-turn");
+    auto node = std::make_shared<spot_node_builder_state_t> ("relocation-ready-turn");
+    auto owner = std::make_shared<spot_context_state_t> ();
+    owner->node = node;
+    owner->relocation_coordination_mode = spot_relocation_coordination_mode_t::application_signaled;
+    owner->relocation_boundary_active = true;
+    owner->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    runtime::serial_execution_queue_t other_queue (executor);
+
+    // Keep the state lane claimed by another application's turn while the
+    // registering handler submits its state mutations to that lane.
+    std::atomic_bool keep_lane_claimed{true};
+    std::atomic_bool awaiting_record{false};
+    std::atomic_bool record_queued{false};
+    std::promise<void> lane_claimed;
+    auto claimed = lane_claimed.get_future ();
+    bool announced = false;
+    std::function<void ()> keep_draining;
+    keep_draining = [&] {
+        if (!keep_lane_claimed.load (std::memory_order_acquire))
+            return;
+        record_queued.store (false, std::memory_order_release);
+        awaiting_record.store (true, std::memory_order_release);
+        if (!announced) {
+            announced = true;
+            lane_claimed.set_value ();
+        }
+        while (keep_lane_claimed.load (std::memory_order_acquire)
+               && !record_queued.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+    };
+    std::thread producer ([&] {
+        while (keep_lane_claimed.load (std::memory_order_acquire)) {
+            if (!awaiting_record.exchange (false, std::memory_order_acq_rel)) {
+                std::this_thread::yield ();
+                continue;
+            }
+            node->lane.try_post (keep_draining);
+            record_queued.store (true, std::memory_order_release);
+        }
+    });
+    other_queue.post_async ("claim-state-lane", [&] (auto complete) {
+        node->lane.run (keep_draining).get ();
+        complete ([] {});
+    });
+    if (claimed.wait_for (std::chrono::seconds (1)) != std::future_status::ready) {
+        keep_lane_claimed.store (false, std::memory_order_release);
+        producer.join ();
+        other_queue.drain ();
+        return false;
+    }
+
+    bool registered = false;
+    bool registering_turn_retained = false;
+    bool same_turn_rejected = false;
+    std::promise<void> registration_finished;
+    auto finished = registration_finished.get_future ();
+    owner->serial_queue->post ("register-relocation-ready", [&] {
+        const auto registering_turn = capture_current_serial_turn ();
+        try {
+            owner->defer_relocation_ready ();
+            registered = true;
+            registering_turn_retained = owner->relocation_ready_turn.lock () == registering_turn;
+            owner->ensure_relocation_turn_open ();
+        }
+        catch (const framework_exception_t &error) {
+            same_turn_rejected =
+              registered && error.kind () == framework_error_kind_t::invalid_operation;
+        }
+        registration_finished.set_value ();
+    });
+    finished.wait ();
+    keep_lane_claimed.store (false, std::memory_order_release);
+    producer.join ();
+    other_queue.drain ();
+    owner->complete_relocation_ready (spot_relocation_ready_outcome_t::continued);
+    owner->serial_queue->drain ();
+
+    bool next_turn_allowed = false;
+    owner->serial_queue->run ("next-application-turn", [&] {
+        owner->ensure_relocation_turn_open ();
+        next_turn_allowed = true;
+    });
+    const bool passed =
+      registered && registering_turn_retained && same_turn_rejected && next_turn_allowed;
+    if (!passed) {
+        std::cerr << "relocation readiness: registered=" << registered
+                  << " registering-turn-retained=" << registering_turn_retained
+                  << " same-turn-rejected=" << same_turn_rejected
+                  << " next-turn-allowed=" << next_turn_allowed << '\n';
+    }
+    return passed;
+}
+
 bool verify_released_spot_turn_does_not_inline_lifecycle_task ()
 {
     using namespace zlink::framework;
@@ -7259,6 +7362,11 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--relocation-ready-state-lane") {
+        const bool passed = verify_relocation_ready_keeps_registering_turn_across_state_lane ();
+        std::cout << "relocation readiness registering turn retained=" << passed << '\n';
+        return passed ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--actor-join-materialization") {
         zlink::framework::runtime::configure_handler_coroutine_executor (
           handler_coroutine_worker_count);
@@ -7677,6 +7785,10 @@ int main (int argc, char **argv)
     }
     if (!verify_released_spot_turn_does_not_inline_lifecycle_task ()) {
         return 129;
+    }
+    if (!verify_relocation_ready_keeps_registering_turn_across_state_lane ()) {
+        std::cerr << "relocation readiness lost the registering application turn" << std::endl;
+        return 130;
     }
     if (!verify_spot_serial_task_async_shutdown_settlement ()) {
         return 93;

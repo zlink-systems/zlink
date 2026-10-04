@@ -4,12 +4,61 @@
 #include "runtime/backend/raw_route_port.hpp"
 
 #include <zlink/Contracts/Messaging/message.hpp>
+#include <zlink/Contracts/Messaging/operation_contracts.hpp>
 
+#include <optional>
+#include <exception>
+#include <coroutine>
+#include <memory>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
 namespace zlink::framework::detail::backend
 {
+
+struct binding_completion_observer_t
+{
+    struct promise_type
+    {
+        binding_completion_observer_t get_return_object () noexcept { return {}; }
+        std::suspend_never initial_suspend () noexcept { return {}; }
+        std::suspend_never final_suspend () noexcept { return {}; }
+        void return_void () noexcept {}
+        void unhandled_exception () noexcept { std::terminate (); }
+
+        zlink::framework::detail::task_scheduler_t zlink_continuation_scheduler () const
+        {
+            // Binding completion already arrives on its owning completion
+            // resource. Raw transport classification runs there and hands the
+            // terminal directly to the reserved Framework dispatcher item.
+            return {};
+        }
+    };
+};
+
+template <typename TSubmission>
+std::optional<zlink::async_result_t<void>> take_submission_admission (TSubmission &submission)
+{
+    if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+        return std::move (submission.admitted);
+    if (submission.result != ZLINK_SUBMIT_OK)
+        throw std::logic_error ("binding async operation returned an invalid result snapshot");
+    return std::nullopt;
+}
+
+struct request_submission_stages_t
+{
+    std::optional<zlink::async_result_t<void>> admission;
+    zlink::async_result_t<std::vector<zlink::message_t>> reply;
+};
+
+template <typename TSubmit> request_submission_stages_t submit_request_once (TSubmit &&submit)
+{
+    auto submission = std::forward<TSubmit> (submit) ();
+    auto admission = take_submission_admission (submission);
+    return {std::move (admission), std::move (submission.reply)};
+}
 
 // A successful binding receive owns native parts until close(). This guard
 // pairs that terminal release with the receive even when ownership transfer or
@@ -46,6 +95,51 @@ inline raw_message_t copy_binding_parts (const std::vector<zlink::message_t> &pa
         result.push_back (part.to_bytes ());
     }
     return result;
+}
+
+inline binding_completion_observer_t observe_request_completion (
+  request_submission_stages_t stages,
+  std::shared_ptr<task_completion_source_t<raw_request_completion_t>> source)
+{
+    try {
+        std::exception_ptr admission_error;
+        if (stages.admission) {
+            try {
+                co_await std::move (*stages.admission);
+            }
+            catch (const std::exception &) {
+                admission_error = std::current_exception ();
+            }
+        }
+        auto reply = co_await std::move (stages.reply);
+        if (admission_error)
+            std::rethrow_exception (admission_error);
+        source->complete (result_t<raw_request_completion_t>::success (
+          raw_request_completion_t{zlink::request_result_t::ok, copy_binding_parts (reply)}));
+    }
+    catch (const zlink::request_error_t &error) {
+        source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
+          error.result (),
+          {},
+          raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, std::nullopt,
+                                error.internal_errno ()}}));
+    }
+    catch (const zlink::submit_error_t &error) {
+        const auto result = runtime::messaging::map_submit_request_result (error.result (), true);
+        source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
+          result,
+          {},
+          raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, error.result (),
+                                error.internal_errno ()}}));
+    }
+    catch (const std::exception &error) {
+        source->complete (result_t<raw_request_completion_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ()));
+    }
+    catch (...) {
+        source->complete (result_t<raw_request_completion_t>::failure (
+          framework_error_kind_t::internal_failure, "raw route request completion failed"));
+    }
 }
 
 inline std::vector<zlink::message_t>

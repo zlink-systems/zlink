@@ -20,7 +20,6 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueu
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -51,9 +50,8 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
                         ZLinkApplicationJobQueueProfile.BALANCED,
                         OptionalLong.of(1),
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
-        AtomicBoolean running = new AtomicBoolean(true);
         BlockingRouter router = new BlockingRouter();
-        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(running::get, queue);
+        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(queue);
         ExecutorService lifecycle = Executors.newSingleThreadExecutor();
         CountDownLatch closeStarted = new CountDownLatch(1);
         try {
@@ -69,7 +67,6 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
                     lifecycle.submit(
                             () -> {
                                 closeStarted.countDown();
-                                running.set(false);
                                 loops.close();
                                 loops.awaitTermination();
                                 router.close();
@@ -84,7 +81,6 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             assertTrue(router.receiveExited.get());
         } finally {
             router.releaseReceive.countDown();
-            running.set(false);
             loops.close();
             loops.awaitTermination();
             queue.close();
@@ -99,7 +95,6 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
                         ZLinkApplicationJobQueueProfile.BALANCED,
                         OptionalLong.of(1),
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
-        AtomicBoolean running = new AtomicBoolean(true);
         FakeRouter router = new FakeRouter();
         router.inbound.add(received("one"));
         router.inbound.add(received("two"));
@@ -109,7 +104,7 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
         CountDownLatch allowFirstInstruction = new CountDownLatch(1);
         CountDownLatch bothDispatched = new CountDownLatch(2);
         AtomicInteger job = new AtomicInteger();
-        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(running::get, queue);
+        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(queue);
 
         try {
             loops.startRequest(
@@ -142,7 +137,6 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             assertEquals(1, router.maxConcurrentReceives.get(), "one receive owner at a time");
             awaitCondition(() -> queue.snapshot().permitsInUse() == 0);
         } finally {
-            running.set(false);
             loops.close();
             queue.close();
             handlerExecutor.shutdownNow();
@@ -157,11 +151,10 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
                         ZLinkApplicationJobQueueProfile.BALANCED,
                         OptionalLong.of(1),
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
-        AtomicBoolean running = new AtomicBoolean(true);
         FakeRouter router = new FakeRouter();
         router.inbound.add(received("after-grant"));
         CountDownLatch dispatched = new CountDownLatch(1);
-        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(running::get, queue);
+        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(queue);
         ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
         try {
             loops.startRequest(
@@ -182,7 +175,6 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             assertEquals(1, router.receiveCount.get());
         } finally {
             held.close();
-            running.set(false);
             loops.close();
             queue.close();
             loops.awaitTermination();
@@ -196,10 +188,9 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
                         ZLinkApplicationJobQueueProfile.BALANCED,
                         OptionalLong.of(1),
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
-        AtomicBoolean running = new AtomicBoolean(true);
         FakeRouter router = new FakeRouter();
         router.inbound.add(received("after-close"));
-        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(running::get, queue);
+        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(queue);
         ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
         try {
             loops.startRequest(
@@ -211,7 +202,6 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
                         throw new AssertionError(error);
                     });
             awaitCondition(() -> queue.snapshot().capacityWaiters() == 1);
-            running.set(false);
             loops.close();
             loops.awaitTermination();
             awaitCondition(() -> queue.snapshot().capacityWaiters() == 0);
@@ -223,11 +213,60 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             assertEquals(0, queue.snapshot().permitsInUse());
         } finally {
             held.close();
-            running.set(false);
             loops.close();
             loops.awaitTermination();
             queue.close();
         }
+    }
+
+    @Test
+    void receiveOwnerProcessesControlWhileAcceptedHandlerDrains() throws Exception {
+        ZLinkApplicationJobQueue jobs =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
+        FakeRouter router = new FakeRouter();
+        ZLinkSerialExecutionQueue serial =
+                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.generic());
+        CompletableFuture<Void> handlerEntered = new CompletableFuture<>();
+        CompletableFuture<Void> releaseHandler = new CompletableFuture<>();
+        CompletableFuture<Void> controlReceived = new CompletableFuture<>();
+        router.inbound.add(received("request"));
+        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(jobs);
+        try {
+            loops.startRequest(
+                    router,
+                    record -> {
+                        try (record) {
+                            if (record.parts().getFirst().toUtf8String().equals("request")) {
+                                serial.enqueue(
+                                        () -> {
+                                            ZLinkApplicationJobContext
+                                                    .beforeFirstApplicationInstruction();
+                                            handlerEntered.complete(null);
+                                            return releaseHandler;
+                                        },
+                                        null);
+                            } else {
+                                controlReceived.complete(null);
+                            }
+                        }
+                    },
+                    controlReceived::completeExceptionally);
+            handlerEntered.get(2, TimeUnit.SECONDS);
+            serial.sealClosingAdmission();
+            router.inbound.add(received("control"));
+            controlReceived.get(2, TimeUnit.SECONDS);
+            assertFalse(serial.awaitQuiescence().toCompletableFuture().isDone());
+        } finally {
+            releaseHandler.complete(null);
+            loops.close();
+            loops.awaitTermination();
+            serial.close();
+            jobs.close();
+        }
+        serial.awaitQuiescence().toCompletableFuture().get(2, TimeUnit.SECONDS);
     }
 
     /** Whether any live thread currently executes code of the class or its nested classes. */
@@ -273,7 +312,8 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
     }
 
     private static final class FakeRouter implements ZLinkBackendRouterSocket {
-        private final ArrayDeque<ZLinkBackendReceived> inbound = new ArrayDeque<>();
+        private final java.util.Queue<ZLinkBackendReceived> inbound =
+                new java.util.concurrent.ConcurrentLinkedQueue<>();
         private final AtomicInteger receiveCount = new AtomicInteger();
         private final AtomicInteger activeReceives = new AtomicInteger();
         private final AtomicInteger maxConcurrentReceives = new AtomicInteger();

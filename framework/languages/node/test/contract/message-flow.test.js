@@ -57,6 +57,8 @@ const {
 } = require('../../packages/framework/dist/runtime/streams/stream-frame-factory');
 const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const { ZLinkRuntimeRouteTransport } = require('../../packages/framework/dist/runtime/channels/channel-transports');
+const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const {
   ZLinkChannelOutboundOperations
 } = require('../../packages/framework/dist/runtime/channels/channel-outbound-operations');
@@ -360,6 +362,50 @@ test('request failure terminals remain visible at Errors level', () => {
   assert.equal(telemetryRecords.length, 1);
   assert.equal(telemetryRecords[0].attributes.phase, 'reply_received');
   assert.equal(telemetryRecords[0].attributes.outcome, 'failed');
+});
+
+test('node direct request records one source flow with sent and reply terminal', async () => {
+  const { tracer } = makeTracer(diagnostics('normal'));
+  let requestParts;
+  let failure = false;
+  const node = {
+    requestToNode(_target, parts) { requestParts = parts; return { high: 1n, low: 1n }; },
+    isObjectClientNodeDirectTarget() { return false; }
+  };
+  const table = {
+    submit(operation) {
+      operation();
+      const header = channelEnvelope.decodeChannelHeader(requestParts.map(part => ZLinkBufferMessage.from(part)));
+      const parts = failure
+        ? []
+        : channelEnvelope.encodeChannelReplyParts(header, { ok: true }).map(part => ZLinkBufferMessage.from(part));
+      return Promise.resolve({ terminalResult: failure ? 101 : 0, failureErrno: 0, parts });
+    }
+  };
+  const transport = new ZLinkRuntimeRouteTransport(
+    () => undefined, undefined,
+    () => ({ meshNode: () => node, meshCompletionTable: () => table }),
+    undefined, undefined, undefined, undefined, () => true, () => tracer
+  );
+
+  assert.deepEqual(await transport.request('mesh', 'target', 'Probe', { value: 1 }, 1000), { ok: true });
+  assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
+  assert.match(telemetryRecords[0].attributes.flow_id, /^[0-9a-f-]{36}$/i);
+  assert.match(telemetryRecords[0].attributes.correlation_id, /^[0-9a-f]{32}$/i);
+  assert.equal(telemetryRecords[0].attributes.flow_id, telemetryRecords[1].attributes.flow_id);
+  assert.equal(telemetryRecords[0].attributes.correlation_id, telemetryRecords[1].attributes.correlation_id);
+  assert.equal(telemetryRecords[0].attributes.surface, 'node');
+  assert.equal(telemetryRecords[1].attributes.outcome, 'succeeded');
+
+  telemetryRecords.length = 0;
+  failure = true;
+  await assert.rejects(() => transport.request('mesh', 'target', 'Probe', { value: 2 }, 1000));
+  assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
+  assert.equal(telemetryRecords[1].attributes.outcome, 'failed');
+  assert.equal(telemetryRecords[0].attributes.flow_id, telemetryRecords[1].attributes.flow_id);
+  assert.equal(telemetryRecords[0].attributes.correlation_id, telemetryRecords[1].attributes.correlation_id);
+  assert.equal(telemetryRecords[1].attributes.error_type, 'ZLinkFrameworkException');
+  assert.match(telemetryRecords[1].attributes.error_message, /result 101/);
 });
 
 test('spec 26 maps every added surface and control without admitting publish as a flow kind', () => {

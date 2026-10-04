@@ -6,6 +6,7 @@
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/fanout/fanout_location_runtime.hpp"
+#include "runtime/handlers/handler_registry_runtime.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/host/hosted_service_lifecycle.hpp"
@@ -137,7 +138,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (!_fanout)
                 _fanout = std::make_shared<fanout::fanout_location_runtime_t> (
                   _bus, _channels, *_runtime, *_store, *_store, services, *_serializers, *_handlers,
-                  _fanout_publisher_advertise_hosts, _listener_statuses);
+                  detail::handler_invocation_executor (), _fanout_publisher_advertise_hosts,
+                  _listener_statuses);
             _fanout->start ();
         }
 

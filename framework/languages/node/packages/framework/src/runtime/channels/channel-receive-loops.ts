@@ -18,7 +18,26 @@ import {
   type ZLinkReceiveTaskErrorReporter
 } from './channel-receive-task-tracker';
 import { ApplicationJobQueue, type ApplicationJobQueuePermit } from '../host/application-job-queue';
-import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
+import {
+  bindApplicationJobPermit,
+  runWithApplicationJobPermit
+} from '../application-jobs/application-job-queue-scope';
+import {
+  ZLinkSerialExecutionQueue,
+  type ZLinkSerialWorkRecord
+} from '../execution/serial-execution-queue';
+
+export function createChannelApplicationDispatchQueue(): ZLinkSerialExecutionQueue {
+  return new ZLinkSerialExecutionQueue(async (record: ZLinkSerialWorkRecord<unknown>) => {
+    try {
+      record.resolve(await record.operation());
+    } catch (error) {
+      record.reject(error);
+    } finally {
+      record.release();
+    }
+  });
+}
 
 //  The loop awaits between reads and the signal can abort in that gap. Reading
 //  through a function keeps the later check honest; an inline read stays
@@ -212,7 +231,8 @@ export class ZLinkChannelReceiveLoop {
     private readonly poller: ZLinkBackendReadablePoller,
     private readonly applicationJobQueue: ApplicationJobQueue,
     reportError?: ZLinkReceiveTaskErrorReporter,
-    private readonly roundRobin?: ZLinkReceiveRoundRobinCoordinator
+    private readonly roundRobin?: ZLinkReceiveRoundRobinCoordinator,
+    private readonly applicationDispatchQueue = createChannelApplicationDispatchQueue()
   ) {
     this.inFlight = new ZLinkReceiveTaskTracker(reportError);
     this.receiveOwner = roundRobin?.register() ?? Symbol('channel-receive-owner');
@@ -310,7 +330,11 @@ export class ZLinkChannelReceiveLoop {
       }
       applicationJobPermit.markApplicationQueued();
       const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-        this.dispatchAndClose(received, signal, classification.decodedHeader, true)
+        this.applicationDispatchQueue.submitPreAdmitted(
+          bindApplicationJobPermit(() =>
+            this.dispatchAndClose(received, signal, classification.decodedHeader, true)
+          )
+        )
       );
       releaseRawReceive();
       this.inFlight.track(task);
@@ -431,7 +455,8 @@ export class ZLinkSubscriberReceiveLoop {
       topicMessage: ReturnType<ZLinkChannelBackendAdapter['createTopicMessage']>
     ) => boolean | ZLinkSubscriberInfrastructureResult,
     private readonly roundRobin?: ZLinkReceiveRoundRobinCoordinator,
-    reportError?: ZLinkReceiveTaskErrorReporter
+    reportError?: ZLinkReceiveTaskErrorReporter,
+    private readonly applicationDispatchQueue = createChannelApplicationDispatchQueue()
   ) {
     this.inFlight = new ZLinkReceiveTaskTracker(reportError);
     this.poller = adapter.createReadablePoller(subscriber);
@@ -531,7 +556,11 @@ export class ZLinkSubscriberReceiveLoop {
       }
       applicationJobPermit.markApplicationQueued();
       const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-        this.dispatchAndClose(topicMessage, signal, classification.decodedHeader, true)
+        this.applicationDispatchQueue.submitPreAdmitted(
+          bindApplicationJobPermit(() =>
+            this.dispatchAndClose(topicMessage, signal, classification.decodedHeader, true)
+          )
+        )
       );
       releaseRawReceive();
       this.inFlight.track(task);
@@ -624,7 +653,8 @@ export class ZLinkRouteReceiveLoop {
     private readonly poller: ZLinkBackendReadablePoller,
     private readonly applicationJobQueue: ApplicationJobQueue,
     private readonly roundRobin?: ZLinkReceiveRoundRobinCoordinator,
-    reportError?: ZLinkReceiveTaskErrorReporter
+    reportError?: ZLinkReceiveTaskErrorReporter,
+    private readonly applicationDispatchQueue = createChannelApplicationDispatchQueue()
   ) {
     this.inFlight = new ZLinkReceiveTaskTracker(reportError);
     this.receiveOwner = roundRobin?.register() ?? Symbol('route-receive-owner');
@@ -738,7 +768,9 @@ export class ZLinkRouteReceiveLoop {
       }
       applicationJobPermit.markApplicationQueued();
       const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-        this.dispatchAndClose(received, signal, true)
+        this.applicationDispatchQueue.submitPreAdmitted(
+          bindApplicationJobPermit(() => this.dispatchAndClose(received, signal, true))
+        )
       );
       releaseRawReceive();
       this.inFlight.track(task);

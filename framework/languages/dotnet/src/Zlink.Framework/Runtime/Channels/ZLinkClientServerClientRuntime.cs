@@ -283,12 +283,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 .SubmitAsync(
                     parts,
                     (pending, nativeTimeout, token) =>
-                        target
-                            .Socket.Request()
-                            .Messages(pending)
-                            .Timeout(nativeTimeout)
-                            .Async(token)
-                            .Reply,
+                        ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                            target.Socket.Request().Messages(pending).Timeout(nativeTimeout),
+                            token
+                        ),
                     timeout,
                     $"ClientServer request failed for '{_channelName}': {{0}}.",
                     cancellationToken
@@ -1261,12 +1259,12 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 IReadOnlyList<Message> reply;
                 try
                 {
-                    reply = await Socket
-                        .Request()
-                        .Message(hello)
-                        .Timeout(_admissionTimeout)
-                        .Async(cancellationToken)
-                        .Reply.ConfigureAwait(false);
+                    reply = await ZLinkRequestSubmissionOutcome
+                        .SubmitAndAwaitReplyAsync(
+                            Socket.Request().Message(hello).Timeout(_admissionTimeout),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
                 }
                 catch
                 {
@@ -1569,12 +1567,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             {
                 // Keep the Core request/reply envelope; reply completion must
                 // not delay the next probe or the connection's deadline check.
-                var request = Socket
-                    .Request()
-                    .Message(probe)
-                    .Timeout(ZLinkServiceLiveness.PeerTimeout)
-                    .Async(cancellationToken)
-                    .Reply;
+                var request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                    Socket.Request().Message(probe).Timeout(ZLinkServiceLiveness.PeerTimeout),
+                    cancellationToken
+                );
                 Interlocked.Increment(ref _sentLivenessProbeCount);
                 reply = await request.ConfigureAwait(false);
             }

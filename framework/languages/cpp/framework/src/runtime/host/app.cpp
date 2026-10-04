@@ -13,6 +13,7 @@
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/handlers/handler_registry_runtime.hpp"
 #include "runtime/dispatch/application_job_queue_capacity.hpp"
 #include "runtime/dispatch/host_capacity_runtime.hpp"
 #include "runtime/host/bound_session_send_stage_trace.hpp"
@@ -2834,7 +2835,8 @@ void app_t::_apply_zlink_framework ()
           provider.get_required<runtime::location_runtime_t> (),
           provider.get_required<location_repository_t> (),
           provider.get_required<location_repository_t> (), provider, _state->serializers,
-          _state->handlers, options.runtime_fanout_advertise_hosts (), _state->listener_statuses,
+          _state->handlers, detail::handler_invocation_executor (),
+          options.runtime_fanout_advertise_hosts (), _state->listener_statuses,
           _state->application_job_queue);
         _state->services.add_factory<fanout_runtime_t> (
           [fanout_runtime] (service_provider_t &) {
