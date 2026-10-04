@@ -326,9 +326,8 @@ class provider_location_repository_t final : public location_repository_t
                 if (!same_owner (snapshot.owner, restore->expected_owner))
                     co_return co_await authority_conflict (std::move (current));
                 snapshot.payload = restore->payload;
-                write_request = {
-                  {version_condition (row_key, found->value.version)},
-                  {store_put_t{row_key, encode_authority (snapshot), std::nullopt}}};
+                write_request = {{version_condition (row_key, found->value.version)},
+                                 {store_put_t{row_key, encode_authority (snapshot), std::nullopt}}};
             } else if (retarget) {
                 if (snapshot.allocation.state != placement_allocation_state_t::active)
                     co_return co_await authority_conflict (std::move (current));
@@ -418,8 +417,8 @@ class provider_location_repository_t final : public location_repository_t
                     write_request.conditions.push_back (
                       condition_for (authority_owner_counter_key, owner_generations));
                     write_request.mutations = {
-                      store_put_t{object_counter_key, to_bytes (std::to_string (object_generation + 1)),
-                                  std::nullopt},
+                      store_put_t{object_counter_key,
+                                  to_bytes (std::to_string (object_generation + 1)), std::nullopt},
                       store_put_t{authority_owner_counter_key,
                                   to_bytes (std::to_string (owner_generation + 1)), std::nullopt}};
                 } else {
@@ -431,8 +430,8 @@ class provider_location_repository_t final : public location_repository_t
             auto written = co_await write_async (std::move (write_request));
             const auto *applied = std::get_if<store_write_applied_t> (&written);
             if (!applied) {
-                if (co_await conflict_qualification_unchanged (
-                      row_key, found->value.version, qualification_owner, std::nullopt))
+                if (co_await conflict_qualification_unchanged (row_key, found->value.version,
+                                                               qualification_owner, std::nullopt))
                     continue;
                 co_return co_await authority_conflict (co_await _store->read (row_key));
             }
