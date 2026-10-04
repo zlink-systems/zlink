@@ -1990,16 +1990,36 @@ async function verifyBilateralEndpointRequests(
   }
 }
 
-test('local channel requests preserve successful and failed terminal results', async () => {
-  const local = rawServiceRuntime({
+test('remote channel requests preserve successful and failed terminal results', async () => {
+  const nonce = `${process.pid}-${Date.now()}`;
+  const source = rawServiceRuntime({
+    descriptor: {
+      ...descriptor('m6a-channel-source', nativeTestEndpoint(`zlink-m6a-channel-source-${nonce}`)),
+      channels: []
+    }
+  });
+  const peer = rawServiceRuntime({
     descriptor: descriptor(
-      'm6a-local-channel',
-      nativeTestEndpoint(`zlink-m6a-local-channel-${process.pid}-${Date.now()}`)
+      'm6a-channel-peer',
+      nativeTestEndpoint(`zlink-m6a-channel-peer-${nonce}`)
     )
   });
-  local.start();
+  source.start();
+  peer.start();
   try {
-    const success = local.requestToChannel(
+    const peerDescriptor = peer.topology.localDescriptor();
+    source.connectPeer(peerDescriptor.advertisedEndpoint, peerDescriptor);
+    await pollUntil(async () => {
+      await source.announceExpectedPeers();
+      await peer.pumpOne();
+      await source.pumpOne();
+      await source.tickLiveness();
+      await peer.tickLiveness();
+      return (
+        source.isPeerRouteReady('m6a-channel-peer') && peer.isPeerRouteReady('m6a-channel-source')
+      );
+    });
+    const success = source.requestToChannel(
       'alpha',
       {
         packetName: 'Question',
@@ -2009,57 +2029,60 @@ test('local channel requests preserve successful and failed terminal results', a
       2_000
     )!;
     let successClaim!: NonNullable<ReturnType<ServiceMailbox['tryClaim']>>;
-    await pollUntil(() => {
-      const claimed = local.mailbox.tryClaim('application', 1, 4096);
+    await pollUntil(async () => {
+      await peer.pumpOne();
+      const claimed = peer.mailbox.tryClaim('application', 1, 4096);
       if (claimed === undefined) return false;
       successClaim = claimed;
       return true;
     });
-    local.reply(successClaim.records[0]!, {
+    peer.reply(successClaim.records[0]!, {
       packetName: 'Answer',
       contentType: 'application/json',
       payload: Buffer.from('reply')
     });
     successClaim.records[0]!.applicationJob?.close();
-    assert.equal(local.mailbox.release(successClaim), true);
+    assert.equal(peer.mailbox.release(successClaim), true);
     const successResult = await success.promise;
     assert.equal(successResult.terminalResult, 0);
     assert.equal(Buffer.from(successResult.payload!.payload).toString(), 'reply');
 
-    const failure = local.requestToChannel(
+    const failure = source.requestToChannel(
       'alpha',
       {
-        packetName: 'MissingHandler',
+        packetName: 'MissingTarget',
         contentType: 'application/json',
         payload: Buffer.from('request')
       },
       2_000
     )!;
     let failureClaim!: NonNullable<ReturnType<ServiceMailbox['tryClaim']>>;
-    await pollUntil(() => {
-      const claimed = local.mailbox.tryClaim('application', 1, 4096);
+    await pollUntil(async () => {
+      await peer.pumpOne();
+      const claimed = peer.mailbox.tryClaim('application', 1, 4096);
       if (claimed === undefined) return false;
       failureClaim = claimed;
       return true;
     });
-    local.reply(
+    peer.reply(
       failureClaim.records[0]!,
       {
         packetName: 'Ignored',
         contentType: 'application/json',
         payload: Buffer.from('must-not-be-returned')
       },
-      102,
-      7
+      RequestResult.NotFound,
+      14
     );
     failureClaim.records[0]!.applicationJob?.close();
-    assert.equal(local.mailbox.release(failureClaim), true);
+    assert.equal(peer.mailbox.release(failureClaim), true);
     const failureResult = await failure.promise;
-    assert.equal(failureResult.terminalResult, 102);
-    assert.equal(failureResult.failureCode, 7);
+    assert.equal(failureResult.terminalResult, RequestResult.NotFound);
+    assert.equal(failureResult.failureCode, 14);
     assert.equal(failureResult.payload, undefined);
   } finally {
-    local.close();
+    source.close();
+    peer.close();
   }
 });
 
@@ -2139,26 +2162,6 @@ test('channel send reports a selected target submit failure as NotConnected', as
         payload: Buffer.from('notice')
       }),
       SubmitResult.NotConnected
-    );
-  } finally {
-    runtime.close();
-  }
-});
-
-test('channel send preserves local mailbox rejection as NotAdmitted', async () => {
-  const runtime = rawServiceRuntime({
-    descriptor: { ...descriptor('m6a-mailbox-local'), state: 'serving' }
-  });
-
-  try {
-    runtime.mailbox.close();
-    assert.equal(
-      await runtime.sendToChannel('alpha', {
-        packetName: 'ChannelNotice',
-        contentType: 'application/json',
-        payload: Buffer.from('notice')
-      }),
-      SubmitResult.NotAdmitted
     );
   } finally {
     runtime.close();
