@@ -10,7 +10,6 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     private readonly Action<string>? _disconnect;
     private readonly ZLinkStateLane _lane = new();
     private readonly HashSet<string> _manualConnections = new(StringComparer.Ordinal);
-    private int _disposed;
     private Task? _disposeTask;
     private IDisposable? _manualConnectionAttachment;
     private IAsyncDisposable? _receiveFlowRegistration;
@@ -48,65 +47,26 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
 
     public SemaphoreSlim ReceiveGate { get; } = new(1, 1);
 
-    public ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() =>
+        new(ZLinkRuntimeTaskRunner.RunDisposal(ref _disposeTask, DisposeCoreAsync));
+
+    private async Task DisposeCoreAsync()
     {
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
-        {
-            var spinner = new SpinWait();
-            Task? task;
-            while ((task = Volatile.Read(ref _disposeTask)) is null)
-                spinner.SpinOnce();
-            return new ValueTask(task);
-        }
-
-        Volatile.Write(ref _disposeTask, completion.Task);
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        StartDisposeCore(started.Task, completion);
-        started.TrySetResult();
-        return new ValueTask(completion.Task);
-    }
-
-    private void StartDisposeCore(Task started, TaskCompletionSource completion)
-    {
-        if (ExecutionContext.IsFlowSuppressed())
-        {
-            _ = DisposeCoreAsync(started, completion);
-            return;
-        }
-
-        using (ExecutionContext.SuppressFlow())
-            _ = DisposeCoreAsync(started, completion);
-    }
-
-    private async Task DisposeCoreAsync(Task started, TaskCompletionSource completion)
-    {
-        try
-        {
-            await started.ConfigureAwait(false);
-            var failures = new ZLinkFailureCollector();
-            IDisposable? attachment = null;
-            await failures
-                .CaptureAsync(async () =>
-                {
-                    attachment = await _lane
-                        .RunAsync(DetachManualConnectionsCore)
-                        .ConfigureAwait(false);
-                })
-                .ConfigureAwait(false);
-            failures.Capture(() => attachment?.Dispose());
-            await failures.CaptureAsync(DetachReceiveFlowAsync).ConfigureAwait(false);
-            await failures.CaptureAsync(Socket.DisposeAsync).ConfigureAwait(false);
-            failures.Capture(ReceiveGate.Dispose);
-            failures.ThrowIfAny();
-            completion.TrySetResult();
-        }
-        catch (Exception error)
-        {
-            completion.TrySetException(error);
-        }
+        var failures = new ZLinkFailureCollector();
+        IDisposable? attachment = null;
+        await failures
+            .CaptureAsync(async () =>
+            {
+                attachment = await _lane
+                    .RunAsync(DetachManualConnectionsCore)
+                    .ConfigureAwait(false);
+            })
+            .ConfigureAwait(false);
+        failures.Capture(() => attachment?.Dispose());
+        await failures.CaptureAsync(DetachReceiveFlowAsync).ConfigureAwait(false);
+        await failures.CaptureAsync(Socket.DisposeAsync).ConfigureAwait(false);
+        failures.ThrowIfAny();
+        ReceiveGate.Dispose();
     }
 
     internal void OwnManualConnectionAttachment(IDisposable attachment)
@@ -115,7 +75,7 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         var (previous, dispose) = AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                if (Volatile.Read(ref _disposed) != 0)
+                if (Volatile.Read(ref _disposeTask) is not null)
                     return ((IDisposable?)null, true);
                 var replaced = _manualConnectionAttachment;
                 _manualConnectionAttachment = attachment;
@@ -195,7 +155,7 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
 
     private void ThrowIfDisposed()
     {
-        if (Volatile.Read(ref _disposed) != 0)
+        if (Volatile.Read(ref _disposeTask) is not null)
             throw new ObjectDisposedException(nameof(ZLinkChannelRuntimeBundle));
     }
 }

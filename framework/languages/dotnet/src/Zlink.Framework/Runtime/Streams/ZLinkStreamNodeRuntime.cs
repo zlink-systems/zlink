@@ -129,38 +129,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     /// <summary>Disposes the node; the token is the host shutdown deadline that forces session cleanup.</summary>
     internal ValueTask DisposeAsync(CancellationToken deadline)
     {
-        var task = Volatile.Read(ref _disposeTask);
-        if (task is not null)
-            return new ValueTask(task);
-
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
+        return new ValueTask(
+            ZLinkRuntimeTaskRunner.RunDisposal(ref _disposeTask, () => DisposeCoreAsync(deadline))
         );
-        task = Interlocked.CompareExchange(ref _disposeTask, completion.Task, null);
-        if (task is not null)
-            return new ValueTask(task);
-
-        Func<Task> dispose = async () =>
-        {
-            try
-            {
-                await DisposeCoreAsync(deadline).ConfigureAwait(false);
-                completion.TrySetResult();
-            }
-            catch (Exception error)
-            {
-                completion.TrySetException(error);
-            }
-        };
-        try
-        {
-            _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() => Task.Run(dispose));
-        }
-        catch (Exception error)
-        {
-            completion.TrySetException(error);
-        }
-        return new ValueTask(completion.Task);
     }
 
     private async Task DisposeCoreAsync(CancellationToken deadline)
@@ -225,13 +196,13 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         if (socketDisposed)
             foreach (var session in sessions)
                 session.ConfirmNodeTransportDisposed();
-        Capture(_stopSource.Dispose);
-        if (_ownsApplicationJobQueue)
-            Capture(_applicationJobQueue.Dispose);
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
         if (failures.Count > 1)
             throw new AggregateException(failures);
+        _stopSource.Dispose();
+        if (_ownsApplicationJobQueue)
+            _applicationJobQueue.Dispose();
         return;
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)

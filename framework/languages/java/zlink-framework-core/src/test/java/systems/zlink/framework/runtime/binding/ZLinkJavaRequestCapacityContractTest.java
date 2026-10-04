@@ -81,6 +81,9 @@ final class ZLinkJavaRequestCapacityContractTest {
                 reply.completeExceptionally(failure);
             }
             assertTrue(completion.isDone());
+            if (initialSubmission) {
+                assertFalse(reply.isDone(), "a slot rejection must not wait for a reply");
+            }
             var terminal =
                     assertInstanceOf(
                             ZLinkFrameworkException.class,

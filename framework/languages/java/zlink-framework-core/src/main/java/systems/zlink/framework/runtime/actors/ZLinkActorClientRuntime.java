@@ -416,25 +416,12 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private RuntimeException mapBackendException(Throwable error, String operationName) {
         Throwable unwrapped = unwrap(error);
         if (unwrapped instanceof ZlinkRequestException request) {
-            return switch (request.getResult()) {
-                case NOT_CONNECTED ->
-                        new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                operationName
-                                        + " failed because the target route is not connected.",
-                                request);
-                case NOT_FOUND ->
-                        new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.NOT_FOUND,
-                                operationName + " failed because the actor route was not found.",
-                                request);
-                case CONFLICT ->
-                        new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                operationName + " failed because the actor location is stale.",
-                                request);
-                default -> request;
-            };
+            return new ZLinkFrameworkException(
+                    systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult
+                            .fromWireTerminal(request.getResult().value())
+                            .toFrameworkErrorKind(),
+                    operationName + " failed: " + request.getResult(),
+                    request);
         }
         if (unwrapped instanceof ZlinkSubmitException submit) {
             return switch (submit.getResult()) {

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -7,7 +8,7 @@
 
 int main ()
 {
-    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     zlink.channel ("profile").enable_client ().connect ("tcp://127.0.0.1:7400");
 
     auto bus = zlink.message_bus ();
@@ -37,7 +38,8 @@ int main ()
         return 6;
     }
 
-    zlink::framework::zlink_builder_t shutdown_builder;
+    zlink::framework::zlink_builder_t shutdown_builder =
+      zlink::framework::test::runtime_failure_builder ();
     shutdown_builder.channel ("profile").enable_client ().connect ("tcp://127.0.0.1:7401");
     auto shutdown_runtime =
       zlink::framework::detail::channel_runtime_t::from (shutdown_builder.message_bus ());
@@ -57,7 +59,8 @@ int main ()
         return 9;
     }
 
-    zlink::framework::zlink_builder_t close_builder;
+    zlink::framework::zlink_builder_t close_builder =
+      zlink::framework::test::runtime_failure_builder ();
     close_builder.channel ("profile").enable_client ().connect ("tcp://127.0.0.1:7402");
     auto close_runtime =
       zlink::framework::detail::channel_runtime_t::from (close_builder.message_bus ());

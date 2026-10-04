@@ -8,6 +8,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -401,27 +402,29 @@ final class RouteRequestCall implements ZLinkRequestCall {
         var operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts = requestParts(operationId, Map.of());
         try {
-            runtime.requestRoute(operationId, router, target, requestParts, timeout)
-                    .whenComplete(
-                            (reply, failure) -> {
-                                requestParts.forEach(Message::close);
-                                if (failure != null) {
-                                    result.completeExceptionally(
-                                            ZLinkChannelCallRuntime.requestFailure(failure));
-                                    return;
-                                }
-                                if (result.isDone()) {
-                                    reply.close();
-                                    return;
-                                }
-                                try {
-                                    runtime.completeReply(reply, replyType, result);
-                                } catch (RuntimeException ex) {
-                                    result.completeExceptionally(ex);
-                                } finally {
-                                    reply.close();
-                                }
-                            });
+            CompletionStage<ZLinkBackendReceived> operation =
+                    runtime.requestRoute(operationId, router, target, requestParts, timeout);
+            ZLinkCompletionBridge.forwardCancellation(result, operation);
+            operation.whenComplete(
+                    (reply, failure) -> {
+                        requestParts.forEach(Message::close);
+                        if (failure != null) {
+                            result.completeExceptionally(
+                                    ZLinkChannelCallRuntime.requestFailure(failure));
+                            return;
+                        }
+                        if (result.isDone()) {
+                            reply.close();
+                            return;
+                        }
+                        try {
+                            runtime.completeReply(reply, replyType, result);
+                        } catch (RuntimeException ex) {
+                            result.completeExceptionally(ex);
+                        } finally {
+                            reply.close();
+                        }
+                    });
         } catch (RuntimeException | Error failure) {
             requestParts.forEach(Message::close);
             result.completeExceptionally(failure);
@@ -464,22 +467,25 @@ final class RouteRequestCall implements ZLinkRequestCall {
                         });
                 return result;
             }
-            runtime.requestNode(operationId, node, target, metadata.encode(), requestParts, timeout)
-                    .whenComplete(
-                            (reply, failure) -> {
-                                if (failure != null) {
-                                    result.completeExceptionally(
-                                            ZLinkChannelCallRuntime.requestFailure(failure));
-                                    return;
-                                }
-                                try {
-                                    runtime.completeReply(reply, replyType, result);
-                                } catch (RuntimeException error) {
-                                    result.completeExceptionally(error);
-                                } finally {
-                                    reply.close();
-                                }
-                            });
+            CompletionStage<ZLinkBackendReceived> operation =
+                    runtime.requestNode(
+                            operationId, node, target, metadata.encode(), requestParts, timeout);
+            ZLinkCompletionBridge.forwardCancellation(result, operation);
+            operation.whenComplete(
+                    (reply, failure) -> {
+                        if (failure != null) {
+                            result.completeExceptionally(
+                                    ZLinkChannelCallRuntime.requestFailure(failure));
+                            return;
+                        }
+                        try {
+                            runtime.completeReply(reply, replyType, result);
+                        } catch (RuntimeException error) {
+                            result.completeExceptionally(error);
+                        } finally {
+                            reply.close();
+                        }
+                    });
         } catch (RuntimeException | Error error) {
             result.completeExceptionally(error);
         } finally {
@@ -959,26 +965,28 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                                 null,
                                 null));
             }
-            runtime.requestClient(target, requestParts, remaining)
-                    .whenComplete(
-                            (reply, failure) -> {
-                                if (failure != null) {
-                                    result.completeExceptionally(
-                                            ZLinkChannelCallRuntime.requestFailure(failure));
-                                    return;
-                                }
-                                if (result.isDone()) {
-                                    reply.close();
-                                    return;
-                                }
-                                try {
-                                    runtime.completeReply(reply, replyType, result);
-                                } catch (RuntimeException ex) {
-                                    result.completeExceptionally(ex);
-                                } finally {
-                                    reply.close();
-                                }
-                            });
+            CompletionStage<ZLinkBackendReceived> operation =
+                    runtime.requestClient(target, requestParts, remaining);
+            ZLinkCompletionBridge.forwardCancellation(result, operation);
+            operation.whenComplete(
+                    (reply, failure) -> {
+                        if (failure != null) {
+                            result.completeExceptionally(
+                                    ZLinkChannelCallRuntime.requestFailure(failure));
+                            return;
+                        }
+                        if (result.isDone()) {
+                            reply.close();
+                            return;
+                        }
+                        try {
+                            runtime.completeReply(reply, replyType, result);
+                        } catch (RuntimeException ex) {
+                            result.completeExceptionally(ex);
+                        } finally {
+                            reply.close();
+                        }
+                    });
         } catch (RuntimeException | Error failure) {
             result.completeExceptionally(failure);
         }
@@ -1006,24 +1014,26 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                         metadata.values(),
                         operationId);
         try {
-            runtime.requestChannel(
-                            operationId, node, channelName, metadata.encode(), parts, timeout)
-                    .whenComplete(
-                            (reply, failure) -> {
-                                parts.forEach(Message::close);
-                                if (failure != null) {
-                                    result.completeExceptionally(
-                                            ZLinkChannelCallRuntime.requestFailure(failure));
-                                    return;
-                                }
-                                try {
-                                    runtime.completeReply(reply, replyType, result);
-                                } catch (RuntimeException error) {
-                                    result.completeExceptionally(error);
-                                } finally {
-                                    reply.close();
-                                }
-                            });
+            CompletionStage<ZLinkBackendReceived> operation =
+                    runtime.requestChannel(
+                            operationId, node, channelName, metadata.encode(), parts, timeout);
+            ZLinkCompletionBridge.forwardCancellation(result, operation);
+            operation.whenComplete(
+                    (reply, failure) -> {
+                        parts.forEach(Message::close);
+                        if (failure != null) {
+                            result.completeExceptionally(
+                                    ZLinkChannelCallRuntime.requestFailure(failure));
+                            return;
+                        }
+                        try {
+                            runtime.completeReply(reply, replyType, result);
+                        } catch (RuntimeException error) {
+                            result.completeExceptionally(error);
+                        } finally {
+                            reply.close();
+                        }
+                    });
         } catch (RuntimeException | Error failure) {
             parts.forEach(Message::close);
             result.completeExceptionally(failure);

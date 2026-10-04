@@ -19,6 +19,8 @@ mesh::raw_mesh_node_options_t options (char rid,
                                        std::shared_ptr<std::atomic_bool> seal = {})
 {
     mesh::raw_mesh_node_options_t result;
+    result.runtime_failures =
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
     result.descriptor = {
       "shutdown-seal", {static_cast<std::uint8_t> (rid)}, 1, 1, std::move (endpoint),
       {{"alpha", 100}}};

@@ -6,6 +6,7 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 
 import java.time.Duration;
 import java.util.List;
@@ -17,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -28,7 +30,8 @@ final class ZLinkJavaDurableRequest {
     private final BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit;
     private final BooleanSupplier targetLifecycleEnded;
     private final CompletableFuture<List<byte[]>> completion = new CompletableFuture<>();
-    private final long started = System.nanoTime();
+    private final LongSupplier nanoTime;
+    private final long started;
     private final long timeoutNanos;
     private final Function<Runnable, CompletionStage<Void>> owner;
     private List<byte[]> frames;
@@ -42,7 +45,10 @@ final class ZLinkJavaDurableRequest {
             BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit,
             BooleanSupplier targetLifecycleEnded,
             Duration timeout,
-            Function<Runnable, CompletionStage<Void>> owner) {
+            Function<Runnable, CompletionStage<Void>> owner,
+            LongSupplier nanoTime) {
+        this.nanoTime = nanoTime;
+        this.started = nanoTime.getAsLong();
         this.prepare = prepare;
         this.submit = submit;
         this.targetLifecycleEnded = targetLifecycleEnded;
@@ -57,8 +63,21 @@ final class ZLinkJavaDurableRequest {
             Function<Runnable, AutoCloseable> observe,
             Function<Runnable, CompletionStage<Void>> owner,
             Duration timeout) {
+        return request(
+                prepare, submit, targetLifecycleEnded, observe, owner, timeout, System::nanoTime);
+    }
+
+    static CompletionStage<List<byte[]>> request(
+            Supplier<List<byte[]>> prepare,
+            BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit,
+            BooleanSupplier targetLifecycleEnded,
+            Function<Runnable, AutoCloseable> observe,
+            Function<Runnable, CompletionStage<Void>> owner,
+            Duration timeout,
+            LongSupplier nanoTime) {
         var request =
-                new ZLinkJavaDurableRequest(prepare, submit, targetLifecycleEnded, timeout, owner);
+                new ZLinkJavaDurableRequest(
+                        prepare, submit, targetLifecycleEnded, timeout, owner, nanoTime);
         AutoCloseable registration;
         try {
             registration = observe.apply(() -> request.post(request::sourceChanged));
@@ -89,13 +108,15 @@ final class ZLinkJavaDurableRequest {
                                 "durable request observer cleanup failed",
                                 cleanupFailure);
                     }
-                    if (request.completion.isCancelled())
+                });
+        ZLinkCompletionBridge.forwardCancellation(
+                request.completion,
+                () ->
                         request.post(
                                 () -> {
                                     if (request.pending != null)
                                         request.pending.toCompletableFuture().cancel(false);
-                                });
-                });
+                                }));
         return request.completion;
     }
 
@@ -117,7 +138,7 @@ final class ZLinkJavaDurableRequest {
     }
 
     private long remaining() {
-        return timeoutNanos - (System.nanoTime() - started);
+        return timeoutNanos - (nanoTime.getAsLong() - started);
     }
 
     private void sourceChanged() {

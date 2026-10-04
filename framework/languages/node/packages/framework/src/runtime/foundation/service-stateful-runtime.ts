@@ -4430,17 +4430,23 @@ export class ServiceStatefulRuntime {
   ): void {
     if (targetNodeRid === this.nodeRid) {
       const deadlineUnixMs = BigInt(Date.now() + Math.max(0, timeoutMs));
+      const capacityStop = new AbortController();
+      void pending.promise.then(
+        () => capacityStop.abort(),
+        () => capacityStop.abort()
+      );
       void (async () => {
-        const applicationJobOwner = await this.raw.reserveLocalIngress();
-        const localIngress: RawServiceIngressRecord = {
-          command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
-          flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
-          sourceRoutingId: this.nodeRid,
-          requestSequence: pending.id,
-          parts,
-          applicationJobOwner
-        };
+        const applicationJobOwner = await this.raw.reserveLocalIngress(capacityStop.signal);
         try {
+          if (!this.operations.isPending(pending.id)) return;
+          const localIngress: RawServiceIngressRecord = {
+            command: parts[0]![SERVICE_WIRE_COMMAND_OFFSET]!,
+            flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
+            sourceRoutingId: this.nodeRid,
+            requestSequence: pending.id,
+            parts,
+            applicationJobOwner
+          };
           await this.submitLocalRequest(
             localIngress,
             pending,

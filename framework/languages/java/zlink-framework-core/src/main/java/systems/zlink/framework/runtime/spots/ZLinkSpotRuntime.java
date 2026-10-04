@@ -4394,25 +4394,59 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     <T> CompletionStage<T> admitNewApplicationJob(Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(operation, "operation");
-        ensureOwnerAdmissionOpen();
-        return applicationJobQueue
-                .acquire()
-                .thenCompose(
-                        permit -> {
-                            permit.queued();
-                            CompletionStage<T> result;
-                            try (var ignored =
-                                    systems.zlink.framework.runtime.internal.dispatch
-                                            .ZLinkApplicationJobContext.enterQueued(permit)) {
-                                result =
-                                        Objects.requireNonNull(
-                                                operation.get(), "application job result");
-                            } catch (RuntimeException failure) {
-                                permit.close();
-                                return CompletableFuture.failedFuture(failure);
-                            }
-                            return result.whenComplete((ignored, failure) -> permit.close());
+        try {
+            ensureOwnerAdmissionOpen();
+        } catch (ZLinkFrameworkException rejected) {
+            return CompletableFuture.failedFuture(rejected);
+        }
+        var acquisition = applicationJobQueue.acquire().toCompletableFuture();
+        CompletableFuture<T> completion =
+                new CompletableFuture<>() {
+                    @Override
+                    public boolean cancel(boolean mayInterruptIfRunning) {
+                        return acquisition.cancel(mayInterruptIfRunning);
+                    }
+                };
+        acquisition
+                .thenCompose(permit -> publishApplicationJob(permit, operation))
+                .whenComplete(
+                        (value, failure) -> {
+                            if (failure == null) completion.complete(value);
+                            else completion.completeExceptionally(failure);
                         });
+        return completion;
+    }
+
+    <T> CompletionStage<T> admitNewApplicationJob(
+            SpotDispatchLine destination, Supplier<CompletionStage<T>> operation) {
+        Objects.requireNonNull(operation, "operation");
+        try {
+            ensureOwnerAdmissionOpen();
+        } catch (ZLinkFrameworkException rejected) {
+            return CompletableFuture.failedFuture(rejected);
+        }
+        return applicationJobQueue.acquireAndPublish(
+                task ->
+                        destination.enqueueInfrastructureDispatch(
+                                () -> {
+                                    task.run();
+                                    return CompletableFuture.completedFuture(null);
+                                }),
+                permit -> publishApplicationJob(permit, operation));
+    }
+
+    private <T> CompletionStage<T> publishApplicationJob(
+            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
+                    permit,
+            Supplier<CompletionStage<T>> operation) {
+        try (var ignored =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
+                        permit)) {
+            return runQueuedApplicationJob(
+                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                            .transferToQueuedJob(),
+                    operation);
+        }
     }
 
     systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
@@ -4435,7 +4469,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
                         .enterQueued(ownership)) {
             result = Objects.requireNonNull(operation.get(), "application job result");
-        } catch (RuntimeException failure) {
+        } catch (RuntimeException | Error failure) {
             ownership.close();
             return CompletableFuture.failedFuture(failure);
         }

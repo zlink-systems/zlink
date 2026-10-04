@@ -337,7 +337,6 @@ export class ZLinkStreamRuntimeManager {
 
   async dispose(): Promise<void> {
     const nodes = [...this.nodes.values()];
-    this.nodes.clear();
     for (const node of nodes.reverse()) {
       await node.runtime?.dispose();
       for (const service of node.nativeSessionServices) {
@@ -347,6 +346,7 @@ export class ZLinkStreamRuntimeManager {
       await node.monitor?.dispose();
       await node.socket.dispose();
     }
+    this.nodes.clear();
   }
 
   async notifyServerDrain(meshName: string): Promise<void> {

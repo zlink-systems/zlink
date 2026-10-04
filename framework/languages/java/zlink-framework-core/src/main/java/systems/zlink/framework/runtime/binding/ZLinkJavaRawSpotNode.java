@@ -43,7 +43,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -677,6 +676,16 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
         long requestId = nextActorRequestSequence.getAndIncrement();
         CompletableFuture<List<Message>> completion = new CompletableFuture<>();
         actorRequests.put(requestId, completion);
+        if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
+            CompletableFuture.delayedExecutor(timeout.toNanos(), TimeUnit.NANOSECONDS)
+                    .execute(
+                            () -> {
+                                if (actorRequests.remove(requestId, completion)) {
+                                    completion.completeExceptionally(
+                                            new ZlinkRequestException(RequestResult.TIMED_OUT));
+                                }
+                            });
+        }
         CompletionStage<Void> dispatched = dispatchLocalActor(actor, parts, requestId, 1);
         if (dispatched == null) {
             actorRequests.remove(requestId);
@@ -689,17 +698,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                         completion.completeExceptionally(unwrapActorDispatchFailure(error));
                     }
                 });
-        if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
-            CompletableFuture.delayedExecutor(timeout.toNanos(), TimeUnit.NANOSECONDS)
-                    .execute(
-                            () -> {
-                                if (actorRequests.remove(requestId, completion)) {
-                                    completion.completeExceptionally(
-                                            new TimeoutException("Actor request timed out"));
-                                }
-                            });
-        }
-        return completion;
+        return completion.whenComplete(
+                (reply, failure) -> dispatched.toCompletableFuture().cancel(false));
     }
 
     @Override
@@ -2824,28 +2824,33 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
         Supplier<CompletionStage<ZLinkBackendReceived>> enqueue =
                 () -> {
                     handedOff[0] = true;
-                    enqueueLocalSpot(target, true, request)
-                            .whenComplete(
-                                    (ignored, failure) -> {
-                                        if (failure != null
-                                                && terminal.tryWin(
-                                                        ZLinkTerminalWinner.Cause.FAILURE)) {
-                                            completion.completeExceptionally(failure);
-                                        }
-                                    });
-                    return completion;
+                    var dispatched = enqueueLocalSpot(target, true, request);
+                    dispatched.whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null
+                                        && terminal.tryWin(ZLinkTerminalWinner.Cause.FAILURE)) {
+                                    completion.completeExceptionally(failure);
+                                }
+                            });
+                    return completion.whenComplete(
+                            (reply, failure) -> {
+                                if (completion.isCancelled())
+                                    terminal.tryWin(ZLinkTerminalWinner.Cause.CANCELLATION);
+                                dispatched.toCompletableFuture().cancel(false);
+                            });
                 };
         if (operations != null) {
             try {
-                return operations.submit(
-                        operationId, timeout, enqueue, ZLinkBackendReceived::close);
+                var registered =
+                        operations.submit(
+                                operationId, timeout, enqueue, ZLinkBackendReceived::close);
+                return registered.whenComplete((reply, failure) -> completion.cancel(false));
             } finally {
                 if (!handedOff[0]) {
                     request.close();
                 }
             }
         }
-        enqueue.get();
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
             CompletableFuture.delayedExecutor(timeout.toNanos(), TimeUnit.NANOSECONDS)
                     .execute(
@@ -2856,7 +2861,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                                 }
                             });
         }
-        return completion;
+        return enqueue.get();
     }
 
     private ZLinkJavaRawSpot localSpot(

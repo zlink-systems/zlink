@@ -524,7 +524,23 @@ mesh_node_runtime_t::mesh_node_runtime_t (std::shared_ptr<mesh_node_builder_stat
 
 mesh_node_runtime_t::~mesh_node_runtime_t ()
 {
-    stop ();
+    if (!_node && _spots.empty ())
+        return;
+    auto failures = _state->spot_state->runtime_failures ();
+    if (!failures->capture ([&] { stop (); }))
+        failures->retain ([node = std::move (_node), spots = std::move (_spots),
+                           state = _state->spot_state] () mutable {
+            runtime::runtime_failure_collector_t failures;
+            for (auto &[_, spot] : spots)
+                failures.capture ([&] { (void) spot.close (); });
+            failures.capture (
+              [&] { runtime::runtime_failure_collector_t::close_resources (node); });
+            failures.rethrow_if_failed ();
+            spots.clear ();
+            spot_node_runtime_t runtime (state);
+            runtime.detach_native_node ();
+            runtime.release_native_handles ();
+        });
 }
 
 void mesh_node_runtime_t::bind_serializers (serializer_registry_t &serializers) noexcept
@@ -769,29 +785,28 @@ void mesh_node_runtime_t::start ()
             std::set<std::string> stable_types (spot_snapshot.actor_types.begin (),
                                                 spot_snapshot.actor_types.end ());
             stable_types.insert ("framework.spot");
+            auto native_options = runtime::mesh::raw_mesh_node_options_t{
+              runtime::mesh::service_node_descriptor_t{
+                .mesh_name = _state->mesh_name,
+                .node_routing_id = _state->routing_id->to_bytes (),
+                .lifecycle_generation = make_lifecycle_generation (),
+                .descriptor_revision = 1,
+                .advertised_endpoint = _state->listen_endpoint,
+                .channels = std::move (channels),
+                .state = runtime::mesh::service_node_state_t::preparing,
+                .object_role = _state->object_role == object_role_t::client
+                                 ? runtime::mesh::service_object_role_t::client
+                               : _state->object_role == object_role_t::server
+                                 ? runtime::mesh::service_object_role_t::server
+                                 : runtime::mesh::service_object_role_t::none,
+                .placement_weight = _state->placement_weight},
+              _state->advertise_host, _state->socket.receive_timeout, _state->auto_hwm_profile,
+              _state->application_jobs};
+            native_options.runtime_failures = _state->spot_state->runtime_failures ();
             auto options = host::host_options_t{
-              runtime::mesh::raw_mesh_node_options_t{
-                runtime::mesh::service_node_descriptor_t{
-                  .mesh_name = _state->mesh_name,
-                  .node_routing_id = _state->routing_id->to_bytes (),
-                  .lifecycle_generation = make_lifecycle_generation (),
-                  .descriptor_revision = 1,
-                  .advertised_endpoint = _state->listen_endpoint,
-                  .channels = std::move (channels),
-                  .state = runtime::mesh::service_node_state_t::preparing,
-                  .object_role = _state->object_role == object_role_t::client
-                                   ? runtime::mesh::service_object_role_t::client
-                                 : _state->object_role == object_role_t::server
-                                   ? runtime::mesh::service_object_role_t::server
-                                   : runtime::mesh::service_object_role_t::none,
-                  .placement_weight = _state->placement_weight},
-                _state->advertise_host, _state->socket.receive_timeout, _state->auto_hwm_profile,
-                _state->application_jobs},
-              spot_snapshot.entry_spot_name.value_or ("entry"),
-              std::move (stable_types),
-              _owner_lease_fencing_margin,
-              _state->core_context,
-              _session_relocation_seal_timeout};
+              std::move (native_options), spot_snapshot.entry_spot_name.value_or ("entry"),
+              std::move (stable_types),   _owner_lease_fencing_margin,
+              _state->core_context,       _session_relocation_seal_timeout};
             return std::make_tuple (std::move (options), _state->spot_state,
                                     std::move (spot_snapshot), _state->mesh_name,
                                     *_state->routing_id);
@@ -1907,7 +1922,7 @@ void mesh_node_runtime_t::cancel_pending_dispatch_waits () noexcept
     spot_node_runtime_t (_state->spot_state).cancel_dispatch_waits ();
 }
 
-void mesh_node_runtime_t::stop () noexcept
+void mesh_node_runtime_t::stop ()
 {
     // Stop timer producers before draining their serial/worker consumers, and
     // keep application instances alive until every admitted callback settles.
@@ -1946,17 +1961,13 @@ void mesh_node_runtime_t::stop () noexcept
         return;
     }
     _node->transport ().mailbox ().bind_application_dispatch ({}, {});
-    try {
-        _peer_connection_intent_lane.run ([&] { _peer_connection_intents.clear (); }).get ();
-        _actors.clear ();
-        for (auto &[_, spot] : _spots)
-            (void) spot.close ();
-        _spots.clear ();
-        spot_runtime.detach_native_node ();
-        _node->close ();
-    }
-    catch (...) {
-    }
+    _peer_connection_intent_lane.run ([&] { _peer_connection_intents.clear (); }).get ();
+    _actors.clear ();
+    for (auto &[_, spot] : _spots)
+        (void) spot.close ();
+    _spots.clear ();
+    _node->close ();
+    spot_runtime.detach_native_node ();
     spot_runtime.release_native_handles ();
     _node.reset ();
 }

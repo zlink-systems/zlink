@@ -6,6 +6,7 @@
 //  test_cpp_framework_execution.cpp.
 
 #include "runtime/dispatch/application_job_queue.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 
 #include <gtest/gtest.h>
 
@@ -44,7 +45,223 @@ zlink::framework::runtime::application_job_queue_configuration_t pressure_config
             resume_percent};
 }
 
+std::shared_ptr<zlink::framework::runtime::host::public_host_runtime_t>
+local_admission_host (const std::shared_ptr<queue_t> &queue)
+{
+    namespace host = zlink::framework::runtime::host;
+    auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "local-admission",
+                              .node_routing_id =
+                                zlink::routing_id_t::from ("local-node").to_bytes (),
+                              .lifecycle_generation = 1,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .application_jobs = queue},
+      .object_stable_types = {"framework.spot", "player"}});
+    native->configure_spot_route_fence_resolver (
+      [] (auto, auto, auto) -> zlink::framework::task_t<std::optional<host::route_fence_t>> {
+          co_return host::route_fence_t{1, 1};
+      });
+    native->start ();
+    return native;
+}
+
 } // namespace
+
+TEST (ZLinkFrameworkApplicationJobQueue, LocalRequestsDoNotPublishWithoutSharedPermit)
+{
+    namespace host = zlink::framework::runtime::host;
+    auto queue = std::make_shared<queue_t> (limit_one_configuration ());
+    auto native = local_admission_host (queue);
+    auto spot = native->get_or_create_spot ("local-spot");
+    auto actor = native->create_actor ("player", "local-actor");
+    auto held = queue->try_reserve_supply ();
+    ASSERT_TRUE (held);
+    const auto status = native->status ();
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from (std::string ("payload")));
+    for (int index = 0; index < 4; ++index) {
+        host::pending_operation_t operation;
+        EXPECT_EQ (zlink::submit_result_t::ok,
+                   spot
+                     .request_to_spot (status.routing_id (), "local-spot", 1, parts, operation,
+                                       zlink::send_flags_t::none, std::chrono::seconds (1))
+                     .result ()
+                     .value ());
+        host::pending_operation_t actor_operation;
+        EXPECT_EQ (zlink::submit_result_t::ok,
+                   actor
+                     .request_to (actor.ref (), parts, actor_operation, zlink::send_flags_t::none,
+                                  std::chrono::seconds (1))
+                     .result ()
+                     .value ());
+    }
+    EXPECT_FALSE (native->next_dispatch_activity_async ().result ().value ().first);
+    EXPECT_EQ (8u, queue->snapshot ().capacity_waiters);
+    held.reset ();
+    EXPECT_TRUE (native->next_dispatch_activity_async ().result ().value ().first);
+    EXPECT_EQ (1u, queue->snapshot ().queued_application_jobs);
+    std::size_t dispatched = 0;
+    (void) native
+      ->dispatch_ready (
+        [&] (const auto &, const auto &record, auto) {
+            ++dispatched;
+            ASSERT_TRUE (record.before_application_handler);
+            record.before_application_handler ();
+        },
+        false)
+      .result ()
+      .value ();
+    EXPECT_EQ (1u, dispatched);
+    queue->stop ();
+    native->close ();
+    EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
+}
+
+TEST (ZLinkFrameworkApplicationJobQueue, LocalRequestsPreserveSubmissionOrderAcrossPermitWait)
+{
+    namespace host = zlink::framework::runtime::host;
+    for (const bool actor_request : {false, true}) {
+        auto queue = std::make_shared<queue_t> (limit_one_configuration ());
+        auto native = local_admission_host (queue);
+        auto spot = native->get_or_create_spot ("local-spot");
+        auto actor = native->create_actor ("player", "local-actor");
+        auto held = queue->try_reserve_supply ();
+        ASSERT_TRUE (held);
+        std::vector<host::pending_operation_t> operations (64);
+        const std::vector<zlink::message_t> parts;
+        for (auto &operation : operations) {
+            ASSERT_EQ (zlink::submit_result_t::ok,
+                       actor_request
+                         ? actor
+                             .request_to (actor.ref (), parts, operation, zlink::send_flags_t::none,
+                                          std::chrono::seconds (5))
+                             .result ()
+                             .value ()
+                         : spot
+                             .request_to_spot (native->status ().routing_id (), "local-spot", 1,
+                                               parts, operation, zlink::send_flags_t::none,
+                                               std::chrono::seconds (5))
+                             .result ()
+                             .value ());
+        }
+        ASSERT_EQ (operations.size (), queue->snapshot ().capacity_waiters);
+        EXPECT_FALSE (native->next_dispatch_activity_async ().result ().value ().first);
+        held.reset ();
+        std::size_t received = 0;
+        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+        while (received < operations.size ()) {
+            ASSERT_LT (std::chrono::steady_clock::now (), deadline);
+            (void) native
+              ->dispatch_ready (
+                [&] (const auto &, const auto &record, auto) {
+                    ASSERT_LT (received, operations.size ());
+                    EXPECT_EQ (operations[received++].id, record.operation_id);
+                    ASSERT_TRUE (record.before_application_handler);
+                    record.before_application_handler ();
+                },
+                false)
+              .result ()
+              .value ();
+        }
+        EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
+        native->close ();
+    }
+}
+
+
+TEST (ZLinkFrameworkApplicationJobQueue, ImmediateLocalRequestPublishesOnItsOwningLane)
+{
+    namespace host = zlink::framework::runtime::host;
+    for (const bool actor_request : {false, true}) {
+        auto queue = std::make_shared<queue_t> (limit_one_configuration ());
+        auto native = local_admission_host (queue);
+        auto spot = native->get_or_create_spot ("local-spot");
+        auto actor = native->create_actor ("player", "local-actor");
+        host::pending_operation_t operation;
+        const std::vector<zlink::message_t> parts;
+        const auto submitted =
+          actor_request
+            ? actor
+                .request_to (actor.ref (), parts, operation, zlink::send_flags_t::none,
+                             std::chrono::seconds (1))
+                .result ()
+                .value ()
+            : spot
+                .request_to_spot (native->status ().routing_id (), "local-spot", 1, parts,
+                                  operation, zlink::send_flags_t::none, std::chrono::seconds (1))
+                .result ()
+                .value ();
+        ASSERT_EQ (zlink::submit_result_t::ok, submitted);
+        EXPECT_TRUE (native->next_dispatch_activity_async ().result ().value ().first);
+        EXPECT_EQ (1u, queue->snapshot ().queued_application_jobs);
+        std::size_t dispatched = 0;
+        (void) native
+          ->dispatch_ready (
+            [&] (const auto &, const auto &record, auto) {
+                ++dispatched;
+                ASSERT_TRUE (record.before_application_handler);
+                record.before_application_handler ();
+            },
+            false)
+          .result ()
+          .value ();
+        EXPECT_EQ (1u, dispatched);
+        EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
+        native->close ();
+    }
+}
+
+TEST (ZLinkFrameworkApplicationJobQueue, LocalRequestTerminalRemovesPermitWaiters)
+{
+    namespace host = zlink::framework::runtime::host;
+    namespace foundation = zlink::framework::runtime::foundation;
+    for (const bool cancel : {false, true}) {
+        auto queue = std::make_shared<queue_t> (limit_one_configuration ());
+        auto native = local_admission_host (queue);
+        auto spot = native->get_or_create_spot ("local-spot");
+        auto actor = native->create_actor ("player", "local-actor");
+        auto held = queue->try_reserve_supply ();
+        ASSERT_TRUE (held);
+        std::vector<host::pending_operation_t> operations (8);
+        const std::vector<zlink::message_t> parts;
+        for (std::size_t index = 0; index < operations.size (); ++index) {
+            const auto submitted =
+              index % 2 == 0
+                ? spot
+                    .request_to_spot (native->status ().routing_id (), "local-spot", 1, parts,
+                                      operations[index], zlink::send_flags_t::none,
+                                      std::chrono::seconds (1))
+                    .result ()
+                    .value ()
+                : actor
+                    .request_to (actor.ref (), parts, operations[index], zlink::send_flags_t::none,
+                                 std::chrono::seconds (1))
+                    .result ()
+                    .value ();
+            ASSERT_EQ (zlink::submit_result_t::ok, submitted);
+        }
+        ASSERT_EQ (8u, queue->snapshot ().capacity_waiters);
+        if (cancel) {
+            for (const auto &operation : operations)
+                ASSERT_TRUE (native->transport ().fail_local_operation (
+                  operation.id, foundation::operation_terminal_t::cancelled));
+        } else {
+            EXPECT_EQ (
+              8u, native->transport ().expire_requests (
+                    foundation::operation_registry_t::clock_t::now () + std::chrono::seconds (2)));
+        }
+        for (const auto &operation : operations)
+            EXPECT_FALSE (operation.completion->task ().result ());
+        EXPECT_FALSE (native->next_dispatch_activity_async ().result ().value ().first);
+        EXPECT_EQ (0u, queue->snapshot ().capacity_waiters);
+        held.reset ();
+        auto reusable = queue->try_reserve_supply ();
+        ASSERT_TRUE (reusable);
+        EXPECT_FALSE (native->next_dispatch_activity_async ().result ().value ().first);
+        native->close ();
+    }
+}
 
 //  §8: with limit 1, while the first job waits before callback start, the
 //  next ordinary record is not received first.

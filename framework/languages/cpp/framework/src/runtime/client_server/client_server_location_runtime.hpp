@@ -66,7 +66,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     client_server_location_runtime_t &operator= (const client_server_location_runtime_t &) = delete;
 
     void start ();
-    void stop () noexcept;
+    void stop ();
     bool empty () const noexcept;
     bool publish_descriptor_state (framework_runtime_state_t state) noexcept;
     bool republish_after_store_recovery ();
@@ -108,8 +108,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     publish_snapshot_locked (client_server_channel_snapshot_t current,
                              const std::shared_ptr<observer_t> &initial_observer = {}) const;
     task_t<void> dispatch_server (std::shared_ptr<raw_client_server_server_t> owner);
-    void stop_servers () noexcept;
-    void stop_clients () noexcept;
+    void stop_servers ();
+    void stop_clients ();
 
     task_t<void> send (const std::string &channel_name,
                        std::string packet_name,

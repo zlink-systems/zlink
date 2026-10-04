@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -154,7 +155,7 @@ final class ZLinkChannelCallRuntimeTest {
 
     @Test
     void disabledFlowCaptureReturnsTheBindingStageWithoutADependent() {
-        var source = new CompletableFuture<String>();
+        var source = new CompletableFuture<ZLinkBackendReceived>();
         var ambient = ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
         try (var ignored = ZLinkFlowContext.enter(ambient)) {
             try (var suppressed =
@@ -169,7 +170,7 @@ final class ZLinkChannelCallRuntimeTest {
 
     @Test
     void enabledFlowCaptureRestoresTheFlowForCompletionAndThenRestoresTheThread() {
-        var source = new CompletableFuture<String>();
+        var source = new CompletableFuture<ZLinkBackendReceived>();
         var captured = ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
         CompletableFuture<ZLinkFlowContext.State> observed;
         try (var ignored = ZLinkFlowContext.enter(captured)) {
@@ -179,9 +180,21 @@ final class ZLinkChannelCallRuntimeTest {
                             .toCompletableFuture();
         }
         assertNull(ZLinkFlowContext.current());
-        source.complete("reply");
+        source.complete(null);
         assertSame(captured, observed.join());
         assertNull(ZLinkFlowContext.current());
+    }
+
+    @Test
+    void capturedRequestCancellationReachesTheBindingWaiter() {
+        var source = new CompletableFuture<ZLinkBackendReceived>();
+        var captured = ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
+        CompletionStage<ZLinkBackendReceived> request;
+        try (var ignored = ZLinkFlowContext.enter(captured)) {
+            request = ZLinkChannelCallRuntime.preserveCurrentFlow(source);
+        }
+        assertTrue(request.toCompletableFuture().cancel(false));
+        assertTrue(source.isCancelled());
     }
 
     @Test

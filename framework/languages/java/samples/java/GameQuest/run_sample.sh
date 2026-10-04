@@ -327,10 +327,11 @@ fi
   >"$LOG_DIR/owner-unavailable-client.log" 2>&1 &
 owner_unavailable_client_pid="$!"
 pids+=("$owner_unavailable_client_pid")
-wait_log_total_count "gamequest-owner-ready player=player-owner-unavailable" 1 \
+wait_log_count "$LOG_DIR/owner-unavailable-client.log" "gamequest-owner-join-completed" 1
+wait_log_total_count "gamequest-owner-initialized player=player-owner-unavailable" 1 \
   "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
 owner_node=""
-if grep -F -q "gamequest-owner-ready player=player-owner-unavailable node=mission-a" \
+if grep -F -q "gamequest-owner-initialized player=player-owner-unavailable node=mission-a" \
   "$LOG_DIR/mission-a.log"; then
   owner_node="mission-a"
 else

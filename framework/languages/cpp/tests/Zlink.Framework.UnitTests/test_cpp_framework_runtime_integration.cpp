@@ -9,7 +9,8 @@
 
 int main ()
 {
-    zlink::framework::runtime::framework_runtime_t runtime;
+    zlink::framework::runtime::framework_runtime_t runtime (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ());
     if (!runtime.owns_native_context ()) {
         return 1;
     }

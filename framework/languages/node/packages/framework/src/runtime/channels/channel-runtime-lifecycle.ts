@@ -1,3 +1,4 @@
+import { RuntimeDisposal } from '../disposal';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkRequestHandler, ZLinkSendHandler } from '../../contracts/Handlers';
 import { ZLinkConfigurationException } from '../configuration';
@@ -115,7 +116,7 @@ export class ZLinkChannelRuntimeLifecycle {
   private readonly meshChannelDispatchers = new Map<string, ZLinkChannelRequestDispatcher>();
   private readonly meshRouteDispatchers = new Map<string, ZLinkRoutePacketDispatcher>();
   private nextManualFanoutIndex = 0;
-  private disposed = false;
+  private readonly disposal = new RuntimeDisposal();
   private locationAutoConnect?: ZLinkChannelLocationAutoConnectContext;
   private clientServerLocation?: ZLinkClientServerLocationRuntime;
   private fanoutLocation?: ZLinkFanoutLocationRuntime;
@@ -392,7 +393,11 @@ export class ZLinkChannelRuntimeLifecycle {
     return this.meshRouteDispatchers.has(meshName);
   }
 
-  async dispose(signal?: AbortSignal): Promise<void> {
+  dispose(signal?: AbortSignal): Promise<void> {
+    return this.disposal.run(() => this.disposeCore(signal));
+  }
+
+  private async disposeCore(signal?: AbortSignal): Promise<void> {
     const work = await this.lane.run(() => this.beginDisposeCore());
     const transportStopped = await startOutsideStateLane(() =>
       Promise.allSettled([
@@ -434,18 +439,29 @@ export class ZLinkChannelRuntimeLifecycle {
       .map((result) => result.reason);
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Channel runtime cleanup failed.');
+    await this.lane.run(() => {
+      this.manualFanoutSubscriberOwners.clear();
+      this.manualFanoutSubscribers.clear();
+      this.channelReceiveLoops.length = 0;
+      this.subscriberReceiveLoops.length = 0;
+      this.routeReceiveLoops.length = 0;
+      this.applicationDispatchQueues.clear();
+      this.clientServerLocation = undefined;
+      this.fanoutLocation = undefined;
+      this.taskRunner = undefined;
+      this.meshChannelDispatchers.clear();
+      this.meshRouteDispatchers.clear();
+      this.options.spotRouteBridges.clear();
+    });
   }
 
   private beginDisposeCore(): ChannelRuntimeDisposeWork {
     const channelLoops = [...this.channelReceiveLoops];
     const manualStates = [...this.manualFanoutSubscribers.values()];
-    this.disposed = true;
     for (const state of manualStates) state.desired = false;
     for (const owner of this.manualFanoutSubscriberOwners) {
       detachEndpointConnections(owner);
     }
-    this.manualFanoutSubscriberOwners.clear();
-    this.manualFanoutSubscribers.clear();
     const manualLoops = new Set(
       manualStates
         .map((state) => state.active?.loop ?? state.stopping?.loop)
@@ -462,16 +478,6 @@ export class ZLinkChannelRuntimeLifecycle {
     const clientServerLocation = this.clientServerLocation;
     const fanoutLocation = this.fanoutLocation;
     const spotRouteBridges = [...this.options.spotRouteBridges.values()];
-    this.channelReceiveLoops.length = 0;
-    this.subscriberReceiveLoops.length = 0;
-    this.routeReceiveLoops.length = 0;
-    this.applicationDispatchQueues.clear();
-    this.clientServerLocation = undefined;
-    this.fanoutLocation = undefined;
-    this.taskRunner = undefined;
-    this.meshChannelDispatchers.clear();
-    this.meshRouteDispatchers.clear();
-    this.options.spotRouteBridges.clear();
     return {
       channelLoops,
       subscriberLoops,
@@ -647,7 +653,7 @@ export class ZLinkChannelRuntimeLifecycle {
     taskRunner: ZLinkRuntimeTaskRunner,
     dispatcher: ZLinkChannelPublishDispatcher
   ): void {
-    if (this.disposed) return;
+    if (this.disposal.started) return;
     const state = this.getOrCreateManualFanoutSubscriber(
       channelName,
       endpoint,
@@ -703,7 +709,7 @@ export class ZLinkChannelRuntimeLifecycle {
 
   private openManualFanoutSubscriber(state: ManualFanoutSubscriberState): Promise<void> {
     const { channelName, endpoint, connectionId, taskRunner, dispatcher } = state;
-    if (this.disposed || !state.desired || this.taskRunner !== taskRunner) {
+    if (this.disposal.started || !state.desired || this.taskRunner !== taskRunner) {
       return Promise.resolve();
     }
     const token = Symbol(`manual-fanout:${channelName}:${endpoint}`);
@@ -719,7 +725,7 @@ export class ZLinkChannelRuntimeLifecycle {
           onReady() {},
           onTerminated: () => {
             if (
-              this.disposed ||
+              this.disposal.started ||
               (state.active?.token !== token && state.openingToken !== token) ||
               reconnecting
             )
@@ -727,7 +733,7 @@ export class ZLinkChannelRuntimeLifecycle {
             reconnecting = true;
             setImmediate(() => {
               if (
-                this.disposed ||
+                this.disposal.started ||
                 (state.active?.token !== token && state.openingToken !== token)
               ) {
                 reconnecting = false;
@@ -735,7 +741,7 @@ export class ZLinkChannelRuntimeLifecycle {
               }
               this.enqueueManualFanoutTransition(state, async () => {
                 reconnecting = false;
-                if (this.disposed || state.active?.token !== token) return;
+                if (this.disposal.started || state.active?.token !== token) return;
                 try {
                   await this.closeManualFanoutSubscriber(state, token);
                 } catch (error) {
@@ -806,8 +812,6 @@ export class ZLinkChannelRuntimeLifecycle {
       await startOutsideStateLane(() => active.loop.stop());
     } catch (error) {
       errors.push(error);
-    } finally {
-      await this.lane.run(() => this.finishCloseManualFanoutSubscriberCore(state, active));
     }
     try {
       await startOutsideStateLane(() =>
@@ -820,17 +824,18 @@ export class ZLinkChannelRuntimeLifecycle {
     if (errors.length > 1) {
       throw new AggregateError(errors, `Fanout subscriber '${state.connectionId}' cleanup failed.`);
     }
+    await this.lane.run(() => this.finishCloseManualFanoutSubscriberCore(state, active));
   }
 
   private shouldReconnectManualFanoutSubscriber(state: ManualFanoutSubscriberState): boolean {
-    return !this.disposed && state.desired;
+    return !this.disposal.started && state.desired;
   }
 
   private beginCloseManualFanoutSubscriberCore(
     state: ManualFanoutSubscriberState,
     expectedToken?: symbol
   ): ManualFanoutSubscriberActive | undefined {
-    const active = state.active;
+    const active = state.active ?? state.stopping;
     if (active === undefined || (expectedToken !== undefined && active.token !== expectedToken)) {
       return undefined;
     }

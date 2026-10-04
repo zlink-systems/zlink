@@ -1,3 +1,4 @@
+import { RuntimeDisposal } from '../disposal';
 import { randomUUID } from 'node:crypto';
 import {
   type ActorRef,
@@ -161,7 +162,7 @@ export class ZLinkSpotNodeRuntimeManager {
     string,
     ReturnType<ZLinkBackendMeshNode['createPublisher']>
   >();
-  private disposed = false;
+  private readonly disposal = new RuntimeDisposal();
   private readonly autoConnectLoops: ZLinkAutoConnectLoop[] = [];
   private readonly publishedMeshNodeDescriptors = new Map<string, ZLinkMeshNodeDescriptor>();
   // Keep the revision source separate from the cached Store row. A new owner
@@ -814,18 +815,17 @@ export class ZLinkSpotNodeRuntimeManager {
     ).filter(([, channel]) => channel.server === true);
   }
 
-  async dispose(signal?: AbortSignal, deadline?: Date): Promise<void> {
-    this.disposed = true;
+  dispose(signal?: AbortSignal, deadline?: Date): Promise<void> {
+    return this.disposal.run(() => this.disposeCore(signal, deadline));
+  }
+
+  private async disposeCore(signal?: AbortSignal, deadline?: Date): Promise<void> {
     const autoConnectLoops = [...this.autoConnectLoops];
     const entryActivations = [...this.entryActivations.values()];
     const meshPumps = [...this.meshPumps.values()];
     const meshNodes = [...this.meshNodes.values()];
     const meshCompletions = [...this.meshCompletions.values()];
-    this.entryActivations.clear();
-    this.autoConnectLoops.length = 0;
-    this.meshPumps.clear();
     const publishers = [...this.publishers.values()];
-    this.publishers.clear();
     const errors: unknown[] = [];
     const settle = async (operations: readonly Promise<unknown>[]) => {
       const results = await Promise.allSettled(operations);
@@ -848,11 +848,15 @@ export class ZLinkSpotNodeRuntimeManager {
     for (const completions of meshCompletions) {
       completions.dispose();
     }
-    this.meshNodes.clear();
-    this.meshCompletions.clear();
     await settle(autoConnectLoops.map((loop) => loop.finishTransportShutdown(signal)));
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'SPOT node runtime cleanup failed.');
+    this.entryActivations.clear();
+    this.autoConnectLoops.length = 0;
+    this.meshPumps.clear();
+    this.publishers.clear();
+    this.meshNodes.clear();
+    this.meshCompletions.clear();
   }
 
   private async dispatchMeshRecord(
@@ -1123,7 +1127,7 @@ export class ZLinkSpotNodeRuntimeManager {
     signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_SPOT_METADATA
   ): Promise<ZLinkSubmitResult> {
-    if (this.disposed) {
+    if (this.disposal.started) {
       return Promise.reject(runtimeShutdownError());
     }
     if (signal?.aborted === true) {
@@ -1190,7 +1194,7 @@ export class ZLinkSpotNodeRuntimeManager {
     flags: number,
     metadata: ReadonlyMap<string, string>
   ): ZLinkSubmitResult {
-    if (this.disposed) {
+    if (this.disposal.started) {
       throw runtimeShutdownError();
     }
     const publisher = this.publishers.get(meshName);

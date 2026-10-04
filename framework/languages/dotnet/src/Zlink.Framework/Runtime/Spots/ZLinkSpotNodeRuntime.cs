@@ -799,32 +799,21 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         await activation.CloseAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
-    public ValueTask DisposeAsync()
-    {
-        return new ValueTask(
-            AwaitStateLane(
-                _lane.RunAsync(() => _disposeTask ??= StartDisposeCore(CancellationToken.None))
+    public ValueTask DisposeAsync() =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                () => DisposeCoreAsync(CancellationToken.None)
             )
         );
-    }
 
-    internal ValueTask ForceStopAsync(CancellationToken cancellationToken)
-    {
-        return new ValueTask(
-            AwaitStateLane(
-                _lane.RunAsync(() => _disposeTask ??= StartDisposeCore(cancellationToken))
+    internal ValueTask ForceStopAsync(CancellationToken cancellationToken) =>
+        new(
+            ZLinkRuntimeTaskRunner.RunDisposal(
+                ref _disposeTask,
+                () => DisposeCoreAsync(cancellationToken)
             )
         );
-    }
-
-    private Task StartDisposeCore(CancellationToken forceStopToken)
-    {
-        if (ExecutionContext.IsFlowSuppressed())
-            return Task.Run(() => DisposeCoreAsync(forceStopToken), CancellationToken.None);
-
-        using (ExecutionContext.SuppressFlow())
-            return Task.Run(() => DisposeCoreAsync(forceStopToken), CancellationToken.None);
-    }
 
     private async Task DisposeCoreAsync(CancellationToken forceStopToken)
     {
@@ -851,11 +840,11 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     : Node.DisposeAsync
             )
             .ConfigureAwait(false);
-        Capture(() => AwaitStateLane(_lane.RunAsync(DisposeStopSourceOnLane)));
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
         if (failures.Count > 1)
             throw new AggregateException(failures);
+        AwaitStateLane(_lane.RunAsync(DisposeStopSourceOnLane));
         return;
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)

@@ -59,6 +59,7 @@
         <Compile Include="Support/Relocation/InMemoryRelocationStore.cs"/>
         <Compile Include="Support/Sessions/TestSession.cs"/>
         <Compile Include="Runtime/AutoConnectLoopTests.cs"/>
+        <Compile Include="Runtime/RawPortCloseFailureTests.cs"/>
         <Compile Include="Runtime/AutoConnectRejectionTests.cs"/>
         <Compile Include="Runtime/AutoConnectLifecycleCoordinatorTests.cs"/>
         <Compile Include="Runtime/AutoConnectReconcilerTests.cs"/>

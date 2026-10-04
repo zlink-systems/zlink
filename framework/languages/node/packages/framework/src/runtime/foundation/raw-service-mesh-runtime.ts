@@ -479,23 +479,6 @@ export class RawServiceMeshRuntime {
     if (selection.kind !== 'selected') return selection.submitResult;
     const selected = selection.peer;
     const applicationFrame = this.applicationFrame(payload);
-    if (selected.descriptor.nodeRoutingId === this.descriptor.nodeRoutingId) {
-      const applicationJobOwner = await this.reserveLocalIngress();
-      try {
-        const applicationJob = await applicationJobOwner.acquire('application');
-        const accepted = this.mailbox.tryEnqueue({
-          owner: `channel:${channelName}`,
-          domain: 'application',
-          parts: [encodeChannelSendHeader(channelName), applicationFrame],
-          sourceRoutingId: this.descriptor.nodeRoutingId,
-          applicationJob
-        });
-        if (!accepted) applicationJob.close();
-        return accepted ? SubmitResult.Ok : SubmitResult.NotAdmitted;
-      } finally {
-        applicationJobOwner.close();
-      }
-    }
     return (await this.send(selected.descriptor.nodeRoutingId, [
       encodeChannelSendHeader(channelName),
       applicationFrame
@@ -533,7 +516,7 @@ export class RawServiceMeshRuntime {
 
   private selectChannelTarget(channelName: string): RawServiceChannelTargetSelection {
     const selected = this.topology.selectChannel(channelName, (peer) =>
-      this.isLocalOrReadyPeer(peer.descriptor.nodeRoutingId)
+      this.isPeerRouteReady(peer.descriptor.nodeRoutingId)
     );
     if (selected !== undefined) return { kind: 'selected', peer: selected };
     return this.topology.hasKnownChannelTarget(channelName)
@@ -550,10 +533,6 @@ export class RawServiceMeshRuntime {
             failureCode: REQUEST_TARGET_NOT_FOUND_FAILURE_CODE
           }
         };
-  }
-
-  private isLocalOrReadyPeer(nodeRoutingId: string): boolean {
-    return nodeRoutingId === this.descriptor.nodeRoutingId || this.isPeerRouteReady(nodeRoutingId);
   }
 
   setServiceIngress(handler: RawServiceIngressHandler): void {
@@ -1031,7 +1010,6 @@ export class RawServiceMeshRuntime {
 
   close(): void {
     if (this.closed) return;
-    this.closed = true;
     this.applicationJobStop.abort(
       new Error('Raw service runtime application job admission stopped.')
     );
@@ -1043,9 +1021,10 @@ export class RawServiceMeshRuntime {
       this.applicationJobQueue.unregisterReceiveFlowTarget?.(router);
     }
     const host = this.host;
+    if (host !== undefined) host.close();
     this.router = undefined;
     this.host = undefined;
-    if (host !== undefined) host.close();
+    this.closed = true;
   }
 
   private requestToTarget(
@@ -1076,14 +1055,11 @@ export class RawServiceMeshRuntime {
         for (;;) {
           const alternate = this.topology.selectChannel(channelName, (peer) => {
             const candidate = peer.descriptor.nodeRoutingId;
-            return !excludedTargets.has(candidate) && this.isLocalOrReadyPeer(candidate);
+            return !excludedTargets.has(candidate) && this.isPeerRouteReady(candidate);
           });
           if (alternate === undefined) break;
           selectedTargetNodeRoutingId = alternate.descriptor.nodeRoutingId;
-          if (
-            selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId ||
-            this.isPeerRouteReady(selectedTargetNodeRoutingId)
-          ) {
+          if (this.isPeerRouteReady(selectedTargetNodeRoutingId)) {
             break;
           }
           excludedTargets.add(selectedTargetNodeRoutingId);
@@ -1107,10 +1083,7 @@ export class RawServiceMeshRuntime {
             return;
           }
           const accepted = this.mailbox.tryEnqueue({
-            owner:
-              channelName === undefined
-                ? `node:${this.descriptor.nodeRoutingId}`
-                : `channel:${channelName}`,
+            owner: `node:${this.descriptor.nodeRoutingId}`,
             domain: 'application',
             parts,
             sourceRoutingId: this.descriptor.nodeRoutingId,

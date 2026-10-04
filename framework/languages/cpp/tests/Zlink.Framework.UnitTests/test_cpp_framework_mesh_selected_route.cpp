@@ -32,6 +32,8 @@ std::vector<std::uint8_t> bytes (const std::string &value)
 mesh::raw_mesh_node_options_t options (const std::string &rid, std::uint64_t lifecycle_generation)
 {
     mesh::raw_mesh_node_options_t result;
+    result.runtime_failures =
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
     result.descriptor = mesh::service_node_descriptor_t{"selected-route-mesh",
                                                         bytes (rid),
                                                         1,

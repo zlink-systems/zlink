@@ -494,23 +494,30 @@ final class ZLinkActorDispatchSerials {
             QueuedTurn turn,
             CompletableFuture<Void> admission,
             Function<CompletableFuture<Void>, CompletionStage<Void>> enqueue) {
+        var ownership =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                        .transferToQueuedJob();
         CompletionStage<Void> queued;
         try {
             queued =
-                    turn.barrierAdmission() == COMPLETED
-                            ? enqueue.apply(admission)
-                            : turn.barrierAdmission()
-                                    .thenCompose(ignored -> enqueue.apply(admission));
+                    turn.barrierAdmission()
+                            .thenCompose(
+                                    ignored -> {
+                                        try (var scope =
+                                                systems.zlink.framework.runtime.internal.dispatch
+                                                        .ZLinkApplicationJobContext.enterQueued(
+                                                        ownership)) {
+                                            return enqueue.apply(admission);
+                                        }
+                                    });
         } catch (RuntimeException | Error failure) {
             queued = CompletableFuture.failedFuture(failure);
         }
-        queued.whenComplete(
+        return queued.whenComplete(
                 (ignored, error) -> {
-                    if (error != null) {
-                        admission.completeExceptionally(error);
-                    }
+                    if (ownership != null) ownership.close();
+                    if (error != null) admission.completeExceptionally(error);
                 });
-        return queued;
     }
 
     private void startTeardown(

@@ -403,7 +403,8 @@ export class ZLinkFrameworkRuntimeHost
         this.meshRouters.classifyManualNodeTarget(meshName, targetNodeRid),
       (meshName, sourceNodeRid, parts) => this.submitLocalMeshRoute(meshName, sourceNodeRid, parts),
       this.metrics,
-      () => this.flowCreationEnabled()
+      () => this.flowCreationEnabled(),
+      () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow
     );
     this.spotAddressTransport = new ZLinkHostSpotAddressTransport({
       resolver: () => this.createLocationSpotRouteResolver(),
@@ -896,7 +897,7 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   get isStarted(): boolean {
-    return this.executionState !== undefined;
+    return this.executionState !== undefined && !this.executionState.abortController.signal.aborted;
   }
 
   get status(): ZLinkFrameworkRuntimeStatus {
@@ -1524,17 +1525,25 @@ export class ZLinkFrameworkRuntimeHost
     } catch (error) {
       if (this.shutdownDeadline !== undefined && isAbortError(error)) throw error;
       await statefulAuthorityRoutes?.stop();
-      await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
-        rollbackRuntimeStart({
-          context,
-          startedLocationRuntime: startedLocationRuntime ?? this.locationOwner.currentRuntime,
-          shutdownSignal: this.shutdownDeadline!.signal,
-          streamRuntime,
-          spotNodeRuntime,
-          channelRuntime,
-          ownedStores: registeredRuntimeStores(this.options.registration)
-        })
-      );
+      try {
+        await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
+          rollbackRuntimeStart({
+            context,
+            startedLocationRuntime: startedLocationRuntime ?? this.locationOwner.currentRuntime,
+            shutdownSignal: this.shutdownDeadline!.signal,
+            streamRuntime,
+            spotNodeRuntime,
+            channelRuntime,
+            ownedStores: registeredRuntimeStores(this.options.registration)
+          })
+        );
+      } catch (cleanupError) {
+        this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+          'framework start rollback',
+          cleanupError
+        );
+        throw new AggregateError([error, cleanupError], 'Framework start and rollback failed.');
+      }
       this.executionState = undefined;
       this.channelRuntime = undefined;
       this.spotNodeRuntime = undefined;
@@ -1612,12 +1621,6 @@ export class ZLinkFrameworkRuntimeHost
     this.stopTopologyObservers();
     this.removeOwnerLeaseRecoveryPublication();
     const locationSnapshot = this.locationOwner.clearForStop();
-    this.executionState = undefined;
-    this.channelRuntime = undefined;
-    this.spotNodeRuntime = undefined;
-    this.streamRuntime = undefined;
-    this.statefulAuthorityRoutes = undefined;
-    this.cachedLocationSpotRouteResolver = undefined;
     this.lifecycleSink?.push('framework:stop');
     await statefulAuthorityRoutes?.stop();
     await stopRuntimeParts({
@@ -1631,6 +1634,12 @@ export class ZLinkFrameworkRuntimeHost
       serviceRelocation: this.serviceRelocation,
       ownedStores: registeredRuntimeStores(this.options.registration)
     });
+    this.executionState = undefined;
+    this.channelRuntime = undefined;
+    this.spotNodeRuntime = undefined;
+    this.streamRuntime = undefined;
+    this.statefulAuthorityRoutes = undefined;
+    this.cachedLocationSpotRouteResolver = undefined;
     this.listenerRecords.clear();
     this.lifecycleSink?.push('framework:stopped');
     if (this.shutdownOperation === undefined) {

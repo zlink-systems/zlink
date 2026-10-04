@@ -296,8 +296,8 @@ class channel_runtime_t
     result_t<std::uint64_t> reserve_outbound_request (std::string channel_name);
     result_t<void> complete_outbound_reply (std::uint64_t request_seq);
     result_t<void> cancel_outbound_request (std::uint64_t request_seq);
-    void close () noexcept;
-    void shutdown () noexcept;
+    void close ();
+    void shutdown ();
     /* Live manual endpoint mutation for a client channel (endpoint
      * connections contract): requests iterate the same bundle set. */
     void add_client_manual_connection (const std::string &channel_name,
@@ -316,7 +316,7 @@ class channel_runtime_t
     std::shared_ptr<zlink::context_t> core_context () const;
     void bind_fanout_advertise_hosts (std::map<std::string, std::string> hosts) noexcept;
     void initialize_manual_channel_publishers ();
-    void close_manual_channel_publishers () noexcept;
+    void close_manual_channel_publishers ();
     void bind_spot_mesh_transport (std::string mesh_name,
                                    channel_runtime_state_t::spot_mesh_send_t send,
                                    channel_runtime_state_t::spot_mesh_request_t request);
@@ -336,6 +336,10 @@ class channel_runtime_t
     void bind_fanout_transport (std::string channel_name,
                                 channel_runtime_state_t::fanout_publish_t publish);
     void unbind_fanout_transport (const std::string &channel_name) noexcept;
+    std::shared_ptr<runtime::runtime_failure_collector_t> runtime_failures () const
+    {
+        return runtime_failures_for (_state->monitoring);
+    }
     dispatch_options_t dispatch_options () const;
     const dispatch_options_t &dispatch_options_ref () const noexcept { return _state->dispatch; }
     void mark_auto_connect_active ();

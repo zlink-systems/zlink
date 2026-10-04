@@ -14,6 +14,7 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterRoute;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
@@ -27,6 +28,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -197,21 +199,24 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 target,
                 copyMessages(frames, "service request must not be empty"),
                 timeout,
-                decodeReply);
+                decodeReply,
+                ignored -> {});
     }
 
-    /** Consumes every request message on every return or throw path. */
+    /** Consumes request messages and discards a decoded reply if cancellation wins. */
     <T> CompletionStage<T> requestMessages(
             RouterSocket router,
             RoutingId target,
             List<Message> messages,
             Duration timeout,
-            Function<List<Message>, T> decodeReply) {
+            Function<List<Message>, T> decodeReply,
+            Consumer<T> discardReply) {
         List<Message> ownedMessages = claimMessages(messages);
         boolean completionOwns = false;
         try {
             ensureOwned(router);
             Objects.requireNonNull(decodeReply, "decodeReply");
+            Objects.requireNonNull(discardReply, "discardReply");
             Objects.requireNonNull(target, "target");
             Objects.requireNonNull(timeout, "timeout");
             if (ownedMessages.isEmpty()) {
@@ -222,19 +227,27 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             for (int index = 1; index < ownedMessages.size(); index++) {
                 submit.message(ownedMessages.get(index));
             }
-            CompletionStage<T> completion =
-                    submit.timeout(timeout)
-                            .submit()
-                            .reply()
-                            .thenApply(
-                                    reply -> {
-                                        try {
-                                            return decodeReply.apply(reply);
-                                        } finally {
-                                            reply.forEach(Message::close);
-                                        }
-                                    })
-                            .whenComplete((ignored, failure) -> Message.closeAll(ownedMessages));
+            CompletionStage<List<Message>> bindingReply =
+                    ZLinkJavaSocketSupport.reply(submit.timeout(timeout).submit());
+            CompletableFuture<T> completion = new CompletableFuture<>();
+            bindingReply.whenComplete(
+                    (reply, failure) -> {
+                        try {
+                            if (failure != null) {
+                                completion.completeExceptionally(failure);
+                            } else {
+                                T decoded = decodeReply.apply(reply);
+                                ZLinkCompletionBridge.completeOrDiscard(
+                                        completion, decoded, discardReply);
+                            }
+                        } catch (RuntimeException | Error error) {
+                            completion.completeExceptionally(error);
+                        } finally {
+                            if (reply != null) Message.closeAll(reply);
+                            Message.closeAll(ownedMessages);
+                        }
+                    });
+            ZLinkCompletionBridge.forwardCancellation(completion, bindingReply);
             completionOwns = true;
             return completion;
         } catch (RuntimeException failure) {

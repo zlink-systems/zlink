@@ -42,7 +42,8 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         null,
         null
     );
-    private int _disposed;
+    private Task? _disposeTask;
+    private bool IsDisposing => Volatile.Read(ref _disposeTask) is not null;
     private long _socketCreationCount;
 
     internal long SocketCreationCount => Volatile.Read(ref _socketCreationCount);
@@ -93,14 +94,18 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         ZLinkLocationRuntimeSnapshot location
     )
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ObjectDisposedException.ThrowIf(IsDisposing, this);
         var desired = plans
             .Where(static plan => plan.Connect)
             .ToDictionary(static plan => IdentityKey(plan.Descriptor));
         var removed = await _lane
             .RunAsync(() =>
             {
-                List<Connection> removed = [];
+                ObjectDisposedException.ThrowIf(IsDisposing, this);
+                List<(
+                    (RoutingId PublisherRid, ulong LifecycleGeneration) Key,
+                    Connection Connection
+                )> removed = [];
                 _location = location;
                 _excluded = plans
                     .Where(static plan => !plan.Connect)
@@ -124,10 +129,25 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
                         continue;
                     }
 
-                    _connections.Remove(key);
-                    removed.Add(connection);
+                    if (plan is not null)
+                        desired[key] = plan;
+                    removed.Add((key, connection));
                 }
 
+                PublishSnapshotNoLock();
+                return removed;
+            })
+            .ConfigureAwait(false);
+
+        foreach (var (key, connection) in removed)
+        {
+            await connection.DisposeAsync().ConfigureAwait(false);
+            await _lane.RunAsync(() => _connections.Remove(key)).ConfigureAwait(false);
+        }
+        await _lane
+            .RunAsync(() =>
+            {
+                ObjectDisposedException.ThrowIf(IsDisposing, this);
                 foreach (var (key, plan) in desired)
                 {
                     var connection = new Connection(this, plan.Descriptor);
@@ -135,12 +155,8 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
                     StartConnection(connection);
                 }
                 PublishSnapshotNoLock();
-                return removed;
             })
             .ConfigureAwait(false);
-
-        foreach (var connection in removed)
-            await connection.DisposeAsync().ConfigureAwait(false);
     }
 
     internal async ValueTask ClearAsync(ZLinkLocationRuntimeSnapshot location)
@@ -148,19 +164,27 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         var removed = await _lane
             .RunAsync(() =>
             {
-                if (Volatile.Read(ref _disposed) != 0)
-                    return Array.Empty<Connection>();
+                if (IsDisposing)
+                    return Array.Empty<(
+                        (RoutingId PublisherRid, ulong LifecycleGeneration) Key,
+                        Connection Connection
+                    )>();
                 _location = location;
                 _excluded = Array.Empty<ZLinkFanoutPublisherConnectionSnapshot>();
-                var removed = _connections.Values.ToArray();
-                _connections.Clear();
+                var removed = _connections
+                    .Select(static entry => (Key: entry.Key, Connection: entry.Value))
+                    .ToArray();
                 PublishSnapshotNoLock();
                 return removed;
             })
             .ConfigureAwait(false);
 
-        foreach (var connection in removed)
+        foreach (var (key, connection) in removed)
+        {
             await connection.DisposeAsync().ConfigureAwait(false);
+            await _lane.RunAsync(() => _connections.Remove(key)).ConfigureAwait(false);
+        }
+        await _lane.RunAsync(PublishSnapshotNoLock).ConfigureAwait(false);
     }
 
     internal void RecordLocationFailure(DateTimeOffset? lastSuccessAt, DateTimeOffset failureAt)
@@ -178,23 +202,34 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         );
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() =>
+        new(ZLinkRuntimeTaskRunner.RunDisposal(ref _disposeTask, DisposeCoreAsync));
+
+    private async Task DisposeCoreAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            return;
         var connections = await _lane
             .RunAsync(() =>
             {
-                var connections = _connections.Values.ToArray();
-                _connections.Clear();
+                var connections = _connections
+                    .Select(static entry => (Key: entry.Key, Connection: entry.Value))
+                    .ToArray();
                 _excluded = Array.Empty<ZLinkFanoutPublisherConnectionSnapshot>();
                 PublishSnapshotNoLock();
                 return connections;
             })
             .ConfigureAwait(false);
         var failures = new ZLinkFailureCollector();
-        foreach (var connection in connections)
-            await failures.CaptureAsync(connection.DisposeAsync).ConfigureAwait(false);
+        foreach (var (key, connection) in connections)
+        {
+            await failures
+                .CaptureAsync(async () =>
+                {
+                    await connection.DisposeAsync().ConfigureAwait(false);
+                    await _lane.RunAsync(() => _connections.Remove(key)).ConfigureAwait(false);
+                })
+                .ConfigureAwait(false);
+        }
+        failures.ThrowIfAny();
         await failures.CaptureAsync(_applicationDispatch.DisposeAsync).ConfigureAwait(false);
         if (_ownsApplicationJobQueue)
             failures.Capture(_applicationJobQueue.Dispose);
@@ -270,6 +305,8 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         private string? _lastFailure;
         private bool _ready;
         private Task? _loop;
+        private ISubSocket? _socket;
+        private Task? _disposeTask;
 
         internal string Endpoint
         {
@@ -344,11 +381,10 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
 
         private async Task RunAttemptAsync(CancellationToken cancellationToken)
         {
-            ISubSocket? socket = null;
             using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             try
             {
-                socket = owner._context.CreateSubscriberSocket();
+                var socket = _socket = owner._context.CreateSubscriberSocket();
                 Interlocked.Increment(ref owner._socketCreationCount);
                 ZLinkChannelBundleFactory.ApplySocketConfig(socket.Options, owner._socketConfig);
                 ZLinkFanoutSubscriptionPolicy.Apply(socket, owner._applicationTopics);
@@ -385,16 +421,22 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
             }
             finally
             {
-                if (socket is not null)
+                if (_socket is not null)
                     try
                     {
-                        await socket.DisposeAsync().ConfigureAwait(false);
+                        await _socket.DisposeAsync().ConfigureAwait(false);
+                        _socket = null;
                     }
                     catch (Exception exception)
                     {
                         await _lane
                             .RunAsync(() => _lastFailure ??= exception.Message)
                             .ConfigureAwait(false);
+                        owner._errorSink.ReportRuntimeTaskException(
+                            nameof(RunAttemptAsync),
+                            exception
+                        );
+                        throw;
                     }
             }
         }
@@ -456,7 +498,10 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         private void SetFailure(string failure) =>
             AwaitStateLane(_lane.RunAsync(() => _lastFailure = failure));
 
-        public async ValueTask DisposeAsync()
+        public ValueTask DisposeAsync() =>
+            new(ZLinkRuntimeTaskRunner.RunDisposal(ref _disposeTask, DisposeCoreAsync));
+
+        private async Task DisposeCoreAsync()
         {
             await _stop.CancelAsync().ConfigureAwait(false);
             if (_loop is not null)
@@ -465,6 +510,15 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
                     await _loop.ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { }
+                finally
+                {
+                    _loop = null;
+                }
+            if (_socket is not null)
+            {
+                await _socket.DisposeAsync().ConfigureAwait(false);
+                _socket = null;
+            }
             _stop.Dispose();
             await _lane.DisposeAsync().ConfigureAwait(false);
         }

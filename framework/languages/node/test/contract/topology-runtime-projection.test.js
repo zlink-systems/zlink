@@ -659,7 +659,7 @@ test('Shutdown seals active RouteMesh ClientServer and Fanout observers with ter
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.executionState = {};
+  host.executionState = { abortController: new AbortController() };
   host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
   routeMesh.markServing();
   host.channelRuntime = manager;
@@ -820,7 +820,7 @@ test('Relocate keeps Serving when descriptor publication is reversibly rolled ba
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.executionState = {};
+  host.executionState = { abortController: new AbortController() };
   host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
   host.routeMeshCoordinator = {
     async prepareHostRetire() {
@@ -847,7 +847,7 @@ test('Relocate reports an irreversible descriptor rollback failure without claim
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.executionState = {};
+  host.executionState = { abortController: new AbortController() };
   host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
   host.routeMeshCoordinator = {
     async prepareHostRetire() {
@@ -868,7 +868,7 @@ test('Relocate preserves an incompatible participant state as StateIncompatible'
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.executionState = {};
+  host.executionState = { abortController: new AbortController() };
   host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
   host.routeMeshCoordinator = {
     async prepareHostRetire() {
@@ -898,7 +898,7 @@ test('Relocate spends one absolute deadline across preflight publication and res
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.executionState = {};
+  host.executionState = { abortController: new AbortController() };
   host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
   let preflightDeadlineAt;
   let publicationBudget;
@@ -1014,7 +1014,7 @@ test('Successful relocation leaves infrastructure started until explicit shutdow
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration({ applicationVersion: 3n })
   });
-  host.executionState = {};
+  host.executionState = { abortController: new AbortController() };
   host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
   host.routeMeshCoordinator = {
     async prepareHostRetire() {
@@ -1043,7 +1043,7 @@ test('Shutdown stops new relocation units and waits only for admitted work to co
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.executionState = {};
+  host.executionState = { abortController: new AbortController() };
   host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
   let relocationStarted;
   let releaseAdmitted;
@@ -1109,7 +1109,7 @@ test('concurrent Relocate shares identical options and rejects a different opera
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration({ applicationVersion: 3n })
   });
-  host.executionState = {};
+  host.executionState = { abortController: new AbortController() };
   host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
   let release;
   let prepares = 0;

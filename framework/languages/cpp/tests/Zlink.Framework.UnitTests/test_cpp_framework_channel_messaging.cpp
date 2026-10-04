@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -813,7 +814,7 @@ int main ()
             return 222;
     }
 
-    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     zlink.add_node ("outbound-node");
     zlink.default_request_timeout (std::chrono::milliseconds (10000));
     zlink.channel ("profile")
@@ -888,10 +889,12 @@ int main ()
     if (!assigned_channel.snapshot ().client.enabled) {
         return 124;
     }
-    zlink::framework::zlink_builder_t movable_builder;
+    zlink::framework::zlink_builder_t movable_builder =
+      zlink::framework::test::runtime_failure_builder ();
     movable_builder.add_node ("movable");
     zlink::framework::zlink_builder_t moved_builder (std::move (movable_builder));
-    zlink::framework::zlink_builder_t assigned_builder;
+    zlink::framework::zlink_builder_t assigned_builder =
+      zlink::framework::test::runtime_failure_builder ();
     assigned_builder = std::move (moved_builder);
     assigned_builder.channel ("moved-channel").enable_client ().connect ("tcp://127.0.0.1:7053");
     const auto assigned_channels =
@@ -1035,7 +1038,8 @@ int main ()
         // contract; this probe only checks that the runtime stays alive.
     }
 
-    zlink::framework::zlink_builder_t unbounded_pending;
+    zlink::framework::zlink_builder_t unbounded_pending =
+      zlink::framework::test::runtime_failure_builder ();
     unbounded_pending.channel ("profile").enable_client ();
     auto pending_runtime =
       zlink::framework::detail::channel_runtime_t::from (unbounded_pending.message_bus ());
@@ -1046,7 +1050,8 @@ int main ()
     }
     pending_runtime.drain ();
 
-    zlink::framework::zlink_builder_t outbound_only;
+    zlink::framework::zlink_builder_t outbound_only =
+      zlink::framework::test::runtime_failure_builder ();
     auto outbound_only_channel = outbound_only.channel ("client-only");
     outbound_only_channel.enable_client ();
     outbound_only_channel.enable_publisher ();
@@ -1057,7 +1062,7 @@ int main ()
         || !outbound_channels[0].client.enabled || !outbound_channels[0].publisher.enabled) {
         return 7;
     }
-    zlink::framework::zlink_builder_t fanout;
+    zlink::framework::zlink_builder_t fanout = zlink::framework::test::runtime_failure_builder ();
     auto fanout_channel = fanout.channel ("broadcast");
     fanout_channel.enable_publisher ().bind ("tcp://127.0.0.1:7351");
     fanout_channel.enable_subscriber ()
@@ -1091,7 +1096,8 @@ int main ()
         return 75;
     }
 
-    zlink::framework::zlink_builder_t local_server;
+    zlink::framework::zlink_builder_t local_server =
+      zlink::framework::test::runtime_failure_builder ();
     local_server.channel ("local").enable_server ().bind ("tcp://127.0.0.1:7401");
     std::vector<zlink::framework::message_dispatch_error_event_t> dispatch_errors;
     std::mutex dispatch_errors_mutex;
@@ -1173,7 +1179,8 @@ int main ()
         }
         assert (retained.to_string () == value.SerializeAsString ());
     }
-    zlink::framework::zlink_builder_t protobuf_client_builder;
+    zlink::framework::zlink_builder_t protobuf_client_builder =
+      zlink::framework::test::runtime_failure_builder ();
     protobuf_client_builder.channel ("protobuf-client")
       .enable_client ()
       .connect ("tcp://127.0.0.1:1");
@@ -1226,7 +1233,8 @@ int main ()
     const auto cancellation =
       zlink::framework::detail::make_cancellation_exception ("channel transport cancelled");
     constexpr auto cancellation_channel = "cancelled-client";
-    zlink::framework::zlink_builder_t cancellation_client_builder;
+    zlink::framework::zlink_builder_t cancellation_client_builder =
+      zlink::framework::test::runtime_failure_builder ();
     cancellation_client_builder.channel (cancellation_channel)
       .enable_client ()
       .connect ("tcp://127.0.0.1:1");
@@ -1260,7 +1268,8 @@ int main ()
 
     zlink::framework::detail::channel_runtime_t::from (outbound_only.message_bus ())
       .bind_serializers (serializers);
-    zlink::framework::zlink_builder_t shutdown_outbound;
+    zlink::framework::zlink_builder_t shutdown_outbound =
+      zlink::framework::test::runtime_failure_builder ();
     auto shutdown_channel = shutdown_outbound.channel ("shutdown-client");
     shutdown_channel.enable_client ().connect ("tcp://127.0.0.1:1");
     shutdown_channel.enable_publisher ().connect ("tcp://127.0.0.1:2");
@@ -1802,7 +1811,8 @@ int main ()
     zlink::socket_monitor_t native_bus_server_monitor = native_bus_server.monitor_open ();
     native_bus_server.bind ("tcp://127.0.0.1:*");
     const auto native_bus_endpoint = native_bus_server.options ().last_endpoint ();
-    zlink::framework::zlink_builder_t native_bus_builder;
+    zlink::framework::zlink_builder_t native_bus_builder =
+      zlink::framework::test::runtime_failure_builder ();
     native_bus_builder.channel ("native-bus").enable_client ().connect (native_bus_endpoint);
     auto native_bus_runtime =
       zlink::framework::detail::channel_runtime_t::from (native_bus_builder.message_bus ());
@@ -1888,7 +1898,8 @@ int main ()
 
     {
         // Direct-mode ClientServer listener: wildcard bind, advertised host + bound port.
-        zlink::framework::zlink_builder_t advertised_builder;
+        zlink::framework::zlink_builder_t advertised_builder =
+          zlink::framework::test::runtime_failure_builder ();
         const auto advertised_listeners =
           std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
         advertised_builder.channel ("hosted-advertised").enable_server ().bind ("tcp://0.0.0.0:0");
@@ -1897,6 +1908,7 @@ int main ()
         advertised_runtime.bind_core_context (framework_core_context);
         advertised_runtime.bind_serializers (serializers);
         zlink::framework::runtime::channel_host_service_t advertised_service (
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
           advertised_builder.message_bus (), advertised_runtime.channel_snapshots (), handlers,
           serializers, {{"hosted-advertised", "cs.example.internal"}}, {}, advertised_listeners);
         advertised_service.start (provider);
@@ -1914,7 +1926,8 @@ int main ()
         }
     }
 
-    zlink::framework::zlink_builder_t hosted_builder;
+    zlink::framework::zlink_builder_t hosted_builder =
+      zlink::framework::test::runtime_failure_builder ();
     const auto hosted_listeners =
       std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     const auto hosted_server_rid = zlink::routing_id_t::from (std::string ("hosted-server"));
@@ -1925,6 +1938,7 @@ int main ()
     hosted_runtime.bind_core_context (framework_core_context);
     hosted_runtime.bind_serializers (serializers);
     zlink::framework::runtime::channel_host_service_t hosted_service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       hosted_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (hosted_builder.message_bus ())
         .channel_snapshots (),
@@ -2033,13 +2047,15 @@ int main ()
     }
     hosted_service.stop ();
 
-    zlink::framework::zlink_builder_t manual_server_builder;
+    zlink::framework::zlink_builder_t manual_server_builder =
+      zlink::framework::test::runtime_failure_builder ();
     manual_server_builder.channel ("hosted-manual").enable_server ().bind ("tcp://127.0.0.1:0");
     auto manual_server_runtime =
       zlink::framework::detail::channel_runtime_t::from (manual_server_builder.message_bus ());
     manual_server_runtime.bind_core_context (framework_core_context);
     manual_server_runtime.bind_serializers (serializers);
     zlink::framework::runtime::channel_host_service_t manual_hosted_service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       manual_server_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (manual_server_builder.message_bus ())
         .channel_snapshots (),
@@ -2050,7 +2066,8 @@ int main ()
         .value ()
         .endpoint;
 
-    zlink::framework::zlink_builder_t manual_client_builder;
+    zlink::framework::zlink_builder_t manual_client_builder =
+      zlink::framework::test::runtime_failure_builder ();
     manual_client_builder.channel ("hosted-manual")
       .enable_client ()
       .connect (manual_hosted_endpoint);
@@ -2106,7 +2123,8 @@ int main ()
         return 89;
     }
 
-    zlink::framework::zlink_builder_t nested_hosted_builder;
+    zlink::framework::zlink_builder_t nested_hosted_builder =
+      zlink::framework::test::runtime_failure_builder ();
     auto nested_hosted_channel = nested_hosted_builder.channel ("hosted-nested");
     nested_hosted_channel.enable_server ().bind ("tcp://127.0.0.1:0");
     auto nested_hosted_runtime =
@@ -2123,6 +2141,7 @@ int main ()
       "hosted-nested", "request", &nested_request_handler_t::handle_request,
       {.packet_name = request_t::packet_name});
     zlink::framework::runtime::channel_host_service_t nested_hosted_service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       nested_hosted_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (nested_hosted_builder.message_bus ())
         .channel_snapshots (),
@@ -2143,7 +2162,8 @@ int main ()
         return 84;
     }
 
-    zlink::framework::zlink_builder_t scoped_hosted_builder;
+    zlink::framework::zlink_builder_t scoped_hosted_builder =
+      zlink::framework::test::runtime_failure_builder ();
     auto scoped_hosted_channel = scoped_hosted_builder.channel ("hosted-scoped");
     scoped_hosted_channel.enable_server ().bind ("tcp://127.0.0.1:0");
     auto scoped_hosted_runtime =
@@ -2161,6 +2181,7 @@ int main ()
       "hosted-scoped", "request", &scoped_channel_handler_t::handle_request,
       {.packet_name = request_t::packet_name});
     zlink::framework::runtime::channel_host_service_t scoped_hosted_service (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       scoped_hosted_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (scoped_hosted_builder.message_bus ())
         .channel_snapshots (),
@@ -2884,7 +2905,8 @@ int main ()
         return 55;
     }
 
-    zlink::framework::zlink_builder_t public_route_builder;
+    zlink::framework::zlink_builder_t public_route_builder =
+      zlink::framework::test::runtime_failure_builder ();
     public_route_builder.route_channel ("public.route")
       .bind ("tcp://public-bind:7700")
       .connect ("tcp://public-peer:7701")
@@ -3206,7 +3228,8 @@ int main ()
         return 77;
     }
 
-    zlink::framework::zlink_builder_t spot_only_builder;
+    zlink::framework::zlink_builder_t spot_only_builder =
+      zlink::framework::test::runtime_failure_builder ();
     auto spot_only_runtime =
       zlink::framework::detail::channel_runtime_t::from (spot_only_builder.message_bus ());
     test_spot_address_resolver_t spot_only_resolver;
@@ -3305,7 +3328,8 @@ int main ()
      * Instance intent. The resulting Ready address is used by the same
      * operation; a later call resolves that address and does not activate it
      * again. */
-    zlink::framework::zlink_builder_t activation_builder;
+    zlink::framework::zlink_builder_t activation_builder =
+      zlink::framework::test::runtime_failure_builder ();
     auto activation_runtime =
       zlink::framework::detail::channel_runtime_t::from (activation_builder.message_bus ());
     test_spot_address_resolver_t activation_resolver;
@@ -3391,7 +3415,8 @@ int main ()
 
     /* A stale resolved address fails the current operation without retry. The
      * next operation resolves the global SpotId again and may use a newer owner. */
-    zlink::framework::zlink_builder_t retry_builder;
+    zlink::framework::zlink_builder_t retry_builder =
+      zlink::framework::test::runtime_failure_builder ();
     auto retry_runtime =
       zlink::framework::detail::channel_runtime_t::from (retry_builder.message_bus ());
     test_spot_address_resolver_t retry_resolver;
@@ -3463,7 +3488,8 @@ int main ()
     /* endpoint_connections live attach: post-apply connect/disconnect on the
      * public handle mutates the same bundle set requests iterate. */
     {
-        zlink::framework::zlink_builder_t live_builder;
+        zlink::framework::zlink_builder_t live_builder =
+          zlink::framework::test::runtime_failure_builder ();
         live_builder.channel ("live.channel").enable_client ();
         auto live_runtime =
           zlink::framework::detail::channel_runtime_t::from (live_builder.message_bus ());
@@ -3556,7 +3582,8 @@ int main ()
         return 65;
     }
 
-    zlink::framework::zlink_builder_t stream_builder;
+    zlink::framework::zlink_builder_t stream_builder =
+      zlink::framework::test::runtime_failure_builder ();
     stream_builder.stream ("routed-bound-session").bind ("tcp://0.0.0.0:9300");
     auto stream_runtime = zlink::framework::detail::stream_runtime_t::from (stream_builder);
     auto stream = stream_runtime.open_session ("routed-bound-session");

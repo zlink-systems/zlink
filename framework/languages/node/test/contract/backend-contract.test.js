@@ -659,7 +659,6 @@ test('backend mesh dispatch pump requeues records beyond the receive batch capac
 
   try {
     node.setBind(`inproc://backend-dispatch-sequence-${process.pid}`);
-    node.addChannelName('backend.sequence');
     node.start();
     pump = new backend.ZLinkMeshDispatchPump(node, {
       applicationJobQueue: applicationJobQueue(),
@@ -673,8 +672,13 @@ test('backend mesh dispatch pump requeues records beyond the receive batch capac
     });
     pump.start();
 
-    assert.equal(await node.sendToChannel('backend.sequence', Buffer.from('first')), zlink.SubmitResult.Ok);
-    assert.equal(await node.sendToChannel('backend.sequence', Buffer.from('second')), zlink.SubmitResult.Ok);
+    const spot = node.entrySpot();
+    const status = node.status();
+    // Channel messaging §2 excludes self; exercise local batch ingress through Spot.
+    assert.equal(await spot.sendToSpot(status.routingId, status.routingId,
+      status.lifecycleGeneration, Buffer.from('first'), { entrySpot: true }), zlink.SubmitResult.Ok);
+    assert.equal(await spot.sendToSpot(status.routingId, status.routingId,
+      status.lifecycleGeneration, Buffer.from('second'), { entrySpot: true }), zlink.SubmitResult.Ok);
     await Promise.race([
       completed,
       new Promise((_, reject) => setTimeout(() => reject(new Error('Sequential mesh records were not both dispatched.')), 2000))

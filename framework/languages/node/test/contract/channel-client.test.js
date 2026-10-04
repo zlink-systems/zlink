@@ -944,7 +944,7 @@ test('ZLinkRouteClient applies RouteMesh request timeout before registration def
   ]);
 });
 
-test('RouteMesh ready weight-zero channel reports Unavailable for send and request', async () => {
+test('RouteMesh with only its own weight-zero server reports NotFound for send and request', async () => {
   class NoticeHandler { handle() {} }
   const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
     builder.addRouteMesh('zero-mesh').listen('tcp://127.0.0.1:0').routingId('zero-node')
@@ -954,12 +954,58 @@ test('RouteMesh ready weight-zero channel reports Unavailable for send and reque
   const client = new framework.DefaultZLinkRouteClient(registration, runtime.routeTransport, runtime.spotRouterChannelIdForMesh);
   try {
     await runtime.start();
+    // Channel messaging §2 excludes the only server here: the requesting node.
     await assert.rejects(() => client.sendToChannel('zero-channel', typedPacket('Notice', { id: 1 })).submit(),
-      { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+      { kind: framework.ZLinkFrameworkErrorKind.NotFound });
     await assert.rejects(() => client.requestToChannel('zero-channel', typedPacket('Question', { id: 2 })).submit(),
-      { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+      { kind: framework.ZLinkFrameworkErrorKind.NotFound });
   } finally {
     await runtime.stop();
+  }
+});
+
+test('RouteMesh ready remote weight-zero channel reports Unavailable for send and request without waiting', async () => {
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: {
+      meshName: 'zero-mesh', nodeRoutingId: 'zero-local', lifecycleGeneration: 1n,
+      descriptorRevision: 1n, advertisedEndpoint: 'tcp://127.0.0.1:0',
+      channels: [], state: 'serving', securityIdentity: 'test',
+      applicationVersion: 1n, protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY], objectRole: 'client',
+      placementWeight: 100, activeCapacityLimit: 100, pendingCapacityLimit: 10,
+      activeCapacityUsed: 0, pendingCapacityUsed: 0
+    },
+    bindingPort: new ZLinkNodeRawBindingPort(),
+    applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration())
+  });
+  runtime.start();
+  try {
+    const remoteRid = 'zero-remote';
+    const connectionId = 'zero-connection';
+    assert.equal(runtime.topology.admit({ ...runtime.topology.localDescriptor(),
+      nodeRoutingId: remoteRid, advertisedEndpoint: 'tcp://127.0.0.1:1',
+      objectRole: 'server', channels: [{ name: 'zero-channel', weight: 0 }]
+    }, connectionId), 'admitted');
+    runtime.liveness.admit(remoteRid, connectionId, 0);
+    assert.equal(runtime.liveness.requestProbe(remoteRid, connectionId, 0), true);
+    const [probe] = runtime.liveness.tick(0).probes;
+    assert.equal(runtime.liveness.acknowledge(remoteRid, connectionId, probe.probeId, 0), true);
+    assert.equal(runtime.isPeerRouteReady(remoteRid), true);
+    assert.equal(runtime.topology.hasKnownChannelTarget('zero-channel'), true);
+    assert.equal(runtime.topology.selectChannel('zero-channel'), undefined);
+
+    const payload = { packetName: 'Notice', contentType: 'application/json', payload: Buffer.from('{}') };
+    const results = await Promise.race([
+      Promise.all([
+        runtime.sendToChannel('zero-channel', payload),
+        runtime.requestToChannel('zero-channel', payload, 100).promise
+      ]),
+      new Promise(resolve => setImmediate(() => resolve('waited for an event-loop turn')))
+    ]);
+    // Framework API §no-eligible-select-one-member: raw NotConnected maps to public Unavailable.
+    assert.deepEqual(results, [zlink.SubmitResult.NotConnected,
+      { terminalResult: zlink.RequestResult.NotConnected, failureCode: 0 }]);
+  } finally {
+    runtime.close();
   }
 });
 
@@ -980,7 +1026,9 @@ for (const state of ['preparing', 'stopped', 'error', 'retiring', 'draining']) {
     runtime.start();
     try {
       const current = runtime.topology.localDescriptor();
-      runtime.topology.publishLocal({ ...current, state, descriptorRevision: current.descriptorRevision + 1n });
+      // Channel messaging §2: the snapshot must describe a remote target.
+      assert.equal(runtime.topology.admit({ ...current, nodeRoutingId: 'remote-selection',
+        advertisedEndpoint: 'tcp://127.0.0.1:1', state }, 'remote-connection'), 'admitted');
       const unavailable = state === 'retiring' || state === 'draining';
       const payload = { packetName: 'Notice', contentType: 'application/json', payload: Buffer.from('{}') };
       assert.equal(await runtime.sendToChannel('api', payload), unavailable ? zlink.SubmitResult.NotConnected : zlink.SubmitResult.NotFound);

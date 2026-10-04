@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "../support/runtime_failure_fixture.hpp"
 
 #include "metric_test_reader.hpp"
 
@@ -145,8 +146,7 @@ TEST (ZLinkFrameworkLocationRuntime, RenewLatenessIsMeasuredFromTheHeartbeatSche
       location_options_t{.owner_lease_renew_interval = std::chrono::milliseconds (100),
                          .owner_lease_renew_timeout = std::chrono::seconds (1)},
       "owner-lateness");
-    runtime.bind_monitoring (
-      std::make_shared<zlink::framework::detail::monitoring_runtime_state_t> ());
+    runtime.bind_monitoring (zlink::framework::test::runtime_failure_monitoring ());
     auto first_renew_called = store.first_renew_called ();
     runtime.start (zlink::routing_id_t::from ("node-lateness"));
     ASSERT_EQ (std::future_status::ready, first_renew_called.wait_for (std::chrono::seconds (5)));

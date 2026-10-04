@@ -20,14 +20,15 @@
 namespace zlink::framework::detail::backend
 {
 raw_dealer_port_t::raw_dealer_port_t (zlink::dealer_socket_t &socket,
-                                      std::mutex *shared_socket_mutex,
+                                      std::shared_ptr<std::mutex> shared_socket_mutex,
                                       zlink::poller_t *shared_poller,
                                       std::uintptr_t poller_slot) :
     _owned_poller (shared_poller == nullptr ? std::make_unique<zlink::poller_t> () : nullptr),
     _poller (shared_poller != nullptr ? shared_poller : _owned_poller.get ()),
     _poller_slot (poller_slot == 0 ? 1 : poller_slot),
     _socket (&socket),
-    _socket_mutex (shared_socket_mutex != nullptr ? shared_socket_mutex : &_owned_socket_mutex)
+    _socket_mutex (shared_socket_mutex ? std::move (shared_socket_mutex)
+                                       : std::make_shared<std::mutex> ())
 {
     _poller->add (socket,
                   zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollout
@@ -58,8 +59,7 @@ task_t<zlink::submit_result_t> raw_dealer_port_t::send_result (const raw_message
                 operation = std::move (operation).message (messages[index]);
             }
             auto submission = std::move (operation).async ();
-            if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
-                pending.emplace (std::move (submission.admitted));
+            pending = take_submission_admission (submission);
         }
         if (pending)
             co_await std::move (*pending);
@@ -77,7 +77,8 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
         throw std::invalid_argument ("raw dealer request requires parts and timeout");
     }
     auto messages = materialize_binding_parts (parts);
-    std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> pending;
+    auto source = std::make_shared<task_completion_source_t<raw_request_completion_t>> ();
+    std::optional<request_submission_stages_t> stages;
     try {
         {
             std::lock_guard lock (*_socket_mutex);
@@ -88,7 +89,8 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
             for (std::size_t index = 1; index < messages.size (); ++index) {
                 operation = std::move (operation).message (messages[index]);
             }
-            pending.emplace (std::move (operation).timeout (timeout).async ().reply);
+            stages.emplace (submit_request_once (
+              [&] { return std::move (operation).timeout (timeout).async (); }));
         }
     }
     catch (const zlink::submit_error_t &error) {
@@ -98,24 +100,8 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
           raw_request_failure_t{raw_request_failure_phase_t::initial_admission, error.result (),
                                 error.internal_errno ()}};
     }
-    try {
-        auto reply = co_await std::move (*pending);
-        co_return raw_request_completion_t{zlink::request_result_t::ok, copy_binding_parts (reply)};
-    }
-    catch (const zlink::request_error_t &error) {
-        co_return raw_request_completion_t{
-          error.result (),
-          {},
-          raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, std::nullopt,
-                                error.internal_errno ()}};
-    }
-    catch (const zlink::submit_error_t &error) {
-        co_return raw_request_completion_t{
-          runtime::messaging::map_submit_request_result (error.result (), true),
-          {},
-          raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, error.result (),
-                                error.internal_errno ()}};
-    }
+    observe_request_completion (std::move (*stages), source);
+    co_return co_await source->task ();
 }
 
 std::optional<raw_message_t> raw_dealer_port_t::try_receive ()
@@ -146,20 +132,16 @@ std::optional<raw_message_t> raw_dealer_port_t::try_receive ()
     return parts;
 }
 
-void raw_dealer_port_t::close () noexcept
+void raw_dealer_port_t::close ()
 {
     std::lock_guard lock (*_socket_mutex);
     auto *socket = _socket;
+    if (_owned_poller) {
+        _owned_poller->close ();
+    } else if (socket != nullptr) {
+        _poller->remove (*socket);
+    }
     _socket = nullptr;
-    try {
-        if (_owned_poller) {
-            _owned_poller->close ();
-        } else if (socket != nullptr) {
-            _poller->remove (*socket);
-        }
-    }
-    catch (...) {
-    }
 }
 
 } // namespace zlink::framework::detail::backend

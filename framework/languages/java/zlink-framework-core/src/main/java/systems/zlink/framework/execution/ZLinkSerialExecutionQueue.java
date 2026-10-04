@@ -1,6 +1,7 @@
 package systems.zlink.framework.execution;
 
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
@@ -1415,12 +1416,7 @@ public final class ZLinkSerialExecutionQueue {
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .currentSerialExecutionTurn();
         CompletableFuture<T> managed = new CompletableFuture<>();
-        managed.whenComplete(
-                (ignored, error) -> {
-                    if (managed.isCancelled()) {
-                        stage.toCompletableFuture().cancel(false);
-                    }
-                });
+        ZLinkCompletionBridge.forwardCancellation(managed, stage);
         if (!queue.lanePolicy.releasesGateOnIncompleteStage()) {
             CompletableFuture<Void> gate = turn.gate;
             stage.whenComplete(
@@ -1578,12 +1574,7 @@ public final class ZLinkSerialExecutionQueue {
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .currentSerialExecutionTurn();
         CompletableFuture<T> managed = new CompletableFuture<>();
-        managed.whenComplete(
-                (ignored, error) -> {
-                    if (managed.isCancelled()) {
-                        stage.toCompletableFuture().cancel(false);
-                    }
-                });
+        ZLinkCompletionBridge.forwardCancellation(managed, stage);
         queue.suspendContinuation(turn.entry);
         gate.complete(null);
         stage.whenComplete(
@@ -1794,7 +1785,14 @@ public final class ZLinkSerialExecutionQueue {
                         systems.zlink.framework.runtime.internal.handlers
                                 .ZLinkSuspendInvocationContext.enterApplicationExecution(
                                 application)) {
-            command.run();
+            SerialTurn turn = currentTurn();
+            try (var job =
+                    ZLinkApplicationJobContext.enterQueued(
+                            turn == null || turn.entry == null
+                                    ? null
+                                    : turn.entry.applicationJobOwnership)) {
+                command.run();
+            }
         } finally {
             setOrRemove(CURRENT, previous);
             setOrRemove(CURRENT_GATE, previousGate);

@@ -55,6 +55,7 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
 {
   public:
     stream_host_service_t (
+      std::shared_ptr<runtime_failure_collector_t> failures,
       detail::stream_runtime_t runtime,
       std::vector<stream_snapshot_t> streams,
       std::map<std::string, detail::stream_session_factory_t> session_factories,
