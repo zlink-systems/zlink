@@ -332,36 +332,34 @@ final class ZLinkProviderCreationTerminalTest {
     }
 
     @ParameterizedTest
-    @EnumSource(
-            value = ZLinkCreationTerminalState.class,
-            names = {"REJECTED", "FAILED"})
-    void deadlineFreeTerminalCleanupDoesNotResubmitConflict(ZLinkCreationTerminalState state) {
+    @EnumSource(ZLinkCreationTerminalState.class)
+    void terminalTransitionRebuildsQualifiedConflict(ZLinkCreationTerminalState state) {
         var fixture = new Fixture();
         fixture.provider.conflictNextWrite = ignored -> {};
-        assertEquals(stale(state), fixture.complete(fixture.terminal(state)));
-        assertEquals(1, fixture.provider.writes.size());
-        assertInstanceOf(
-                ZLinkCreationTerminalMissing.class,
-                await(fixture.repository.readCreationTerminal(OPERATION, () -> false)));
+        var terminal = fixture.terminal(state);
+        assertEquals(applied(state), fixture.complete(terminal));
+        assertEquals(2, fixture.provider.writes.size());
+        assertTerminal(
+                terminal, await(fixture.repository.readCreationTerminal(OPERATION, () -> false)));
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void deadlineFreeCleanupDoesNotResubmitConflict(boolean abort) {
+    void terminalFreeTransitionRebuildsQualifiedConflict(boolean abort) {
         var fixture = new Fixture();
         fixture.provider.conflictNextWrite = ignored -> {};
         if (abort) {
             assertEquals(
-                    ZLinkObjectAbortResult.STALE,
+                    ZLinkObjectAbortResult.ABORTED,
                     await(fixture.repository.abort(fixture.reservation, () -> false)));
         } else {
             assertEquals(
-                    ZLinkObjectCommitResult.STALE,
+                    ZLinkObjectCommitResult.COMMITTED,
                     await(
                             fixture.repository.commit(
                                     fixture.reservation, new byte[] {9}, () -> false)));
         }
-        assertEquals(1, fixture.provider.writes.size());
+        assertEquals(2, fixture.provider.writes.size());
         assertInstanceOf(
                 ZLinkCreationTerminalMissing.class,
                 await(fixture.repository.readCreationTerminal(OPERATION, () -> false)));

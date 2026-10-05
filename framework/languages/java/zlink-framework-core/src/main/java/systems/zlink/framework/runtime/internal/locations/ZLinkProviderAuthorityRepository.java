@@ -30,7 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -836,21 +835,12 @@ final class ZLinkProviderAuthorityRepository {
     }
 
     CompletionStage<ZLinkObjectCommitResult> commit(
-            ZLinkObjectReservation reservation,
-            byte[] readyPayload,
-            ZLinkCreationOperationTerminal terminal,
-            ZLinkStoreCancellation cancellation) {
-        return commit(reservation, readyPayload, terminal, cancellation, OptionalLong.empty());
-    }
-
-    CompletionStage<ZLinkObjectCommitResult> commit(
             ZLinkObjectReservation reservation, byte[] readyPayload, long deadlineUnixMs) {
         return commit(
                 reservation,
                 readyPayload,
                 null,
-                () -> System.currentTimeMillis() >= deadlineUnixMs,
-                OptionalLong.of(deadlineUnixMs));
+                () -> System.currentTimeMillis() >= deadlineUnixMs);
     }
 
     CompletionStage<ZLinkObjectCommitResult> commit(
@@ -862,16 +852,14 @@ final class ZLinkProviderAuthorityRepository {
                 reservation,
                 readyPayload,
                 terminal,
-                () -> System.currentTimeMillis() >= deadlineUnixMs,
-                OptionalLong.of(deadlineUnixMs));
+                () -> System.currentTimeMillis() >= deadlineUnixMs);
     }
 
-    private CompletionStage<ZLinkObjectCommitResult> commit(
+    CompletionStage<ZLinkObjectCommitResult> commit(
             ZLinkObjectReservation reservation,
             byte[] readyPayload,
             ZLinkCreationOperationTerminal terminal,
-            ZLinkStoreCancellation cancellation,
-            OptionalLong deadlineUnixMs) {
+            ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(reservation, "reservation");
         Objects.requireNonNull(readyPayload, "readyPayload");
         if (terminal != null) {
@@ -901,8 +889,7 @@ final class ZLinkProviderAuthorityRepository {
                                             current,
                                             readyPayload,
                                             terminal,
-                                            opaqueCancellation,
-                                            deadlineUnixMs)
+                                            opaqueCancellation)
                                     .thenApply(
                                             applied ->
                                                     applied
@@ -948,8 +935,7 @@ final class ZLinkProviderAuthorityRepository {
                                             current,
                                             null,
                                             terminal,
-                                            opaqueCancellation,
-                                            OptionalLong.empty())
+                                            opaqueCancellation)
                                     .thenApply(
                                             applied ->
                                                     applied
@@ -980,8 +966,7 @@ final class ZLinkProviderAuthorityRepository {
             AuthorityRecord current,
             byte[] readyPayload,
             ZLinkCreationOperationTerminal terminal,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
-            OptionalLong deadlineUnixMs) {
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         if (cancellation.isCancellationRequested()) {
             return completed(false);
         }
@@ -1068,9 +1053,6 @@ final class ZLinkProviderAuthorityRepository {
                                                                             ZLinkStoreWriteApplied) {
                                                                         return completed(true);
                                                                     }
-                                                                    if (deadlineUnixMs.isEmpty()) {
-                                                                        return completed(false);
-                                                                    }
                                                                     return canRebuild(
                                                                                     key,
                                                                                     authority
@@ -1116,8 +1098,7 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                             current,
                                                                                                             readyPayload,
                                                                                                             terminal,
-                                                                                                            cancellation,
-                                                                                                            deadlineUnixMs)
+                                                                                                            cancellation)
                                                                                                     : completed(
                                                                                                             false));
                                                                 });

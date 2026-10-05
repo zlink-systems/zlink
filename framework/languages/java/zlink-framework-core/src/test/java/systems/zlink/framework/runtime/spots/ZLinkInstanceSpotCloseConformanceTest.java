@@ -56,6 +56,46 @@ final class ZLinkInstanceSpotCloseConformanceTest {
     private static Observation current;
 
     @Test
+    void readyCommitRebuildsSharedCapacityConflictWithoutReinitializing() throws Exception {
+        String spotId = "java-instance-ready-conflict-" + UUID.randomUUID();
+        Observation observation = new Observation(false, false);
+        observation.closingRelease.complete(null);
+        current = observation;
+        ObservedStore store = new ObservedStore(spotId, observation);
+        store.readyCapacityConflicts.set(1);
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        options.addRouteMesh(MESH)
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(RoutingId.from(spotId))
+                .objects()
+                .server()
+                .addEntrySpot(Entry.class)
+                .addInstanceSpotFactory(
+                        TYPE, Instance.class, factory -> factory.disableRelocation());
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(options, new CapturingBackend())) {
+            Reply reply =
+                    runtime.route()
+                            .requestToSpot(spotId, new InitialProbe())
+                            .instanceSpot(TYPE)
+                            .inMesh(MESH)
+                            .timeout(WAIT)
+                            .submit(Reply.class)
+                            .toCompletableFuture()
+                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            assertEquals(0, store.readyCapacityConflicts.get());
+            assertEquals(List.of(reply.generation()), observation.initializations);
+            assertEquals(List.of(reply.generation()), observation.configureGenerations);
+            var ready = snapshot(new ZLinkProviderLocationRepository(store), spotId);
+            assertEquals(ZLinkPlacementAllocationState.ACTIVE, ready.allocation().state());
+            assertTrue(ready.pendingCreation().isEmpty());
+            assertEquals(0, observation.closingCalls.get());
+        }
+    }
+
+    @Test
     void pendingMessageAcceptedBeforeCloseRunsOnlyInTheNewIncarnation() throws Exception {
         run(null, "Serving", true, true, false);
     }
@@ -1370,6 +1410,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         private long originalGeneration;
         private long lastGeneration;
         final AtomicInteger missingPlacementAttempts = new AtomicInteger();
+        final AtomicInteger readyCapacityConflicts = new AtomicInteger();
 
         /** One authority read answered with an earlier record, as a caller's racing read. */
         final java.util.concurrent.atomic.AtomicReference<ZLinkStoreReadResult> staleAuthorityRead =
@@ -1427,6 +1468,42 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                     item ->
                                             item instanceof ZLinkStoreDelete write
                                                     && authority(write.key()));
+            var capacityPut =
+                    request.mutations().stream()
+                            .filter(ZLinkStorePut.class::isInstance)
+                            .map(ZLinkStorePut.class::cast)
+                            .filter(write -> !authority(write.key()))
+                            .findFirst();
+            boolean reserved =
+                    request.conditions().stream()
+                            .anyMatch(
+                                    condition ->
+                                            condition instanceof ZLinkStoreMissingCondition missing
+                                                    && authority(missing.key()));
+            if (put
+                    && !reserved
+                    && capacityPut.isPresent()
+                    && readyCapacityConflicts.getAndUpdate(remaining -> Math.max(0, remaining - 1))
+                            > 0) {
+                // Another Spot changes the shared capacity version while this reservation stays
+                // intact.
+                ZLinkStoreKey capacityKey = capacityPut.orElseThrow().key();
+                return inner.read(capacityKey, cancellation)
+                        .thenCompose(
+                                read -> {
+                                    var found = assertInstanceOf(ZLinkStoreReadFound.class, read);
+                                    return inner.write(
+                                            new ZLinkStoreWriteRequest(
+                                                    List.of(),
+                                                    List.of(
+                                                            new ZLinkStorePut(
+                                                                    capacityKey,
+                                                                    found.value().bytes(),
+                                                                    null))),
+                                            cancellation);
+                                })
+                        .thenCompose(ignored -> inner.write(request, cancellation));
+            }
             CompletableFuture<Void> hold = delete ? deleteHold : null;
             CompletionStage<Void> admitted = CompletableFuture.completedFuture(null);
             if (hold != null) {
