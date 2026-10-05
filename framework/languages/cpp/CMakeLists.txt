@@ -978,7 +978,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-  target_link_libraries(test_cpp_framework_submit_result_contract PRIVATE zlink::cpp Threads::Threads)
+  target_link_libraries(test_cpp_framework_submit_result_contract PRIVATE
+    zlink::cpp
+    opentelemetry-cpp::api
+    Threads::Threads)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_submit_result_contract
     COMMAND test_cpp_framework_submit_result_contract
