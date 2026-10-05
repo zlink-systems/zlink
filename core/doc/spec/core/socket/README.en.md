@@ -323,7 +323,7 @@ typedef enum zlink_send_complete_result_t {
   ZLINK_SEND_ADMITTED = 0,         // WRITABLE: the same target accepts a resubmit
   ZLINK_SEND_NOT_FOUND = 801,      // WRITABLE: the target was explicitly removed (ENOENT)
   ZLINK_SEND_NOT_CONNECTED = 802,  // WRITABLE: the STREAM physical connection ended and its RID is gone (ENOTCONN)
-  ZLINK_SEND_TIMED_OUT = 803       // WRITABLE: not admitted within SNDTIMEO (EAGAIN)
+  ZLINK_SEND_TIMED_OUT = 803       // ABI preservation only; Core never produces this result
 } zlink_send_complete_result_t;
 
 typedef struct zlink_completion_t {
@@ -1106,12 +1106,12 @@ or an in-progress NONE wait. A STREAM physical disconnect ends its RID; its
 token; it waits for reconnect and admission to the same target within the
 snapshotted `SNDTIMEO`.
 
-A wait token still outstanding at the `SNDTIMEO` deadline snapshotted by the submit that returned it
-ends with a WRITABLE record carrying `send_result == ZLINK_SEND_TIMED_OUT` and
-`send_terminal_errno == EAGAIN`. This is the same deadline and errno as
-a NONE `SNDTIMEO` expiry; an `SNDTIMEO` of `-1` sets no deadline.
+A wait token has no deadline. `SNDTIMEO` applies only to a `NONE` wait and does not end a wait token.
+An application that stops waiting receives the later WRITABLE record with `zlink_completion_recv()`
+to release the reservation. The completion reservation limit above bounds the number of wait tokens
+that have not ended.
 
-Besides the resource-recovery WRITABLE record above and the deadline expiry, a PAIR, DEALER, or
+Besides the resource-recovery WRITABLE record above, a PAIR, DEALER, or
 ROUTER wait token ends in two ways: (a) explicit removal of the target (`zlink_disconnect_rid`, endpoint termination
 for that RID), which produces a WRITABLE record with
 `send_result == ZLINK_SEND_NOT_FOUND` and `send_terminal_errno == ENOENT`; (b)
@@ -1200,7 +1200,7 @@ correlation work/count limit (systems/06-auto-hwm, work budget), that token, whi
 the pair's correlation reservation is returned** (terminal reply, timeout, disconnect), not when physical
 write credit alone recovers — the recovery of the refusing resource is the sole wake condition (one rule). Target
 granularity, wake edges, the level-held `ZLINK_POLLOUT` and
-`ZLINK_POLLCOMPLETION`, and the token end conditions, including deadline expiry, are
+`ZLINK_POLLCOMPLETION`, and the token end conditions are
 the same as for a SEND wait token in
 [whole-message send](#whole-message-send-and-pending-admission). The first paragraph of this section defines the result of a request to a ROUTER RID without a route.
 
@@ -1512,8 +1512,8 @@ connection, options, send/receive/completion functions, return values, and
   with `BACKPRESSURED` and `EAGAIN`, ID `0`, and no completion, and that they can be resubmitted after
   receiving completions releases reservations.
 - Verify the termination results of SEND and REQUEST wait tokens (resource recovery, explicit removal,
-  STREAM physical disconnect, deadline expiry with `SNDTIMEO` 0 or a positive value and its absence with `-1`, races between
-  recovery and expiry, and no record after close or termination), one WRITABLE record, and reservation
+  STREAM physical disconnect, no deadline regardless of `SNDTIMEO`, and no record after close or
+  termination), one WRITABLE record, and reservation
   release on receive, against [whole-message send](#whole-message-send-and-pending-admission).
 - REQUEST admission, timeout, completion, and reply-token verification refer to [Request and reply](#request-and-reply).
 - HWM and pending-request admission verification refer to [Auto HWM admission](../systems/06-auto-hwm.en.md#message-processing-sequence) and [pending-request admission](../systems/06-auto-hwm.en.md#pending-request-admission).
