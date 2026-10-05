@@ -346,6 +346,10 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             if (duplicate != null) {
                 return duplicate;
             }
+            long activationDeadline =
+                    instanceIntent && instanceSpots != null
+                            ? instanceSpots.activationDeadline(selectedMesh)
+                            : 0;
             SpotTransportAddressResolver resolver = resolver();
             CompletionStage<Void> stage =
                     resolve(target, resolver)
@@ -371,7 +375,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                                                         copyPayload(),
                                                                         packetName,
                                                                         contentType,
-                                                                        metadata.values())
+                                                                        metadata.values(),
+                                                                        activationDeadline)
                                                         : sendExisting(address);
                                         return failure == null
                                                 ? resolver.observeTerminal(target, submitted)

@@ -2338,6 +2338,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     public ZLinkInstanceSpotCallRuntime instanceSpotCalls() {
         return new ZLinkInstanceSpotCallRuntime() {
             @Override
+            public long activationDeadline(String meshName) {
+                long started = System.currentTimeMillis();
+                String sourceMesh = resolveObjectMesh(meshName);
+                Duration activationTimeout =
+                        frameworkRegistration.meshNodes().stream()
+                                .filter(node -> node.meshName().equals(sourceMesh))
+                                .map(node -> node.defaultRequestTimeout())
+                                .filter(Objects::nonNull)
+                                .findFirst()
+                                .orElse(defaultRequestTimeout);
+                return started + activationTimeout.toMillis();
+            }
+
+            @Override
             public String metricMeshName(String requestedMesh, String callerMesh) {
                 return requestedMesh != null && nodesByName.containsKey(requestedMesh)
                         ? requestedMesh
@@ -2352,8 +2366,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     Message payload,
                     Optional<String> packetName,
                     String contentType,
-                    Map<String, String> metadata) {
-                long deadline = Long.MAX_VALUE;
+                    Map<String, String> metadata,
+                    long deadline) {
                 return activateInstanceSpot(
                                 spotId,
                                 stableType,

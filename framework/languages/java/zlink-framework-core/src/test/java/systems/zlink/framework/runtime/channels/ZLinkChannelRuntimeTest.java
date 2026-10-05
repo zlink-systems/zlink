@@ -787,6 +787,12 @@ final class ZLinkChannelRuntimeTest {
                         }
 
                         @Override
+                        public long activationDeadline(String meshName) {
+                            return System.currentTimeMillis()
+                                    + options.registration().defaultRequestTimeout().toMillis();
+                        }
+
+                        @Override
                         public CompletionStage<Void> send(
                                 String spotId,
                                 String stableType,
@@ -794,7 +800,8 @@ final class ZLinkChannelRuntimeTest {
                                 Message payload,
                                 Optional<String> packetName,
                                 String contentType,
-                                Map<String, String> metadata) {
+                                Map<String, String> metadata,
+                                long activationDeadline) {
                             throw new AssertionError("ready route must not activate");
                         }
 
@@ -1262,6 +1269,12 @@ final class ZLinkChannelRuntimeTest {
                         }
 
                         @Override
+                        public long activationDeadline(String meshName) {
+                            return System.currentTimeMillis()
+                                    + options.registration().defaultRequestTimeout().toMillis();
+                        }
+
+                        @Override
                         public CompletionStage<Void> send(
                                 String spotId,
                                 String stableType,
@@ -1269,7 +1282,8 @@ final class ZLinkChannelRuntimeTest {
                                 Message payload,
                                 Optional<String> packetName,
                                 String contentType,
-                                Map<String, String> metadata) {
+                                Map<String, String> metadata,
+                                long activationDeadline) {
                             sendActivationAttempts.incrementAndGet();
                             return CompletableFuture.completedFuture(null);
                         }
@@ -1364,6 +1378,12 @@ final class ZLinkChannelRuntimeTest {
             runtime.registerInstanceSpotCallRuntime(
                     new ZLinkInstanceSpotCallRuntime() {
                         @Override
+                        public long activationDeadline(String meshName) {
+                            return System.currentTimeMillis()
+                                    + options.registration().defaultRequestTimeout().toMillis();
+                        }
+
+                        @Override
                         public CompletionStage<Void> send(
                                 String spotId,
                                 String stableType,
@@ -1371,7 +1391,8 @@ final class ZLinkChannelRuntimeTest {
                                 Message payload,
                                 Optional<String> packetName,
                                 String contentType,
-                                Map<String, String> metadata) {
+                                Map<String, String> metadata,
+                                long activationDeadline) {
                             return resolver.resolve(spotId)
                                     .thenCompose(
                                             address -> {

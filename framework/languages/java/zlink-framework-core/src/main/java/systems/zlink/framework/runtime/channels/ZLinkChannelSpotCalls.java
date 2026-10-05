@@ -237,6 +237,10 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                     systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.current();
             ZLinkInstanceSpotCallRuntime activation =
                     instanceSpots == null ? null : instanceSpots.get();
+            long activationDeadline =
+                    instanceIntent && activation != null
+                            ? activation.activationDeadline(selectedMesh)
+                            : 0;
             CompletionStage<Void> stage =
                     SpotCallAddresses.resolve(resolver, target)
                             .handle(
@@ -271,7 +275,8 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                                                                                         packetName,
                                                                                         contentType,
                                                                                         metadata
-                                                                                                .values())
+                                                                                                .values(),
+                                                                                        activationDeadline)
                                                                         : submitExisting(address);
                                                         return failure == null
                                                                 ? resolver.observeTerminal(

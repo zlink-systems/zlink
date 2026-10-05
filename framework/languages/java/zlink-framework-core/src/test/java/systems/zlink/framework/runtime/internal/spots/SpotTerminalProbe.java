@@ -46,6 +46,11 @@ public final class SpotTerminalProbe
     }
 
     @Override
+    public long activationDeadline(String meshName) {
+        return 0;
+    }
+
+    @Override
     public CompletionStage<Void> send(
             String spotId,
             String stableType,
@@ -53,7 +58,8 @@ public final class SpotTerminalProbe
             Message payload,
             Optional<String> packetName,
             String contentType,
-            Map<String, String> metadata) {
+            Map<String, String> metadata,
+            long activationDeadline) {
         if (!missing)
             return java.util.Objects.requireNonNull(readySend, "readySend").apply(payload);
         activations++;
