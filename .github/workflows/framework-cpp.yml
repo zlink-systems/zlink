@@ -1,44 +1,26 @@
 name: Framework C++ Verify
 
 # Framework C++ has a heavier bootstrap than the checks in pr-verify.yml, so it
-# is kept separate. The workflow-level filter prevents unrelated PRs from
+# is kept separate. The workflow-level filter prevents unrelated pushes from
 # allocating a runner at all.
 on:
-# Verification moved to local unit tests before merge; CI runs on request
-# (user decision 2026-09-17). Uncomment the blocks below to restore the
-# automatic triggers.
-#  push:
-#    branches:
-#      - main
-#    paths:
-#      - ".github/workflows/framework-cpp.yml"
-#      - ".github/workflows/framework-cpp-system-toolchain.cmake"
-#      - ".github/actions/msvc-env/**"
-#      - "VERSION"
-#      - "core/**"
-#      - "bindings/cpp/**"
-#      - "framework/languages/cpp/**"
-#      - "framework/runtime/**"
-#      - "scripts/local-package/build-windows.ps1"
-#      - "scripts/local-package/core/**"
-#      - "scripts/local-package/cpp/**"
-#      - "scripts/local-package/sync-version.py"
-#  pull_request:
-#    branches:
-#      - main
-#    paths:
-#      - ".github/workflows/framework-cpp.yml"
-#      - ".github/workflows/framework-cpp-system-toolchain.cmake"
-#      - ".github/actions/msvc-env/**"
-#      - "VERSION"
-#      - "core/**"
-#      - "bindings/cpp/**"
-#      - "framework/languages/cpp/**"
-#      - "framework/runtime/**"
-#      - "scripts/local-package/build-windows.ps1"
-#      - "scripts/local-package/core/**"
-#      - "scripts/local-package/cpp/**"
-#      - "scripts/local-package/sync-version.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/framework-cpp.yml"
+      - ".github/workflows/framework-cpp-system-toolchain.cmake"
+      - ".github/actions/msvc-env/**"
+      - "VERSION"
+      - "core/**"
+      - "bindings/cpp/**"
+      - "framework/languages/cpp/**"
+      - "framework/runtime/**"
+      - "scripts/local-package/build-windows.ps1"
+      - "scripts/local-package/build-wsl.sh"
+      - "scripts/local-package/core/**"
+      - "scripts/local-package/cpp/**"
+      - "scripts/local-package/sync-version.py"
   workflow_dispatch:
 
 permissions:
@@ -82,8 +64,8 @@ jobs:
               nlohmann-json3-dev libssl-dev \
               protobuf-compiler libprotobuf-dev
 
-      # Install the async Redis client and its libuv CMake config from the same
-      # vcpkg graph as vcpkg.json. Other ports stay on the system toolchain path.
+      # Install OpenTelemetry and the async Redis client with its libuv CMake
+      # config from the vcpkg graph. Other ports stay on the system toolchain path.
       - name: Resolve the runner vcpkg
         id: vcpkg
         run: |
