@@ -68,7 +68,6 @@ class ops_console_registry_t
             try {
                 writes.push_back (stream.write_packet (zlink::message_t::from_json (message))
                                     .packet_name (T::packet_name)
-                                    .timeout (std::chrono::seconds (2))
                                     .async ());
             }
             catch (...) {
