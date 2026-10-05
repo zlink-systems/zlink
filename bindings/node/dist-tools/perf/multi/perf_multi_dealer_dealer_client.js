@@ -6,7 +6,7 @@ const zlink = require('@zlink-systems/zlink');
 const { currentEpochNs, createPayload, sleepImmediate, stampPayload, } = require('../common/perf_metrics');
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementParts, sendRouted, waitForConnectionReady } = require('./perf_multi_runtime');
+const { POLLCOMPLETION, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementParts, pollEvents, sendRouted, waitForConnectionReady, waitPollerOne } = require('./perf_multi_runtime');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 // DEALER_DEALER client == SENDER (one DEALER socket per client).
 //
@@ -24,7 +24,7 @@ const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 // Handshake (PERF_MULTI § 1.5 / line 201): server READY,<endpoint> then
 // client spawn; client prints CLIENT_READY,<size>; runner sends
 // START,<size> to BOTH; sender runs the send window after START.
-async function runDealerDealerSendRounds({ dealers, payloads, msgSize, activeStopNs, runId = 1, maxTurns = Number.POSITIVE_INFINITY, submit = sendRouted, yieldTurn = sleepImmediate }) {
+async function runDealerDealerSendRounds({ dealers, payloads, msgSize, activeStopNs, runId = 1, maxTurns = Number.POSITIVE_INFINITY, submit = sendRouted, drainCompletions = null, yieldTurn = sleepImmediate }) {
     let seq = 1n;
     let turns = 0;
     let nextSocket = 0;
@@ -73,10 +73,19 @@ async function runDealerDealerSendRounds({ dealers, payloads, msgSize, activeSto
         nextSocket = (nextSocket + 1) % dealers.length;
         turns += 1;
         if (blocked.size === dealers.length) {
-            await Promise.race(blocked.values());
+            if (drainCompletions) {
+                drainCompletions(50);
+                await yieldTurn();
+            }
+            else {
+                await Promise.race(blocked.values());
+            }
         }
         else if (maxTurns !== Number.POSITIVE_INFINITY) {
             await yieldTurn();
+        }
+        else {
+            drainCompletions?.(0);
         }
         if (failure)
             throw failure;
@@ -84,7 +93,13 @@ async function runDealerDealerSendRounds({ dealers, payloads, msgSize, activeSto
     // The active deadline stops new payloads. Finish managed admissions that the
     // binding may still be retrying before emitting each wire-level stop token.
     while (blocked.size > 0) {
-        await Promise.race(blocked.values());
+        if (drainCompletions) {
+            drainCompletions(50);
+            await yieldTurn();
+        }
+        else {
+            await Promise.race(blocked.values());
+        }
         if (failure)
             throw failure;
     }
@@ -95,6 +110,8 @@ async function main() {
     const ctx = zlink.createContext();
     applyContextPolicy(ctx, 'client', 'DEALER_DEALER');
     const dealers = [];
+    const poller = zlink.createPoller();
+    const pollEventsBuffer = zlink.createPollEvents(Math.max(1, options.clients));
     let rl = null;
     try {
         for (let i = 0; i < options.clients; i += 1) {
@@ -106,6 +123,7 @@ async function main() {
         for (let i = 0; i < dealers.length; i += 1) {
             const dealer = dealers[i];
             await waitForConnectionReady(dealer, () => dealer.connect(options.endpoint));
+            poller.add(dealer, pollEvents(POLLCOMPLETION), i);
         }
         ctx.recalculateAutoHwm();
         for (const dealer of dealers) {
@@ -127,14 +145,29 @@ async function main() {
             dealers,
             payloads,
             msgSize: options.msgSize,
-            activeStopNs
+            activeStopNs,
+            drainCompletions: (timeoutMs) => waitPollerOne(poller, pollEventsBuffer, timeoutMs)
         });
-        const stopAdmissions = dealers.map((dealer) => sendRouted(dealer, [STOP_TOKEN_BYTES])).filter((submission) => submission.result === zlink.SubmitResult.Backpressured).map((submission) => submission.admitted);
-        await Promise.all(stopAdmissions);
+        const stopAdmissions = dealers.map((dealer) => sendRouted(dealer, [STOP_TOKEN_BYTES]))
+            .filter((submission) => submission.result === zlink.SubmitResult.Backpressured)
+            .map((submission) => submission.admitted);
+        let pendingStops = stopAdmissions.length;
+        let stopFailure = null;
+        const stopDrain = Promise.all(stopAdmissions.map((admission) => admission.then(() => { pendingStops -= 1; }, (error) => { stopFailure ??= error; pendingStops -= 1; })));
+        while (pendingStops > 0 && !stopFailure) {
+            waitPollerOne(poller, pollEventsBuffer, 50);
+            await sleepImmediate();
+        }
+        if (!stopFailure)
+            await stopDrain;
+        if (stopFailure)
+            throw stopFailure;
         console.log(`CLIENT_DONE,${options.msgSize}`);
     }
     finally {
         rl?.close();
+        pollEventsBuffer.close();
+        poller.close();
         for (const dealer of dealers) {
             dealer.close();
         }
