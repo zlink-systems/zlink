@@ -130,12 +130,16 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `sendTimeout` | 보낼 자리가 나기를 기다리는 상한 | 1초 |
+| `sendTimeout` | Classic fanout publisher가 보낼 자리를 기다리는 상한 | 1초 |
 | `ReceiveTimeout` | 받는 방향의 대기 상한 | 지정 안 함 |
 | `sendHighWaterMark` · `receiveHighWaterMark` | 상대별로 보관할 byte. `0`은 무제한 | 지정 안 함 — Core가 계산 |
 
-상한에 도달하면 보내는 쪽이 `sendTimeout`까지 기다리고, 끝까지 자리가 나지 않으면 그 호출은
-deadline 초과로 끝난다. 자동으로 다시 보내지 않으므로 재시도 여부는 application이 정한다.
+`sendTimeout`은 `configureSpotPublisher()`로 설정하는 Classic fanout publisher에만 적용한다.
+이 publisher는 상한까지 자리가 나지 않으면 `DeadlineExceeded`로 끝난다.
+RouteMesh·ClientServer·Spot·Actor·bound session·STREAM의 one-way send에는 시간 상한과 caller
+cancellation 입력이 없다. Capacity가 회복되면 정상 완료하고, 대기 중 route가 제거되면
+`Unavailable`, socket close나 runtime shutdown이면 `ShuttingDown`으로 끝난다. 제출 시점에
+target이 없으면 `NotFound`다. Caller cancellation은 caller 대기만 끝내며 send는 계속된다.
 **MeshNode 사이의 연결에는 message 크기 상한 설정이 없다** — 그 상한은 STREAM node와
 ClientServer listener가 소유한다([Backpressure](33-backpressure.ko.md)).
 
