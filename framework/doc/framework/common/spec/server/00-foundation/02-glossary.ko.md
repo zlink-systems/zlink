@@ -771,8 +771,8 @@ handler 실행과 reply까지 하나의 end-to-end deadline을 적용할 수 있
 | 형태 | Absolute end-to-end time boundary |
 | .NET 표기 | Caller는 `TimeSpan` timeout을 지정하고 Framework와 lifecycle context는 고정된 `DateTimeOffset Deadline`을 사용한다. |
 | 공개 구성 | Terminal submit을 시작할 때 한 번 계산한 마지막 시점 하나다. 단계별 timeout의 합이 아니다. |
-| 생성·관리 | Source Framework가 caller timeout과 현재 시각으로 고정한다. |
-| 수명 | Resolve, reservation, factory, Ready barrier, handler와 reply가 공유하며 terminal completion 뒤 폐기한다. |
+| 생성·관리 | Request는 source Framework가 caller timeout과 현재 시각으로 고정한다. One-way의 Instance activation deadline은 [Spot 주소 메시징 §5](../03-spot-actor/06-spot-address-messaging.ko.md#5-existing-owner를-향한-direct-call과-완료-경계)가 정한다. |
+| 수명 | Request deadline은 resolve, reservation, factory, Ready barrier, handler와 reply가 공유하며 terminal completion 뒤 폐기한다. |
 
 <a id="factory"></a>
 ### Factory

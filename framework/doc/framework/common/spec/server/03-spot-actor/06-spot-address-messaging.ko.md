@@ -440,8 +440,8 @@ completion 의미를 가진다. Instance intent가 없는 direct call은 existin
 One-way call은 local outbound admission까지만 기다린다. Cold activation이 필요해도 application
 handler 실행은 기다리지 않는다. 여기서 outbound admission은 activation envelope가 선택한
 target transport에 수락된 시점이며 reservation이나 Ready commit 완료를 뜻하지 않는다. One-way call의
-activation deadline(route kind `2`·ZLIA의 deadline)은 send를 시작한 시각에 그 MeshNode의 기본 request
-timeout을 더한 값이다. 이 deadline은 target의 activation 작업(reservation과 recovery)에만 적용하며 caller의
+activation deadline(route kind `2`·ZLIA의 deadline)은 terminal send 제출을 시작한 시각에 source MeshNode의
+기본 request timeout을 더해 한 번 계산하며, resolve 뒤에 다시 계산하지 않는다. 이 deadline은 target의 activation 작업(reservation과 recovery)에만 적용하며 caller의
 send 대기를 끝내지 않는다 — send의 대기는 [Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다. Request는
 resolve, cold activation, 최초 message dispatch와 reply를 하나의 deadline 안에서 terminal-once로
 완료한다. Target queue admission 뒤의 failure를 current owner를 다시 찾아 몰래 다시 시도하지
