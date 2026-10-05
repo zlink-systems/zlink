@@ -301,7 +301,7 @@ A request timeout bounds outbound admission and reply waiting together, without 
 socket send timeout. A STREAM reply does not receive the client's request timeout.
 
 Only a Classic fanout publisher uses a send timeout. Its default and value rules follow
-[Submit and completion §7](../../spec/server/01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout).
+[Submit and completion §7](../../../common/spec/server/01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout).
 
 The two HWMs differ only in direction, not in character. Each sets **how many bytes your own
 node will hold**, and that limit carries through to the peer's flow. When deciding a value,

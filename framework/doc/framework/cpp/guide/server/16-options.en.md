@@ -136,17 +136,16 @@ rather than the number of objects.
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `send_timeout` | How long a Classic fanout publisher waits for room | 1 second |
+| Classic fanout publisher `send_timeout` | How long a publish waits for room | 1 second |
 | `receive_timeout` | Wait limit in the receive direction | Not set |
 | `SendHighWaterMark` · `ReceiveHighWaterMark` | Bytes held per peer. `0` is unlimited | Not set — the Core computes it |
 
-`send_timeout` applies only to the Classic fanout publisher configured through
-`fanout_channel_builder_t::set_send_timeout`. It ends with `deadline_exceeded` if no room appears within that limit.
-One-way sends through RouteMesh, ClientServer, Spot, Actor, bound sessions, and STREAM have no
-time limit or caller cancellation input. They complete normally when capacity recovers, with
-`Unavailable` if the route is removed while pending, or with `ShuttingDown` on socket close or
-runtime shutdown. A target absent at submission produces `NotFound`. Caller cancellation ends
-only the caller wait; the send continues. **Connections between MeshNodes have no message size limit setting** — that
+A send waits until capacity recovers, with no time limit or caller cancellation. Removing its route
+while pending ends it with `Unavailable`; closing the socket or runtime ends it with `ShuttingDown`.
+Only Classic fanout publish uses the publisher `send_timeout`, ending with `DeadlineExceeded` if
+capacity does not recover within that limit.
+
+**Connections between MeshNodes have no message size limit setting** — that
 limit belongs to the STREAM node and the ClientServer listener
 ([Backpressure](33-backpressure.en.md)).
 

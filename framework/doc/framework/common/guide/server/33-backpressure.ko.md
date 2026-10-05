@@ -272,7 +272,7 @@ reply 대기를 함께 제한하며 socket send timeout과 결합하지 않는�
 timeout을 전달하지 않는다.
 
 Classic fanout publisher만 송신 timeout을 사용한다. 기본값과 값의 범위는
-[Submit과 completion §7](../../spec/server/01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다.
+[Submit과 completion §7](../../../common/spec/server/01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다.
 
 두 HWM은 방향만 다를 뿐 성격이 같다. 각각 **자기 node가 들고 있을 byte**를 정하고, 그
 한도가 상대 쪽 흐름으로 이어진다. 값을 정할 때는 다음을 확인한다.

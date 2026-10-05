@@ -130,16 +130,14 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `sendTimeout` | Classic fanout publisher가 보낼 자리를 기다리는 상한 | 1초 |
+| Classic fanout publisher의 `sendTimeout` | publish가 보낼 자리를 기다리는 상한 | 1초 |
 | `receiveTimeout` | 받는 방향의 대기 상한 | 지정 안 함 |
 | `sendHighWaterMark` · `receiveHighWaterMark` | 상대별로 보관할 byte. `0`은 무제한 | 지정 안 함 — Core가 계산 |
 
-`sendTimeout`은 `configureSpotPublisher()`로 설정하는 Classic fanout publisher에만 적용한다.
-이 publisher는 상한까지 자리가 나지 않으면 `DeadlineExceeded`로 끝난다.
-RouteMesh·ClientServer·Spot·Actor·bound session·STREAM의 one-way send에는 시간 상한과 caller
-cancellation 입력이 없다. Capacity가 회복되면 정상 완료하고, 대기 중 route가 제거되면
-`Unavailable`, socket close나 runtime shutdown이면 `ShuttingDown`으로 끝난다. 제출 시점에
-target이 없으면 `NotFound`다. Java stage 취소와 Kotlin coroutine 취소는 caller 대기만 끝내며 send는 계속된다.
+Send는 capacity가 회복될 때까지 기다리며 시간 상한과 caller cancellation이 없다. 대기 중 route가 제거되면
+`Unavailable`, socket이나 runtime이 종료되면 `ShuttingDown`으로 끝난다. Classic fanout publish만 publisher의
+`sendTimeout`을 사용하며, 상한까지 capacity가 회복되지 않으면 `DeadlineExceeded`로 끝난다.
+
 **MeshNode 사이의 연결에는 message 크기 상한 설정이 없다** — 그 상한은 STREAM node와
 ClientServer listener가 소유한다([Backpressure](33-backpressure.ko.md)).
 
