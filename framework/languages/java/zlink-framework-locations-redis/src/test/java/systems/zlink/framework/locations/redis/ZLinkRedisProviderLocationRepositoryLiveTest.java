@@ -266,14 +266,11 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
                             .toCompletableFuture()
                             .get()
                             .status());
-            // NOTE: unlike the legacy Lua/HASH path, ZLinkProviderAuthorityRepository's
-            // commit() fences only against the authority row's own identity,
-            // not against the target mesh node's current lifecycleGeneration --
-            // a reservation captured against a since-replaced descriptor still
-            // commits. Documented here as observed current behavior, not
-            // necessarily the intended contract; flagged separately.
+            // Location runtime §6.1 (#1432): creation transitions verify the target owner lease and
+            // the target MeshNode descriptor's StoreVersion, so a reservation captured against a
+            // since-replaced descriptor (new lifecycleGeneration) no longer commits.
             assertEquals(
-                    ZLinkObjectCommitResult.COMMITTED,
+                    ZLinkObjectCommitResult.STALE,
                     store.commit(first.reservation(), new byte[] {2}, () -> false)
                             .toCompletableFuture()
                             .get());
