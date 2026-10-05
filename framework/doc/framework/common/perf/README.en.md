@@ -155,9 +155,8 @@ A local driver request arriving after measured end starts no outbound call, retu
 
 Framework perf loads the system by the same principle as binding perf. **Server-driven cells set no
 in-flight cap and submit continuously up to the backpressure boundary; the only exception is the CS
-connector below.** An in-flight cap measures
-the concurrency the harness chose instead of the library's capacity, and keeps load off the
-Framework and Core backpressure paths ([binding perf policy §7.2][perf-inflight]).
+connector below.** An in-flight cap measures the concurrency the harness chose instead of the
+library's capacity, and keeps load off the Framework and Core backpressure paths ([binding perf policy §7.2][perf-inflight]).
 
 - **A server-driven stream starts the next call without waiting for a request reply or send/send echo.**
   - A one-way call (send, the first send of send/send, publish) starts the next call after the

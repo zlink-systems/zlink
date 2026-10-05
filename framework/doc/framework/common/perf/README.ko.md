@@ -148,8 +148,9 @@ Measured 종료 뒤 도착한 local driver 요청은 outbound call을 시작하�
 ### 4.3 부하 원칙
 
 Framework perf는 binding perf와 같은 원칙으로 부하를 건다. **Server-driven 셀은 in-flight
-상한을 두지 않고 backpressure 경계까지 연속 제출하고, 예외는 아래의 CS connector 하나다.** In-flight 상한은 라이브러리의 처리 능력 대신 harness가
-정한 동시 수를 재게 하고, Framework와 Core의 backpressure 경로를 지나지 않게 하기 때문이다
+상한을 두지 않고 backpressure 경계까지 연속 제출하고, 예외는 아래의 CS connector 하나다.**
+In-flight 상한은 라이브러리의 처리 능력 대신 harness가 정한 동시 수를 재게 하고, Framework와
+Core의 backpressure 경로를 지나지 않게 하기 때문이다
 ([binding perf 정책 §7.2][perf-inflight]).
 
 - **Server-driven stream은 request reply나 send/send echo를 기다리지 않고 다음 call을 시작한다.**
