@@ -644,6 +644,24 @@ public sealed partial class EntrySpotActorDispatchTests
             new InstanceSpotIntentAddress("entry", "Tests.InstanceSpot", spotId),
             new ProbeRouteMessage("activate")
         ).Async();
+        // Send completion confirms admission; owner selection is observed at the target separately.
+        var store = RequireLocationStore(runtime);
+        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId);
+        using var observation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            var authority = await store.ReadAuthorityAsync(key, observation.Token);
+            if (
+                authority is ZLinkAuthorityReadResult.Found found
+                && ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                    found.Snapshot.Payload.Span,
+                    out var payload
+                )
+                && payload.State == ZLinkInstanceSpotAuthorityState.Ready
+            )
+                return;
+            await Task.Delay(5, observation.Token);
+        }
     }
 
     private static ZLinkUserSpotActivation AttachActorToUserSpot(

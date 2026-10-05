@@ -371,20 +371,47 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"MeshNode '{Name}' does not host Instance Spot factories."
             );
-        return activationTarget.ActivateAsync(
-            new InstanceSpotActivationOperation(
-                target,
-                sourceNodeRid,
-                sourceNodeGeneration,
-                sourceSpotId,
-                operationId,
-                request,
-                request ? operationId.Low : 0,
-                deadlineUnixMs
-            ),
-            metadata,
-            payload,
-            cancellationToken
+        var operation = new InstanceSpotActivationOperation(
+            target,
+            sourceNodeRid,
+            sourceNodeGeneration,
+            sourceSpotId,
+            operationId,
+            request,
+            request ? operationId.Low : 0,
+            deadlineUnixMs
+        );
+        if (request)
+            return activationTarget.ActivateAsync(operation, metadata, payload, cancellationToken);
+
+        // Local transport admission completes before target activation and first dispatch.
+        if (
+            !_taskRunner.TryRunDetached(
+                "local-instance-spot-activation",
+                async shutdownToken =>
+                {
+                    var terminal = await activationTarget
+                        .ActivateAsync(operation, metadata, payload, shutdownToken)
+                        .ConfigureAwait(false);
+                    if (terminal.Result != RequestResult.Ok)
+                        throw ZLinkRequestFailureMapper.CreateCompletionException(
+                            terminal.Result,
+                            (int)terminal.FailureCode,
+                            "Local Instance Spot activation"
+                        );
+                }
+            )
+        )
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "Local Instance Spot activation admission is closed."
+            );
+        return ValueTask.FromResult(
+            new InstanceSpotActivationTerminal(
+                RequestResult.Ok,
+                0,
+                Array.Empty<ReadOnlyMemory<byte>>()
+            )
         );
     }
 

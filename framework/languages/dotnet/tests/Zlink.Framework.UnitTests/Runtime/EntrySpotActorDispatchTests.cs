@@ -9814,6 +9814,8 @@ public sealed partial class EntrySpotActorDispatchTests
         TimeSpan? defaultRequestTimeout = null,
         ZLinkUserSpotExecutionMode userSpotExecutionMode = ZLinkUserSpotExecutionMode.SpotWide,
         bool includeInstanceSpotRoute = false,
+        Type? instanceSpotType = null,
+        ColdSendProbe? instanceDispatchProbe = null,
         Func<IZLinkLocationStore, IZLinkLocationStore>? locationStoreWrapper = null,
         IZLinkSpotRetireTarget? retireTarget = null,
         IZLinkRelocationStore? relocationStore = null,
@@ -9888,6 +9890,10 @@ public sealed partial class EntrySpotActorDispatchTests
             .AddTransient<ProbeActorThrowingRequestHandler>()
             .AddTransient<MeshChannelRequestHandler>()
             .AddTransient<MeshRouteRequestHandler>();
+        if (instanceDispatchProbe is not null)
+            serviceCollection
+                .AddSingleton(instanceDispatchProbe)
+                .AddTransient<ColdSendInstanceHandler>();
         if (dispatchProbe is not null)
         {
             serviceCollection.AddSingleton(dispatchProbe);
@@ -9997,12 +10003,12 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             registration.SpotNodes["entry"].InstanceSpotFactories["Tests.InstanceSpot"] =
                 new ZLinkInstanceSpotFactoryRegistration(
-                    typeof(ProbeInstanceSpot),
+                    instanceSpotType ?? typeof(ProbeInstanceSpot),
                     new ZLinkInstanceSpotFactoryConfiguration()
                 );
             registration.SpotNodes["entry"].InstanceSpotRelocations["Tests.InstanceSpot"] =
                 new ZLinkObjectRelocationRegistration(
-                    typeof(ProbeInstanceSpot),
+                    instanceSpotType ?? typeof(ProbeInstanceSpot),
                     new ZLinkObjectPlacementOptions(),
                     PolicyKind: 0,
                     AdapterType: null,

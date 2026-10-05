@@ -12,6 +12,139 @@ public sealed partial class EntrySpotActorDispatchTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task Local_instance_send_does_not_return_target_activation_deadline_failure(
+        bool activationDeadlineExpires
+    )
+    {
+        const string spotId = "local-cold-send-deadline";
+        HeldInstanceResolveStore? heldStore = null;
+        var probe = new ColdSendProbe();
+        var relocationStore = new ObservedActivationRelocationStore();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            instanceSpotType: typeof(ColdSendInstanceSpot),
+            instanceDispatchProbe: probe,
+            locationStoreWrapper: inner => heldStore = new(inner, spotId),
+            relocationStore: relocationStore
+        );
+        runtime.Registration.SpotNodes["entry"].DefaultRequestTimeout = activationDeadlineExpires
+            ? TimeSpan.FromMilliseconds(100)
+            : TimeSpan.FromSeconds(5);
+        var targetFailure = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        runtime.ErrorSink.UnhandledCallbackException += error => targetFailure.TrySetResult(error);
+        try
+        {
+            var pending = new ZLinkSpotClient(runtime)
+                .SendToSpot(spotId, new ProbeRouteMessage("activate"))
+                .InstanceSpot()
+                .Async()
+                .AsTask();
+            await heldStore!.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (activationDeadlineExpires)
+                await Task.Delay(TimeSpan.FromMilliseconds(350));
+            Assert.False(pending.IsCompleted);
+            heldStore.Release.TrySetResult();
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            if (activationDeadlineExpires)
+                Assert.IsType<OperationCanceledException>(
+                    await targetFailure.Task.WaitAsync(TimeSpan.FromSeconds(5))
+                );
+            else
+            {
+                Assert.Equal(
+                    "activate",
+                    await probe.Message.Task.WaitAsync(TimeSpan.FromSeconds(5))
+                );
+                Assert.False(probe.Release.Task.IsCompleted);
+                Assert.False(targetFailure.Task.IsCompleted);
+                probe.Release.TrySetResult();
+                await relocationStore.Deleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            await runtime.StopAsync(CancellationToken.None);
+            Assert.Equal(!activationDeadlineExpires, probe.Message.Task.IsCompleted);
+            Assert.Equal(activationDeadlineExpires ? 0 : 1, probe.HandlerCalls);
+        }
+        finally
+        {
+            heldStore?.Release.TrySetResult();
+            probe.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class ColdSendInstanceSpot(IZLinkInstanceSpotContext context)
+        : IZLinkInstanceSpot
+    {
+        public IZLinkInstanceSpotContext Context { get; } = context;
+
+        public void Configure() => Context.Handlers.AddPacket<ColdSendInstanceHandler>();
+    }
+
+    private sealed class ColdSendProbe
+    {
+        public TaskCompletionSource<string> Message { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int HandlerCalls;
+    }
+
+    private sealed class ObservedActivationRelocationStore : IZLinkRelocationStore
+    {
+        private readonly InMemoryRelocationStore inner = new();
+        public TaskCompletionSource Deleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ValueTask<ZLinkBlobPutResult> PutAsync(
+            ZLinkBlobReference reference,
+            ReadOnlyMemory<byte> payload,
+            TimeSpan retention,
+            CancellationToken cancellationToken = default
+        ) => inner.PutAsync(reference, payload, retention, cancellationToken);
+
+        public ValueTask<ZLinkBlobReadResult> ReadAsync(
+            ZLinkBlobReference reference,
+            CancellationToken cancellationToken = default
+        ) => inner.ReadAsync(reference, cancellationToken);
+
+        public ValueTask<ZLinkBlobRenewResult> RenewAsync(
+            ZLinkBlobReference reference,
+            TimeSpan retention,
+            CancellationToken cancellationToken = default
+        ) => inner.RenewAsync(reference, retention, cancellationToken);
+
+        public async ValueTask DeleteAsync(
+            ZLinkBlobReference reference,
+            CancellationToken cancellationToken = default
+        )
+        {
+            await inner.DeleteAsync(reference, cancellationToken);
+            Deleted.TrySetResult();
+        }
+    }
+
+    private sealed class ColdSendInstanceHandler(ColdSendProbe probe)
+        : IZLinkSpotPacketHandler<ColdSendInstanceSpot, ProbeRouteMessage>
+    {
+        public async ValueTask HandleAsync(
+            ColdSendInstanceSpot spot,
+            ProbeRouteMessage message,
+            CancellationToken cancellationToken
+        )
+        {
+            Interlocked.Increment(ref probe.HandlerCalls);
+            probe.Message.SetResult(message.Value);
+            await probe.Release.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task Instance_send_fixes_activation_deadline_before_resolve_without_ending_caller_wait(
         bool inferInstanceType
     )
