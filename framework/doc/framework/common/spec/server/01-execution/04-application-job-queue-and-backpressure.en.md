@@ -412,10 +412,14 @@ close are recorded in diagnostics and metrics.
 The binding operation's submission count and HWM waiting owner are defined by
 [Submit and completion §5](01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
-- **If the wait runs out of time, the call ends with
-  [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded).** Send, publish,
-  one-way and request are all the same here. Being backpressured is not itself a value the
-  caller receives ([`Backpressured`](../00-foundation/02-glossary.en.md#backpressured)).
+- **The operation's contract decides how the wait ends.** A send wait ends as
+  [Submit and completion §7](01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)
+  states, the wait before a Logical Multicast starts follows
+  [Submit and completion §6](01-submit-and-completion.en.md#6-logical-multicast-and-classic-fanout) and
+  [Cancellation and shutdown §4](03-cancellation-and-shutdown.en.md#4-logical-multicast-cancellation), and the
+  request timeout follows [Submit and completion §9](01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget).
+  Being backpressured is not itself a value the caller receives
+  ([`Backpressured`](../00-foundation/02-glossary.en.md#backpressured)).
 - **Having no room is not an error.** No queue rejects a call or throws away what it received
   because it is full ([error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure)).
 - **This rule applies only before the result is settled.** A failure after a call has already
@@ -494,8 +498,9 @@ names — confirms the following. Each item leads to one contract test.
 **Backpressure and Core HWM**
 
 - Framework-internal work waiting for send space follows [§3 Permit Return and No Resource Holding While Waiting](#permit-return-and-holding).
-- When the wait for send space runs out of time, send, publish, one-way and request all end
-  with `DeadlineExceeded`, and no call receives a different error for lack of room.
+- A send waiting for send space never ends because of time, and a request ends with
+  `DeadlineExceeded` when its request timeout runs out. No call receives a different error for
+  lack of room.
 - However much is put into a per-execution-object FIFO, no record is rejected.
 - A failure after an already completed call (a skip after publish has started, a
   target failure of a completed send) does not change the caller's result and is recorded

@@ -363,9 +363,12 @@ white-box 불변 조건이다. Binding 호출은 queue, registry와 user callbac
 Binding operation의 제출 횟수와 HWM 대기 소유는
 [Submit과 완료 §5](01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
-- **기다리다 시간이 다 되면 [`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded)로
-  끝난다.** send·publish·one-way·request가 모두 같다. 밀렸다는 사실 자체는 호출자가 받는
-  값이 아니다([`Backpressured`](../00-foundation/02-glossary.ko.md#backpressured)).
+- **대기의 종료는 operation 계약이 정한다.** Send 대기 종료는
+  [Submit과 완료 §7](01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout),
+  Logical Multicast 시작 전 대기는 [Submit과 완료 §6](01-submit-and-completion.ko.md#6-logical-multicast와-classic-fanout)과
+  [Cancellation과 shutdown §4](03-cancellation-and-shutdown.ko.md#4-logical-multicast-cancellation),
+  request timeout은 [Submit과 완료 §9](01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)를 따른다.
+  밀렸다는 사실 자체는 호출자가 받는 값이 아니다([`Backpressured`](../00-foundation/02-glossary.ko.md#backpressured)).
 - **자리가 없다는 것은 오류가 아니다.** 어느 줄도 자리가 없다는 이유로 호출을 거부하거나
   받은 것을 버리지 않는다([오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)).
 - **이 규칙은 결과가 아직 정해지지 않은 구간에만 사용한다.** 이미 끝난 호출 뒤에 생긴 실패는
@@ -438,8 +441,8 @@ pressure 상태 조회, socket receive-flow 절대 상태, [Runtime metric](../0
 **Backpressure와 Core HWM**
 
 - Framework 내부 작업의 송신 공간 대기가 [§3 Permit 반환과 대기 중 자원 점유 금지](#permit-return-and-holding)를 지킨다.
-- 송신 공간을 기다리다 시간이 다 되면 send·publish·one-way·request가 모두
-  `DeadlineExceeded`로 끝나고, 자리가 없다는 이유로 다른 오류를 받는 호출이 없다.
+- 송신 공간을 기다리는 send는 시간을 이유로 끝나지 않고, request는 request timeout이 다 되면
+  `DeadlineExceeded`로 끝난다. 자리가 없다는 이유로 다른 오류를 받는 호출은 없다.
 - 실행 객체별 FIFO에 얼마를 넣어도 record를 거절하지 않는다.
 - 이미 완료된 호출 뒤의 실패(publish 시작 후 건너뜀, 완료된 send의 target 실패)는
   caller 결과를 바꾸지 않고 관측에만 남는다.

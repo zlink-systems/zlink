@@ -847,8 +847,7 @@ public interface IZLinkSessionActor
     // Submits to the current Actor route, preserving the original request info and session sequence (command 24).
     ValueTask RelayAsync(
         ZLinkSessionDispatchContext dispatch,
-        ZLinkMessage payload,
-        CancellationToken cancellationToken = default);
+        ZLinkMessage payload);
     // Sends a logical disconnect notification to this one Actor while the connection is kept.
     // Doesn't destroy the Actor or change Spot membership (§7).
     ValueTask NotifyDisconnectedAsync(
@@ -862,8 +861,7 @@ var boundActor = await session.Actors
 
 await boundActor.RelayAsync(
     dispatch,
-    payload,
-    cancellationToken); // submits while preserving the original request info and session sequence.
+    payload); // submits while preserving the original request info and session sequence.
 ```
 
 ## 14. Verification Requirements

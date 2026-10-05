@@ -695,8 +695,7 @@ public interface IZLinkSessionActor
     // 원래 request 정보와 session sequence를 보존해 current Actor route로 제출한다 (command 24).
     ValueTask RelayAsync(
         ZLinkSessionDispatchContext dispatch,
-        ZLinkMessage payload,
-        CancellationToken cancellationToken = default);
+        ZLinkMessage payload);
     // connection이 유지된 상태에서 이 Actor 하나에 논리적 disconnect 통지를 보낸다.
     // Actor를 destroy하거나 Spot membership을 바꾸지 않는다 (§7).
     ValueTask NotifyDisconnectedAsync(
@@ -710,8 +709,7 @@ var boundActor = await session.Actors
 
 await boundActor.RelayAsync(
     dispatch,
-    payload,
-    cancellationToken); // 원래 request 정보와 session sequence를 보존해 제출한다.
+    payload); // 원래 request 정보와 session sequence를 보존해 제출한다.
 ```
 
 ## 14. 검증 요구
