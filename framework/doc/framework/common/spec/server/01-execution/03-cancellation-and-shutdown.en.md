@@ -20,19 +20,24 @@ title: "Cancellation and Shutdown"
 - Cancellation is a cooperative request.
 - An already-completed result is not turned into a cancellation, and delivery
   of an already-accepted one-way message is not cancelled.
+- **A one-way send has no cancellation input.** The cases that end its wait are defined by
+  [Submit and completion §7](01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). A cancellation input exists only where the
+  operation's contract defines cancellation, such as a request or a Logical Multicast publish before
+  commit ([§4](#4-logical-multicast-cancellation)).
 - [§3](#3-handling-the-cancellation-race) defines the cancellation ownership boundary between Framework queue waiting and binding operations.
 - The per-language surface uses `.NET` `CancellationToken`, Java
   `CompletionStage.toCompletableFuture().cancel(false)`, Kotlin coroutine
   cancellation, and Node.js `AbortSignal`.
 - For a stage returned by the Java Framework, `toCompletableFuture()` is tied
-  to the cancellation and cleanup of the original pending admission.
-- The C++ one-way `async()` terminal provides no separate public cancellation input.
+  to the cancellation and cleanup of the original pending admission only for an operation that
+  supports cancellation. `cancel(false)` on a send stage, and cancellation of a Kotlin coroutine
+  awaiting that stage, end only the caller's wait; the send continues.
 - Not using a C++ task, or simply not holding onto a Java stage, does not by
   itself guarantee the operation was cancelled.
 
 ## 2. Pre-Cancelled Call
 
-The rules for a call that arrives already pre-cancelled are:
+The rules for a call with a cancellation input that arrives already pre-cancelled are:
 
 - The call validates arguments, handles, and one-shot state first.
 - `.NET`'s pre-cancelled `CancellationToken` and Node.js's already-aborted
@@ -159,8 +164,8 @@ MeshNode state transition is observed. Each item leads to one test.
 
 - Requesting cancellation on an already-completed call does not change the
   completion result.
-- An already-accepted one-way message is still delivered after a
-  cancellation request.
+- After `cancel(false)` on a Java send stage, or cancellation of a Kotlin coroutine awaiting that
+  stage, the send stays pending and is delivered exactly once when capacity recovers.
 - A call made with a pre-cancelled `.NET` `CancellationToken`, or an
   already-aborted Node.js `AbortSignal`, does not start runtime admission and
   completes with a cancelled awaitable.

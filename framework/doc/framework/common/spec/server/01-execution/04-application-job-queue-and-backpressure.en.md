@@ -314,7 +314,7 @@ connection with a slow consumer still leaves other connections' progress unblock
 Wiring the directional socket options of RouteMesh's
 [MeshNode](../00-foundation/02-glossary.en.md#meshnode) — the runtime node that
 participates in a RouteMesh to send or receive messages — `SendHighWaterMark`,
-`ReceiveHighWaterMark`, `SendTimeout`, `ReceiveTimeout` — is not covered by this
+`ReceiveHighWaterMark`, `ReceiveTimeout` — is not covered by this
 document. The channel-transport topic owns the public configuration defined by
 [RouteMesh Topology](../02-channel-transport/01-channel-topology.en.md) and [MeshNode
 Startup](../03-spot-actor/03-mesh-node.en.md).

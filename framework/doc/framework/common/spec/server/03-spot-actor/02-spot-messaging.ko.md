@@ -355,17 +355,12 @@ static ValueTask<TReply> RequestAsync<TRequest, TReply>(
 Spot direct send는 `Async(...)`만 제공한다. 비동기 call을 만들지 않고 즉시
 완료를 반환하는 별도 API는 제공하지 않는다.
 
-Owner MeshNode의 ROUTER queue가 일시적으로 가득 차면 유한한 send timeout 동안
-queue가 message를 받을 수 있을 때까지 기다린다.
+Owner MeshNode의 ROUTER queue가 일시적으로 가득 차면 queue가 message를 받을 수 있을 때까지
+기다린다. 이 대기에는 시간 상한과 caller cancellation이 없다([Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)).
 
 Ready Spot에 보내는 일반 direct send는 source의 송신 경로가 message를 수락하면
 결과값 없이 완료된다. 이 완료는 target Spot의 handler가 실행되었다는 뜻이 아니다.
-Send timeout까지 수락하지 못하면 operation에 허용된 deadline까지 완료 조건을
-만족하지 못했을 때 발생하는 Framework exception인
-[`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded), Spot이나 route가 없으면
-`NotFound`, runtime이 종료 중이면 `ShuttingDown`으로 실패한다.
-Cancellation과 caller process에서 발생한 오류의 자세한 경계는
-[비동기 실행 정책 §1.3](../01-execution/01-submit-and-completion.ko.md)을 따른다.
+Spot이나 route가 없으면 `NotFound`, runtime이 종료 중이면 `ShuttingDown`으로 실패한다.
 
 Cold activation이 필요한 submit도 선택한 target으로 보내는 송신 경로가 activation
 envelope를 수락하면 완료한다. Target이 생성 권한을 확보하고 factory를 실행하여
@@ -563,8 +558,7 @@ send를 여러 번 호출하여 Logical Multicast를 직접 구현하는 방식�
 Logical Multicast는 publish 전용 전달 정책 option을 제공하지 않는다.
 
 Framework는 동시에 처리할 수 있는 publish 작업 수를 제한한다. 모든 worker가
-사용 중이면 유한한 send timeout까지 worker와 source-local outbound capacity를 기다린다.
-그 안에 확보하지 못하면 어떤 target에도 message를 보내지 않고 `DeadlineExceeded`로 실패한다.
+사용 중이면 worker와 source-local outbound capacity를 시간 상한 없이 기다린다.
 Publish를 시작하기 전에 cancellation이나 runtime shutdown이 확정되면 각각 기존 typed cancellation
 또는 `ShuttingDown` 오류로 완료한다.
 
@@ -601,8 +595,8 @@ sequenceDiagram
     participant Local as Local Spot queue
 
     Caller->>Executor: publish 제출
-    alt 사용 가능한 worker 없음
-        Executor-->>Caller: target 처리 없이 DeadlineExceeded
+    alt worker 확보 전 cancellation 또는 shutdown
+        Executor-->>Caller: target 처리 없이 cancellation 또는 ShuttingDown
     else 사용 가능한 worker 있음
         Executor->>Runtime: 고정한 target 목록 처리 시작
         Executor-->>Caller: 결과값 없이 정상 완료
@@ -731,11 +725,11 @@ Spot application queue와 Actor queue는 한도가 있다. 한도를 넘겼을 �
 
 | 계열 | 포화한 대기열 | 호출자가 받는 결과 |
 |---|---|---|
-| Send·one-way | **같은 runtime**의 outbound 또는 Spot·Actor 대기열 | [Async 실행 정책 §1](../01-execution/01-submit-and-completion.ko.md)을 따른다 — send timeout까지 자리를 기다리고, 시간이 다 되면 `DeadlineExceeded` |
+| Send·one-way | **같은 runtime**의 outbound 또는 Spot·Actor 대기열 | 자리가 날 때까지 기다린다. 시간 상한과 caller cancellation은 없다([Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)) |
 | Send·one-way | **다른 node**의 Spot·Actor 대기열 | **결과가 없다.** Send 완료 경계는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)를 따른다. 이후 target admission 실패는 metric·log·trace로 남는다 |
-| Publish (시작 전) | worker 자리 또는 source-local outbound | send timeout까지 기다린다. 확보하지 못하면 `DeadlineExceeded` |
+| Publish (시작 전) | worker 자리 또는 source-local outbound | 시간 상한 없이 기다린다. 시작 전 cancellation·shutdown으로만 끝난다 |
 | Publish (시작 후) | local Spot 대기열 | **자리가 날 때까지 기다린다.** publish는 이미 완료했으므로 이 대기가 호출자 결과를 바꾸지 않는다. 용량이 아닌 이유로 전달하지 못한 경우만 관측으로 남긴다(§4.3) |
-| Request | 같은 runtime 또는 다른 node의 Spot·Actor 대기열 | send와 같다 — 자리를 기다리고, 시간이 다 되면 `DeadlineExceeded`다([Framework 오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)). |
+| Request | 같은 runtime 또는 다른 node의 Spot·Actor 대기열 | 자리를 기다리고, request timeout이 다 되면 `DeadlineExceeded`다([Framework 오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)). |
 | Control claim | 같은 runtime 또는 다른 node의 control 한도 | 위와 같다([Framework 오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)). |
 
 Publish의 두 줄이 다른 이유는 **완료 시점이 그 사이에 있기** 때문이다. 시작 전에는 아직

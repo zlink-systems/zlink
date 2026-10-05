@@ -347,7 +347,7 @@ discovery 결과는 이 handle로 변경하지 않는다.
 `Client` 또는 `Server`인 Mesh와 Location Store가 없으면 startup이 실패한다. Global ActorId가 current Mesh와
 owner route를 결정하므로 이 설정은 MeshName을 받지 않는다.
 
-`DefaultRequestTimeout`의 기본값은 30초, `DefaultSocketSendTimeout`의 기본값은 1초다.
+`DefaultRequestTimeout`의 기본값은 30초, `DefaultSocketSendTimeout`의 기본값은 1초다. `DefaultSocketSendTimeout`은 Classic fanout publisher의 send timeout에만 적용한다([Submit과 completion §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)).
 `SessionReplacementCallbackTimeout`은 actor binding 교체 callback이 실행될 수 있는 최대 시간이며 기본값은
 30초다. 이 시간을 넘기면 Framework가 물러난 session을 강제로 닫는다. `Worker`는 worker의
 최소·최대 thread 수와 idle timeout을 host startup 전에 설정한다.
@@ -501,7 +501,6 @@ public interface IZLinkSocketConfig
     int ReceiveBufferSize { get; set; }
     TimeSpan? Linger { get; set; }
     TimeSpan? ReceiveTimeout { get; set; }
-    TimeSpan? SendTimeout { get; set; }
     TimeSpan? ConnectTimeout { get; set; }
     TimeSpan? HandshakeInterval { get; set; }
     bool? IPv6 { get; set; }
@@ -518,7 +517,6 @@ public interface IZLinkStreamSocketConfig
     int ReceiveBufferSize { get; set; }
     TimeSpan? Linger { get; set; }
     TimeSpan? ReceiveTimeout { get; set; }
-    TimeSpan? SendTimeout { get; set; }
     TimeSpan? ConnectTimeout { get; set; }
     TimeSpan? HandshakeInterval { get; set; }
     bool? IPv6 { get; set; }
@@ -560,7 +558,6 @@ public interface IZLinkMeshNodeSocketConfig
     ulong SendHighWaterMark { get; set; }
     ulong ReceiveHighWaterMark { get; set; }
     TimeSpan? ReceiveTimeout { get; set; }
-    TimeSpan? SendTimeout { get; set; }
 }
 ```
 

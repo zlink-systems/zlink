@@ -98,7 +98,7 @@ sequenceDiagram
 
 - **같은 node에서 여러 Spot이 일치하면 immutable message storage의 reference를 공유해 각 Spot
   queue에 넣는다.** message 본문을 Spot 수만큼 복제하지 않기 위해서다.
-- **remote 송신의 HWM, send timeout과 backpressure는 ROUTER 규칙을 그대로 따른다.** Logical
+- **remote 송신의 HWM과 backpressure는 ROUTER 규칙을 그대로 따른다.** Logical
   Multicast가 별도 흐름 제어 경로를 두지 않기 때문이다.
 - **뒤 target의 실패가 앞에서 수락된 target의 제출을 취소하지 않는다.** target마다 독립적으로
   제출하기 때문이다.

@@ -199,23 +199,24 @@ sequenceDiagram
     participant Tgt as Target owner
 
     App->>Src: RequestToXxx(...).Async<TReply>()
-    alt source-local admission succeeds within send timeout
+    alt source-local admission succeeds within request timeout
         Src->>Tgt: builds reply correlation and delivers the request
         alt reply arrives
             Src-->>App: completes with the typed reply
         else no response by request timeout, or route error
             Src-->>App: completes with the matching framework error
         end
-    else admission fails by send timeout
-        Src-->>App: completes with DeadlineExceeded (the send itself failed)
+    else admission fails by request timeout
+        Src-->>App: completes with DeadlineExceeded (a later send remains possible)
     end
     Note over Src,Tgt: Submit and completion §5 defines request resubmission
 ```
 
 - **`send` provides one async submit.** The one-way completion boundary and terminator kinds are
   defined by [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
-- **If the queue is temporarily full, it waits for admission up to a finite
-  send timeout.** A one-way error occurring after acceptance is reported
+- **If the queue is temporarily full, a send waits until capacity recovers.** There is no time
+  limit and no caller cancellation; wait termination is defined by
+  [Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). A one-way error occurring after acceptance is reported
   through the standard logger/telemetry provider configured by the application
   and through monitoring. The framework provides no dedicated runtime error
   sink.
@@ -236,10 +237,9 @@ sequenceDiagram
 - **The one-way completion, failure, and resubmission boundaries are defined by
   [Submit and completion §§4–5](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).**
 - **`request` builds reply correlation on the selected send path and delivers
-  the terminal result exactly once.** Request timeout is the time waiting for
-  a reply, and send-stage backpressure is handled by send timeout. The timeout budget of a
-  global object request is set by
-  [Submit and completion §§7, 9](../01-execution/01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules). The resubmission boundary after route error or timeout is defined by
+  the terminal result exactly once.** Request timeout limits send-stage admission and the reply
+  wait together. The timeout budget is set by
+  [Submit and completion §9](../01-execution/01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget). The resubmission boundary after route error or timeout is defined by
   [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). Each language's transport error is converted into one of this
   document's closed framework results — a transport-specific result isn't
   exposed on the public call.
@@ -277,20 +277,21 @@ sequenceDiagram
     participant Loc as Local Spot queue (same node)
 
     App->>Exec: Publish(channelName, topic, message)
-    alt worker slot secured within send timeout
+    alt worker slot secured
         Exec-->>App: completes normally (no return data) — transaction starts
         Note over Exec,Loc: the public call has already ended,<br/>per-target submission continues internally from here
         Exec->>Rem: submits a routed message once per MeshNode
         Rem->>Rem: checks local subscription for (ChannelName, topic filter)
         Exec->>Loc: submits independently to matching local Spot queue
-    else worker slot not secured
-        Exec-->>App: DeadlineExceeded (transaction didn't start)
+    else cancellation or shutdown before commit
+        Exec-->>App: cancellation or ShuttingDown (transaction didn't start)
     end
 ```
 
 - **The framework service runtime submits the publish transaction to a bounded
-  I/O executor.** If a worker slot isn't secured by the send timeout, the
-  transaction doesn't start and it fails with `DeadlineExceeded`. Once handoff
+  I/O executor.** It waits for a worker slot with no time limit; if cancellation or shutdown is
+  decided first, the transaction doesn't start
+  ([Submit and completion §6](../01-execution/01-submit-and-completion.en.md#6-logical-multicast-and-classic-fanout)). Once handoff
   succeeds and the transaction starts, the public terminal completes normally
   with no return data, and the runtime keeps submitting to each remote target
   and local Spot queue internally.
@@ -460,9 +461,8 @@ A STREAM session owns connection lifecycle and packet order.
 - **The server package's bound session send, session Actor relay, and
   explicit STREAM send/reply also return the same async-only one-way
   admission result.** A separate stream connector package's send builder
-  follows the connector package's contract. A STREAM reply uses that STREAM
-  socket's send timeout and doesn't use the caller's request timeout as the
-  reply admission deadline.
+  follows the connector package's contract. A STREAM reply's wait also follows
+  [Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout) and doesn't use the caller's request timeout.
 - **If the reply sequence or one-shot token is invalid, or the same reply call
   is submitted twice, it ends as a local exceptional completion.** The first
   valid reply terminator atomically consumes the token before transport
@@ -491,12 +491,12 @@ the application. The business message types are illustrative examples.
 // Node direct: the application specifies a particular node RID in the "world" Mesh.
 await routes
     .SendToNode("world", targetNodeRid, new ReloadConfig())
-    .Async(cancellationToken);
+    .Async();
 
 // Channel select-one: the framework picks one ready server in the "game" Channel.
 MatchFound match = await routes
     .RequestToChannel("game", new FindMatch(playerId))
-    .Timeout(TimeSpan.FromSeconds(2))    // upper bound for waiting on reply. Send admission is handled separately by send timeout.
+    .Timeout(TimeSpan.FromSeconds(2))    // limits send admission and the reply wait together.
     .Async<MatchFound>(cancellationToken);
 ```
 
@@ -566,18 +566,17 @@ aren't returned as a public result or aggregated into publish-only monitoring.
 // submits a server-initiated one-way packet to the current session FIFO.
 await sessionClient
     .Send(new ServerNotice("maintenance"))
-    .Async(cancellationToken);
+    .Async();
 
 // only consumes the current request's reply capability, exactly once, from within a STREAM request handler.
 await sessionClient
     .Reply(new LoginAccepted(playerId))
-    .Async(cancellationToken);
+    .Async();
 
 // bound Actor relay submits to the Actor mailbox using the current session binding.
 await sessionActor
     .RelayAsync(
-        ZLinkMessage.From(new ClientInput(sequence, command)),
-        cancellationToken);
+        ZLinkMessage.From(new ClientInput(sequence, command)));
 ```
 
 `Reply(...)` isn't an API for sending an arbitrary server-initiated message. It
@@ -640,8 +639,10 @@ verify the following. Each item maps to one test.
 
 **Failure**
 
-- If the queue is full and admission doesn't succeed by the send timeout, it
-  ends with `DeadlineExceeded`.
+- A one-way send never ends because of time. Verify wait termination against
+  [Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout).
+- If a Classic fanout publish isn't admitted by the publisher send timeout, it ends with
+  `DeadlineExceeded`.
 - Verify request resubmission after route error or timeout against [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - If a reply is submitted twice with the same reply token, the second call
   ends as a local exceptional completion.

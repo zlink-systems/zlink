@@ -422,8 +422,7 @@ setting for RouteMesh SS. A sender or receiver doesn't reject a message because
 of a Framework-level complete-message cap. Transport and service-wire
 representation bounds, HWM, and mailbox budgets remain separate resource and
 wire guards.
-If `send_timeout` isn't specified, the framework default of 1 second
-is used. If `receive_timeout` isn't specified, there's no separate
+If `receive_timeout` isn't specified, there's no separate
 bound on receive waiting. HWM must be 0 or greater.
 
 The Spot Actor Join/Relocation-related interface is also a formal
@@ -802,8 +801,8 @@ actor context.
 The call execution surface expresses the common async call contract in
 C++ coroutine convention. `request(...)`, `send(...)`,
 `join_spot(...)`, and `join_entry_spot(...)` return a call object. A
-one-way call's `async()` returns a `task_t` carrying the bounded
-admission result up to the send timeout. Session Actor `relay(...)`
+one-way call's `async()` returns a `task_t` carrying the
+admission result. Session Actor `relay(...)`
 doesn't build a separate call object and returns a `task_t<void>` that
 produces no normal completion value. For a request, `async()` is the
 point that waits for reply completion.

@@ -456,8 +456,7 @@ to send a duplicate-connection notice can adjust this setting.
 Failure to deliver the previous-session notification, callback failure, and
 delayed connection close are recorded with bounded diagnostics, but they
 never restore or remove the new binding. This notification's send follows the
-ordinary rule: when the queue is full, it waits for admission until the send
-timeout, and ends with `DeadlineExceeded` if it is not admitted by then. The
+ordinary one-way send rule ([Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)). The
 Framework adds no separate retry and does not delay the bind terminal. Core
 reconnect handles recovery after the connection is lost. If the previous
 owner remains unreachable after all, the physical close is left to that

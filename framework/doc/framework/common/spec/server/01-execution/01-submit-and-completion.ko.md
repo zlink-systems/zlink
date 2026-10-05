@@ -61,7 +61,7 @@ Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을 사용한
 
 검증은 Framework가 실제로 노출하는 종결자의 완료 표현과 관측 결과를 사용하여, 이미 반환된 다른 호출의 결과와 이후 호출의 결과가 공유 상태 때문에 오염되지 않는지 확인한다. Binding 결과 객체의 구조나 `Backpressured` 결과를 Framework에 노출하도록 요구하지 않는다.
 
-격리의 책임은 그 완료 표현을 반환하는 계층에 있다. Framework queue 대기의 취소, binding operation의 caller wait 취소와 late completion 정리의 소유권은 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)을 따른다. 반환 표현의 격리를 위해 pending stage의 기존 cancellation 연결을 제거하거나, binding의 operation state·registry·재제출을 Framework에 추가하지 않는다.
+격리의 책임은 그 완료 표현을 반환하는 계층에 있다. Framework queue 대기의 취소, binding operation의 caller wait 취소와 late completion 정리의 소유권은 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)을 따른다. 반환 표현의 격리를 위해 cancellation을 지원하는 pending stage의 cancellation 연결을 제거하거나, binding의 operation state·registry·재제출을 Framework에 추가하지 않는다.
 
 **Application이 직접 완료시키는 비동기 결과와 제한 시간 관찰.** Application은 외부 사건으로 완료되는 비동기 결과를 만들고, application thread에서 그 결과를 제한 시간 동안 관찰할 수 있다.
 
@@ -163,8 +163,8 @@ sequenceDiagram
 
 ## 5. Backpressure와 오류 분류
 
-Local Framework capacity가 부족하면 Framework가 해당 family의 send timeout까지
-기다린다. Core HWM으로 binding operation이 대기하면 Core가 재시도를 소유하고
+Local Framework capacity가 부족하면 Framework는 capacity가 회복되거나 runtime이 새
+admission을 받지 않을 때까지 기다린다. Core HWM으로 binding operation이 대기하면 Core가 재시도를 소유하고
 operation별 completion awaitable(binding 결과 객체의 `admitted`)을 완료한다. Framework는
 별도 readiness callback, retry waiter 또는 binding adapter를 만들지 않으며 다음 규칙을 따른다.
 
@@ -172,10 +172,9 @@ operation별 completion awaitable(binding 결과 객체의 `admitted`)을 완료
   [`Backpressured`](../00-foundation/02-glossary.ko.md#backpressured)는 public terminal result가
   아니다.
 - Capacity가 먼저 확보되면 message를 정확히 한 번 제출하고 정상 완료한다.
-- Binding에 넘기기 전 Framework queue 대기의 timeout·shutdown·cancellation 경쟁은
-  [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)을 따른다.
-  Binding operation의 cancellation과 native completion 정리도 그 절의 소유 경계를 참조한다.
-- Framework는 기다리는 줄을 따로 만들지 않는다. 자리를 기다리다 시간이 다 되면 `DeadlineExceeded`로 끝난다.
+- One-way send의 대기에는 시간 상한과 caller cancellation이 없다. 대기가 끝나는 경우는
+  [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이 정한다.
+- Framework는 기다리는 줄을 따로 만들지 않는다.
 - Core가 대기 토큰 없이 capacity 부족을 반환하면(예: request completion slot 포화) 기다릴 대상이 없으므로
   Framework는 그 호출을 즉시 `Unavailable`로 끝낸다.
 - 어느 경우에도 `Backpressured` status를 공개하거나 나중에 message를 다시 제출하지 않는다.
@@ -187,7 +186,7 @@ operation별 completion awaitable(binding 결과 객체의 `admitted`)을 완료
 | Mesh 없음 | `NotFound` |
 | ChannelName target 선택 실패 | [Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다 |
 | 사용할 route가 없음 | `Unavailable` |
-| admission deadline 만료 | `DeadlineExceeded` |
+| 대기 중 route가 없어짐 | [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다 |
 | runtime이 새 admission을 받지 않음 | `ShuttingDown` |
 | 같은 call의 terminal을 두 번 실행 | `InvalidOperation` |
 | Binding이 one-way send를 수락하지 않음(`NOT_ADMITTED`) | `Rejected` |
@@ -201,7 +200,7 @@ source-local admission 확인 단계에서만 다른 eligible member를 선택�
 
 Binding operation이 시작되면 선택한 target이 확정된다. Core가 HWM 재시도와
 완료를 소유하며 Framework는 용량을 이유로 target을 다시 선택하거나 binding operation을
-다시 제출하지 않는다. 완료 뒤에는 자동 재제출하지 않는다. 이후 detach 또는 timeout은 해당 operation의 terminal이다. 새 select-one operation은 시작할 때 그 시점의 eligible member를 선택할 수 있다.
+다시 제출하지 않는다. 완료 뒤에는 자동 재제출하지 않는다. 대상 제거와 runtime 종료만 해당 operation의 terminal이다. 새 select-one operation은 시작할 때 그 시점의 eligible member를 선택할 수 있다.
 
 ## 6. Logical Multicast와 Classic fanout
 
@@ -209,7 +208,9 @@ Binding operation이 시작되면 선택한 target이 확정된다. Core가 HWM 
 같다.
 
 - Operation을 시작할 때 target snapshot을 고정하고 각 target을 한 번씩 시도한다.
-- Operation 자체를 local executor에 제출하지 못하면 send timeout까지 기다린다.
+- Operation 자체를 local executor에 제출하지 못하면 worker slot을 확보하거나 runtime이 새
+  admission을 받지 않을 때까지 기다린다. 이 대기에는 시간 상한이 없으며, commit 전에만 caller
+  cancellation으로 끝낼 수 있다([Cancellation과 shutdown §4](03-cancellation-and-shutdown.ko.md#4-logical-multicast-cancellation)).
 - Source-local 자리를 확보해 transaction이 시작되면 public
   terminal은 반환 데이터 없이 정상 완료하고 target별 제출은 내부에서 계속한다.
 - 시작된 뒤 개별 target 실패는 전체 publish를 rollback하거나 exceptional completion으로
@@ -222,50 +223,37 @@ Binding operation이 시작되면 선택한 target이 확정된다. Core가 HWM 
 socket queue가 message를 수락하면 정상 완료한다. Subscriber 수와 수신 완료를 public
 result로 만들지 않는다.
 
-## 7. Admission deadline — owner와 값 규칙
+## 7. One-way send의 대기 종료와 Classic fanout send timeout
 
-One-way admission deadline과 global object request의 outbound admission deadline은 operation이 실제로 사용하는 outbound socket 또는, RouteMesh에
-참여해 message를 보내거나 받는 runtime node인
-[MeshNode](../00-foundation/02-glossary.ko.md#meshnode)가 소유한다.
+**One-way send에는 시간 상한과 caller cancellation이 없다.** 대상은 RouteMesh node·Channel, Spot,
+Actor, ClientServer, bound session·session Actor relay의 send, commit된 Logical Multicast의 target별
+제출, STREAM send·reply다. Route resolve·ClientServer ready 대기처럼 binding operation을 시작하기 전
+단계도 같다. Pending send는 다음 셋 가운데 하나로만 끝난다.
 
-| Operation family | deadline owner | 기본 규칙 |
-|---|---|---|
-| [RouteMesh](../00-foundation/02-glossary.ko.md#routemesh) node·channel, Spot, Actor | 선택한 MeshNode ROUTER send timeout | global object route resolve 시간을 포함하며 설정이 없으면 1초 |
-| ClientServer | client DEALER send timeout | 설정이 없으면 1초 |
-| Logical Multicast | 선택한 MeshNode ROUTER의 target별 send timeout | commit된 publish transaction의 각 remote target에 적용한다 |
-| classic fanout | publisher socket send timeout | 설정이 없으면 1초 |
-| bound session·session Actor relay | Framework socket send timeout | local·remote Actor route가 바뀌어도 같은 deadline을 사용한다 |
-| STREAM send·reply | 해당 STREAM socket send timeout | reply에 caller request timeout을 사용하지 않는다 |
+| 끝나는 사건 | 결과 |
+|---|---|
+| Capacity 회복 뒤 admission | 정상 완료 |
+| 대기 중 route가 없어짐 — Core의 대상 제거([Core 대기 토큰의 종료](../../../../../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)), STREAM 연결 종료 | `Unavailable` — 제출 시점에 있던 target의 route를 잃은 것이므로 target 부재(`NotFound`)와 구분한다 |
+| Socket close·runtime shutdown | `ShuttingDown` |
 
-Framework public send timeout의 값 규칙은 다음과 같다.
+시간 상한과 cancellation을 두지 않는 이유는 caller가 대기를 끝낸 뒤 message가 나가는 일을 막기
+위해서다. Binding operation의 cancellation은 caller의 대기만 끝내고 이미 시작한 재제출을 거두지
+않으므로([Binding 비동기 실행 모델 §6](../../../../../../../bindings/doc/spec/async-execution-model.ko.md#6-caller-wait-cancellation)),
+대기를 끝내는 시간 상한이나 cancellation은 "보내지 않았다"를 보장하지 못한다. 전송 결과가 필요한
+application은 request를 사용한다. Request의 timeout은 [§9](#9-request-completion--완료-경쟁과-timeout-budget)가 정한다.
+
+[Classic fanout](../00-foundation/02-glossary.ko.md#classic-fanout) publish는 blocking 제출이므로
+publisher socket send timeout까지 admission을 기다리고, 그때까지 수락되지 않으면
+`DeadlineExceeded`로 끝난다. Publisher send timeout의 값 규칙은 다음과 같다.
 
 - millisecond로 올림한 값이 `1..INT_MAX` 범위인 유한한 duration이어야 한다.
 - 양수인 sub-millisecond 값은 1ms로 올린다.
 - `0`, 음수, 무한대와 상한 초과는 늦어도 host startup에서 거부하며 유효한 기본값으로
   바꾸지 않는다.
-- 값이 지정되지 않으면 해당 family의 1초 기본값을 선택한다.
+- 값이 지정되지 않으면 1초 기본값을 선택한다.
 - 기존 public root fallback이 있으면 같은 의미로 적용하지만, 다른 언어에 같은 root
   option을 새로 추가해야 한다는 뜻은 아니다.
 - Runtime setter가 있는 경우 잘못된 값은 setter 호출에서 즉시 거부한다.
-
-호출 쪽 deadline이 있는 admission은 socket send timeout과 그 deadline 중 먼저 도달하는 deadline을
-사용하며, 호출 쪽 값으로 socket send timeout을 연장하지 않는다. 호출 쪽 deadline은 아래 STREAM
-one-way send의 admission timeout modifier와 global object request의 남은 request timeout
-([§9](#9-request-completion--완료-경쟁과-timeout-budget))이다.
-
-STREAM one-way send call은 선택적인 호출별 admission timeout modifier를 제공한다. 이
-값은 reply를 기다리는 시간이 아니라 해당 send가 STREAM transport queue의 수락을
-기다릴 수 있는 최대 시간이다.
-
-- Modifier를 생략하면 해당 STREAM socket의 send timeout을 사용한다.
-- Modifier를 지정하면 위의 호출 쪽 deadline 규칙을 따른다.
-- 값 검증과 millisecond 올림은 위 `1..INT_MAX` 규칙을 그대로 사용한다.
-- Deadline이 먼저 끝나면 `DeadlineExceeded`로 한 번 완료하고, 이후 capacity가
-  생겨도 해당 send를 admission하거나 다시 시도하지 않는다.
-- 이 modifier는 STREAM reply call에는 적용하지 않는다. Reply는 socket send timeout과
-  one-shot token 계약을 사용한다.
-- 언어별 cancellation과 timeout의 경쟁은
-  [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)을 따른다.
 
 ## 8. STREAM reply token
 
@@ -278,12 +266,11 @@ STREAM reply의 one-shot [reply token](../00-foundation/02-glossary.ko.md#reply-
 - Request sequence와 token을 call을 만들 때 보존한다.
 - 유효한 첫 terminator invocation이 transport admission 시도 전에 token을
   원자적으로 claim하고 소비한다.
-- 그 terminator가 `DeadlineExceeded`, cancellation 또는 runtime shutdown 예외로
-  완료되어도 token은 다시 사용할 수 없다.
+- 그 terminator가 실패로 완료되어도 token은 다시 사용할 수 없다.
 - 같은 token에서 만든 두 call이 경쟁하면 claim에 성공한 하나만 transport admission을
   시작하고 나머지는 transport 시도 없이 exceptional completion으로 끝난다.
-- Caller request timeout은 reply wire에 전달되지 않으므로 STREAM reply의 admission
-  deadline으로 사용하지 않는다.
+- Reply의 대기는 [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다. Caller의
+  request timeout은 reply wire에 전달되지 않으며 reply의 대기를 끝내지 않는다.
 - 늦게 수락된 reply가 client correlation에서 일치하지 않더라도 transport admission
   결과를 request 결과로 바꾸지 않는다.
 
@@ -311,10 +298,12 @@ flowchart LR
     C5 -.-> D
 ```
 
-Global object request timeout은 current Ready authority resolve, outbound
-admission, handler와 reply 전체를 포함한다. Source는 앞 단계에서 사용한 시간을 뺀
-잔여 시간만 다음 단계에 전달한다. Outbound admission 단계의 deadline은
-[§7](#7-admission-deadline--owner와-값-규칙)이 정한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
+Request timeout은 outbound admission과 reply 대기 전체를 포함하며, global object request는
+current Ready authority resolve와 handler 시간도 포함한다. Source는 앞 단계에서 사용한 시간을 뺀
+잔여 시간만 다음 단계에 전달한다. Outbound admission 단계는 남은 request timeout만 끝낼 수 있으며
+socket send timeout과 결합하지 않는다. Timeout이나 cancellation으로 caller의 대기가 끝나도 request가
+전송되지 않았다는 뜻은 아니다 — admission 전에 끝난 request도 binding이 이미 시작한 재제출로 나중에
+전송될 수 있고, 그 reply는 닫힌 correlation이므로 폐기한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
 
 같은 handler turn에서 보낸 request를 기다릴 때 gate를 어떻게 반납하고 재개하는지는
 [Handler turn과 execution gate 「4. 같은 turn에서의 대기와 반납」](02-handler-turn-and-execution-gate.ko.md#4-같은-turn에서의-대기와-반납)이
@@ -540,22 +529,18 @@ dispatcher 자리 등록 시점)은 §10·§11이 규칙과 함께 소유하며 
 **Submit과 admission**
 
 - One-way 완료와 실패는 [§4](#4-one-way-submit--admission-경계)와 [§5](#5-backpressure와-오류-분류)를 확인한다.
-- Local capacity가 부족한 send는 family send timeout까지 기다리다가, capacity가
-  먼저 생기면 정확히 한 번 제출되어 정상 완료하고, timeout이 먼저 확정되면
-  `DeadlineExceeded`로 완료한다.
-- 대기 토큰이 있는 capacity 부족은 그 대기로 이어지고, 시간이 다 된 call만 `DeadlineExceeded`로
-  끝난다. 토큰 없는 거절은 [§5](#5-backpressure와-오류-분류)대로 `Unavailable`로 끝난다.
+- Local capacity가 부족하거나 대기 토큰을 받은 send는 시간이 지나도 시간을 이유로 끝나지 않으며,
+  capacity가 회복되면 정확히 한 번 제출되어 정상 완료한다. 대기 중 대상 제거와 runtime 종료는
+  [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)의 결과로 끝난다. 토큰 없는 거절은
+  [§5](#5-backpressure와-오류-분류)대로 `Unavailable`로 끝난다.
 - Logical Multicast는 target이 0개여도 반환 데이터 없이 정상 완료하고, 시작 뒤
   개별 target 실패는 public 반환값을 바꾸지 않는다.
 - Subscriber가 없는 Classic fanout의 완료는 [§6](#6-logical-multicast와-classic-fanout)의 publish 규칙을 확인한다.
 
-**Deadline과 reply token**
+**Send timeout과 reply token**
 
-- Send timeout에 `0`, 음수, 무한대 또는 상한 초과 값을 설정하면 host startup 또는
-  setter 호출에서 거부된다.
-- STREAM send call의 admission timeout modifier가 socket timeout보다 먼저 끝나면
-  `DeadlineExceeded`로 완료하고, 이후 같은 send를 다시 admission하거나 시도하지
-  않는다.
+- Classic fanout publisher send timeout에 `0`, 음수, 무한대 또는 상한 초과 값을 설정하면 host
+  startup 또는 setter 호출에서 거부된다.
 - 같은 STREAM reply token에서 만든 두 call이 동시에 제출되면 하나만 transport
   admission을 시작하고 나머지는 transport 시도 없이 exceptional completion으로
   끝난다.

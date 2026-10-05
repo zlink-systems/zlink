@@ -119,7 +119,7 @@ following public error meaning.
 | `not_connected`, `route_not_connected` | `unavailable` |
 | `not_found`, `request_target_not_found`, `handler_not_found` | `not_found` |
 | Admission or filter rejection with no typed result | `rejected` |
-| A queue has no room | Not an error. The work waits for room, and if the time runs out, `deadline_exceeded` |
+| A queue has no room | Not an error. The work waits for room. Only a request ends with `deadline_exceeded` when its request timeout runs out |
 | `busy` | `unavailable` |
 | `protocol_error`, `request_protocol_error` | `protocol_error` |
 
@@ -312,9 +312,9 @@ SPOT and STREAM backpressure is only observed through the public
 
 - **An application handler isn't given an API that directly controls
  the framework queue.**
-- **A full queue does not end the call with a failure.** The work waits for room, and if the
- wait runs out of time it ends with `deadline_exceeded`. One-way, send and request behave the
- same, and so do local and remote queues
+- **A full queue does not end the call with a failure.** The work waits for room. A one-way send
+ has no time limit, and a request ends with `deadline_exceeded` when its request timeout runs
+ out. Local and remote queues behave the same
  ([Spot Messaging §5.3](../../../03-spot-actor/02-spot-messaging.en.md)).
 
 This rule applies to ordinary SPOT and STREAM execution queues. Payloads

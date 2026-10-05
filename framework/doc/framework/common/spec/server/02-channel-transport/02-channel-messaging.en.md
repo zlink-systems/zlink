@@ -188,8 +188,9 @@ ClientServer path.
 
 <a id="clientserver-ready-wait"></a>
 The two paths also handle the "no candidate yet" case differently. RouteMesh doesn't wait,
-as above. If there's no ready target, ClientServer waits within the call's admission deadline
-([Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules)).
+as above. If there's no ready target, ClientServer waits until a ready target appears. A send's
+wait termination is defined by [Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout), and a request's by the remaining
+request timeout ([Submit and completion §9](../01-execution/01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget)).
 The result of both paths follows [the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result).
 Framework startup doesn't wait for local ClientServer admission to complete.
 

@@ -99,7 +99,6 @@ struct mesh_node_socket_config_t {
  zlink::byte_count_t receive_high_water_mark =
  zlink::byte_count_t::bytes(4'096'000);
  std::optional<std::chrono::milliseconds> receive_timeout;
- std::optional<std::chrono::milliseconds> send_timeout;
 };
 
 enum class object_role_t : std::uint8_t {
@@ -735,7 +734,6 @@ public:
  stream_send_call_t &metadata(std::string key, std::string value);
  stream_send_call_t &packet_name(std::string packet_name);
  stream_send_call_t &compress();
- stream_send_call_t &timeout(std::chrono::milliseconds timeout);
  task_t<void> async();
  void submit();   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
 };
@@ -881,8 +879,8 @@ A request handler's return value allows `TReply` or `task_t<TReply>`.
 A handler returning `task_t<TReply>` has the same meaning as `.NET`'s
 `async Task<TReply>` handler, and a call that must wait for a result
 like an internal request is used as `co_await call.async()`. A
-one-way send/push receives the bounded admission result up to the send
-timeout with `co_await call.async()`. If accepted immediately, the
+one-way send/push receives the admission result with `co_await call.async()`.
+Wait termination is defined by [Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). If accepted immediately, the
 prepared task can complete right away, without waiting for remote
 handler completion.
 
@@ -1083,48 +1081,31 @@ don't produce a normal completion value. Normal completion means the
 operation family's defined source-local queue accepted the message.
 It doesn't wait for remote handler execution, subscriber receipt,
 remote Spot queue acceptance, or application callback completion. If
-queue capacity is short, it waits for a capacity signal up to that
-family's send timeout, and submits the message exactly once if space
-opens within the deadline. `backpressured` isn't a public terminal
-result or an immediately-thrown application exception. Timeout
-completes as `deadline_exceeded`, route disconnection as `unavailable`,
+queue capacity is short, it waits for a capacity signal and submits the
+message exactly once when space opens. This wait has no time limit
+([Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)). `backpressured` isn't a public terminal
+result or an immediately-thrown application exception. Route
+disconnection completes as `unavailable`,
 and runtime shutdown as a `framework_exception_t` of `shutting_down`
 kind. Absence of Actor/Spot/Mesh/session target uses the existing
 error kind the operation family defines. A C++ server call has no
 separate cancellation argument. Not keeping or destroying the returned
-task doesn't guarantee the operation is cancelled, and the same
-operation isn't automatically resubmitted after timeout or shutdown.
+task doesn't cancel the operation, and the same
+operation isn't automatically resubmitted after shutdown.
 An invalid argument/state and a duplicate submit complete as
 `framework_exception_t`. A STREAM reply's valid first terminator
 atomically claims and consumes a one-shot reply token before starting
 transport. If two calls built from the same token race, the call that
 fails the claim doesn't attempt transport and completes as
 `framework_exception_t`. Even if the call that consumed the token ends
-with `deadline_exceeded`, the token can't be used again, and an
+with a failure, the token can't be used again, and an
 already-used token is also treated as exceptional completion. A STREAM
-reply isn't given the client request timeout — it only uses that
-STREAM socket's send timeout.
+reply isn't given the client request timeout.
 
-RouteMesh node/Channel/[Spot](../../../00-foundation/02-glossary.en.md#spot)/Actor
-uses the selected MeshNode ROUTER's send timeout, ClientServer uses the
-client DEALER's,
-[classic fanout](../../../00-foundation/02-glossary.en.md#classic-fanout) uses the
-publisher socket's, and STREAM send/reply uses that STREAM socket's
-send timeout. A bound session uses one framework socket send timeout
-even if the local/remote Actor route changes. An ordinary one-way call
-doesn't have a per-call `timeout(...)`, but `stream_send_call_t` can
-shorten its admission wait per call. Omission uses the STREAM socket send
-timeout; specifying it uses the shorter of the per-call and socket values,
-so it cannot extend the socket timeout. The value is `1..INT_MAX`
-milliseconds, rounding any remaining fraction from another unit up to the
-next millisecond. Expiry completes terminal-once as `deadline_exceeded` and
-does not start later admission or replay. A STREAM reply doesn't provide
-this modifier. Without socket or MeshNode
-configuration, a 1-second default is used instead of an infinite wait.
-The socket/MeshNode `std::chrono::milliseconds` value used for one-way
-admission only allows the `1..INT_MAX` range. `0`, negative, and
-exceeding the bound are rejected as a configuration error at setting
-time or, at latest, at startup, and aren't switched to the default.
+Only the [Classic fanout](../../../00-foundation/02-glossary.en.md#classic-fanout) publisher uses a
+send timeout; its value rules and default are defined by
+[Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). Other one-way calls and STREAM send/reply
+have neither a per-call `timeout(...)` nor a socket send timeout.
 
 [Interaction model §5](../../../00-foundation/04-interaction-model.en.md#5-spot-logical-multicast)
 and [Cancellation and shutdown §4](../../../01-execution/03-cancellation-and-shutdown.en.md#4-logical-multicast-cancellation)

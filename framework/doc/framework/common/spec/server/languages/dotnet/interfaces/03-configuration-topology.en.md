@@ -376,7 +376,7 @@ ActorId determines the current Mesh and owner route, this setting doesn't
 take a MeshName.
 
 `DefaultRequestTimeout`'s default is 30 seconds, and
-`DefaultSocketSendTimeout`'s default is 1 second.
+`DefaultSocketSendTimeout`'s default is 1 second. `DefaultSocketSendTimeout` applies only to the Classic fanout publisher's send timeout ([Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)).
 `SessionReplacementCallbackTimeout` is the maximum time an actor-binding replacement callback may
 run before Framework force-closes the retired session; its default is 30 seconds. `Worker` sets the
 worker's minimum/maximum thread count and idle timeout before host
@@ -563,7 +563,6 @@ public interface IZLinkSocketConfig
  int ReceiveBufferSize { get; set; }
  TimeSpan? Linger { get; set; }
  TimeSpan? ReceiveTimeout { get; set; }
- TimeSpan? SendTimeout { get; set; }
  TimeSpan? ConnectTimeout { get; set; }
  TimeSpan? HandshakeInterval { get; set; }
  bool? IPv6 { get; set; }
@@ -580,7 +579,6 @@ public interface IZLinkStreamSocketConfig
  int ReceiveBufferSize { get; set; }
  TimeSpan? Linger { get; set; }
  TimeSpan? ReceiveTimeout { get; set; }
- TimeSpan? SendTimeout { get; set; }
  TimeSpan? ConnectTimeout { get; set; }
  TimeSpan? HandshakeInterval { get; set; }
  bool? IPv6 { get; set; }
@@ -622,7 +620,6 @@ public interface IZLinkMeshNodeSocketConfig
  ulong SendHighWaterMark { get; set; }
  ulong ReceiveHighWaterMark { get; set; }
  TimeSpan? ReceiveTimeout { get; set; }
- TimeSpan? SendTimeout { get; set; }
 }
 ```
 

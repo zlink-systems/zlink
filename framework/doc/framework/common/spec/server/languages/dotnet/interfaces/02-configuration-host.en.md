@@ -198,5 +198,5 @@ same setting as the owner lease renew interval.
 
 A [Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast)
 publisher doesn't provide a publish-only delivery policy option. Each
-remote target follows the MeshNode ROUTER's HWM and send timeout, and the
+remote target follows the MeshNode ROUTER's HWM, and the
 local Spot queue accepts or drops independently.

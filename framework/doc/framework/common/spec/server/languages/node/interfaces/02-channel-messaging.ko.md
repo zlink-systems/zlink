@@ -304,7 +304,7 @@ export declare function ZLinkSend(packetName?: string): MethodDecorator;
 export interface ZLinkSendCall {
  metadata(key: string, value: string): this;
  metadata(metadata: ZLinkMessageMetadata): this;
- submit(signal?: AbortSignal): Promise<void>;
+ submit(): Promise<void>;
 }
 
 export interface ZLinkSendHandler<TMessage> {
@@ -312,28 +312,22 @@ export interface ZLinkSendHandler<TMessage> {
 }
 ```
 
-모든 server one-way call의 `submit(signal?)`과 session Actor `relay(...)`는 정상 완료 값을 만들지 않는다.
+모든 server one-way call의 `submit()`과 session Actor `relay(...)`는 정상 완료 값을 만들지 않는다.
 정상 완료는 operation family가 정의한 source-local queue가 message를 수락했다는 뜻이다. Remote handler 실행,
 subscriber 수신, remote Spot queue 수락과 application callback 완료는 기다리지 않는다. Queue capacity가
-부족하면 해당 family의 send timeout까지 capacity signal을 기다리고, deadline 안에 공간이 생기면 message를
-정확히 한 번 제출한다. `Backpressured`는 public terminal result나 즉시 발생하는 application exception이
-아니다. Timeout은 `DeadlineExceeded`, route 단절은 `Unavailable`, runtime 종료는
-`ShuttingDown`으로 Promise를 reject한다. Actor·Spot·Mesh·session target 부재는 `NotFound`를 사용한다.
-
-`AbortSignal`이 `submit(...)` 또는 `relay(...)` 전에 이미 abort 상태이면 runtime admission을 시작하지 않고
-`AbortError`로 reject한다.
-Admission이 시작된 뒤에는 abort, timeout, shutdown과 수락 중 먼저 확정된 terminal 결과만 남기며, abort나
-timeout 뒤에 같은 operation을 다시 제출하지 않는다. 잘못된 argument·handle·state와 중복 submit은 exceptional completion으로
+부족하면 capacity signal을 기다리고, 공간이 생기면 message를 정확히 한 번 제출한다. 이 대기에는 시간 상한과
+`AbortSignal`이 없다([Submit과 완료 §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)). `Backpressured`는 public terminal result나 즉시 발생하는
+application exception이 아니다. Route 단절은 `Unavailable`, runtime 종료는 `ShuttingDown`으로 Promise를
+reject한다. Actor·Spot·Mesh·session target 부재는 `NotFound`를 사용한다. Shutdown 뒤에 같은 operation을 다시
+제출하지 않는다. 잘못된 argument·handle·state와 중복 submit은 exceptional completion으로
 처리한다. STREAM reply의 유효한 첫 terminator는 transport를 시작하기 전에 one-shot reply token을 원자적으로
 claim하고 소비한다. 같은 token에서 만든 두 call이 경쟁하면 claim에 실패한 call은 transport를 시도하지 않고
-exceptional completion으로 끝난다. Token을 소비한 call이 `DeadlineExceeded`, runtime shutdown 또는 abort로 끝나도 token을
+exceptional completion으로 끝난다. Token을 소비한 call이 실패로 끝나도 token을
 다시 사용할 수 없다. 이미 사용한 token도 exceptional completion으로 처리한다. STREAM reply는 client request
-timeout을 전달받지 않으며 해당 STREAM socket의 send timeout만 사용한다.
+timeout을 전달받지 않는다.
 
-RouteMesh node·Channel·Spot·Actor는 선택한 MeshNode ROUTER, ClientServer는 client DEALER, [classic fanout](../../../00-foundation/02-glossary.ko.md#classic-fanout)은
-publisher socket, STREAM send·reply는 해당 STREAM socket의 send timeout을 사용한다. Bound session은
-local·remote Actor route가 바뀌어도 framework socket send timeout 하나를 사용한다. 공개 설정이 없으면
-1초를 사용한다. One-way admission에 사용하는 millisecond 설정은 `1..2147483647` 범위의 유한 정수만
+[Classic fanout](../../../00-foundation/02-glossary.ko.md#classic-fanout) publisher만 `sendTimeoutMs`를 사용한다. 공개 설정이 없으면
+1초를 사용한다. 이 millisecond 설정은 `1..2147483647` 범위의 유한 정수만
 허용한다. `undefined`는 기본값을 선택하며 `0`, 음수, 정수가 아닌 값과 상한 초과는
 `ZLinkConfigurationError`로 거부한다.
 
@@ -355,9 +349,8 @@ export interface ZLinkSession {
 export interface ZLinkSessionActor {
  readonly actorId: ActorId;
  readonly ref: ActorRef;
- relay(payload: ZLinkMessage, signal?: AbortSignal): Promise<void>;
- relay(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage,
- signal?: AbortSignal): Promise<void>;
+ relay(payload: ZLinkMessage): Promise<void>;
+ relay(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void>;
  notifyDisconnected(signal?: AbortSignal): Promise<void>;
 }
 
@@ -406,15 +399,14 @@ export interface ZLinkSessionPacketHandler<TSessionContext, TMessage = ZLinkMess
 
 export interface ZLinkSessionReplyCall {
  compress(enabled?: boolean): this;
- submit(signal?: AbortSignal): Promise<void>;
+ submit(): Promise<void>;
 }
 
 export interface ZLinkSessionSendCall {
  metadata(key: string, value: string): this;
  metadata(metadata: ZLinkMessageMetadata): this;
  compress(enabled?: boolean): this;
- timeout(timeoutMs: number): this;
- submit(signal?: AbortSignal): Promise<void>;
+ submit(): Promise<void>;
 }
 ```
 
@@ -424,12 +416,6 @@ callback이다. Framework는 callback 전에 session을 closing으로 바꿔 새
 않는다. Callback이 성공 또는 실패로 terminal이 되면 Framework는 non-blocking timer를 예약하고 turn을 즉시
 반환한다. Timer는 retired session identity를 다시 확인한 뒤 100 ms에 connection을 닫으며, `sleep`이나
 session serial lane·worker 점유로 기다리지 않는다. 새 bind는 callback이나 close를 기다리지 않는다.
-
-`ZLinkSessionSendCall.timeout(...)`은 이 send의 admission 대기만 줄인다. 생략하면 STREAM socket send
-timeout을 사용하고 지정하면 두 값 중 짧은 값을 사용하므로 socket timeout을 늘릴 수 없다. 값은
-`1..2_147_483_647` 범위의 정수 milliseconds여야 한다. 만료되면 `DeadlineExceeded`로 terminal-once
-reject하고 이후 admission이나 replay를 시작하지 않는다. `AbortSignal`은 기존 Node cancellation 의미를
-유지하며 reply call에는 이 modifier를 제공하지 않는다.
 
 Bind 뒤 relay·request relay와 `notifyDisconnected(...)`는 Actor별 저장 route를 사용하며 message마다
 Location Store를 조회하지 않는다. Physical disconnect는 Framework가 current binding 전체에 automatic

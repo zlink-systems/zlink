@@ -79,7 +79,6 @@ public interface IZLinkMeshNodeSocketConfig
     ulong SendHighWaterMark { get; set; }     // send-direction socket HWM.
     ulong ReceiveHighWaterMark { get; set; }  // receive-direction socket HWM.
     TimeSpan? ReceiveTimeout { get; set; }
-    TimeSpan? SendTimeout { get; set; }
 }
 ```
 
@@ -633,8 +632,9 @@ RouteMesh ServerServer (SS) transport doesn't expose a listener message-size set
 and the framework doesn't reject a complete message solely because of a
 Framework-level `MaxMessageSize`.
 
-`ConfigureRouterSocket()` applies `SendHighWaterMark` and `ReceiveHighWaterMark`, and
-`SendTimeout` and `ReceiveTimeout`, to separate socket directions.
+`ConfigureRouterSocket()` applies `SendHighWaterMark` and `ReceiveHighWaterMark` to separate
+socket directions. A MeshNode ROUTER has no send timeout option — a one-way send's wait
+termination is defined by [Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout).
 
 Messages still follow the transport and service-wire protocol's representation limits,
 and the process-memory limit. If a message is rejected at one of these lower limits,

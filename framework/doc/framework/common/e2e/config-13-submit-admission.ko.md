@@ -7,8 +7,9 @@
 
 One-way send와 publish는 payload를 반환하지 않는다. 정상 완료는 해당 operation family의 source admission이
 message를 수락했다는 뜻이며 원격 handler 실행 완료를 뜻하지 않는다. Queue가 바로
-수락하지 못하면 public send deadline 안에서 capacity를 기다리고, timeout 예외·Shutdown 중 먼저
-확정된 결과 하나로 끝난다.
+수락하지 못하면 send는 capacity를 기다린다. 이 대기에는 시간 상한과 caller cancellation이 없으며
+capacity 회복 뒤 수락, route 제거, Shutdown 가운데 먼저 확정된 결과 하나로 끝난다
+([Submit과 completion §7](../spec/server/01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)). Classic fanout publish만 publisher send timeout을 쓴다.
 
 이 config는 실제 process 사이에서 public one-way API의 완료와 실패를 검증한다. Client는 역할 server의
 application endpoint를 호출하고, 역할 server가 Framework public API로 send·publish·reply를 시작한다.
@@ -17,7 +18,7 @@ Transport attempt count, private queue, socket buffer 크기와 test-only snapsh
 ## 1. 확인 범위
 
 - 즉시 수락과 capacity 회복 뒤 수락
-- Bounded pending admission, deadline, Shutdown과 지원 언어의 cancellation
+- 시간 상한 없는 pending admission과 route 제거·Shutdown terminal
 - Node·Channel·Spot·Actor·Session·STREAM·classic fanout의 one-way 의미
 - Logical Multicast의 부분 전달과 target별 결과 부재
 - Direct logical target과 select-one Channel의 target 선택 차이
@@ -50,7 +51,7 @@ common setup timeout 안에 만들어지지 않으면 scenario setup 실패로 �
 횟수나 queue cap을 실행 중에 늘리지 않는다.
 
 Send terminal과 remote 실행은 별도 evidence로 판정한다. 정상 send terminal을 먼저 확인하고 handler
-completion은 application gate를 연 뒤 확인한다. Deadline 또는 cancellation으로 끝난 operation은 gate와
+completion은 application gate를 연 뒤 확인한다. Route 제거 또는 Shutdown으로 끝난 operation은 gate와
 route가 복구된 뒤에도 handler에서 실행되면 안 된다.
 
 Logical Multicast는 target별 delivery report를 반환하지 않는다. Public result와 수락 가능한 target의
@@ -80,7 +81,7 @@ Queue에 capacity가 있으면 one-way call은 payload 없는 정상 terminal을
 
 우선순위: `P0`
 
-Target의 shared permit이 모두 예약돼도 deadline 전에 handler가 시작해 permit을 반환하면 Application이
+Target의 shared permit이 모두 예약돼도 handler가 시작해 permit을 반환하면 Application이
 같은 operation을 다시 호출하지 않고 원래 awaitable이 완료되어야 한다.
 
 **검증 질문:** Shared job capacity 회복 뒤 pending send가 정상 완료되고 handler에서 최대 한 번 처리되는가.
@@ -94,37 +95,23 @@ Target의 shared permit이 모두 예약돼도 deadline 전에 handler가 시작
 - 세부 동작: [오류 모델 §4](../spec/server/00-foundation/07-framework-error-model.ko.md)의 send-ready 대기를
   검증한다.
 
-#### SA-E2E-03 Pending send를 bounded terminal로 끝낸다
+#### SA-E2E-03 Pending send는 시간을 이유로 끝나지 않는다
 
 우선순위: `P0`
 
-Shared job capacity wait 중에도 유한한 send 집합은 각자의 deadline 안에서 terminal
-결과를 가져야 한다. 이 scenario는 내부 pending waiter의 크기를 검증하지 않는다.
+Shared job capacity wait 중인 send는 경과 시간과 관계없이 pending으로 남고, capacity 회복 또는 Shutdown으로만
+terminal을 가져야 한다. 이 scenario는 내부 pending waiter의 크기를 검증하지 않는다.
 
-**검증 질문:** Shared capacity로 pending된 sends가 무기한 남지 않고 success 또는 `DeadlineExceeded`로 한 번씩 끝나는가.
+**검증 질문:** Pending send가 오래 기다려도 `DeadlineExceeded`로 끝나지 않고, capacity 회복 뒤 정상 완료하거나
+Shutdown 뒤 `ShuttingDown`으로 한 번 끝나는가.
 
 - 시작 조건: 서로 다른 target process 두 개에 `MaxQueuedApplicationJobs = 1`과 handler-start gate를
-  설정한다. 각 target에 blocker job을 먼저 보내 reserved/queued 1을 확인한다. 두 send deadline은 짧고 유한하다.
-- 절차: 각 target으로 서로 다른 operation ID의 send를 시작한다. 첫 target의 gate는 deadline 전에 열고
-  두 번째 target의 gate는 deadline까지 유지한다.
-- 검증: 모든 awaitable이 bounded 시간 안에 terminal 하나를 가진다. 첫 target의 marker는 최대 한 번이고
-  두 번째 target의 operation은 `DeadlineExceeded`로 끝나며 handler evidence에 없다.
-- 세부 동작: [오류 모델 §4](../spec/server/00-foundation/07-framework-error-model.ko.md)를 검증한다.
-
-#### SA-E2E-04 Deadline 뒤 늦은 capacity가 operation을 되살리지 않는다
-
-우선순위: `P0`
-
-Send deadline이 먼저 끝났다면 이후 queue capacity가 생겨도 완료된 operation을 제출해서는 안 된다.
-
-**검증 질문:** `DeadlineExceeded` 뒤 gate를 열어도 이전 marker가 handler에 전달되지 않는가.
-
-- 시작 조건: Send가 pending이 되도록 `MaxQueuedApplicationJobs = 1`과 handler-start gate를 구성한다.
-- 절차: Public send deadline이 끝날 때까지 gate를 유지한다. `DeadlineExceeded` terminal을 확인한 뒤 gate를
-  열고 새 operation ID의 send를 보낸다.
-- 검증: 이전 marker는 handler evidence에 없고 새 marker만 한 번 처리된다.
-- 세부 동작: [오류 모델 §4](../spec/server/00-foundation/07-framework-error-model.ko.md)의 late admission
-  차단을 검증한다.
+  설정한다. 각 target에 blocker job을 먼저 보내 reserved/queued 1을 확인한다.
+- 절차: 각 target으로 서로 다른 operation ID의 send를 시작한다. 두 gate를 3초 동안 유지하고 두 awaitable이
+  pending인지 확인한다. 첫 target의 gate를 연다. 두 번째 source host를 Shutdown한다.
+- 검증: 3초 시점에 두 awaitable은 terminal이 없다. 첫 send는 결과 payload 없이 정상 완료하고 marker는 한
+  번만 처리된다. 두 번째 send는 `ShuttingDown`으로 끝나며 이후 gate를 열어도 handler evidence에 없다.
+- 세부 동작: [Submit과 completion §7](../spec/server/01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 검증한다.
 
 #### SA-E2E-05 Target 부재와 route 미연결을 구분한다
 
@@ -162,17 +149,18 @@ Host가 신규 작업 수락을 닫은 뒤 시작한 send는 queue에 들어가�
 
 우선순위: `P1`
 
-Pending admission이 timeout 또는 Shutdown으로 먼저 끝나면 handler가 실행되지 않아야 한다. Public admission
-cancellation을 제공하는 언어에서는 cancellation variant도 실행한다. Logical Multicast submit이 정상
-완료된 뒤 caller scope 종료는 이미 시작한 fanout을 rollback하지 않는다.
+Pending send가 Shutdown으로 먼저 끝나면 handler가 실행되지 않아야 한다. Logical Multicast는 commit 전
+cancellation으로 시작을 막을 수 있고, submit이 정상 완료된 뒤 caller scope 종료는 이미 시작한 fanout을
+rollback하지 않는다.
 
-**검증 질문:** Commit 전 timeout·Shutdown과 지원 언어의 cancellation은 delivery를 막고, 정상 publish
+**검증 질문:** Pending send의 Shutdown과 publish commit 전 cancellation은 delivery를 막고, 정상 publish
 terminal 뒤 caller scope 종료는 기존 delivery를 취소하지 않는가.
 
 - 시작 조건: 일반 send는 pending 상태로 만들고, multicast target handler는 application gate에서
   대기하도록 구성한다.
-- 절차: Pending send를 timeout 또는 Shutdown으로 끝낸다. 지원 언어에서는 cancellation도 별도 fixture에서
-  실행한다. 별도 multicast를 publish하여 정상 terminal을 받은 뒤 caller scope를 끝내고 handler gate를 연다.
+- 절차: Pending send를 Shutdown으로 끝낸다. Publish cancellation 입력이 있는 언어에서는 worker를 모두 점유한
+  상태의 publish를 commit 전에 취소하는 variant를 별도 fixture에서 실행한다. 별도 multicast를 publish하여 정상
+  terminal을 받은 뒤 caller scope를 끝내고 handler gate를 연다.
 - 검증: Terminal send marker는 없다. Multicast marker는 수락된 target에서 최대 한 번 처리되고 public
   publish terminal은 바뀌지 않는다.
 - 세부 동작: [Spot messaging §4](../spec/server/03-spot-actor/02-spot-messaging.ko.md)와
@@ -194,23 +182,23 @@ Target node가 같은 process인지 다른 process인지와 관계없이 send te
 - 세부 동작: [Interaction model §3](../spec/server/00-foundation/04-interaction-model.ko.md)을
   검증한다.
 
-#### SA-E2E-09 Channel topology별 send deadline을 적용한다
+#### SA-E2E-09 Channel topology별 send 대기를 확인한다
 
 우선순위: `P0`
 
-RouteMesh와 ClientServer Channel send는 queue capacity가 없으면 family send deadline까지 기다린 뒤
-같은 public terminal 하나로 끝나야 한다.
+RouteMesh와 ClientServer Channel send는 queue capacity가 없으면 capacity가 회복될 때까지 기다린 뒤 같은
+public terminal 하나로 끝나야 한다. ClientServer는 ready server가 없을 때도 ready server가 생길 때까지 기다린다.
 
-**검증 질문:** RouteMesh와 ClientServer Channel send가 capacity 회복 전에는 pending이고 deadline 전
-회복 시 성공하며, 회복하지 않으면 같은 timeout 결과를 반환하는가.
+**검증 질문:** RouteMesh와 ClientServer Channel send가 capacity 회복 전에는 시간과 관계없이 pending이고,
+회복 뒤 정상 완료하는가.
 
-- 시작 조건: RouteMesh와 ClientServer를 실제 별도 topology로 구성한다. 각 topology에서 성공·timeout
-  variant는 서로 다른 ChannelName과 target process를 사용한다. 각 target에
+- 시작 조건: RouteMesh와 ClientServer를 실제 별도 topology로 구성한다. 각 target에
   `MaxQueuedApplicationJobs = 1`과 handler-start gate를 설정하고 blocker job의 reserved/queued 상태를 확인한다.
-- 절차: 각 topology의 성공 target으로 send를 시작해 deadline 전에 gate를 열고, timeout target의 별도
-  send는 gate를 deadline까지 유지한다.
-- 검증: 두 topology 모두 success send는 payload 없는 정상 terminal과 handler 1회를 만들고, timeout
-  send는 `DeadlineExceeded`와 handler 0회를 만든다.
+  ClientServer ready-wait variant는 server process를 시작하지 않은 별도 ChannelName을 사용한다.
+- 절차: 각 topology에서 send를 시작하고 3초 동안 gate를 유지한 뒤 연다. Ready-wait variant는 send를 시작하고
+  3초 뒤 server를 시작한다.
+- 검증: 3초 시점에 모든 awaitable이 pending이다. 이후 모두 결과 payload 없이 정상 완료하고 handler가 marker를
+  한 번 처리한다.
 - 세부 동작: [Channel messaging §7](../spec/server/02-channel-transport/02-channel-messaging.ko.md)과
   [ClientServer Channel §6](../spec/server/02-channel-transport/03-client-server-channel.ko.md)를 검증한다.
 
@@ -286,51 +274,47 @@ Classic fanout publish는 subscriber count나 delivery acknowledgement를 반환
 
 Session owner와 Actor owner가 local인지 remote인지에 따라 one-way terminal 의미가 바뀌어서는 안 된다.
 
-**검증 질문:** Local·remote bound Session send와 Actor relay가 같은 deadline과 non-replay 규칙을
+**검증 질문:** Local·remote bound Session send와 Actor relay가 같은 대기·Shutdown과 non-replay 규칙을
 사용하는가.
 
 - 시작 조건: Local binding과 remote binding을 fresh Session으로 각각 구성한다. Pending 변형은 각 Session을
   별도 gateway process에 배치하여 host shared job capacity를 공유하지 않게 하고, 해당 gateway의
   `MaxQueuedApplicationJobs = 1`과 handler-start gate로 capacity 대기를 만든다.
-- 절차: 네 조합에서 정상 send를 한 번 실행하고, 별도 pending send는 deadline까지 capacity를 열지 않는다.
-- 검증: 정상 sends는 결과 payload 없이 완료하고 target evidence가 한 번씩 나타난다. Pending sends는
-  `DeadlineExceeded`이며 이후 capacity 복구 뒤 replay되지 않는다.
+- 절차: 네 조합에서 정상 send를 한 번 실행한다. 별도 pending send는 3초 동안 capacity를 열지 않은 뒤 source
+  gateway를 Shutdown한다.
+- 검증: 정상 sends는 결과 payload 없이 완료하고 target evidence가 한 번씩 나타난다. Pending sends는 3초
+  시점에 terminal이 없고 Shutdown 뒤 `ShuttingDown`으로 끝나며 이후 capacity 복구 뒤 replay되지 않는다.
 - 세부 동작: [One-way submit](../spec/server/01-execution/README.ko.md),
-  [Admission deadline](../spec/server/01-execution/01-submit-and-completion.ko.md)과
+  [One-way send의 대기 종료](../spec/server/01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)와
   [Session Actor inbound dispatch](../spec/server/04-session/02-session-actor-binding.ko.md)를 검증한다.
 
 #### SA-E2E-16 Server Stream send 순서를 유지한다
 
 우선순위: `P0`
 
-같은 Stream Session에서 수락된 server sends는 application 제출 순서를 유지해야 한다. 각 send call의
-public `Timeout(...)` modifier로 실패한
-send는 나중에 client에게 나타나면 안 된다.
+같은 Stream Session에서 수락된 server sends는 application 제출 순서를 유지해야 한다.
 
-**검증 질문:** Stream client가 성공한 sequence만 제출 순서로 받는가.
+**검증 질문:** Stream client가 server send를 제출 순서대로 중복 없이 받는가.
 
 - 시작 조건: Public stream connector가 server Session에 연결되어 있고 server send HWM을 작게 설정한다.
-  Server send gate는 닫아 두고 성공 marker에는 긴 call timeout, `timeout` marker에는 더 짧은 timeout을
-  설정한다.
-- 절차: `1`, `timeout`, `2`, `3` 순서로 server send를 시작한다. `timeout` operation이 deadline으로
-  끝난 것을 확인한 뒤 긴 deadline이 끝나기 전에 gate를 연다.
-- 검증: Client가 받은 성공 sequence `1,2,3`은 source의 successful terminal 순서와 같고 중복이 없다.
-  `timeout` marker는 client에게 도착하지 않는다.
-- 세부 동작: [Async execution — STREAM send call별 timeout](../spec/server/01-execution/README.ko.md)과
+  Server send gate는 닫아 둔다.
+- 절차: `1`, `2`, `3` 순서로 server send를 시작하고 대기 중인 awaitable이 있는 것을 확인한 뒤 gate를 연다.
+- 검증: Client가 받은 sequence `1,2,3`은 source의 successful terminal 순서와 같고 중복이 없다.
+- 세부 동작: [Submit과 completion §7](../spec/server/01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)과
   [Stream session의 codec 계층 분리](../spec/server/04-session/01-stream-session.ko.md)를 검증한다.
 
 #### SA-E2E-17 Stream reply token은 한 번만 사용한다
 
 우선순위: `P0`
 
-Request reply token은 유효한 첫 reply call이 사용한다. 첫 call이 normal, socket send timeout 또는
-Shutdown으로 끝나도 같은 token을 다시 사용할 수 없다. Cancellation은 지원 언어의 추가 variant다.
+Request reply token은 유효한 첫 reply call이 사용한다. 첫 call이 normal 또는 Shutdown으로 끝나도 같은
+token을 다시 사용할 수 없다.
 
 **검증 질문:** 같은 reply token의 두 call 중 하나만 admission을 시작하고 client reply도 최대 하나인가.
 
 - 시작 조건: Stream peer가 request를 보내고 server handler가 public reply token을 받는다.
-- 절차: 같은 token으로 reply call 두 개를 만들고 application barrier에서 동시에 시작한다. Normal,
-  socket send timeout과 Shutdown variant를 fresh request에서 반복하고, 지원 언어에서는 cancellation도 실행한다.
+- 절차: 같은 token으로 reply call 두 개를 만들고 application barrier에서 동시에 시작한다. Normal과
+  Shutdown variant를 fresh request에서 반복한다.
 - 검증: 각 request에서 한 call만 정상 또는 첫 terminal을 얻고 다른 call은 local invalid-state error다.
   Client reply는 최대 하나이며 terminal token을 재사용해도 reply가 생기지 않는다.
 - 세부 동작: [오류 모델 §3](../spec/server/00-foundation/07-framework-error-model.ko.md)의
@@ -360,8 +344,8 @@ eligible member 중 하나를 선택할 수 있다.
 
 우선순위: `P0`
 
-Timeout, connection loss 또는 Shutdown으로 끝난 operation은 route가 복구되어도 다시 pending 상태로
-돌아가지 않는다. Public admission cancellation을 지원하는 언어는 cancellation variant도 실행한다.
+Route 제거 또는 Shutdown으로 끝난 operation은 route가 복구되어도 다시 pending 상태로
+돌아가지 않는다.
 
 **검증 질문:** Route 복구 뒤 이전 marker는 전달되지 않고 새 operation만 처리되는가.
 
@@ -397,6 +381,6 @@ Application이 send terminal을 remote 업무 완료로 해석하면 실제 hand
   조건이 아니다.
 - Pending 상태는 public awaitable의 미완료 상태와 `MaxQueuedApplicationJobs`·handler-start gate 조합으로 만들며 setup
   timeout 안에 재현되지 않으면 실패한다. Runtime 값을 바꾸어 재시도하지 않는다.
-- 정상 terminal, timeout, cancellation과 Shutdown 결과는 operation마다 하나만 발생한다.
+- 정상 terminal, route 제거와 Shutdown 결과는 operation마다 하나만 발생한다.
 - Terminal 뒤 capacity·route 복구가 기존 operation을 자동 재제출하지 않는다.
 - Public API 형태와 internal resource cleanup은 언어별 interface·contract test가 별도로 검증한다.

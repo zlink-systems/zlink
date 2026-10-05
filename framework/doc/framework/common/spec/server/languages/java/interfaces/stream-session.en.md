@@ -118,7 +118,6 @@ public interface systems.zlink.framework.streams.ZLinkSessionReplyCall {
 public interface systems.zlink.framework.streams.ZLinkSessionSendCall {
  public abstract systems.zlink.framework.streams.ZLinkSessionSendCall metadata(java.lang.String, java.lang.String);
  public abstract systems.zlink.framework.streams.ZLinkSessionSendCall compress();
- public abstract systems.zlink.framework.streams.ZLinkSessionSendCall timeout(java.time.Duration);
  public abstract java.util.concurrent.CompletionStage<java.lang.Void> submit();
 }
 public interface systems.zlink.framework.streams.ZLinkStreamCompressionCodec {
@@ -157,12 +156,9 @@ reply capability, so it only returns admission. A handshake failure is
 only recorded in runtime monitoring before session creation, and isn't
 delivered to `onError(...)`.
 
-`ZLinkSessionSendCall.timeout(...)` only shortens this send's admission
-wait. Omission uses the STREAM socket send timeout; specifying it uses the
-shorter of the two, so it cannot extend the socket timeout. The duration is
-positive and must round up into `1..Integer.MAX_VALUE` milliseconds. Expiry
-completes terminal-once as `DEADLINE_EXCEEDED` and does not start later
-admission or replay. The reply call doesn't provide this modifier.
+The wait of a send or reply call has no time limit, and `cancel(false)` on the returned stage
+ends only the caller's wait without stopping the send
+([Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)).
 
 ## STREAM Codec Public Signature
 

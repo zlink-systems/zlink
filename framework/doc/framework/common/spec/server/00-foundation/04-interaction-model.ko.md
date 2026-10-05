@@ -187,22 +187,23 @@ sequenceDiagram
     participant Tgt as Target owner
 
     App->>Src: RequestToXxx(...).Async<TReply>()
-    alt send timeout 안에 source-local admission 성공
+    alt request timeout 안에 source-local admission 성공
         Src->>Tgt: reply correlation을 만들어 request 전달
         alt reply 도착
             Src-->>App: typed reply로 완료
         else request timeout까지 무응답 또는 route 오류
             Src-->>App: 해당 Framework 오류로 완료
         end
-    else send timeout까지 admission 실패
-        Src-->>App: DeadlineExceeded로 완료 (전송 자체가 실패)
+    else request timeout까지 admission 실패
+        Src-->>App: DeadlineExceeded로 완료 (나중 전송 가능성은 남는다)
     end
     Note over Src,Tgt: request 재제출 경계는 Submit과 완료 §5가 정의한다
 ```
 
 - **`send`는 비동기 submit 하나만 제공한다.** One-way 완료 경계와 terminator 종류는
   [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
-- **Queue가 일시적으로 가득 차면 유한한 send timeout까지 admission을 기다린다.** 이미 수락한
+- **Queue가 일시적으로 가득 차면 send는 capacity가 회복될 때까지 기다린다.** 시간 상한과
+  caller cancellation은 없으며 대기 종료는 [Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이 정한다. 이미 수락한
   뒤 발생한 one-way 오류는 application이 구성한 standard logger·telemetry provider와
   monitoring으로 보고한다. Framework 전용 runtime error sink는 제공하지 않는다.
 - **Global Spot·Actor send도 같은 비동기 terminator를 사용한다.** Source는 current Ready
@@ -217,9 +218,8 @@ sequenceDiagram
 - **One-way 완료 경계·오류와 재제출 경계는
   [Submit과 완료 §4·§5](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.**
 - **`request`는 선택한 송신 경로에 reply correlation을 만들고 terminal 결과를 정확히 한 번
-  전달한다.** request timeout은 reply를 기다리는 시간이고, 전송 단계의 backpressure는 send
-  timeout이 담당한다. Global object request의 timeout budget은
-  [Submit과 완료 §7·§9](../01-execution/01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙)가 정한다. route 오류·timeout 뒤 재제출 경계는
+  전달한다.** request timeout은 전송 단계의 admission과 reply 대기를 함께 제한한다. Timeout budget은
+  [Submit과 완료 §9](../01-execution/01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)가 정한다. route 오류·timeout 뒤 재제출 경계는
   [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다. 언어별 transport 오류는 이 문서의 닫힌 Framework 결과 가운데 하나로 변환하며
   transport 전용 결과를 public call에 노출하지 않는다.
 - **Spot에서 시작한 request는 원래 activation과 generation을 completion record에 보존한다.**
@@ -250,20 +250,20 @@ sequenceDiagram
     participant Loc as Local Spot queue(같은 node)
 
     App->>Exec: Publish(channelName, topic, message)
-    alt send timeout 안에 worker slot 확보
+    alt worker slot 확보
         Exec-->>App: 정상 완료 (반환 데이터 없음) — transaction 시작
         Note over Exec,Loc: public 호출은 이미 끝났고,<br/>target별 제출은 여기서부터 내부에서 계속된다
         Exec->>Rem: MeshNode마다 routed message 1회 submit
         Rem->>Rem: (ChannelName, topic filter) local subscription 검사
         Exec->>Loc: 일치하는 local Spot queue에 독립적으로 제출
-    else worker slot 확보 실패
-        Exec-->>App: DeadlineExceeded (transaction 시작 안 됨)
+    else commit 전 cancellation 또는 shutdown
+        Exec-->>App: cancellation 또는 ShuttingDown (transaction 시작 안 됨)
     end
 ```
 
-- **Framework service runtime은 I/O executor에 publish transaction을 제출한다.** Send
-  timeout까지 worker slot을 확보하지 못하면 transaction을 시작하지 않고
-  `DeadlineExceeded`로 실패한다. Handoff에 성공해 transaction이 시작되면 public terminal은
+- **Framework service runtime은 I/O executor에 publish transaction을 제출한다.** Worker slot을
+  확보할 때까지 시간 상한 없이 기다리며, 그 전에 cancellation이나 shutdown이 확정되면 transaction을
+  시작하지 않는다([Submit과 완료 §6](../01-execution/01-submit-and-completion.ko.md#6-logical-multicast와-classic-fanout)). Handoff에 성공해 transaction이 시작되면 public terminal은
   반환 데이터 없이 정상 완료하고, runtime은 각 remote target과 local Spot queue의 제출을
   내부에서 계속한다.
 - **Transaction 시작이 [snapshot](02-glossary.ko.md#publish-target-snapshot) operation의 commit point다.**
@@ -410,8 +410,8 @@ STREAM session은 연결 lifecycle과 packet 순서를 소유한다.
   Actor 이동 중에는 session barrier가 old epoch와 new epoch의 순서를 구분한다.
 - **Server package의 bound session send, session Actor relay와 명시적인 STREAM send·reply도
   같은 async-only one-way admission 결과를 반환한다.** 별도 stream connector package의 send
-  builder는 connector package 계약을 따른다. STREAM reply는 해당 STREAM socket의 send
-  timeout을 사용하며 caller request timeout을 reply admission deadline으로 사용하지 않는다.
+  builder는 connector package 계약을 따른다. STREAM reply의 대기도
+  [Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따르며 caller request timeout을 reply에 사용하지 않는다.
 - **Reply sequence 또는 one-shot token이 유효하지 않거나 같은 reply call을 두 번 제출하면
   local exceptional completion으로 끝난다.** 유효한 첫 reply terminator는 transport admission
   전에 token을 원자적으로 소비한다. 이 terminator가 backpressure, timeout 또는 cancellation으로
@@ -437,12 +437,12 @@ type은 설명을 위한 예시다.
 // Node direct: application이 "world" Mesh의 특정 node RID를 지정한다.
 await routes
     .SendToNode("world", targetNodeRid, new ReloadConfig())
-    .Async(cancellationToken);
+    .Async();
 
 // Channel select-one: Framework가 "game" Channel의 ready server 하나를 선택한다.
 MatchFound match = await routes
     .RequestToChannel("game", new FindMatch(playerId))
-    .Timeout(TimeSpan.FromSeconds(2))    // reply 대기 상한. 전송 admission은 send timeout이 따로 담당한다.
+    .Timeout(TimeSpan.FromSeconds(2))    // 전송 admission과 reply 대기를 함께 제한한다.
     .Async<MatchFound>(cancellationToken);
 ```
 
@@ -512,18 +512,17 @@ publish 전용 monitoring으로 집계하지 않는다.
 // 현재 session FIFO에 server-initiated one-way packet을 제출한다.
 await sessionClient
     .Send(new ServerNotice("maintenance"))
-    .Async(cancellationToken);
+    .Async();
 
 // STREAM request handler에서만 현재 request의 reply capability를 정확히 한 번 소비한다.
 await sessionClient
     .Reply(new LoginAccepted(playerId))
-    .Async(cancellationToken);
+    .Async();
 
 // Binding된 Actor relay는 현재 session binding을 사용해 Actor mailbox에 제출한다.
 await sessionActor
     .RelayAsync(
-        ZLinkMessage.From(new ClientInput(sequence, command)),
-        cancellationToken);
+        ZLinkMessage.From(new ClientInput(sequence, command)));
 ```
 
 `Reply(...)`는 임의의 server-initiated message를 보내는 API가 아니다. 현재 handler가 받은
@@ -578,7 +577,8 @@ Shutdown의 host [admission seal](02-glossary.ko.md#admission-seal)과 Relocate�
 
 **실패**
 
-- Queue가 가득 차 send timeout까지 admission을 마치지 못하면 `DeadlineExceeded`로 끝난다.
+- One-way send는 시간을 이유로 끝나지 않는다. 대기 종료는 [Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 확인한다.
+- Classic fanout publish가 publisher send timeout까지 admission을 마치지 못하면 `DeadlineExceeded`로 끝난다.
 - Route 오류·timeout 뒤 request 재제출은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 확인한다.
 - 같은 reply token으로 reply를 두 번 제출하면 두 번째 호출은 local exceptional completion으로
   끝난다.

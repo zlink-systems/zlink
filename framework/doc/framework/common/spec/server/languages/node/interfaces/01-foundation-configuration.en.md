@@ -139,7 +139,7 @@ export interface ZLinkBoundSession {
 
 export interface ZLinkBoundSessionSendCall {
  metadata(key: string, value: string): this;
- submit(signal?: AbortSignal): Promise<void>;
+ submit(): Promise<void>;
 }
 
 export interface ZLinkChannelClient {
@@ -178,7 +178,6 @@ export interface ZLinkMeshNodeSocketConfig {
  sendHighWaterMark: bigint;
  receiveHighWaterMark: bigint;
  receiveTimeoutMs?: number;
- sendTimeoutMs?: number;
 }
 
 export interface ZLinkSpotPublisherConfig {

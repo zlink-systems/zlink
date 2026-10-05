@@ -75,16 +75,13 @@ public interface IZLinkSessionSendCall
  : IZLinkMetadataCall<IZLinkSessionSendCall>
 {
  IZLinkSessionSendCall Compress();
- IZLinkSessionSendCall Timeout(TimeSpan timeout);
- ValueTask Async(
- CancellationToken cancellationToken = default);
+ ValueTask Async();
 }
 
 public interface IZLinkSessionReplyCall
 {
  IZLinkSessionReplyCall Compress();
- ValueTask Async(
- CancellationToken cancellationToken = default);
+ ValueTask Async();
 }
 
 public interface IZLinkSessionActors
@@ -104,8 +101,7 @@ public interface IZLinkSessionActor
  string ActorId => Ref.ActorId;
  ActorRef Ref { get; }
  ValueTask RelayAsync(
- ZLinkMessage payload,
- CancellationToken cancellationToken = default);
+ ZLinkMessage payload);
  ValueTask NotifyDisconnectedAsync(
  CancellationToken cancellationToken = default);
 }
@@ -141,21 +137,11 @@ claims and consumes the token before starting transport. If two calls
 created from the same token race, the one that fails the claim doesn't
 attempt transport and ends with exceptional completion. A reply created
 from a send packet, an already-used token, and a duplicate submit are
-rejected the same way. Even if the call that consumed the token ends with
-timeout, `DeadlineExceeded`, or cancellation, the token can't be used
-again. A valid reply only uses the STREAM socket send timeout as the
-admission deadline. Since the caller request timeout isn't delivered over
-the wire, it isn't used as the reply
-[deadline](../../../00-foundation/02-glossary.en.md#deadline), and no late reply is
-sent after a timeout or cancellation.
-
-`IZLinkSessionSendCall.Timeout(...)` only shortens this send's admission
-wait. Omission uses the STREAM socket `SendTimeout`; specifying it uses the
-shorter of the two, so it cannot extend the socket timeout. Only a positive
-value that rounds up into `1..Int32.MaxValue` milliseconds is valid. Expiry
-completes terminal-once as `DeadlineExceeded` and does not start later
-admission or replay. `CancellationToken` keeps the existing .NET cancellation
-contract, and the reply call doesn't provide this modifier.
+rejected the same way. Even if the call that consumed the token ends with a
+failure, the token can't be used again. The wait of a send, reply, or relay
+has no time limit and no `CancellationToken`
+([Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)). The caller request timeout isn't delivered
+over the wire and doesn't end the reply's wait.
 
 `OnActorBindingReplacedAsync(...)`, `RelayAsync(...)`, and `NotifyDisconnectedAsync(...)`
 are the .NET callback and call surface. [Session–Actor binding](../../../04-session/02-session-actor-binding.en.md)

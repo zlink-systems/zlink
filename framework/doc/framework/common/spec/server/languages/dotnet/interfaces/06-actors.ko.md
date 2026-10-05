@@ -172,8 +172,7 @@ public interface IZLinkActorGetOrCreateCall
 
 public interface IZLinkActorSendCall : IZLinkMetadataCall<IZLinkActorSendCall>
 {
- ValueTask Async(
- CancellationToken cancellationToken = default);
+ ValueTask Async();
 }
 
 public interface IZLinkActorRequestCall : IZLinkMetadataCall<IZLinkActorRequestCall>

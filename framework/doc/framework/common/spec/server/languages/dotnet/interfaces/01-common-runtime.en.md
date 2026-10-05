@@ -35,8 +35,7 @@ public sealed class ZLinkMessageMetadata
 
 public interface IZLinkSendCall : IZLinkMetadataCall<IZLinkSendCall>
 {
- ValueTask Async(
- CancellationToken cancellationToken = default);
+ ValueTask Async();
  void Submit();   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
 }
 
@@ -79,18 +78,18 @@ public interface IZLinkWorkerOptions
 ```
 
 [Submit and completion](../../../01-execution/01-submit-and-completion.en.md)
-defines one-way admission, timeout, and terminal completion.
+defines one-way admission and terminal completion.
 .NET `Async()` returns a resultless `ValueTask` and reports failure by exceptional completion.
 
-[Submit and completion](../../../01-execution/01-submit-and-completion.en.md)
-defines the one-way send timeout and its default.
+A one-way send has no time limit and no `CancellationToken`.
+[Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout) defines its wait termination and the Classic fanout publisher send timeout.
 
 `IZLinkPublishCall` returns a resultless `ValueTask`.
 [Submit and completion §6](../../../01-execution/01-submit-and-completion.en.md)
 defines the Logical Multicast completion boundary.
 
 [Submit and completion](../../../01-execution/01-submit-and-completion.en.md)
-defines cancellation and the terminal race with admission, timeout, and shutdown.
+defines cancellation of operations such as request and publish and its terminal race with admission, timeout, and shutdown.
 .NET reports cancellation with a cancelled `ValueTask`.
 
 An invalid argument/handle/state, a duplicate terminal, and an

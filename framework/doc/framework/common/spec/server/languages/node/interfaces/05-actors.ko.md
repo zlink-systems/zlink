@@ -121,7 +121,7 @@ export interface ZLinkActorRequestCall {
 
 export interface ZLinkActorSendCall {
  metadata(key: string, value: string): this;
- submit(signal?: AbortSignal): Promise<void>;
+ submit(): Promise<void>;
 }
 ```
 

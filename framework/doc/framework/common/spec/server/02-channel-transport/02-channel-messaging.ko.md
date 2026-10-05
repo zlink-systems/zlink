@@ -169,9 +169,10 @@ process에서 처리하려면 ClientServer 경로를 사용한다.
 
 <a id="clientserver-ready-wait"></a>
 두 경로는 후보가 아직 없을 때의 처리도 다르다. RouteMesh는 위와 같이 기다리지 않는다.
-ClientServer는 ready target이 없으면 호출의 admission deadline
-([Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙))
-안에서 기다린다. 두 경로의 결과는 [Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다.
+ClientServer는 ready target이 없으면 ready target이 생길 때까지 기다린다. Send의 대기 종료는
+[Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이, request의 대기 종료는
+남은 request timeout([Submit과 완료 §9](../01-execution/01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget))이
+정한다. 두 경로의 결과는 [Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다.
 Framework startup은 local ClientServer admission 완료를 기다리지 않는다.
 
 두 경로를 다르게 정하는 이유는 후보가 없다는 사실의 의미가 다르기 때문이다. RouteMesh에서

@@ -19,8 +19,8 @@ Session send/reply, bound session send, and Session Actor relay return a
 Kotlin one-way wrapper. The application only waits for local STREAM
 queue admission with `await(): Unit`, and doesn't directly use Java's
 `CompletionStage` and submission result type. If the queue is full, it
-waits until the send timeout, and timeout, cancellation, route break,
-and runtime shutdown complete with an exception.
+waits until capacity recovers, and route break and runtime shutdown
+complete with an exception.
 
 Java's `ZLinkSessionActor.notifyDisconnected()` is used as a logical
 notification while the connection is kept. After bind, relay/disconnect
@@ -89,7 +89,6 @@ suspend fun ZLinkSessionActors.bindOrGetActor(
 interface ZLinkKotlinSessionSendCall {
  fun metadata(key: String, value: String): ZLinkKotlinSessionSendCall
  fun compress(): ZLinkKotlinSessionSendCall
- fun timeout(timeout: Duration): ZLinkKotlinSessionSendCall
  suspend fun await()
 }
 
@@ -139,7 +138,6 @@ public final class systems.zlink.framework.kotlin.ZLinkFrameworkExtensionsKt {
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall {
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall metadata(java.lang.String, java.lang.String);
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall compress();
- public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall timeout(java.time.Duration);
  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionReplyCall {
@@ -159,11 +157,6 @@ public interface systems.zlink.framework.kotlin.ZLinkKotlinBoundSession {
 }
 ```
 
-`ZLinkKotlinSessionSendCall.timeout(...)` only shortens this send's admission
-wait. Omission uses Java's STREAM socket send timeout; specifying it uses the
-shorter of the two, so it cannot extend the socket timeout. The duration is
-positive and must round up into `1..Int.MAX_VALUE` milliseconds. Expiry
-completes terminal-once as `ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED` and does
-not start later admission or replay. Coroutine cancellation keeps the existing
-Kotlin wait-cancellation meaning, and the reply call doesn't provide this
-modifier.
+The wait of a send, reply, or relay has no time limit. Cancellation of the awaiting coroutine
+ends only that coroutine's wait and doesn't stop the send
+([Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)).

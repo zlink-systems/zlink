@@ -411,7 +411,7 @@ subscription만 검사한다. 각 remote ROUTER와 local mailbox는 대상별로
 `mesh_node_socket_config_t`는 RouteMesh SS의 Framework-level message-size 설정을 제공하지 않는다.
 Sender와 receiver는 Framework-level complete-message 상한으로 message를 거부하지 않는다. Transport와
 service-wire 표현 한계, HWM과 mailbox budget은 별도 자원·wire guard로 유지한다.
-`send_timeout`을 지정하지 않으면 framework 기본값 1초를 사용한다. `receive_timeout`을 지정하지 않으면
+`receive_timeout`을 지정하지 않으면
 수신 대기 상한을 따로 두지 않는다. HWM은 0 이상이어야 한다.
 
 Spot Actor Join / Relocation 관련 interface도 이 문서에 기록된 정식 계약이며,
@@ -694,8 +694,8 @@ raw payload 처리는 framework 내부 invoker가 맡으며 application public a
 별도 raw join overload를 두지 않는다.
 
 호출 실행 표면은 공통 비동기 call 계약을 C++ coroutine 관례로 표현한다. `request(...)`, `send(...)`,
-`join_spot(...)`과 `join_entry_spot(...)`은 call object를 반환한다. One-way call의 `async()`은 send timeout까지
-bounded admission 결과를 담은 `task_t`를 반환한다. Session Actor `relay(...)`는 별도 call object를 만들지 않고
+`join_spot(...)`과 `join_entry_spot(...)`은 call object를 반환한다. One-way call의 `async()`은
+admission 결과를 담은 `task_t`를 반환한다. Session Actor `relay(...)`는 별도 call object를 만들지 않고
 정상 완료 값을 만들지 않는 `task_t<void>`를 반환한다. Request는 `async()`이 reply 완료를
 기다리는 지점이다.
 일반 channel `request_call_t`는 metadata와 request timeout을, `send_call_t`는 metadata만 submit 전에 모으고,

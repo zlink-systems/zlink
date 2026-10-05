@@ -274,7 +274,7 @@ connection, STREAM을 포함한 **모든 multi-connection 수신 경로**에 적
 
 RouteMesh에 참여해 message를 보내거나 받는 runtime node인
 [MeshNode](../00-foundation/02-glossary.ko.md#meshnode)의 `SendHighWaterMark`·
-`ReceiveHighWaterMark`·`SendTimeout`·`ReceiveTimeout` 같은 방향별 socket option 배선은 이
+`ReceiveHighWaterMark`·`ReceiveTimeout` 같은 방향별 socket option 배선은 이
 문서가 다루지 않는다 — channel-transport
 주제가 [RouteMesh topology](../02-channel-transport/01-channel-topology.ko.md)와
 [MeshNode startup](../03-spot-actor/03-mesh-node.ko.md)이 정한 공개 설정을 소유한다.
