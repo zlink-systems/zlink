@@ -1107,7 +1107,7 @@ token; it waits for reconnect and admission to the same target within the
 snapshotted `SNDTIMEO`.
 
 A wait token has no deadline. `SNDTIMEO` applies only to a `NONE` wait and does not end a wait token.
-An application that stops waiting receives the later WRITABLE record with `zlink_completion_recv()`
+An application that abandons the wait receives the later WRITABLE record with `zlink_completion_recv()`
 to release the reservation. The completion reservation limit above bounds the number of wait tokens
 that have not ended.
 
@@ -1515,6 +1515,10 @@ connection, options, send/receive/completion functions, return values, and
   STREAM physical disconnect, no deadline regardless of `SNDTIMEO`, and no record after close or
   termination), one WRITABLE record, and reservation
   release on receive, against [whole-message send](#whole-message-send-and-pending-admission).
+- For SEND and REQUEST each, with `SNDTIMEO` set to `0`, a positive value, and `-1`, verify that a wait
+  token does not end and produces no WRITABLE record after that time passes. Verify that after an
+  application abandons the wait, receiving the WRITABLE that arrives on resource recovery or target
+  removal returns the reservation so that a later wait token can use it.
 - REQUEST admission, timeout, completion, and reply-token verification refer to [Request and reply](#request-and-reply).
 - HWM and pending-request admission verification refer to [Auto HWM admission](../systems/06-auto-hwm.en.md#message-processing-sequence) and [pending-request admission](../systems/06-auto-hwm.en.md#pending-request-admission).
 

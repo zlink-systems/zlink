@@ -1032,7 +1032,7 @@ STREAM은 물리 연결 종료 시 RID가 끝나므로 [STREAM routed send](08-s
 기다린다.
 
 대기 토큰에는 기한이 없다. `SNDTIMEO`는 `NONE` wait에만 적용하며 대기 토큰을 끝내지 않는다.
-기다리기를 그만둔 application은 뒤에 오는 WRITABLE record를 `zlink_completion_recv()`로 꺼내
+대기를 중단한 application은 뒤에 오는 WRITABLE record를 `zlink_completion_recv()`로 꺼내
 reservation을 반환한다. 끝나지 않은 대기 토큰의 수는 위의 completion reservation 상한이 제한한다.
 
 PAIR·DEALER·ROUTER의 대기 토큰은 위의 자원 회복 WRITABLE record 외에 다음으로 종료된다. (a) target의 명시적
@@ -1351,6 +1351,9 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - SEND·REQUEST 대기 토큰의 종료 결과(자원 회복, 명시적 제거, STREAM 물리 종료, `SNDTIMEO` 값과 관계없는
   기한 부재, close·termination 뒤 record 부재)와 WRITABLE 한 건·reservation의
   receive 시 해제를 [whole-message send](#whole-message-send와-pending-admission)에 따라 검증한다.
+- SEND·REQUEST 각각에서 `SNDTIMEO`를 `0`·양수·`-1`로 두고, 그 값이 지난 뒤에도 대기 토큰이 끝나지 않으며
+  WRITABLE을 만들지 않음을 검증한다. Application이 대기를 중단한 뒤 자원 회복이나 대상 제거로 온
+  WRITABLE을 수신하면 reservation이 반환되어 다음 대기 토큰 발급에 쓰일 수 있음을 검증한다.
 - REQUEST admission·timeout·completion·reply token 검증은 [Request와 reply](#request와-reply)를 참조한다.
 - HWM·pending request 수용 검증은 [Auto HWM의 admission](../systems/06-auto-hwm.ko.md#message-처리-순서)과 [pending request 수용](../systems/06-auto-hwm.ko.md#pending-request-수용)을 참조한다.
 
