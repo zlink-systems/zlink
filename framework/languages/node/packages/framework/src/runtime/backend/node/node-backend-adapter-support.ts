@@ -184,26 +184,24 @@ export async function submitBindingRequest(
     if (timeoutMs !== undefined) {
       current = current.timeout(timeoutMs);
     }
-    return await waitRequestReply(
-      bindingRequestReply(current.submit()),
-      'Request',
-      deadlineMs,
-      undefined,
-      undefined,
-      closeBindingReply
-    );
+    return await bindingRequestReply(current.submit(), deadlineMs);
   } catch (error) {
     throw translateBindingResultError(error);
   }
 }
 
 export async function bindingRequestReply(
-  submission: import('@zlink-systems/zlink').RequestSubmission
+  submission: import('@zlink-systems/zlink').RequestSubmission,
+  deadlineMs: number | undefined
 ): Promise<import('@zlink-systems/zlink').Message[]> {
   const reply = submission.reply;
   if (submission.result === SubmitResult.Backpressured) {
     try {
-      const [, replies] = await Promise.all([submission.admitted, reply]);
+      const [, replies] = await waitRequestReply(
+        Promise.all([submission.admitted, reply]),
+        'Request',
+        deadlineMs
+      );
       return replies;
     } catch (error) {
       void reply.then(closeBindingReply, () => undefined);

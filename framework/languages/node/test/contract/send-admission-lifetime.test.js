@@ -94,14 +94,14 @@ test('request budget includes binding outbound admission', async () => {
   } finally { clearTimeout(guard); }
 });
 
-test('request timeout observes late reply and closes each native message once', async () => {
+test('backpressured request timeout observes late reply and closes each native message once', async () => {
   let completeReply;
   let closes = 0;
   const reply = new Promise(resolve => { completeReply = resolve; });
   const operation = {
     message() { return this; },
     timeout() { return this; },
-    submit() { return { result: zlink.SubmitResult.Ok, admitted: Promise.resolve(), reply }; }
+    submit() { return { result: zlink.SubmitResult.Backpressured, admitted: Promise.resolve(), reply }; }
   };
   await assert.rejects(submitBindingRequest(operation, Buffer.from('request'), 20),
     error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded);

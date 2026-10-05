@@ -1,4 +1,3 @@
-import { waitRequestReply } from '../../messaging/request-deadline';
 import {
   Message,
   Received,
@@ -23,7 +22,6 @@ import {
 import {
   translateBindingResultError,
   bindingRequestReply,
-  closeBindingReply,
   submitBindingAsyncSend
 } from './node-backend-adapter-support';
 import { isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
@@ -291,14 +289,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
       throw translateBindingResultError(error, 'submit');
     }
     try {
-      const replies = await waitRequestReply(
-        bindingRequestReply(submission),
-        'Request',
-        deadlineMs,
-        undefined,
-        undefined,
-        closeBindingReply
-      );
+      const replies = await bindingRequestReply(submission, deadlineMs);
       return copyAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error, 'completion');
@@ -360,14 +351,7 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
       throw translateBindingResultError(error, 'submit');
     }
     try {
-      const replies = await waitRequestReply(
-        bindingRequestReply(submission),
-        'Request',
-        deadlineMs,
-        undefined,
-        undefined,
-        closeBindingReply
-      );
+      const replies = await bindingRequestReply(submission, deadlineMs);
       return copyAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error, 'completion');
