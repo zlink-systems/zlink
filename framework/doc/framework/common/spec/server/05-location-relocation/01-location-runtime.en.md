@@ -827,10 +827,10 @@ a whole User Spot move. There's no separate create operation name.
 The Framework puts the expected version, counter, record, and lookup-index changes into
 one Store request. `Preserve`, `Reincarnate`, and `Delete` verify the current owner lease. `NewOwner`
 verifies the target lease and the capacity that relocation pre-secured. The creation transitions
-(`Reserve`, `Commit`, `Abort`) verify the target owner lease (owner ID and lease generation) and
-don't use the `StoreVersion` of the target MeshNode descriptor record as a condition. The owner
-lease condition fixes the `descriptorLifecycleGeneration` CAS, and a descriptor re-published in
-the same lifecycle is no reason to block a creation transition. If the record
+(`Reserve`, `Commit`, `Abort`) verify both the target owner lease (owner ID and lease generation)
+and the `StoreVersion` of the target MeshNode descriptor record as first read. The descriptor
+condition carries the `descriptorLifecycleGeneration` CAS — the owner lease may stay the same when
+a MeshNode lifecycle restarts within the same process. If the record
 doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the target
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.
