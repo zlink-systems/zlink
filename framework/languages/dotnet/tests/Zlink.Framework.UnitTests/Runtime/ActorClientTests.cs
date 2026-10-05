@@ -167,9 +167,7 @@ public sealed class ActorClientTests
             static method => method.Name == "Async"
         );
         Assert.Equal(typeof(ValueTask), submit.ReturnType);
-        var cancellation = Assert.Single(submit.GetParameters());
-        Assert.Equal(typeof(CancellationToken), cancellation.ParameterType);
-        Assert.True(cancellation.HasDefaultValue);
+        Assert.Empty(submit.GetParameters());
         Assert.Empty(
             typeof(IZLinkActorSendCall)
                 .GetMethods()
@@ -231,10 +229,10 @@ public sealed class ActorClientTests
         IZLinkSessionSendCall sessionSend = session.Client.Send(new OneWayMessage("session"));
         IZLinkSessionReplyCall sessionReply = session.Client.Reply(new OneWayMessage("reply"));
 
-        var terminals = new (string Contract, Func<CancellationToken, ValueTask> Async)[]
+        var terminals = new (string Contract, Func<ValueTask> Async)[]
         {
             (nameof(IZLinkSendCall), send.Async),
-            (nameof(IZLinkPublishCall), publish.Async),
+            (nameof(IZLinkPublishCall), () => publish.Async()),
             (nameof(IZLinkActorSendCall), actorSend.Async),
             (nameof(IZLinkBoundSessionSendCall), boundSessionSend.Async),
             (nameof(IZLinkSessionSendCall), sessionSend.Async),
@@ -245,10 +243,10 @@ public sealed class ActorClientTests
         {
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
-            _ = await Record.ExceptionAsync(() => terminal.Async(cancellation.Token).AsTask());
+            _ = await Record.ExceptionAsync(() => terminal.Async().AsTask());
 
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                terminal.Async(CancellationToken.None).AsTask()
+                terminal.Async().AsTask()
             );
 
             Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);

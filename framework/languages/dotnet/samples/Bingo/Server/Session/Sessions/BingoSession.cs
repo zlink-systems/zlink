@@ -48,7 +48,7 @@ internal sealed class BingoSession(IZLinkSessionContext context, ILogger<BingoSe
             return;
 
         var actor = RequireSingleBoundActor($"relaying packet '{dispatch.PacketName}'");
-        await actor.RelayAsync(payload, cancellationToken);
+        await actor.RelayAsync(payload);
     }
 
     // --8<-- [end:doc-bingo-session-relay]

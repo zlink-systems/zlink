@@ -14,6 +14,6 @@ internal sealed class BindCourierSessionHandler(CourierSessionBinder binder)
     )
     {
         var bound = await binder.BindAsync(request.CourierId, context, cancellationToken);
-        await context.Client.Reply(bound).Async(cancellationToken);
+        await context.Client.Reply(bound).Async();
     }
 }

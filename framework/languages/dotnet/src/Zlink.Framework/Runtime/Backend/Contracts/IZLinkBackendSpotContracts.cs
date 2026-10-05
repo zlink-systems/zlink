@@ -59,8 +59,6 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     void SetRouterReceiveTimeout(TimeSpan? value) { }
 
-    void SetRouterSendTimeout(TimeSpan? value);
-
     // Starts the node explicitly at the host-startup point after routing id,
     // bind and channels are applied (spec 21 §3). Idempotent.
     void Start();

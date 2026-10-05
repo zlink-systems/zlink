@@ -167,7 +167,6 @@ internal sealed class ZLinkSpotOutboundEndpoint(
                     () => outbound.PublishCurrent(channelName, topic, parts, metadata),
                     cancellationToken,
                     runtime.ShutdownToken,
-                    runtime.Registration.DefaultSocketSendTimeout,
                     ReleaseWorkerResources,
                     errorSink
                 )

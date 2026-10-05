@@ -16,11 +16,7 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
         try
         {
             dealer = state.Context.CreateDealerSocket();
-            ApplySocketConfig(
-                dealer.Options,
-                channel.Client!.SocketConfig,
-                registration.DefaultSocketSendTimeout
-            );
+            ApplySocketConfig(dealer.Options, channel.Client!.SocketConfig);
             dealer.Options.Probe = true;
             bundle = new ZLinkChannelRuntimeBundle(
                 dealer,
@@ -244,13 +240,9 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
             registration.NetworkOptions
         );
 
-    internal static void ApplySocketConfig(
-        CommonSocketOptions socket,
-        IZLinkSocketConfig config,
-        TimeSpan? defaultSendTimeout = null
-    )
+    internal static void ApplySocketConfig(CommonSocketOptions socket, IZLinkSocketConfig config)
     {
-        ZLinkBackendSocketOptionsMapper.Apply(socket, config, defaultSendTimeout);
+        ZLinkBackendSocketOptionsMapper.Apply(socket, config);
     }
 
     internal static void ApplyPublisherSocketConfig(
@@ -259,7 +251,9 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
         TimeSpan? defaultSendTimeout = null
     )
     {
-        ApplySocketConfig(socket, channel.Publisher!.SocketConfig, defaultSendTimeout);
+        ApplySocketConfig(socket, channel.Publisher!.SocketConfig);
+        if (defaultSendTimeout is { } timeout)
+            socket.SendTimeout = timeout;
         socket.NoDrop = channel.PublisherNoDrop.GetValueOrDefault();
     }
 

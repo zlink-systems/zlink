@@ -170,8 +170,7 @@ public sealed class ActorContracts
 
         public IZLinkActorSendCall Metadata(ZLinkMessageMetadata metadata) => this;
 
-        public ValueTask Async(CancellationToken cancellationToken = default) =>
-            ValueTask.CompletedTask;
+        public ValueTask Async() => ValueTask.CompletedTask;
     }
 
     private sealed class ActorRequestCall : IZLinkActorRequestCall

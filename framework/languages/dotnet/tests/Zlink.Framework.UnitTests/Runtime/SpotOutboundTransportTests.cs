@@ -15,11 +15,7 @@ public sealed class SpotOutboundTransportTests
         >();
         var proxy = (AuthorityAwareBackendSpotProxy)(object)spot;
 
-        await using var transport = new ZLinkSpotOutboundTransport(
-            spot,
-            TimeSpan.FromSeconds(1),
-            CancellationToken.None
-        );
+        await using var transport = new ZLinkSpotOutboundTransport(spot, CancellationToken.None);
         using var payload = Message.From("node-control");
 
         var result = transport.TrySendToSpotOnce(
@@ -46,11 +42,7 @@ public sealed class SpotOutboundTransportTests
         >();
         var proxy = (AuthorityAwareBackendSpotProxy)(object)spot;
 
-        await using var transport = new ZLinkSpotOutboundTransport(
-            spot,
-            TimeSpan.FromSeconds(1),
-            CancellationToken.None
-        );
+        await using var transport = new ZLinkSpotOutboundTransport(spot, CancellationToken.None);
         using var payload = Message.From("user-spot");
 
         var result = transport.TrySendToSpotOnce(
@@ -87,11 +79,7 @@ public sealed class SpotOutboundTransportTests
         proxy.AuthorityFailure = authorityFailure
             ? new InvalidOperationException("authority rejected")
             : null;
-        await using var transport = new ZLinkSpotOutboundTransport(
-            spot,
-            null,
-            CancellationToken.None
-        );
+        await using var transport = new ZLinkSpotOutboundTransport(spot, CancellationToken.None);
         var payload = Message.Allocate(4096);
         using var witness = payload.Copy();
         async Task Submit()

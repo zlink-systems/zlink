@@ -134,5 +134,5 @@ public sealed class OpsConsoleRegistry(ILogger<OpsConsoleRegistry>? logger = nul
         IZLinkSessionContext context,
         TMessage message,
         CancellationToken cancellationToken
-    ) => await context.Client.Send(message).Async(cancellationToken);
+    ) => await context.Client.Send(message).Async();
 }

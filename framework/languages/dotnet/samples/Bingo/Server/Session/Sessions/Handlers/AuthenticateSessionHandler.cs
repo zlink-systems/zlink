@@ -73,7 +73,7 @@ internal sealed class AuthenticateBingoSessionHandler(
                     DisplayName = authenticated.DisplayName,
                 }
             )
-            .Async(cancellationToken);
+            .Async();
         // --8<-- [end:doc-bingo-session-bind]
     }
 }

@@ -105,8 +105,9 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
         return this;
     }
 
-    public async ValueTask Async(CancellationToken cancellationToken = default)
+    public async ValueTask Async()
     {
+        var cancellationToken = runtime.ShutdownToken;
         _submission.Claim();
         if (_meshSelected && !_instanceIntent)
             throw new ZLinkFrameworkException(
@@ -153,7 +154,7 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
 
         var call = new ZLinkRouteSpotSendCall<TMessage>(runtime, handle, message, _instanceIntent);
         call.Metadata(_metadata.Snapshot());
-        await call.Async(cancellationToken).ConfigureAwait(false);
+        await call.Async().ConfigureAwait(false);
     }
 }
 
@@ -409,8 +410,9 @@ internal sealed class ZLinkCurrentSpotSendCall<TMessage>(
         return this;
     }
 
-    public async ValueTask Async(CancellationToken cancellationToken = default)
+    public async ValueTask Async()
     {
+        var cancellationToken = CancellationToken.None;
         _submission.Claim();
         cancellationToken.ThrowIfCancellationRequested();
         var header = ZLinkClientCallCodec.CreateEnvelope(

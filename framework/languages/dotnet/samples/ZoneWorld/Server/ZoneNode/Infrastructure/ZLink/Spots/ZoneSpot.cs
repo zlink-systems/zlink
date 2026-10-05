@@ -170,7 +170,7 @@ public sealed class ZoneSpot(
         if (!enter.IsBot && !enter.InitialEntry)
             await actor
                 .Context.BoundSession.Send(new ZoneChangedNotify(enter.PlayerId, ZoneId))
-                .Async(cancellationToken);
+                .Async();
 
         logger.LogInformation(
             "zone spot: player entered. zone={ZoneId}, player={PlayerId}, bot={IsBot}, initial={InitialEntry}",
@@ -277,7 +277,7 @@ public sealed class ZoneSpot(
     {
         foreach (var playerId in ZoneTickUseCase.Bots(_state))
         {
-            await actors.SendToActor(playerId, new BotTickMsg()).Async(cancellationToken);
+            await actors.SendToActor(playerId, new BotTickMsg()).Async();
         }
     }
 
@@ -319,7 +319,7 @@ public sealed class ZoneSpot(
             {
                 // PlayerId is the global ActorId. Resolve the current owner for every
                 // delivery instead of retaining an Actor instance from a lifecycle callback.
-                await actors.SendToActor(playerId, message).Async(cancellationToken);
+                await actors.SendToActor(playerId, message).Async();
             }
             catch (Exception error)
             {

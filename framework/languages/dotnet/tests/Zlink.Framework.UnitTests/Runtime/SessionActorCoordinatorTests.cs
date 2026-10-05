@@ -278,7 +278,7 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Fact]
-    public async Task Session_Reply_PreCancellation_Claims_The_Reply_Token_Before_Admission()
+    public async Task Session_Reply_Claims_The_Reply_Token_Once()
     {
         var runtime = CreateRuntime();
         var stream = new TestStream(RoutingId.From("session-node"));
@@ -299,13 +299,8 @@ public sealed class SessionActorCoordinatorTests
                 ZlinkStreamMetadata.Empty
             )
         );
-        using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            context.Client.Reply(new SessionPush("cancelled")).Async(cancellation.Token).AsTask()
-        );
-        Assert.Empty(stream.Writes);
+        await context.Client.Reply(new SessionPush("accepted")).Async();
+        Assert.Single(stream.Writes);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             context.Client.Reply(new SessionPush("duplicate")).Async().AsTask()

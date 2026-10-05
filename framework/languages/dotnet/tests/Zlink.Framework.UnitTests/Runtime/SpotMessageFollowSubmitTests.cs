@@ -14,11 +14,7 @@ public sealed class SpotMessageFollowSubmitTests
         var proxy = (MessageFollowSpotProxy)(object)spot;
         var operationId = new MeshOperationId(41, 146);
 
-        await using var transport = new ZLinkSpotOutboundTransport(
-            spot,
-            TimeSpan.FromSeconds(2),
-            CancellationToken.None
-        );
+        await using var transport = new ZLinkSpotOutboundTransport(spot, CancellationToken.None);
         var first = Message.From("payload-1");
         var second = Message.From("payload-2");
         var pending = transport
@@ -61,12 +57,8 @@ public sealed class SpotMessageFollowSubmitTests
         var proxy = (MessageFollowSpotProxy)(object)spot;
         var message = Message.From("timeout");
 
-        await using var transport = new ZLinkSpotOutboundTransport(
-            spot,
-            TimeSpan.FromMilliseconds(25),
-            CancellationToken.None
-        );
-        var result = await transport
+        await using var transport = new ZLinkSpotOutboundTransport(spot, CancellationToken.None);
+        var pending = transport
             .SendMessageFollowToSpotAsync(
                 RoutingId.From("target-node"),
                 "room-1",
@@ -79,12 +71,16 @@ public sealed class SpotMessageFollowSubmitTests
                 [message],
                 CancellationToken.None
             )
-            .AsTask()
-            .WaitAsync(TimeSpan.FromSeconds(5));
+            .AsTask();
+        await Task.Delay(TimeSpan.FromMilliseconds(3100));
+        Assert.False(pending.IsCompleted);
+        Assert.False(proxy.TerminalToken.IsCancellationRequested);
+        proxy.CompleteAdmission();
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(ZLinkOneWaySubmitStatus.TimedOut, result.Status);
+        Assert.Equal(ZLinkOneWaySubmitStatus.Submitted, result.Status);
         Assert.Equal(1, proxy.InvocationCount);
-        Assert.True(proxy.TerminalToken.IsCancellationRequested);
+        Assert.False(proxy.TerminalToken.IsCancellationRequested);
         Assert.Throws<ObjectDisposedException>(() => _ = message.Size);
     }
 
@@ -98,13 +94,7 @@ public sealed class SpotMessageFollowSubmitTests
         var shutdownProxy = (MessageFollowSpotProxy)(object)shutdownSpot;
         using var stop = new CancellationTokenSource();
         var shutdownMessage = Message.From("shutdown");
-        await using (
-            var transport = new ZLinkSpotOutboundTransport(
-                shutdownSpot,
-                TimeSpan.FromSeconds(5),
-                stop.Token
-            )
-        )
+        await using (var transport = new ZLinkSpotOutboundTransport(shutdownSpot, stop.Token))
         {
             var pending = transport
                 .SendMessageFollowToSpotAsync(
@@ -136,7 +126,6 @@ public sealed class SpotMessageFollowSubmitTests
         var cancelledMessage = Message.From("cancelled");
         await using var cancelledTransport = new ZLinkSpotOutboundTransport(
             cancelledSpot,
-            TimeSpan.FromSeconds(5),
             CancellationToken.None
         );
         var cancelled = cancelledTransport

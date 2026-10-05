@@ -122,8 +122,9 @@ internal sealed class ZLinkChannelSendCall<TMessage>(
         return this;
     }
 
-    public async ValueTask Async(CancellationToken cancellationToken = default)
+    public async ValueTask Async()
     {
+        var cancellationToken = runtime.ShutdownToken;
         _submission.Claim();
         cancellationToken.ThrowIfCancellationRequested();
         var parts = Encode(out var metadata);
@@ -319,8 +320,9 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
         return this;
     }
 
-    public async ValueTask Async(CancellationToken cancellationToken = default)
+    public async ValueTask Async()
     {
+        var cancellationToken = runtime.ShutdownToken;
         _submission.Claim();
         cancellationToken.ThrowIfCancellationRequested();
         var nodeRuntime = runtime.GetMeshNodeRuntime(meshName);
@@ -515,8 +517,9 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
         return this;
     }
 
-    public async ValueTask Async(CancellationToken cancellationToken = default)
+    public async ValueTask Async()
     {
+        var cancellationToken = runtime.ShutdownToken;
         _submission.Claim();
         cancellationToken.ThrowIfCancellationRequested();
         var snapshot = target.Snapshot;

@@ -659,7 +659,6 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId.From("entry-node"),
             "entry",
             "entry",
-            TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(1)
         );
         runtime.GetOrCreateActorState(actor.Context.ActorId).JoinSpot(activation);

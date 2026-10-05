@@ -80,7 +80,7 @@ internal sealed class SupportUserActor(string actorId, IZLinkActorContext contex
                         .BoundSession.Send(
                             new JoinConversationFailedNotify(pending.ConversationId, "Rejected")
                         )
-                        .Async(cancellationToken);
+                        .Async();
                 }
                 if (hasPendingIntent)
                     _pendingJoins.Dequeue();
@@ -97,7 +97,7 @@ internal sealed class SupportUserActor(string actorId, IZLinkActorContext contex
                                 failed.Kind.ToString()
                             )
                         )
-                        .Async(cancellationToken);
+                        .Async();
                 }
                 if (hasPendingIntent)
                     _pendingJoins.Dequeue();

@@ -2,11 +2,7 @@ namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
 internal static class ZLinkBackendSocketOptionsMapper
 {
-    public static void Apply(
-        CommonSocketOptions options,
-        IZLinkSocketConfig config,
-        TimeSpan? defaultSendTimeout = null
-    )
+    public static void Apply(CommonSocketOptions options, IZLinkSocketConfig config)
     {
         if (config.MaxMessageSize > 0)
             options.MaxMessageSize = config.MaxMessageSize;
@@ -21,8 +17,6 @@ internal static class ZLinkBackendSocketOptionsMapper
         options.Linger = config.Linger;
         if (config.ReceiveTimeout is not null)
             options.ReceiveTimeout = config.ReceiveTimeout;
-        if (ResolveSendTimeout(config, defaultSendTimeout) is { } sendTimeout)
-            options.SendTimeout = sendTimeout;
         if (config.ConnectTimeout is not null)
             options.ConnectTimeout = config.ConnectTimeout;
         if (config.HandshakeInterval is not null)
@@ -34,9 +28,4 @@ internal static class ZLinkBackendSocketOptionsMapper
         if (config.Immediate is { } immediate)
             options.Immediate = immediate;
     }
-
-    internal static TimeSpan? ResolveSendTimeout(
-        IZLinkSocketConfig config,
-        TimeSpan? defaultSendTimeout
-    ) => config.SendTimeout ?? defaultSendTimeout;
 }

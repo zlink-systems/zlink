@@ -140,5 +140,5 @@ internal sealed class RejoinWorldHandler
         IZLinkMessageContext context,
         JoinWorldReq message,
         CancellationToken cancellationToken
-    ) => await actor.Context.BoundSession.Send(spot.Rejoin(actor)).Async(cancellationToken);
+    ) => await actor.Context.BoundSession.Send(spot.Rejoin(actor)).Async();
 }

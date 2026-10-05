@@ -257,12 +257,10 @@ public sealed class BackendAdapterFactoryTests
         spotNode.SetRouterHighWaterMark(byteHwm);
         spotNode.SetRouterReceiveHighWaterMark(byteHwm - 1);
         spotNode.SetRouterReceiveTimeout(TimeSpan.FromMilliseconds(29));
-        spotNode.SetRouterSendTimeout(TimeSpan.FromMilliseconds(37));
 
         Assert.Equal(byteHwm, spotNode.NativeNode.RouterHighWaterMark);
         Assert.Equal(byteHwm - 1, spotNode.NativeNode.RouterReceiveHighWaterMark);
         Assert.Equal(TimeSpan.FromMilliseconds(29), spotNode.NativeNode.ReceiveTimeout);
-        Assert.Equal(TimeSpan.FromMilliseconds(37), spotNode.NativeNode.SendTimeout);
     }
 
     private static async Task AssertStreamBackendAsync(IZLinkBackendRuntimeContext context)

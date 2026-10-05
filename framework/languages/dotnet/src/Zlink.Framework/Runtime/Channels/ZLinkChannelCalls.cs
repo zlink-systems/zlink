@@ -30,7 +30,7 @@ internal sealed class ZLinkPublishCall(
         }
         catch (ZlinkSubmitException failure)
         {
-            throw ZLinkRequestFailureMapper.CreateSubmitException(failure, "Fanout publish");
+            throw ZLinkSubmitFailureMapper.CreateFanoutException(failure);
         }
         finally
         {

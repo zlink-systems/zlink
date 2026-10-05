@@ -259,7 +259,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     public long RelocationInFlightPayloadBudget { get; set; } = 16 * 1024 * 1024;
     public long RelocationNodeInFlightPayloadBudget { get; set; }
     public TimeSpan? ReceiveTimeout { get; set; }
-    public TimeSpan? SendTimeout { get; set; }
 
     public void SetRoutingId(RoutingId routingId)
     {
@@ -354,14 +353,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 socket.Options.ReceiveHighWaterMark = RouterReceiveHighWaterMark;
                 if (ReceiveTimeout is { } receiveTimeout)
                     socket.Options.ReceiveTimeout = receiveTimeout;
-                if (SendTimeout is { } timeout)
-                {
-                    socket.Options.SubmitRetryMode = SubmitRetryMode.LocalFailure;
-                    socket.Options.SubmitRetryTimeoutMilliseconds = checked(
-                        (int)Math.Ceiling(timeout.TotalMilliseconds)
-                    );
-                    socket.Options.SubmitRetryAttempts = 16;
-                }
                 socket.SetRoutingId(_routingId);
                 if (_applicationJobQueue is not null)
                 {
@@ -4916,6 +4907,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ownershipTransferred = true;
                 request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
                     requestOperation,
+                    remaining,
                     cancellationToken
                 );
             }
@@ -9978,6 +9970,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
                     request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
                         socket.Request(target).Messages(messages).Timeout(timeout),
+                        timeout,
                         cancellationToken
                     );
                     ownershipTransferred = true;

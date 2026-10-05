@@ -267,7 +267,7 @@ internal sealed class TicTacToeGame(IZLinkSpotContext context, ILogger<TicTacToe
             recipients,
             async actor =>
             {
-                await actor.Context.BoundSession.Send(message).Async(cancellationToken);
+                await actor.Context.BoundSession.Send(message).Async();
             }
         );
     }
@@ -300,7 +300,7 @@ internal sealed class TicTacToeGame(IZLinkSpotContext context, ILogger<TicTacToe
             recipients,
             async actor =>
             {
-                await actor.Context.BoundSession.Send(message).Async(cancellationToken);
+                await actor.Context.BoundSession.Send(message).Async();
             }
         );
     }

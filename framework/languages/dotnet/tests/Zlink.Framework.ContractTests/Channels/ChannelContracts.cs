@@ -205,8 +205,7 @@ public sealed class ChannelContracts
 
         public IZLinkSendCall Metadata(ZLinkMessageMetadata metadata) => this;
 
-        public ValueTask Async(CancellationToken cancellationToken = default) =>
-            ValueTask.CompletedTask;
+        public ValueTask Async() => ValueTask.CompletedTask;
     }
 
     private class ExampleRequestCall(object? reply) : IZLinkRequestCall

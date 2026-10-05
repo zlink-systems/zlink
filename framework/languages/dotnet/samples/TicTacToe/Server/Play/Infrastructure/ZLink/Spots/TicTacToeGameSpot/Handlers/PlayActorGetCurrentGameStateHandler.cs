@@ -18,7 +18,7 @@ internal sealed class PlayActorGetCurrentGameStateHandler(
     )
     {
         var state = spot.GetCurrentState(actor, message.RoomId);
-        await actor.Context.BoundSession.Send(new JoinGameNotify(state)).Async(cancellationToken);
+        await actor.Context.BoundSession.Send(new JoinGameNotify(state)).Async();
 
         logger.LogInformation(
             "game spot: current state returned to reconnected actor. actor={ActorId}, roomId={RoomId}",

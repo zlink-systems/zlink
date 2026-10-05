@@ -32,7 +32,7 @@ internal sealed class ConversationNotificationPublisher
         var state = ConversationContracts.ToState(snapshot);
         await roster
             .Context.BoundSession.Send(new ConversationAssignedNotify(state.ConversationId, state))
-            .Async(cancellationToken);
+            .Async();
     }
 
     // --8<-- [end:doc-sc-roster-push]
@@ -69,7 +69,7 @@ internal sealed class ConversationNotificationPublisher
                             .Context.BoundSession.Send(
                                 new ConversationIdleNotify(state.ConversationId, state)
                             )
-                            .Async(cancellationToken);
+                            .Async();
                     }
                 );
                 break;
@@ -88,7 +88,7 @@ internal sealed class ConversationNotificationPublisher
                             .Context.BoundSession.Send(
                                 new ConversationClosedNotify(state.ConversationId, state)
                             )
-                            .Async(cancellationToken);
+                            .Async();
                     }
                 );
                 break;
@@ -126,7 +126,7 @@ internal sealed class ConversationNotificationPublisher
                             state
                         )
                     )
-                    .Async(cancellationToken);
+                    .Async();
             }
         );
     }
@@ -151,7 +151,7 @@ internal sealed class ConversationNotificationPublisher
                     .Context.BoundSession.Send(
                         new ChatMessageNotify(state.ConversationId, chatMessage, state)
                     )
-                    .Async(cancellationToken);
+                    .Async();
             }
         );
     }
@@ -181,7 +181,7 @@ internal sealed class ConversationNotificationPublisher
                             state
                         )
                     )
-                    .Async(cancellationToken);
+                    .Async();
             }
         );
     }

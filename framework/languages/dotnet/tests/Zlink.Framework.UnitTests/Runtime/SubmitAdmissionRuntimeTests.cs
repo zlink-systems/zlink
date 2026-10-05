@@ -88,7 +88,10 @@ public sealed class SubmitAdmissionRuntimeTests
             pair.Client.Request().Message(requestPart).Timeout(TimeSpan.FromSeconds(5))
         );
 
-        var completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(operation);
+        var completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+            operation,
+            TimeSpan.FromSeconds(5)
+        );
 
         Assert.Equal(1, operation.SubmissionCount);
         Assert.Equal(SubmitResult.Ok, operation.LastSubmission.Result);
@@ -135,9 +138,11 @@ public sealed class SubmitAdmissionRuntimeTests
         Assert.False(producer.IsCompleted);
         Assert.InRange(attempts, 2, recordCount - 1);
         Assert.Equal(SubmitResult.Backpressured, blocked.Result);
-        Assert.Same(blocked.Admitted, blocked.EnsureAcceptedAsync());
+
         Assert.False(blocked.Admitted.IsCompleted);
 
+        await Task.Delay(TimeSpan.FromMilliseconds(3100));
+        Assert.False(producer.IsCompleted);
         // Receiving releases Core capacity. Only the binding can resubmit the
         // blocked record; the producer resumes with the next sequence number.
         for (var sequence = 0; sequence < recordCount; sequence++)
@@ -164,6 +169,35 @@ public sealed class SubmitAdmissionRuntimeTests
                 await submission.EnsureAcceptedAsync();
             }
         }
+    }
+
+    [Fact]
+    public async Task RequestBudget_ExpiresWhileBindingAdmissionIsPending()
+    {
+        using var pair = new AdmissionPair();
+        SendSubmission blocked = default;
+        for (var sequence = 0; sequence < 32; sequence++)
+        {
+            using var filler = Message.From(AdmissionPair.Payload(sequence));
+            blocked = pair.Client.Send().Message(filler).Async();
+            if (blocked.Result == SubmitResult.Backpressured)
+                break;
+        }
+        Assert.Equal(SubmitResult.Backpressured, blocked.Result);
+        using var request = Message.From(AdmissionPair.Payload(100));
+        var operation = new CountingRequestSubmitOperation(
+            pair.Client.Request().Message(request).Timeout(TimeSpan.FromSeconds(5))
+        );
+        var completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+            operation,
+            TimeSpan.FromMilliseconds(100)
+        );
+        Assert.Equal(SubmitResult.Backpressured, operation.LastSubmission.Result);
+        var failure = await Assert.ThrowsAsync<ZlinkRequestException>(() =>
+            completion.WaitAsync(TimeSpan.FromSeconds(2))
+        );
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, failure.Result);
+        Assert.Equal(1, operation.SubmissionCount);
     }
 
     [Fact]

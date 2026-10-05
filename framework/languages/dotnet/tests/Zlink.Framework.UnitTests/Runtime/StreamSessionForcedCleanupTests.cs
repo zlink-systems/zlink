@@ -2297,7 +2297,7 @@ public sealed class StreamSessionForcedCleanupTests
             CancellationToken cancellationToken
         )
         {
-            await Context.Client.Reply(new StreamFlowReply("reply")).Async(cancellationToken);
+            await Context.Client.Reply(new StreamFlowReply("reply")).Async();
             lifetime.ReplyCompleted.TrySetResult();
         }
     }

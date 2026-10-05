@@ -19,7 +19,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private readonly IZLinkBackendRuntimeContext _context;
     private readonly IZLinkSocketConfig _socketConfig;
     private readonly ZLinkApplicationJobQueue _applicationJobQueue;
-    private readonly TimeSpan _sendTimeout;
     private readonly TimeProvider _time;
     private readonly CancellationToken _stopToken;
     private readonly ZLinkStateLane _lane = new();
@@ -44,7 +43,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         IZLinkMonitoringBackendAdapter monitoring,
         IZLinkBackendRuntimeContext context,
         IZLinkSocketConfig socketConfig,
-        TimeSpan sendTimeout,
         CancellationToken stopToken,
         ZLinkApplicationJobQueue applicationJobQueue,
         IZLinkRuntimeFailureReporter errorSink,
@@ -56,7 +54,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         _monitoring = monitoring;
         _context = context;
         _socketConfig = socketConfig;
-        _sendTimeout = sendTimeout;
         _stopToken = stopToken;
         _applicationJobQueue = applicationJobQueue;
         _errorSink = errorSink;
@@ -160,8 +157,20 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         CancellationToken cancellationToken
     )
     {
-        var readiness = await WaitForReadyAsync(_sendTimeout, cancellationToken)
-            .ConfigureAwait(false);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _stopToken
+        );
+        ReadyWaitResult readiness;
+        try
+        {
+            readiness = await WaitForReadyAsync(lifetime.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
+        }
         var target = readiness.Target;
         if (target is null)
         {
@@ -186,7 +195,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             await target
                 .Socket.Send()
                 .Messages(parts)
-                .Async(cancellationToken)
+                .Async()
                 .EnsureAcceptedAsync()
                 .ConfigureAwait(false);
             if (sentPacketName is not null && _flow!.Enabled(ZLinkMessageFlowOutcome.Sent))
@@ -208,7 +217,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 error.Result switch
                 {
                     ZlinkSubmitException.ErrorCode.Backpressured =>
-                        ZLinkOneWaySubmitStatus.TimedOut,
+                        ZLinkOneWaySubmitStatus.Backpressured,
                     ZlinkSubmitException.ErrorCode.NotFound =>
                         ZLinkOneWaySubmitStatus.TargetNotFound,
                     ZlinkSubmitException.ErrorCode.NotConnected =>
@@ -239,13 +248,14 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     {
         Interlocked.Increment(ref _pendingRequests);
         SignalStateChanged();
+        var started = _time.GetTimestamp();
         using var readyWaitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             _stopToken
         );
         try
         {
-            var readiness = await WaitForReadyAsync(_sendTimeout, readyWaitCancellation.Token)
+            var readiness = await WaitForReadyAsync(readyWaitCancellation.Token, timeout, started)
                 .ConfigureAwait(false);
             var target = readiness.Target;
             if (target is null)
@@ -285,13 +295,22 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     (pending, nativeTimeout, token) =>
                         ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
                             target.Socket.Request().Messages(pending).Timeout(nativeTimeout),
+                            nativeTimeout,
                             token
                         ),
-                    timeout,
+                    timeout - _time.GetElapsedTime(started),
                     $"ClientServer request failed for '{_channelName}': {{0}}.",
                     cancellationToken
                 )
                 .ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                $"ClientServer channel '{_channelName}' request timed out."
+            );
         }
         catch (OperationCanceledException)
             when (_stopToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -511,7 +530,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             try
             {
                 await created
-                    .PrepareAsync(_applicationJobQueue, _monitoring, _socketConfig, _sendTimeout)
+                    .PrepareAsync(_applicationJobQueue, _monitoring, _socketConfig)
                     .ConfigureAwait(false);
                 var committed = false;
                 try
@@ -639,7 +658,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 null,
                 DistinctConnections().Any(static connection => connection.AdmittedButIneligible)
                     ? ZLinkOneWaySubmitStatus.RouteNotConnected
-                    : ZLinkOneWaySubmitStatus.TimedOut
+                    : ZLinkOneWaySubmitStatus.Backpressured
             );
         });
 
@@ -730,14 +749,19 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private void RunState(Action work) => AwaitStateLane(_lane.RunAsync(work));
 
     private async ValueTask<ReadyWaitResult> WaitForReadyAsync(
-        TimeSpan timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        TimeSpan? requestTimeout = null,
+        long requestStarted = 0
     )
     {
-        var started = _time.GetTimestamp();
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var remaining = requestTimeout is { } limit
+                ? limit - _time.GetElapsedTime(requestStarted)
+                : (TimeSpan?)null;
+            if (remaining <= TimeSpan.Zero)
+                throw new TimeoutException("ClientServer request ready deadline elapsed.");
             var readiness = SelectReady();
             if (
                 readiness.Target is not null
@@ -757,20 +781,22 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     || readiness.Status == ZLinkOneWaySubmitStatus.RouteNotConnected
                 )
                     return readiness;
-                var remaining = timeout - _time.GetElapsedTime(started);
-                if (remaining <= TimeSpan.Zero)
-                    return readiness;
-                try
+                if (remaining is { } budget)
                 {
-                    await changed
-                        .Task.WaitAsync(remaining, _time, cancellationToken)
-                        .ConfigureAwait(false);
+                    try
+                    {
+                        await changed
+                            .Task.WaitAsync(budget, _time, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        // Timer notification can precede the monotonic deadline.
+                        // The next iteration checks the same request budget.
+                    }
                 }
-                catch (TimeoutException)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    // Observe the current snapshot and monotonic deadline again after the timer wakes.
-                }
+                else
+                    await changed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -1005,8 +1031,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         internal async ValueTask PrepareAsync(
             ZLinkApplicationJobQueue applicationJobQueue,
             IZLinkMonitoringBackendAdapter monitoring,
-            IZLinkSocketConfig socketConfig,
-            TimeSpan sendTimeout
+            IZLinkSocketConfig socketConfig
         )
         {
             _admissionTimeout = socketConfig.ConnectTimeout ?? TimeSpan.FromSeconds(1);
@@ -1016,7 +1041,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     socketConfig.MaxMessageSize
                 );
             Socket.SetRoutingId(RoutingId.From($"csc-{Guid.NewGuid():N}"));
-            ZLinkChannelBundleFactory.ApplySocketConfig(Socket.Options, socketConfig, sendTimeout);
+            ZLinkChannelBundleFactory.ApplySocketConfig(Socket.Options, socketConfig);
             Socket.Options.Probe = false;
             _monitor = monitoring.OpenSocketMonitor(Socket);
             _receivePoller = ZLinkBackendSocketPoller.Create(Socket);
@@ -1262,6 +1287,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     reply = await ZLinkRequestSubmissionOutcome
                         .SubmitAndAwaitReplyAsync(
                             Socket.Request().Message(hello).Timeout(_admissionTimeout),
+                            _admissionTimeout,
                             cancellationToken
                         )
                         .ConfigureAwait(false);
@@ -1569,6 +1595,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 // not delay the next probe or the connection's deadline check.
                 var request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
                     Socket.Request().Message(probe).Timeout(ZLinkServiceLiveness.PeerTimeout),
+                    ZLinkServiceLiveness.PeerTimeout,
                     cancellationToken
                 );
                 Interlocked.Increment(ref _sentLivenessProbeCount);

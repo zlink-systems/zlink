@@ -138,7 +138,7 @@ internal sealed class BingoRoom(
         if (_game is not null && _game.Status == BingoRoomStatus.Running)
             await actor
                 .Context.BoundSession.Send(new BingoGameStartedNotify { State = _game.Snapshot() })
-                .Async(cancellationToken);
+                .Async();
 
         if (_settings.IsObserver)
             Context.RelocationReady().Defer();
@@ -379,7 +379,7 @@ internal sealed class BingoRoom(
                     Rarity = message.Rarity,
                 }
             )
-            .Async(cancellationToken);
+            .Async();
         Context.RelocationReady().Defer();
     }
 

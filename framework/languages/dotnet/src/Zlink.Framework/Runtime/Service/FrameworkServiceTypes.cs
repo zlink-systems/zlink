@@ -909,7 +909,6 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     ulong RouterHighWaterMark { get; set; }
     ulong RouterReceiveHighWaterMark { get; set; }
     TimeSpan? ReceiveTimeout { get; set; }
-    TimeSpan? SendTimeout { get; set; }
     void SetRoutingId(RoutingId routingId);
     void SetObjectRole(ZLinkMeshNodeObjectRole objectRole);
     void SetBind(string endpoint);

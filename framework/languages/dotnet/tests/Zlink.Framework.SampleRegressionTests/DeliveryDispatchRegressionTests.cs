@@ -562,7 +562,7 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal
         );
         Assert.Contains(
-            "context.Client.Reply(bound).Async(cancellationToken)",
+            "context.Client.Reply(bound).Async()",
             courierSessionHandler,
             StringComparison.Ordinal
         );

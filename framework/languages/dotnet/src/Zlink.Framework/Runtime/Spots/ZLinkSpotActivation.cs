@@ -63,7 +63,6 @@ internal abstract partial class ZLinkSpotActivation
         string spotNodeName,
         string channelName,
         TimeSpan defaultRequestTimeout,
-        TimeSpan? sendTimeout,
         ZLinkUserSpotExecutionMode executionMode = ZLinkUserSpotExecutionMode.SpotWide,
         ZLinkSpotRelocationCoordinationMode relocationCoordinationMode =
             ZLinkSpotRelocationCoordinationMode.FrameworkManaged,
@@ -88,7 +87,7 @@ internal abstract partial class ZLinkSpotActivation
         DefaultRequestTimeout = defaultRequestTimeout;
         ExecutionMode = executionMode;
         RelocationCoordinationMode = relocationCoordinationMode;
-        _outbound = new ZLinkSpotOutboundTransport(nativeSpot, sendTimeout, _stopSource.Token);
+        _outbound = new ZLinkSpotOutboundTransport(nativeSpot, _stopSource.Token);
         _outboundEndpoint = new ZLinkSpotOutboundEndpoint(this, _outbound, _runtime);
         _serial = new ZLinkSpotSerialExecutor(
             this,
@@ -287,7 +286,6 @@ internal sealed class ZLinkUserSpotActivation
         string spotNodeName,
         string channelName,
         TimeSpan defaultRequestTimeout,
-        TimeSpan? sendTimeout,
         ZLinkUserSpotExecutionMode executionMode = ZLinkUserSpotExecutionMode.SpotWide,
         ZLinkSpotRelocationCoordinationMode relocationCoordinationMode =
             ZLinkSpotRelocationCoordinationMode.FrameworkManaged,
@@ -303,7 +301,6 @@ internal sealed class ZLinkUserSpotActivation
             spotNodeName,
             channelName,
             defaultRequestTimeout,
-            sendTimeout,
             executionMode,
             relocationCoordinationMode,
             restoreLogicalTimers,
@@ -374,7 +371,6 @@ internal sealed class ZLinkInstanceSpotActivation : ZLinkSpotActivation, IZLinkI
         string spotNodeName,
         string channelName,
         TimeSpan defaultRequestTimeout,
-        TimeSpan? sendTimeout,
         bool restoreLogicalTimers = false,
         ZLinkTimerScheduler? timerScheduler = null
     )
@@ -387,7 +383,6 @@ internal sealed class ZLinkInstanceSpotActivation : ZLinkSpotActivation, IZLinkI
             spotNodeName,
             channelName,
             defaultRequestTimeout,
-            sendTimeout,
             restoreLogicalTimers: restoreLogicalTimers,
             timerScheduler: timerScheduler
         )

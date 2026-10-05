@@ -65,7 +65,7 @@ public sealed class PlayerSession(
         {
             await Context
                 .Client.Reply(await relocationProbes.SelectPairAsync(cancellationToken))
-                .Async(cancellationToken);
+                .Async();
             return;
         }
 
@@ -76,7 +76,7 @@ public sealed class PlayerSession(
                 .Client.Reply(
                     await relocationProbes.FindActorAsync(request.ActorId, cancellationToken)
                 )
-                .Async(cancellationToken);
+                .Async();
             return;
         }
 
@@ -87,7 +87,7 @@ public sealed class PlayerSession(
                 .Client.Reply(
                     await relocationProbes.CreateFreshActorAsync(request.ActorId, cancellationToken)
                 )
-                .Async(cancellationToken);
+                .Async();
             return;
         }
 
@@ -97,14 +97,14 @@ public sealed class PlayerSession(
             var reply = await actors
                 .RequestToActor(request.ActorId, request)
                 .Async<MessageFollowProbeRes>(cancellationToken);
-            await Context.Client.Reply(reply).Async(cancellationToken);
+            await Context.Client.Reply(reply).Async();
             return;
         }
 
         if (dispatch.PacketName == nameof(MessageFollowProbeMsg))
         {
             var message = payload.Decode<MessageFollowProbeMsg>();
-            await actors.SendToActor(message.ActorId, message).Async(cancellationToken);
+            await actors.SendToActor(message.ActorId, message).Async();
             return;
         }
 
@@ -129,7 +129,7 @@ public sealed class PlayerSession(
         // route on this node only, and the actor's node learns it from the first relayed
         // packet. Answer the join without relaying it and a player who never moves would
         // sit in the world receiving nothing.
-        await actor.RelayAsync(payload, cancellationToken);
+        await actor.RelayAsync(payload);
     }
 }
 

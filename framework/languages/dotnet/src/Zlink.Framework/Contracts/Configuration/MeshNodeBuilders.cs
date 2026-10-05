@@ -31,8 +31,6 @@ public interface IZLinkMeshNodeSocketConfig
     ulong ReceiveHighWaterMark { get; set; }
 
     TimeSpan? ReceiveTimeout { get; set; }
-
-    TimeSpan? SendTimeout { get; set; }
 }
 
 public interface IZLinkMeshChannelRoleBuilder

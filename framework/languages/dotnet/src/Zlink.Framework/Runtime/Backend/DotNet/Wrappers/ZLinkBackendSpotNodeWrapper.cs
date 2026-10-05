@@ -253,11 +253,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _node.ReceiveTimeout = value;
     }
 
-    public void SetRouterSendTimeout(TimeSpan? value)
-    {
-        _node.SendTimeout = value;
-    }
-
     // Explicit host startup calls Start after routing id, bind, and channels
     // are configured. Pull dispatch is activated separately after every
     // framework ingress owner has been installed.

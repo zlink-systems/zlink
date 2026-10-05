@@ -150,7 +150,6 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
             cancellationToken,
             runtime.ShutdownToken
         );
-        terminal.CancelAfter(runtime.Registration.DefaultSocketSendTimeout);
         try
         {
             return await runtime
@@ -165,10 +164,6 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
         catch (OperationCanceledException) when (runtime.ShutdownToken.IsCancellationRequested)
         {
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TimedOut);
         }
     }
 
@@ -271,8 +266,9 @@ internal sealed class ZLinkBoundSessionSendCall<TMessage>(
         return this;
     }
 
-    public ValueTask Async(CancellationToken cancellationToken = default)
+    public ValueTask Async()
     {
+        var cancellationToken = CancellationToken.None;
         _submission.Claim();
         return service
             .SubmitBoundSessionAsync(

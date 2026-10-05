@@ -174,14 +174,9 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     }
 
     [Theory]
-    [InlineData(2, 5)]
-    [InlineData(2, -5)]
-    [InlineData(30, 5)]
-    [InlineData(30, -5)]
-    public async Task ReadinessWaitUsesMonotonicSendTimeoutAfterRequestDeadline(
-        int sendTimeoutSeconds,
-        int wallJumpSeconds
-    )
+    [InlineData(5)]
+    [InlineData(-5)]
+    public async Task ReadinessWaitUsesMonotonicRequestDeadline(int wallJumpSeconds)
     {
         var time = new ReadinessTimeProvider();
         await using var client = new ZLinkClientServerClientRuntime(
@@ -189,7 +184,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             null!,
             null!,
             null!,
-            TimeSpan.FromSeconds(sendTimeoutSeconds),
             CancellationToken.None,
             null!,
             new ZLinkRuntimeErrorSink(),
@@ -201,7 +195,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             .AsTask();
         time.AdvanceWall(TimeSpan.FromSeconds(wallJumpSeconds));
         Assert.False(request.IsCompleted);
-        time.AdvanceMonotonic(TimeSpan.FromSeconds(sendTimeoutSeconds) - TimeSpan.FromTicks(1));
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1) - TimeSpan.FromTicks(1));
         Assert.False(request.IsCompleted);
         time.AdvanceMonotonic(TimeSpan.FromTicks(1));
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
@@ -269,7 +263,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [InlineData(3)]
     [InlineData(4)]
     [InlineData(5)]
-    public async Task ClientRequestStartedBeforeServerUsesSendTimeoutForAdmission(int iteration)
+    public async Task ClientRequestStartedBeforeServerUsesRequestBudgetForAdmission(int iteration)
     {
         using var reservation = ReserveBoundTcpPort();
         var port = ((System.Net.IPEndPoint)reservation.LocalEndPoint!).Port;
@@ -308,7 +302,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [InlineData(3)]
     [InlineData(4)]
     [InlineData(5)]
-    public async Task ClientRequestExpiresAtSendTimeoutBeforeLateServerStarts(int iteration)
+    public async Task ClientRequestExpiresAtRequestDeadlineBeforeLateServerStarts(int iteration)
     {
         using var reservation = ReserveBoundTcpPort();
         var port = ((System.Net.IPEndPoint)reservation.LocalEndPoint!).Port;
@@ -325,7 +319,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             var request = client
                 .GetRequiredService<IZLinkRouteClient>()
                 .RequestToChannel("work", new EchoRequest($"too-late-{iteration}"))
-                .Timeout(TimeSpan.FromSeconds(5))
+                .Timeout(sendTimeout)
                 .Async<EchoReply>()
                 .AsTask();
             var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
@@ -359,7 +353,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [InlineData(3)]
     [InlineData(4)]
     [InlineData(5)]
-    public async Task ClientSendStartedBeforeServerUsesSendTimeoutForAdmission(int iteration)
+    public async Task ClientSendStartedBeforeServerWaitsForAdmission(int iteration)
     {
         using var reservation = ReserveBoundTcpPort();
         var port = ((System.Net.IPEndPoint)reservation.LocalEndPoint!).Port;
@@ -402,13 +396,15 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [InlineData(3)]
     [InlineData(4)]
     [InlineData(5)]
-    public async Task ClientSendExpiresAtSendTimeoutBeforeLateServerStarts(int iteration)
+    public async Task ClientSendWaitsBeyondThreeDefaultTimeoutsAndCompletesAfterServerStarts(
+        int iteration
+    )
     {
         using var reservation = ReserveBoundTcpPort();
         var port = ((System.Net.IPEndPoint)reservation.LocalEndPoint!).Port;
         var endpoint = $"tcp://{AdmissionTestServerHost}:{port}";
         var sendTimeout = TimeSpan.FromMilliseconds(150);
-        await using var client = CreateClient(endpoint, sendTimeout: sendTimeout);
+        await using var client = CreateClient(endpoint);
         await using var server = CreateServer(port, bindHost: AdmissionTestServerHost);
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -421,20 +417,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 .SendToChannel("work", new EchoSend($"too-late-{iteration}"))
                 .Async()
                 .AsTask();
-            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                send.WaitAsync(TimeSpan.FromSeconds(3))
-            );
-
-            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, failure.Kind);
-            var elapsed = Stopwatch.GetElapsedTime(started);
-            Assert.True(
-                elapsed >= sendTimeout,
-                $"elapsed={elapsed}, configured send timeout={sendTimeout}"
-            );
-            Assert.True(
-                elapsed < TimeSpan.FromSeconds(1),
-                $"elapsed={elapsed}, configured send timeout={sendTimeout}"
-            );
+            await Task.Delay(TimeSpan.FromMilliseconds(3100));
+            Assert.False(send.IsCompleted);
 
             reservation.Dispose();
             await serverRuntime.StartAsync(CancellationToken.None);
@@ -444,13 +428,38 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 () => clientTransport.ReadyCount == 1,
                 TimeSpan.FromSeconds(10)
             );
-            Assert.False(server.GetRequiredService<EchoProbe>().Received.Task.IsCompleted);
+            await send.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(
+                $"too-late-{iteration}",
+                await server
+                    .GetRequiredService<EchoProbe>()
+                    .Received.Task.WaitAsync(TimeSpan.FromSeconds(5))
+            );
         }
         finally
         {
             await serverRuntime.StopAsync(CancellationToken.None);
             await clientRuntime.StopAsync(CancellationToken.None);
         }
+    }
+
+    [Fact]
+    public async Task ClientSendWaitingForReadyEndsWithShuttingDown()
+    {
+        await using var client = CreateClient("tcp://127.0.0.1:0");
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        var send = client
+            .GetRequiredService<IZLinkRouteClient>()
+            .SendToChannel("work", new EchoSend("pending-shutdown"))
+            .Async()
+            .AsTask();
+        Assert.False(send.IsCompleted);
+        await runtime.StopAsync(CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            send.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
     }
 
     [Fact]
@@ -3286,7 +3295,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         string endpoint,
         long maximumMessageBytes = 16L * 1024L * 1024L,
         TimeProvider? timeProvider = null,
-        TimeSpan? sendTimeout = null,
         TimeSpan? defaultSendTimeout = null,
         string? additionalEndpoint = null
     )
@@ -3303,8 +3311,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         registration.Channels["work"].Client!.SocketConfig.MaxMessageSize = maximumMessageBytes;
         if (defaultSendTimeout is { } configuredDefaultSendTimeout)
             registration.DefaultSocketSendTimeout = configuredDefaultSendTimeout;
-        if (sendTimeout is { } configuredSendTimeout)
-            registration.Channels["work"].Client!.SocketConfig.SendTimeout = configuredSendTimeout;
         if (timeProvider is not null)
             registration.TimeProvider = timeProvider;
         return provider;

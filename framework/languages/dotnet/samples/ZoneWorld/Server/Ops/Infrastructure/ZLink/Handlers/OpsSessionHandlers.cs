@@ -15,7 +15,7 @@ internal sealed class WatchNodesHandler(NodeRegistry nodes, OpsConsoleRegistry c
         CancellationToken cancellationToken
     )
     {
-        await context.Client.Reply(new WatchNodesRes(nodes.Snapshot())).Async(cancellationToken);
+        await context.Client.Reply(new WatchNodesRes(nodes.Snapshot())).Async();
         await consoles.ReplayNodesAsync(context, cancellationToken);
         await consoles.ReplayAlertsAsync(context, cancellationToken);
     }
@@ -45,7 +45,7 @@ internal sealed class AnnounceWorldHandler(
             announcementId
         );
 
-        await context.Client.Reply(new AnnounceWorldRes(announcementId)).Async(cancellationToken);
+        await context.Client.Reply(new AnnounceWorldRes(announcementId)).Async();
     }
 }
 
@@ -66,7 +66,7 @@ internal sealed class SetMaintenanceHandler(MaintenanceService maintenance)
     )
     {
         var reply = await maintenance.SetAsync(request.NodeId, request.Enabled, cancellationToken);
-        await context.Client.Reply(reply).Async(cancellationToken);
+        await context.Client.Reply(reply).Async();
     }
 }
 
@@ -81,6 +81,6 @@ internal sealed class NodeDiagnosticsHandler(NodeDiagnosticsService diagnostics)
     )
     {
         var reply = await diagnostics.GetAsync(request.NodeId, cancellationToken);
-        await context.Client.Reply(reply).Async(cancellationToken);
+        await context.Client.Reply(reply).Async();
     }
 }

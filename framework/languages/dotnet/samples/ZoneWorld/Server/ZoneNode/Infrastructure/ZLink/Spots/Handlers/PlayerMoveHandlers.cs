@@ -119,7 +119,7 @@ internal sealed class PlayerZoneStateDeliveryHandler(ILogger<PlayerZoneStateDeli
             .Context.BoundSession.Send(
                 new ZoneStateNotify(message.ZoneId, message.Tick, message.Players)
             )
-            .Async(cancellationToken);
+            .Async();
         // --8<-- [end:doc-zw-state-push]
         logger.LogInformation(
             "zone state delivery handler completed. player={PlayerId}, zone={ZoneId}",
@@ -148,7 +148,7 @@ internal sealed class PlayerZoneChangedDeliveryHandler
             return;
         await actor
             .Context.BoundSession.Send(new ZoneChangedNotify(message.PlayerId, message.ZoneId))
-            .Async(cancellationToken);
+            .Async();
     }
 }
 
@@ -174,7 +174,7 @@ internal sealed class PlayerWorldAnnouncementDeliveryHandler
             .Context.BoundSession.Send(
                 new WorldAnnounceNotify(message.AnnouncementId, message.Text)
             )
-            .Async(cancellationToken);
+            .Async();
     }
 }
 
@@ -296,7 +296,7 @@ internal sealed class PlayerMovement(
                         spot.ZoneId,
                         new UpdatePositionMsg(actor.ActorId, stayed.To.X, stayed.To.Y, actor.IsBot)
                     )
-                    .Async(cancellationToken);
+                    .Async();
                 return;
 
             case MoveDecision.Accepted accepted:
@@ -373,6 +373,6 @@ internal sealed class PlayerMovement(
             .Context.BoundSession.Send(
                 new MoveRejectedNotify(reason, actor.Position.X, actor.Position.Y)
             )
-            .Async(cancellationToken);
+            .Async();
     }
 }

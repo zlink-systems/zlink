@@ -40,7 +40,7 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
         set
         {
             _registration.DefaultSocketSendTimeout =
-                ZLinkSocketConfig.NormalizeSendTimeout(value)
+                ZLinkSpotPublisherConfig.NormalizeSendTimeout(value)
                 ?? throw new ZLinkConfigurationException("DefaultSocketSendTimeout is required.");
         }
     }

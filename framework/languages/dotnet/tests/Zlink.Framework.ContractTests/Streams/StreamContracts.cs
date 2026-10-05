@@ -340,10 +340,7 @@ public sealed class StreamContracts
 
         public Systems.Zlink.ActorRef Ref { get; } = actor;
 
-        public ValueTask RelayAsync(
-            ZLinkMessage payload,
-            CancellationToken cancellationToken = default
-        )
+        public ValueTask RelayAsync(ZLinkMessage payload)
         {
             return ValueTask.CompletedTask;
         }
@@ -360,8 +357,7 @@ public sealed class StreamContracts
 
         public IZLinkSendCall Metadata(ZLinkMessageMetadata metadata) => this;
 
-        public ValueTask Async(CancellationToken cancellationToken = default) =>
-            ValueTask.CompletedTask;
+        public ValueTask Async() => ValueTask.CompletedTask;
     }
 
     private sealed class RequestCall(object reply) : IZLinkRequestCall
@@ -403,13 +399,7 @@ public sealed class StreamContracts
             return this;
         }
 
-        public IZLinkSessionSendCall Timeout(TimeSpan timeout)
-        {
-            return this;
-        }
-
-        public ValueTask Async(CancellationToken cancellationToken = default) =>
-            ValueTask.CompletedTask;
+        public ValueTask Async() => ValueTask.CompletedTask;
     }
 
     private sealed class SessionReplyCall : IZLinkSessionReplyCall
@@ -419,8 +409,7 @@ public sealed class StreamContracts
             return this;
         }
 
-        public ValueTask Async(CancellationToken cancellationToken = default) =>
-            ValueTask.CompletedTask;
+        public ValueTask Async() => ValueTask.CompletedTask;
     }
 
     private sealed class BoundSessionSendCall : IZLinkBoundSessionSendCall
@@ -435,8 +424,7 @@ public sealed class StreamContracts
             return this;
         }
 
-        public ValueTask Async(CancellationToken cancellationToken = default) =>
-            ValueTask.CompletedTask;
+        public ValueTask Async() => ValueTask.CompletedTask;
     }
 
     private sealed class MetadataPolicy(IReadOnlySet<string> forwardedKeys)

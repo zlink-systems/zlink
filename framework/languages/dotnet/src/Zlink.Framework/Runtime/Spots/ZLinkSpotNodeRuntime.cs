@@ -931,12 +931,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             await _instanceSpotActivationTarget
                 .RecoverAsync(_stopSource.Token)
                 .ConfigureAwait(false);
-        _entryOutbound ??= new ZLinkSpotOutboundTransport(
-            _entrySpot,
-            Registration.Router?.SocketConfig.SendTimeout
-                ?? _frameworkRegistration.DefaultSocketSendTimeout,
-            _stopSource.Token
-        );
+        _entryOutbound ??= new ZLinkSpotOutboundTransport(_entrySpot, _stopSource.Token);
         if (Registration.EntrySpotType is null)
         {
             if (ShouldAttachActorDispatchPump())

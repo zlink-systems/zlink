@@ -94,22 +94,11 @@ public interface IZLinkSessionSendCall : IZLinkMetadataCall<IZLinkSessionSendCal
     IZLinkSessionSendCall Compress();
 
     /// <summary>
-    /// Limits how long this send may wait for local transport admission.
-    /// The effective timeout is the shorter of this value and the STREAM
-    /// socket send timeout.
-    /// </summary>
-    /// <param name="timeout">
-    /// A positive duration that rounds up to at most <see cref="int.MaxValue"/>
-    /// milliseconds.
-    /// </param>
-    IZLinkSessionSendCall Timeout(TimeSpan timeout);
-
-    /// <summary>
     /// Submits the session send. Input validation and local transport
     /// acceptance complete before this method returns. If the transport queue
-    /// is full, the call waits up to the configured send timeout.
+    /// is full, the call waits for capacity without a time limit.
     /// </summary>
-    ValueTask Async(CancellationToken cancellationToken = default);
+    ValueTask Async();
 }
 
 public interface IZLinkSessionReplyCall
@@ -121,5 +110,5 @@ public interface IZLinkSessionReplyCall
     /// the request packet name and does not expose PacketName because a reply
     /// must keep the request correlation.
     /// </summary>
-    ValueTask Async(CancellationToken cancellationToken = default);
+    ValueTask Async();
 }

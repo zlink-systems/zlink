@@ -37,7 +37,7 @@ internal sealed class GameplayEventOwnerDispatcher(IZLinkSpotClient spots)
             // message; the caller never resolves or chooses a physical node.
             .InstanceSpot(SampleNames.PlayerQuestSpotType)
             .InMesh(SampleNames.MeshName)
-            .Async(cancellationToken);
+            .Async();
         // --8<-- [end:doc-gq-owner-send]
         return gameplayEvent.PlayerId;
     }

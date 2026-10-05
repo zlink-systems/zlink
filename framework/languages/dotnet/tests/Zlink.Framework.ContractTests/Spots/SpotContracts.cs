@@ -936,8 +936,7 @@ public sealed class SpotContracts
 
         public IZLinkSendCall Metadata(ZLinkMessageMetadata metadata) => this;
 
-        public ValueTask Async(CancellationToken cancellationToken = default) =>
-            ValueTask.CompletedTask;
+        public ValueTask Async() => ValueTask.CompletedTask;
     }
 
     private sealed class SpotSendCall : IZLinkSpotSendCall
@@ -952,8 +951,7 @@ public sealed class SpotContracts
 
         public IZLinkSpotSendCall Metadata(ZLinkMessageMetadata metadata) => this;
 
-        public ValueTask Async(CancellationToken cancellationToken = default) =>
-            ValueTask.CompletedTask;
+        public ValueTask Async() => ValueTask.CompletedTask;
     }
 
     private sealed class SpotRequestCall(object? reply = null) : IZLinkSpotRequestCall

@@ -203,14 +203,9 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
     internal async ValueTask<ZLinkWorkerSubmitResult> SubmitDirectAsync(
         Action<CancellationToken> work,
         Action? cancelBeforeStart,
-        TimeSpan timeout,
         CancellationToken cancellationToken
     )
     {
-        if (timeout <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(timeout));
-        var deadline = Stopwatch.GetElapsedTime(0) + timeout;
-
         while (true)
         {
             Task capacityChanged;
@@ -218,8 +213,6 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
             {
                 if (_disposed)
                     return ZLinkWorkerSubmitResult.Stopped;
-                if (deadline <= Stopwatch.GetElapsedTime(0))
-                    return ZLinkWorkerSubmitResult.Full;
 
                 var availableReservations =
                     _idleThreads + (MaxThreads - _threadCount) - _directQueue.Count;
@@ -246,19 +239,7 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
 
             try
             {
-                var remaining = deadline - Stopwatch.GetElapsedTime(0);
-                if (remaining <= TimeSpan.Zero)
-                    return ZLinkWorkerSubmitResult.Full;
-                try
-                {
-                    await capacityChanged
-                        .WaitAsync(remaining, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    return ZLinkWorkerSubmitResult.Full;
-                }
+                await capacityChanged.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
