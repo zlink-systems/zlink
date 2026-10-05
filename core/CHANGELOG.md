@@ -12,6 +12,31 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.15.0]
+
+### Changed
+
+- A `DONTWAIT` SEND or REQUEST wait token no longer has a deadline. It ends
+  only on resource recovery (`ZLINK_SEND_ADMITTED`), explicit target removal
+  (`ZLINK_SEND_NOT_FOUND`, STREAM `ZLINK_SEND_NOT_CONNECTED`), or socket close
+  and context termination. `SNDTIMEO` applies only to a blocking `NONE`
+  submission. Core no longer produces `ZLINK_SEND_TIMED_OUT` (803); the value is
+  kept for ABI preservation. This reverts the 1.11.0 wait-token deadline (#1452).
+
+### Fixed
+
+- CMake compiler-flag probes now use valid result variable names, so `-Wall`,
+  `-Wextra`, `-pedantic` (and MSVC `/W4`, `/WX`) and `LIBZLINK_WERROR` are
+  applied; the warnings they report are fixed in source (#1420).
+- Platform feature-test macros are defined before feature probes, so Linux
+  builds detect `SO_BINDTODEVICE` and `ZLINK_OPT_BINDTODEVICE` takes effect
+  (#1420).
+
+### Removed
+
+- The internal socket priority path (`SO_PRIORITY`), which no public option
+  could enable, and the unused `O_CLOEXEC` and TIPC build probes (#1420).
+
 ## [1.14.0]
 
 ### Fixed

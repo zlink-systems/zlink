@@ -1,14 +1,14 @@
 {
   "schema": 1,
-  "coreVersion": "1.14.0",
+  "coreVersion": "1.15.0",
   "headers": [
     {
       "path": "include/zlink.h",
-      "sha256": "41e2a85ed13a28f05da266d70ee3738e8e723bbefe1b39b4129b9d744ddbe060"
+      "sha256": "8038957734fefb7ec3e2c4771c8de8337a5a3e12a09ef4d5be95c6f5485ff076"
     },
     {
       "path": "include/zlink/common.h",
-      "sha256": "788bb85222a7e250042c32a46ac22adb8f2dff578e53d116ea65186b5dc83b88"
+      "sha256": "96952a73ab25ddc4f37067ce7c496d9b404af76023fcc80a1e5305a4b6c2c6ff"
     },
     {
       "path": "include/zlink/core/api.h",
