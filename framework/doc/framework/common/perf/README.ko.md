@@ -129,13 +129,13 @@ CS의 physical connector와 단위가 다르며 S2S·AC·PS·Spot local/worker�
 Standalone client 하나가 `applicationTriggerUrl`로 phase 시작을 알린다. 이 HTTP 호출과
 응답은 측정 operation이나 KOPS가 아니다. `/perf/*`는 부하를 시작하지 않는다.
 
-Role config가 logical stream 수, stream당 in-flight, duration과 deadline을 소유한다.
+Role config가 logical stream 수, duration과 deadline을 소유한다.
 Trigger는 `runId`, `cellId`, `resetSeq`, phase만 전달하고 그 설정을 바꾸지 않는다.
 하나의 phase는 한 번만 시작하며 중복 trigger는 같은 시작 acknowledgement를 돌려준다.
 
 Spot handler 안에서 outbound call을 재는 셀은 같은 process의 application driver가 public
-Spot request/send로 handler를 실행한다. Driver는 호출 전에 stream의 in-flight 자리를 확보하고
-최종 echo 결과까지 유지한다. Local driver 호출을 별도 KOPS로 세지 않는다.
+Spot request/send로 handler를 실행한다. Driver 호출도 §4.3의 request 규칙으로 연속 제출한다.
+Local driver 호출을 별도 KOPS로 세지 않는다.
 Driver 호출의 deadline은 §5.2의 `driverTimeoutMs`다. Driver 호출은 측정 대상 remote call을 감싸므로,
 remote call이 자기 deadline에 끝나도 driver가 그 결과를 받을 수 있어야 하기 때문이다.
 §10.5의 주 latency는 handler 안 remote call 직전부터 완료까지이며, driver부터의 전체 시간은
@@ -144,6 +144,33 @@ remote call이 자기 deadline에 끝나도 driver가 그 결과를 받을 수 �
 Source admission 대기는 각 구간의 public call 시작부터 포함한다.
 Measured 종료 뒤 도착한 local driver 요청은 outbound call을 시작하지 않고
 `PerfDriveReply.started=false`로 끝내며 `driver.notStarted`로 기록한다.
+
+### 4.3 부하 원칙
+
+Framework perf는 binding perf와 같은 원칙으로 부하를 건다. **Server-driven 셀은 in-flight
+상한을 두지 않고 backpressure 경계까지 연속 제출하고, 예외는 아래의 CS connector 하나다.**
+In-flight 상한은 라이브러리의 처리 능력 대신 harness가 정한 동시 수를 재게 하고, Framework와
+Core의 backpressure 경로를 지나지 않게 하기 때문이다
+([binding perf 정책 §7.2][perf-inflight]).
+
+- **Server-driven stream은 request reply나 send/send echo를 기다리지 않고 다음 call을 시작한다.**
+  - One-way call(send, send/send의 첫 send, publish)은 이전 call의 admission terminal 뒤에 다음
+    call을 시작한다. One-way terminal은 source-local admission에서 끝나므로([Submit §4][submit])
+    HWM이 차면 이 대기가 backpressure다. Send/send의 echo는 기다리지 않는다.
+  - Request는 reply를 기다리지 않고 다음 call을 시작한다. HWM이 차면 Framework와 Core가 그
+    call을 admission에서 기다리게 한다([Submit §5][submit]). Core가 대기 없이 거절해 call이
+    public `Unavailable`로 끝나면 그 실패를 그대로 기록한다(§13).
+  - 연속 제출 루프는 언어의 public 비동기 실행 모델로 실행하며 실행 문맥을 독점하지 않는다.
+- **CS connector는 연결마다 unresolved echo를 하나만 둔다.** CS client는 Core HWM admission을
+  지나지 않는 STREAM client이므로 binding perf의 [STREAM client 예외][perf-stream]와 같은
+  조건을 쓴다. 이 값은 설정 가능한 옵션이 아니다.
+- **Classic fanout publisher는 [`NoDrop`][nodrop]을 켠다.** 기본 동작은 HWM에서 event를 버리고
+  publish를 성공으로 끝내므로 backpressure가 생기지 않기 때문이다. `NoDrop`을 켜면 publish는
+  모든 일치 subscriber가 받을 수 있을 때까지 admission에서 기다린다.
+- **포화 상태의 latency는 queue와 admission 대기를 포함한다.** Backpressure 경계에서 재는
+  값이므로 동시 수를 고정한 측정의 latency와 직접 비교하지 않는다.
+- **Harness는 in-flight 수를 제한하는 옵션·환경 변수·코드 window를 두지 않는다.** 관측한 최대
+  미완료 수는 `load.inflight.max`로 기록한다(§14).
 
 ## 5. 공통 CLI
 
@@ -161,7 +188,6 @@ Shell runner의 옵션 이름과 consumer는 다음과 같다. 미적용 옵션�
 | `--warmup-seconds` | 5, finite > 0 | 같은 owner의 warmup loop |
 | `--payload-size` | scenario 대표값; 1024 또는 4096 | `run_single.sh`와 payload factory가 소비 |
 | `--payload-sizes` | `1024,4096` | `run_perf.sh` matrix 확장; 단일값 옵션과 함께 받지 않음 |
-| `--inflight` | 1, 양의 int32 | CS는 connector별, server-driven은 stream별 logical operation 상한; PS는 publish admission 상한 |
 | `--connect-concurrency` | 256, 양의 int32 | §4 connect/setup의 동시 수. CS는 client process당 connector connect/setup, server-driven은 source role의 객체 준비와 준비된 대상별 probe echo(§16.1) |
 | `--spot-count` | 16, 양의 int32 | Spot Object Server의 User Spot 준비와 stream→Spot mapping; §10.5 표준 matrix는 1/16 |
 | `--subscriber-count` | 8, 양의 int32 | PS 셀에서 공통 runner가 띄우는 독립 Subscriber process 수 |
@@ -236,7 +262,7 @@ Worker config에는 `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
 적용은 각 언어의 public worker options만 사용한다(§10.8). Worker queue에는 상한이 없다
 ([Framework API](../spec/server/00-foundation/06-framework-api.ko.md)). Host가 받는 job의 상한은
 Application job queue가 소유하며 §23 manifest로만 바꾼다.
-일반 workload는 각 stream이 완료 뒤 다음 operation을 시작하는 closed-loop다.
+일반 workload의 제출 방식은 §4.3이 정한다.
 Rate·burst·Core/queue profile을 바꾸는 입력은 §23 manifest만 소유한다.
 
 ## 6. 표준 프로젝트 구조
@@ -314,7 +340,7 @@ Server-driven 셀은 physical connector를 만들지 않는다. Source process �
 `logicalStreams`개 stream을 실행하며 `clientCount=1`인 standalone client는 trigger만 담당한다.
 Spot 셀은 `streamId mod spotCount`, AC는 stream ID와 ActorId의 1:1 mapping을 사용한다.
 CS는 준비된 connector ID마다 Actor 하나를 bind한다. 이 mapping과 Actor 수는 config에 남기며
-Slot·count의 의미는 §13, 집계는 §15가 소유한다.
+Logical operation의 완료와 결산은 §13, 집계는 §15가 정한다.
 
 ### 6.3 server 역할 분리
 
@@ -382,7 +408,7 @@ Scenario 파일은 §8.4 이름에 대응한다. 한 scenario의 비교 셀은 �
 `PerfRunPlan`은 CS ID 분할, `ConnectionPool`은 public 연결 준비·정리,
 `ScenarioRunner`는 공통 runner의 control pipe 명령에 따른 phase 진행, `ResultWriter`는 client
 원본 저장을 맡는다. Admin endpoint 호출은 공통 runner가 한다(§6.5).
-Correlation과 in-flight 계측을 server에서도 사용하면 `Shared`에 한 번만 둔다.
+Correlation과 미완료 수 계측을 server에서도 사용하면 `Shared`에 한 번만 둔다.
 
 ### 7.2 server 폴더
 
@@ -411,12 +437,12 @@ mode·terminal·topology, Store 필요성과 null metric 사유를 적는다.
 각 언어의 실제 호출은 §10·§11의 interface 링크를 따른다.
 
 ```text
-reserve one logical in-flight slot
 record start immediately before the measured public call
 invoke the public request or initial send once
-observe the first request terminal or harness echo outcome
-validate the echoed identity and payload
-record the outcome if its terminal is inside the window; release the slot
+continue with the next call by the §4.3 rule (one-way: after admission; request: without waiting)
+on the first request terminal or harness echo outcome:
+  validate the echoed identity and payload
+  record the outcome if its terminal is inside the window
 ```
 
 Send/send는 correlation 등록과 return handler가 드러나야 한다.
@@ -603,7 +629,7 @@ internal cast로 보충하지 않는다. 두 interface의 선언 차이는 소�
 | 부하·mode | Spot process logical streams; `request`; 대표 4096 bytes |
 | 실행 | Actor 없는 `SpotWide` User Spot direct request handler; source stream을 SpotId에 균등 배정 |
 | 완료·집계 | Spot handler의 remote Channel public request 직전부터 terminal 뒤 reply 검증까지; driver RTT 별도 |
-| 비교 고정값 | Remote Channel process 구성·payload·logicalStreams·inflight·deadline·execution mode |
+| 비교 고정값 | Remote Channel process 구성·payload·logicalStreams·deadline·execution mode |
 | Location Store/Docker | User Spot와 automatic mesh에 run 전용 Docker Redis 필수 |
 | Null/unsupported | Exact suspended/resumed turn·resume latency·mailbox depth는 public 미지원; `spot.remoteCallLatency.*`와 application Yield 호출 수는 측정 가능; worker/Actor/fanout 비적용 |
 
@@ -648,7 +674,7 @@ Spot에서 Channel로 보낸 send가 원래 Spot의 별도 send handler로 돌�
 
 - **Source Spot handler는 첫 send의 수락을 관찰한 뒤 반환한다.** 같은 Spot return handler를
   기다리며 turn을 유지하면 [execution 계약][turn]이 정한 진행 경계를 가로막기 때문이다.
-  Driver가 turn 밖에서 application correlation을 기다리고 최종 결과까지 in-flight를 유지한다.
+  Echo는 return handler가 application correlation으로 기록한다.
 - **Return 주소는 DTO가 전달한다.** Channel context에 source SpotId가 제공된다고 추정하지 않기 때문이다.
 
 ### 10.7 `spot-no-await-echo`
@@ -772,7 +798,7 @@ Publisher 하나의 local publish 처리량과 Subscriber N개의 실제 수신�
 | Role/process | HTTP Client × 1, Publisher × 1, Subscriber × subscriberCount; 각 subscriber 별도 PID |
 | 부하·mode | Publisher logical streams; `publish`, ordinary; 대표 1024 bytes |
 | 완료·집계 | Publisher의 public publish admission과 각 Subscriber typed handler의 unique delivery를 각각 집계 |
-| In-flight | Publisher-local admission 대기 수만 제한; subscriber ACK window 없음 |
+| Backpressure | Publisher channel에 `NoDrop`; publish admission 대기가 경계(§4.3); subscriber ACK window 없음 |
 | 준비 | Automatic discovery; subscriber별 public Ready와 warmup marker 최초 수신 확인 |
 | Location Store/Docker | Standard automatic 구성에 run 전용 Docker Redis 필수 |
 | Null/unsupported | Echo completed/KOPS/echo latency 비적용; clock domain 미검증 시 one-way latency null; Spot/worker/Actor 비적용 |
@@ -875,9 +901,8 @@ Message 등록은 stable packet name과 typed handler를 사용한다([Framework
 
 ## 13. Request 방식과 Send/Send 방식의 공정성
 
-한 **logical operation**은 측정 대상 public call 한 번으로 시작한 업무 단위다.
-In-flight 자리는 public call 시작 전에 확보하고 request의 첫 terminal, 또는 send/send의
-최종 echo correlation 결과까지 유지한다. Source admission 대기도 포함한다.
+한 **logical operation**은 측정 대상 public call 한 번으로 시작한 업무 단위다. Request는 첫
+terminal에서, send/send는 최종 echo correlation 결과에서 끝나며 source admission 대기도 포함한다.
 §4.2의 local Spot driver는 이 단위의 제출 장치이며 nested public call을 추가 KOPS로 세지 않는다.
 
 - **Native DONTWAIT 시도·wait token·WRITABLE을 operation으로 세지 않는다.** 그 진행은
@@ -885,8 +910,8 @@ In-flight 자리는 public call 시작 전에 확보하고 request의 첫 termin
   public awaitable 하나의 결과만 관찰하기 때문이다.
 - **Send/send는 모든 언어에서 harness correlationId를 사용한다.** Framework request
   correlation 제공 여부와 관계없이 두 one-way call은 application echo로 연결해야 하기 때문이다.
-- **Request와 send/send는 같은 stream 수·inflight·payload·배치·deadline으로 비교한다.**
-  무제한 send 적재나 다른 return target은 같은 완료 비용을 재지 않기 때문이다.
+- **Request와 send/send는 같은 stream 수·payload·배치·deadline과 §4.3의 제출 규칙으로 비교한다.**
+  다른 return target은 같은 완료 비용을 재지 않기 때문이다.
 
 Request의 terminal 선택과 remote 업무가 남는 조건은 [Submit §9][submit]를 참조한다.
 Harness는 public reply를 검증한 성공, public 실패, cancellation을 서로 배타적인 결과로 기록한다.
@@ -920,9 +945,7 @@ messages.expired <= messages.timeout
 Publish의 결산은 §15.4에서 별도로 정의한다. 실패 operation과 `inflightAtEnd`는 성공 latency에 넣지 않는다.
 
 Send/send에서 echo가 first-send terminal보다 먼저 관측되면 echo 시각을 보존한다.
-In-flight slot은 echo의 최종 결과와 first-send terminal을 모두 관찰한 뒤 반납하므로
-admission 대기 중인 public call 위에 다음 operation을 겹쳐 제출하지 않는다. Window가 끝날 때 echo와
-first-send terminal 중 하나라도 없으면 그 operation은 `inflightAtEnd`다.
+Window가 끝날 때 echo와 first-send terminal 중 하나라도 없으면 그 operation은 `inflightAtEnd`다.
 
 ## 14. 메트릭
 
@@ -933,7 +956,7 @@ API에서 얻는다. [Runtime monitoring][monitor]·[Runtime metrics][metrics]�
 | Key 또는 key 집합 | 단위·형식 | 측정 경계 |
 |---|---|---|
 | `connections.requested/connected/failed` | count, u64 문자열 | CS setup의 최종 연결 결과; measured counter reset과 별도로 보존 |
-| `load.logicalStreams`, `load.inflightPerStream`, `load.inflight.max` | count, u64 문자열 | Server-driven stream 수·설정 상한·application에서 관측한 전체 최대 미완료 수 |
+| `load.logicalStreams`, `load.inflight.max` | count, u64 문자열 | Server-driven stream 수·application에서 관측한 전체 최대 미완료 수 |
 | `messages.sent` | count, u64 문자열 | Window 안 측정 public call을 시작한 logical operation 수 |
 | `messages.admitted` | count, u64 문자열 | Initial one-way send의 정상 public admission terminal 수; request는 null |
 | `messages.completed` | count, u64 문자열 | §4.1의 window 성공 |
@@ -978,7 +1001,7 @@ API에서 얻는다. [Runtime monitoring][monitor]·[Runtime metrics][metrics]�
 `driver.*`는 §10.5–10.6의 보조 local driver에만 적용한다. §10.7–10.8의 local public
 caller 구간은 이미 primary latency이므로 driver histogram에 복제하지 않는다.
 Server-driven의 physical connection metric은 null이고,
-CS의 `load.logicalStreams`는 null이다. CS in-flight의 기준은 connector별 설정과 실제 계측으로 남긴다.
+CS의 `load.logicalStreams`는 null이다.
 
 ### 14.1 Public 관측 미지원 값
 
@@ -1049,7 +1072,7 @@ Sequence 파일은 PS만 생성한다. 일반 measured에서는 message-flow 파
 JSON UTF-8 bytes의 SHA-256 전체 lowercase hex다. 그 정확한 입력 bytes를 config에 보존한다.
 
 비교 입력에는 language, mode, terminal, topology/discovery, execution mode, Spot/Actor mapping 규칙·개수,
-subscriber 수, connection/stream 분할, in-flight, timeout, worker workload/options, CPU·memory·
+subscriber 수, connection/stream 분할, timeout, worker workload/options, CPU·memory·
 runtime option, serializer, §23 workload hash·repetition을 넣는다. RunId·PID·동적 port·출력 경로는
 비교 hash 입력에서 제외하고 환경 metadata에 남긴다. 실제 run/cell별 SpotId·ActorId도 hash 확정 뒤
 생성하며 hash에는 ID 문자열 대신 배치·분할 규칙을 넣는다. `cellId`는 run 안의 이 상대 디렉터리다.
@@ -1593,7 +1616,7 @@ schema·histogram bounds·집계와 격리 절차는 §6.5의 공통 runner가 �
 `provenance`에는 commit hash, Core/binding/Framework version·artifact hash·실제 load 경로·build
 mode, CPU model·effective processor·quota·cpuset·executor maximum, memory limit, OS·kernel·container,
 file descriptor limit, role PID·host·endpoint, serializer 이름·version·설정과 clock 근거를 기록한다.
-Config에는 실제 connection/stream 수와 분할, payload, duration, warmup, inflight, deadline,
+Config에는 실제 connection/stream 수와 분할, payload, duration, warmup, deadline,
 Spot/Actor mapping, topology/discovery, worker 설정을 남긴다.
 
 | Result status | 의미·비교 사용 |
@@ -1668,7 +1691,9 @@ Runner CLI, application admin/trigger JSON, typed reply·handler evidence, publi
 - `session-echo-only`와 local Spot 기준을 실행하면 §11의 완료 경계가 기록되고 local Spot은 §10.7 결과 한 개를 참조한다.
 - CS 요청을 보내면 같은 identity·payload의 original STREAM reply가 관측되고 setup의 create/bind 시간은 echo histogram에 포함되지 않는다.
 - No-bind Actor 셀을 실행하면 config의 global ActorId와 public request/send 결과가 기록되고 session bind evidence는 없다.
-- Request와 send/send 입력을 같게 실행하면 config의 logical in-flight 기준이 같고 send admission과 echo completion이 별도 metric으로 보인다.
+- Request와 send/send 입력을 같게 실행하면 config의 stream 수와 제출 규칙이 같고 send admission과 echo completion이 별도 metric으로 보인다.
+- Server-driven 셀을 실행하면 config와 실행 코드에 in-flight 상한이 없고 `load.inflight.max`에 관측한 최대 미완료 수가 기록된다.
+- PS 셀을 실행하면 config에 publisher channel의 `NoDrop=true`가 기록된다.
 - Worker 셀을 실행하면 public worker 반환값의 checksum·iterations·실제 callback 시간과 선택한 ordinary/Yield 값이 기록된다.
 
 **Phase와 결과**
@@ -1706,7 +1731,7 @@ Perf는 public 설정값과 snapshot·완료 evidence를 기록한다.
 | Manifest 입력 | Consumer |
 |---|---|
 | `scenario`, `payloadDistribution`, `requestOneWayRatio` | Application workload generator; packet kind·logical bytes 비율 |
-| `logicalStreams` 또는 `connections`, `inflight`, `ratePerSecond`, `burstRatePerSecond`, `burstDurationMs` | 해당 CS/source generator; steady/burst 부하 |
+| `logicalStreams` 또는 `connections`, `ratePerSecond`, `burstRatePerSecond`, `burstDurationMs` | 해당 CS/source generator; steady/burst 부하 |
 | `handlerCpuWork`, `handlerIoWork` | Public application handler/worker; 고정한 CPU·I/O 비율 |
 | `warmupSeconds=30`, `measuredSeconds=60`, `repetitions=5`, 각 deadline 값 | Phase owner; 명시적인 입력값으로 기록 |
 | `requestedProcessors=[4,8,16]`, `cpuQuota`, `cpuset`, `executorMaximum` | Process/container 실행과 public executor 설정 |
@@ -1878,3 +1903,6 @@ counter를 함께 보존한다. 내부 permit leak·source handoff 검증을 per
 [n-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/typescript/03-stream-connector.ko.md
 [workspace]: ../../../../../doc/building/framework-workspace.ko.md
 [local-package]: ../../../../../scripts/local-package/README.ko.md
+[perf-inflight]: ../../../../../doc/perf/PERF_POLICY.md#72-inflightoutstanding-옵션-금지
+[perf-stream]: ../../../../../doc/perf/PERF_POLICY.md#stream-client-예외-검증-인프라
+[nodrop]: ../../../../../framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약
