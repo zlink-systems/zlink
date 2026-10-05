@@ -20,6 +20,7 @@ import {
 import {
   requireOneWayCompletion,
   requirePublishCompletion,
+  requireClassicFanoutCompletion,
   throwAlreadySubmitted,
   ZLinkSubmitStatus,
   type ZLinkSubmitResult
@@ -450,12 +451,11 @@ class DefaultZLinkSendCall implements ZLinkSendCall {
     return this;
   }
 
-  async submit(signal?: AbortSignal): Promise<void> {
+  async submit(): Promise<void> {
     ensureNotExecuted(this.executed);
     this.validate();
     this.executed = true;
-    throwIfAborted(signal);
-    const result = await this.submitter(undefined, new Map(this.selectedMetadata), signal);
+    const result = await this.submitter(undefined, new Map(this.selectedMetadata), undefined);
     requireOneWayCompletion(result, 'One-way send');
   }
 }
@@ -580,6 +580,6 @@ class DefaultZLinkFanoutPublishCall implements ZLinkFanoutPublishCall {
     this.executed = true;
     throwIfAborted(signal);
     const result = await this.submitter(signal);
-    requireOneWayCompletion(result, 'Classic fanout publish');
+    requireClassicFanoutCompletion(result, 'Classic fanout publish');
   }
 }

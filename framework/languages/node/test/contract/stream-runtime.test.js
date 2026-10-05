@@ -685,7 +685,7 @@ test('managed stream treats an actor-destroy stale unbind as idempotent cleanup'
   await assert.doesNotReject(() => stream.unbindActor('actor-destroy', 1000));
 });
 
-test('managed stream delegates each call timeout to binding-owned admission', async () => {
+test('managed stream submits without a per-call timeout', async () => {
   const observed = [];
   const socket = {
     sendTimeoutMs: 10,
@@ -704,16 +704,16 @@ test('managed stream delegates each call timeout to binding-owned admission', as
   );
   const message = zlink.Message.from('payload');
   try {
-    assert.deepEqual(await stream.submitRaw(message, undefined, 25), {
+    assert.deepEqual(await stream.submitRaw(message), {
       status: ZLinkSubmitStatus.Submitted
     });
-    assert.deepEqual(await stream.submitRaw(message, undefined, 4), {
+    assert.deepEqual(await stream.submitRaw(message), {
       status: ZLinkSubmitStatus.Submitted
     });
   } finally {
     message.close();
   }
-  assert.deepEqual(observed, [25, 4]);
+  assert.deepEqual(observed, [undefined, undefined]);
 });
 
 test('managed stream projects STREAM submit failures by admission phase', async () => {
@@ -8119,7 +8119,7 @@ test('session reply token remains consumed after failed admission', async () => 
   const context = runtime.createSessionContext({
     ...fakeStream('session-reply-timeout', 'rid-reply-timeout'),
     async submitRaw() {
-      return { status: ZLinkSubmitStatus.TimedOut };
+      return { status: ZLinkSubmitStatus.RouteNotConnected };
     }
   });
   context.enterDispatch({
@@ -8133,7 +8133,7 @@ test('session reply token remains consumed after failed admission', async () => 
   try {
     await assert.rejects(
       () => context.client.reply({ accepted: true }).submit(),
-      (error) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
     );
     await assert.rejects(
       () => context.client.reply({ accepted: false }).submit(),
@@ -8144,7 +8144,7 @@ test('session reply token remains consumed after failed admission', async () => 
   }
 });
 
-test('pre-aborted stream reply claims its token before cancellation without transport admission', async () => {
+test('stream reply has no cancellation input and consumes its token once', async () => {
   let attempts = 0;
   const runtime = new framework.ZLinkStreamBindingRuntime({ messageFactory: binaryMessageFactory() });
   const context = runtime.createSessionContext({
@@ -8165,21 +8165,19 @@ test('pre-aborted stream reply claims its token before cancellation without tran
   const controller = new AbortController();
   controller.abort();
   try {
-    await assert.rejects(
-      () => context.client.reply({ accepted: true }).submit(controller.signal),
-      (error) => error?.name === 'AbortError'
-    );
+    assert.equal(context.client.reply({ accepted: true }).submit.length, 0);
+    await context.client.reply({ accepted: true }).submit();
     await assert.rejects(
       () => context.client.reply({ accepted: false }).submit(),
       /already has a reply submission/
     );
-    assert.equal(attempts, 0);
+    assert.equal(attempts, 1);
   } finally {
     context.exitDispatch();
   }
 });
 
-test('stream send validation and duplicate state win over pre-aborted signals', async () => {
+test('stream send keeps validation and duplicate submission checks', async () => {
   let attempts = 0;
   const runtime = new framework.ZLinkStreamBindingRuntime({ messageFactory: binaryMessageFactory() });
   const context = runtime.createSessionContext({
@@ -8193,13 +8191,13 @@ test('stream send validation and duplicate state win over pre-aborted signals', 
   controller.abort();
 
   await assert.rejects(
-    () => context.client.send({ invalid: true }).submit(controller.signal),
+    () => context.client.send({ invalid: true }).submit(),
     /packetName|required/i
   );
 
   const call = context.client.send({ value: 'first' }).packetName('SessionNotice');
   assert.equal(await call.submit(), undefined);
-  await assert.rejects(() => call.submit(controller.signal), (error) => {
+  await assert.rejects(() => call.submit(), (error) => {
     assert.equal(error instanceof framework.ZLinkFrameworkException, true);
     assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.InvalidOperation);
     return true;
@@ -8207,27 +8205,21 @@ test('stream send validation and duplicate state win over pre-aborted signals', 
   assert.equal(attempts, 1);
 });
 
-test('session send validates and forwards its per-call admission timeout', async () => {
-  const observedTimeouts = [];
+test('session send exposes no timeout modifier and submits only its message', async () => {
+  const arities = [];
   const runtime = new framework.ZLinkStreamBindingRuntime({ messageFactory: binaryMessageFactory() });
   const context = runtime.createSessionContext({
-    ...fakeStream('session-send-timeout', 'rid-send-timeout'),
-    async submitRaw(_message, _signal, timeoutMs) {
-      observedTimeouts.push(timeoutMs);
+    ...fakeStream('session-send', 'rid-send'),
+    async submitRaw(...args) {
+      arities.push(args.length);
       return { status: ZLinkSubmitStatus.Submitted };
     }
   });
-
-  for (const invalid of [0, -1, 1.5, Number.POSITIVE_INFINITY, 2_147_483_648]) {
-    assert.throws(
-      () => context.client.send({ value: invalid }).packetName('Notice').timeout(invalid),
-      /integer from 1 through 2147483647/
-    );
-  }
-  await context.client.send({ value: 'short' }).packetName('Notice').timeout(25).submit();
-  await context.client.send({ value: 'default' }).packetName('Notice').submit();
-
-  assert.deepEqual(observedTimeouts, [25, undefined]);
+  const call = context.client.send({ value: 'notice' }).packetName('Notice');
+  assert.equal(call.timeout, undefined);
+  assert.equal(call.submit.length, 0);
+  await call.submit();
+  assert.deepEqual(arities, [1]);
 });
 
 test('session client reply uses configured stream payload codec', async () => {

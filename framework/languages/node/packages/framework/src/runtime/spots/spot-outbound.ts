@@ -283,13 +283,13 @@ function createAddressedSpotSendCall(
       );
       return this;
     },
-    async submit(signal?: AbortSignal): Promise<void> {
+    async submit(): Promise<void> {
       markSubmitted(options);
       const pending = startRequestOnSerial(serial, () => ({
         pending: transport.sendToSpotAddress(
           spotId,
           message,
-          freezeAddressCallOptions(options, signal, sourceSpotProvider?.())
+          freezeAddressCallOptions(options, undefined, sourceSpotProvider?.())
         )
       }));
       const result = await (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending));
@@ -453,8 +453,8 @@ function wrapSendCall(serial: ZLinkSpotSerialTurnExecutor, inner: ZLinkSendCall)
       else inner.metadata(key);
       return this;
     },
-    async submit(signal?: AbortSignal) {
-      const result = await runInternalTransportStart(serial, () => inner.submit(signal));
+    async submit() {
+      const result = await runInternalTransportStart(serial, () => inner.submit());
       return result;
     }
   };
@@ -548,11 +548,10 @@ function wrapRoutedSpotSendCall(
       }
       return this;
     },
-    async submit(signal?: AbortSignal): Promise<void> {
+    async submit(): Promise<void> {
       const pending = startRequestOnSerial(serial, () => ({
         pending: sendToSpotHandle(transport, spot, message, {
           metadata,
-          signal,
           spotRouterChannelIdForMesh,
           sourceSpot: sourceSpotProvider?.()
         })

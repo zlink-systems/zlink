@@ -3,7 +3,7 @@ import type { ZLinkMessageMetadata } from '../Common';
 export interface ZLinkSendCall {
   metadata(key: string, value: string): this;
   metadata(metadata: ZLinkMessageMetadata): this;
-  submit(signal?: AbortSignal): Promise<void>;
+  submit(): Promise<void>;
 }
 
 export interface ZLinkRequestCall {

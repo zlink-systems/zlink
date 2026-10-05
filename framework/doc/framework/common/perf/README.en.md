@@ -236,8 +236,8 @@ Standard echo role config records `requestTimeoutMs=1000`, `correlationExpiryMs=
 `driverTimeoutMs=2000`, `setupTimeoutMs=30000`, and `adminTimeoutMs=5000`.
 Consumers are respectively public request calls, harness correlations, §4.2 local driver calls,
 shared-runner/setup callers and HTTP clients. The shared runner owns these values; roles and clients
-only read them from role config. Record effective family send timeouts from public socket configuration
-(standard: 1000ms; [owning contract][submit]).
+only read them from role config. Sends have no time limit. Record only the Classic fanout publisher send timeout from public socket
+configuration (standard: 1000ms; [owning contract][submit]).
 
 Worker config records `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
 `idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`, and effective executor limits. Apply

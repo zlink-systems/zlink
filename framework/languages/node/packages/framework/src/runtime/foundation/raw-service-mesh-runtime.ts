@@ -10,7 +10,8 @@ import type {
   ZLinkRawReceivedRecord,
   ZLinkRawRouterPort
 } from '../backend/raw-binding-port';
-import { RequestResult, SubmitResult } from '../backend/runtime-values';
+import { submitToRequestResult } from '../messaging/submission-result';
+import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
 import { OperationRegistry, type PendingOperation } from './operation-registry';
 import { ServiceLivenessRegistry, type ServiceLivenessTick } from './service-liveness-registry';
@@ -380,9 +381,19 @@ export class RawServiceMeshRuntime {
       this.peerAdmissionSealed?.() === true
     )
       return false;
-    const accepted = await this.send(nodeRoutingId, [
-      encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
-    ]);
+    let accepted: boolean;
+    try {
+      accepted = await this.send(nodeRoutingId, [
+        encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
+      ]);
+    } catch (error) {
+      if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+        const terminal = submitToRequestResult(error.result, error.phase);
+        if (terminal === RequestResult.NotConnected || terminal === RequestResult.NotFound)
+          return false;
+      }
+      throw error;
+    }
     if (
       accepted &&
       this.expectedPeers.get(nodeRoutingId) === expected &&
@@ -1260,12 +1271,8 @@ export class RawServiceMeshRuntime {
   }
 
   private async send(targetNodeRoutingId: string, parts: readonly Uint8Array[]): Promise<boolean> {
-    try {
-      await this.requireStarted().send(targetNodeRoutingId, parts);
-      return true;
-    } catch {
-      return false;
-    }
+    await this.requireStarted().send(targetNodeRoutingId, parts);
+    return true;
   }
 }
 

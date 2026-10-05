@@ -1,3 +1,4 @@
+const { ZLinkBackendResultError, SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { RawServiceMeshRuntime } = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
@@ -128,6 +129,20 @@ test('a rejected HELLO does not record acceptance for its selected route', async
   }
 });
 
+test('an unexpected HELLO submission failure propagates without recording acceptance', async () => {
+  const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
+  const cause = new Error('Unexpected adapter failure');
+  try {
+    pair.rejectNextSubmit(cause);
+    await assert.rejects(pair.left.observeSelectedRoutes(), error => error === cause);
+    assert.equal(pair.sent.length, 0);
+    assert.equal(await pair.left.announceExpectedPeers(), 1);
+  } finally {
+    pair.left.close();
+    pair.right.close();
+  }
+});
+
 test('late HELLO acceptance belongs to the route generation submitted', async () => {
   const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
   const { left, right, sent, selectRoute, holdNextSubmit } = pair;
@@ -153,7 +168,7 @@ function createPair({ endpointOnly, hostAttached, notify }) {
   const disconnected = [];
   const sent = [];
   let connected = false;
-  let rejectSubmit = false;
+  let rejectSubmit;
   let heldSubmit;
   const descriptors = Object.fromEntries(['left', 'right'].map((rid, index) => [rid, {
     meshName: 'not-required-mesh', nodeRoutingId: rid,
@@ -191,9 +206,10 @@ function createPair({ endpointOnly, hostAttached, notify }) {
       async send(target, parts) {
         assert.equal(target, remote);
         assert.equal(connected, true);
-        if (rejectSubmit) {
-          rejectSubmit = false;
-          throw new Error('Controlled submit refusal');
+        if (rejectSubmit !== undefined) {
+          const error = rejectSubmit;
+          rejectSubmit = undefined;
+          throw error;
         }
         const record = { sourceRid: rid, routeGeneration, parts: parts.map(part => Buffer.from(part)) };
         if (heldSubmit !== undefined) {
@@ -233,7 +249,7 @@ function createPair({ endpointOnly, hostAttached, notify }) {
     connected = true;
   };
   return { left, right, sent, disconnected, selectRoute,
-    rejectNextSubmit() { rejectSubmit = true; },
+    rejectNextSubmit(error = new ZLinkBackendResultError('submit', SubmitResult.NotConnected, undefined, { phase: 'submit' })) { rejectSubmit = error; },
     holdNextSubmit() {
       let accept;
       heldSubmit = new Promise(resolve => { accept = resolve; });

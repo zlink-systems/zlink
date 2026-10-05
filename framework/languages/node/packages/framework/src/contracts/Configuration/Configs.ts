@@ -8,7 +8,6 @@ export interface ZLinkSocketConfig {
   sendHighWaterMark?: number;
   receiveHighWaterMark?: number;
   receiveTimeoutMs?: number;
-  sendTimeoutMs?: number;
 }
 
 export interface ZLinkRouteConfig {

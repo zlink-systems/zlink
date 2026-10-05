@@ -59,15 +59,6 @@ class ZLinkLiveSocketConfig implements ZLinkSocketConfig {
     requireValidSendTimeoutMs('receiveTimeoutMs', value);
     this.socket.receiveTimeoutMs = value;
   }
-
-  get sendTimeoutMs(): number {
-    return this.socket.sendTimeoutMs;
-  }
-
-  set sendTimeoutMs(value: number) {
-    validateSendTimeout(value);
-    this.socket.sendTimeoutMs = value;
-  }
 }
 
 class ZLinkServerRuntimeOptions {
@@ -154,8 +145,4 @@ function validateHighWaterMark(value: number, label: string): void {
   if (!Number.isInteger(value) || value < 0) {
     throw new ZLinkConfigurationException(`${label} must be a non-negative integer.`);
   }
-}
-
-function validateSendTimeout(value: number): void {
-  requireValidSendTimeoutMs('sendTimeoutMs', value);
 }

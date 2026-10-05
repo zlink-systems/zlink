@@ -49,7 +49,7 @@ import { ZLinkSessionRequestTracker, type ZLinkPendingSessionRequest } from './s
 
 export interface ZLinkSessionContextStream extends ZLinkStream {
   writeRaw(payload: Message, flags?: number): boolean;
-  submitRaw(payload: Message, signal?: AbortSignal, timeoutMs?: number): Promise<ZLinkSubmitResult>;
+  submitRaw(payload: Message): Promise<ZLinkSubmitResult>;
   enqueueActorBound?(actorSlot: number, actorId: string): Promise<void>;
   enqueueActorUnbound?(actorSlot: number): Promise<void>;
 }
@@ -538,30 +538,22 @@ export class DefaultZLinkSessionActor implements ZLinkSessionActor {
     this.currentRef = ref;
   }
 
-  async relay(payload: ZLinkMessage, signal?: AbortSignal): Promise<void>;
-  async relay(
-    dispatch: ZLinkSessionDispatchContext,
-    payload: ZLinkMessage,
-    signal?: AbortSignal
-  ): Promise<void>;
+  async relay(payload: ZLinkMessage): Promise<void>;
+  async relay(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void>;
   async relay(
     dispatchOrPayload: ZLinkSessionDispatchContext | ZLinkMessage,
-    payloadOrSignal?: ZLinkMessage | AbortSignal,
-    signal?: AbortSignal
+    payloadOrSignal?: ZLinkMessage
   ): Promise<void> {
     const dispatch = isSessionDispatchContext(dispatchOrPayload) ? dispatchOrPayload : undefined;
     let payload: ZLinkMessage;
-    let relaySignal: AbortSignal | undefined;
     let header: ZLinkStreamFrameHeader | undefined;
     if (dispatch === undefined) {
       payload = dispatchOrPayload as ZLinkMessage;
-      relaySignal = payloadOrSignal as AbortSignal | undefined;
     } else {
       payload = payloadOrSignal as ZLinkMessage;
-      relaySignal = signal;
       header = sessionDispatchHeader(dispatch);
     }
-    const result = await this.runtime.relay(this, payload, relaySignal, header);
+    const result = await this.runtime.relay(this, payload, undefined, header);
     requireOneWayCompletion(
       result,
       'Session Actor relay',

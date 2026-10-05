@@ -126,9 +126,9 @@ test('two in-process ClientServer nodes deliver a delayed reply to an awaited cl
   }
 });
 
-test('ClientServer channel without a ready target reports DeadlineExceeded', async () => {
+test('ClientServer send waits for readiness until shutdown while request keeps its deadline', async () => {
   const registration = framework.createFrameworkRegistration({
-    channels: { empty: { client: { manualConnections: ['tcp://127.0.0.1:1'], sendTimeoutMs: 30 }, requestTimeoutMs: 30 } }
+    channels: { empty: { client: { manualConnections: ['tcp://127.0.0.1:1'] }, requestTimeoutMs: 30 } }
   });
   const runtime = new framework.ZLinkFrameworkRuntimeHost({ registration });
   const client = new framework.DefaultZLinkChannelClient(registration, runtime.channelTransport);
@@ -137,16 +137,20 @@ test('ClientServer channel without a ready target reports DeadlineExceeded', asy
     const deadlineExceeded = (error) =>
       error instanceof framework.ZLinkFrameworkException &&
       error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded;
-    await assert.rejects(
-      () => client.sendToChannel('empty', typedPacket('Notice', { id: 1 })).submit(),
-      deadlineExceeded
-    );
+    let settled = false;
+    const send = client.sendToChannel('empty', typedPacket('Notice', { id: 1 })).submit();
+    const shutdown = assert.rejects(send, error => error.kind === framework.ZLinkFrameworkErrorKind.ShuttingDown);
+    send.then(() => { settled = true; }, () => { settled = true; });
+    await new Promise(resolve => setTimeout(resolve, 3100));
+    assert.equal(settled, false);
     await assert.rejects(
       () => client.requestToChannel('empty', typedPacket('Question', { id: 2 }))
         .timeout(30)
         .submit(),
       deadlineExceeded
     );
+    await runtime.stop();
+    await shutdown;
   } finally {
     await runtime.stop();
   }
@@ -1221,7 +1225,7 @@ test('route packet dispatcher sends channel envelopes to route handlers before S
   }
 });
 
-test('ZLinkChannelClient and fanout client reject pre-aborted submit before transport dispatch', async () => {
+test('Channel send has no cancellation while request and fanout retain pre-abort checks', async () => {
   const controller = new AbortController();
   controller.abort();
   const calls = [];
@@ -1246,10 +1250,11 @@ test('ZLinkChannelClient and fanout client reject pre-aborted submit before tran
   const client = new framework.DefaultZLinkChannelClient(registration, transport);
   const fanout = new framework.DefaultZLinkFanoutClient(registration, transport);
 
-  await assertAborted(() => client.sendToChannel('api', 'hello').submit(controller.signal));
+  assert.equal(client.sendToChannel('api', 'hello').submit.length, 0);
+  await client.sendToChannel('api', 'hello').submit();
   await assertAborted(() => client.requestToChannel('api', typedPacket('Ping', 'ping')).submit(controller.signal));
   await assertAborted(() => fanout.publish('events', typedPacket('Event', 'event')).submit(controller.signal));
-  assert.deepEqual(calls, []);
+  assert.deepEqual(calls, ['send']);
 });
 
 test('ZLinkFanoutClient preserves an explicitly supplied topic and derives packet name separately', async () => {
@@ -1351,7 +1356,7 @@ test('Logical Multicast pre-commit admission failure remains exceptional', async
     () => client.publish('mesh', 'events', 'topic', typedPacket('Event', 'event')).submit(),
     (error) => {
       assert.equal(error instanceof framework.ZLinkFrameworkException, true);
-      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
       return true;
     }
   );

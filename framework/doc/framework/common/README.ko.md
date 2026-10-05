@@ -223,7 +223,7 @@ zlink framework host가 lifecycle과 dispatch loop를 직접 소유하는 방식
 - 자동 연결과 수동 연결을 어떻게 설정하는가
 - request/send/event 호출 시 기본 packet key를 어떻게 해석하는가
 - timeout, packet override 같은 변형을 어떤 `options` 또는 동등한 구조로 두는가
-- send/publish의 내부 submit 정책과 `SendTimeout` 기반 backpressure 처리를
+- send의 시간 상한 없는 대기와 Classic fanout publisher timeout 처리를
   어떻게 설명하는가
 - handler dispatch가 어떤 ingress를 기준으로 설명되는가
 - outbound reply 수신은 어떤 경로로 처리되는가

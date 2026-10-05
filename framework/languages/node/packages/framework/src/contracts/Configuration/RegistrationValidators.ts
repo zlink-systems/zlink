@@ -730,14 +730,12 @@ function requireSocketOptions(
   options: {
     readonly sendHighWaterMark?: number;
     readonly receiveHighWaterMark?: number;
-    readonly sendTimeoutMs?: number;
     readonly maxMessageSize?: number;
   }
 ): void {
   requireNonNegativeInteger(`${label} sendHighWaterMark`, options.sendHighWaterMark);
   requireNonNegativeInteger(`${label} receiveHighWaterMark`, options.receiveHighWaterMark);
   requireNonNegativeInteger(`${label} maxMessageSize`, options.maxMessageSize);
-  requireValidSendTimeoutMs(`${label} sendTimeoutMs`, options.sendTimeoutMs);
 }
 
 function requireRouteMeshSocketOptions(
@@ -745,10 +743,8 @@ function requireRouteMeshSocketOptions(
   options: {
     readonly sendHighWaterMark?: number;
     readonly receiveHighWaterMark?: number;
-    readonly sendTimeoutMs?: number;
   }
 ): void {
   requireNonNegativeInteger(`${label} sendHighWaterMark`, options.sendHighWaterMark);
   requireNonNegativeInteger(`${label} receiveHighWaterMark`, options.receiveHighWaterMark);
-  requireValidSendTimeoutMs(`${label} sendTimeoutMs`, options.sendTimeoutMs);
 }

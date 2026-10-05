@@ -55,12 +55,6 @@ export interface ZLinkHostSpotAddressTransportOptions {
   readonly completions: (meshName: string) => ZLinkMeshCompletionTable | undefined;
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   readonly defaultRequestTimeoutMs: number;
-  /** Internal one-way deadline policy; public calls do not expose this option. */
-  readonly defaultSendTimeoutMs?: number;
-  /** Resolves the send timeout for a configured Spot Mesh. */
-  readonly sendTimeoutMsForMesh?: (meshName: string) => number;
-  /** Resolves the send timeout for a resolved Spot route channel. */
-  readonly sendTimeoutMsForRouteChannel?: (routeChannelId: string) => number;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
 }
 
@@ -109,155 +103,134 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     message: unknown,
     call: ZLinkSpotAddressCallOptions
   ): Promise<ZLinkSubmitResult> {
-    const timeoutMs = initialSendTimeoutMs(this.options, call);
-    const deadline = createSpotAddressDeadline(timeoutMs, call.signal);
-    try {
-      const existing = await this.resolveExisting(spotId, deadline.signal);
-      deadline.requireRemaining();
-      if (existing !== undefined) {
-        this.validateExisting(existing, call);
-        deadline.setOwnerTimeout(this.sendTimeoutMsForRouteChannel(existing.routerChannelId));
-        try {
-          const result = await awaitWithAbort(
-            this.options.routed.sendToSpot(existing, message, {
-              instanceSpot: call.instanceSpot,
-              timeoutMs: deadline.requireRemaining(),
-              signal: deadline.signal,
-              metadata: call.metadata
-            }),
-            deadline.signal
-          );
-          if (result.status === ZLinkSubmitStatus.Submitted) {
-            this.traceInstanceAddress(
-              ZLinkMessageFlowOutcome.Sent,
-              ZLinkDispatchMessageKind.Send,
-              spotId,
-              message,
-              existing.routerChannelId,
-              existing.stableType,
-              existing.targetNodeRid
-            );
-          } else {
-            this.traceInstanceAddress(
-              submitResultFlowOutcome(result.status),
-              ZLinkDispatchMessageKind.Send,
-              spotId,
-              message,
-              existing.routerChannelId,
-              existing.stableType,
-              existing.targetNodeRid,
-              submitResultReason(result.status)
-            );
-          }
-          if (
-            result.status === ZLinkSubmitStatus.TargetNotFound ||
-            result.status === ZLinkSubmitStatus.RouteNotConnected
-          ) {
-            this.options.resolver()?.invalidate?.(spotId);
-          }
-          return result;
-        } catch (error) {
-          if (isSpotRouteRefreshError(error)) {
-            this.options.resolver()?.invalidate?.(spotId);
-          }
-          const reason = addressedInstanceErrorReason(error);
+    const activationDeadlineUnixMs = BigInt(
+      Math.round(Date.now() + this.options.defaultRequestTimeoutMs)
+    );
+    const existing = await this.resolveExisting(spotId);
+    if (existing !== undefined) {
+      this.validateExisting(existing, call);
+      try {
+        const result = await this.options.routed.sendToSpot(existing, message, {
+          instanceSpot: call.instanceSpot,
+          metadata: call.metadata
+        });
+        if (result.status === ZLinkSubmitStatus.Submitted) {
           this.traceInstanceAddress(
-            reason === ZLinkDispatchErrorReason.Backpressure
-              ? ZLinkMessageFlowOutcome.Backpressured
-              : ZLinkMessageFlowOutcome.Dropped,
+            ZLinkMessageFlowOutcome.Sent,
+            ZLinkDispatchMessageKind.Send,
+            spotId,
+            message,
+            existing.routerChannelId,
+            existing.stableType,
+            existing.targetNodeRid
+          );
+        } else {
+          this.traceInstanceAddress(
+            submitResultFlowOutcome(result.status),
             ZLinkDispatchMessageKind.Send,
             spotId,
             message,
             existing.routerChannelId,
             existing.stableType,
             existing.targetNodeRid,
-            reason
+            submitResultReason(result.status)
           );
-          throw error;
         }
-      }
-      if (!call.instanceSpot) {
-        return { status: ZLinkSubmitStatus.TargetNotFound };
-      }
-      const selected = this.selectMissingTarget(spotId, call);
-      if (selected.kind === 'unsupported') {
+        if (
+          result.status === ZLinkSubmitStatus.TargetNotFound ||
+          result.status === ZLinkSubmitStatus.RouteNotConnected
+        ) {
+          this.options.resolver()?.invalidate?.(spotId);
+        }
+        return result;
+      } catch (error) {
+        if (isSpotRouteRefreshError(error)) {
+          this.options.resolver()?.invalidate?.(spotId);
+        }
+        const reason = addressedInstanceErrorReason(error);
         this.traceInstanceAddress(
-          ZLinkMessageFlowOutcome.Dropped,
+          reason === ZLinkDispatchErrorReason.Backpressure
+            ? ZLinkMessageFlowOutcome.Backpressured
+            : ZLinkMessageFlowOutcome.Dropped,
           ZLinkDispatchMessageKind.Send,
           spotId,
           message,
-          call.initialMeshName,
-          call.instanceSpotType,
-          undefined,
-          ZLinkDispatchErrorReason.StaleTarget
-        );
-        return { status: ZLinkSubmitStatus.TargetNotFound };
-      }
-      if (selected.kind === 'capacity') {
-        const error = missingInstancePlacementCapacity(spotId, call.instanceSpotType);
-        this.traceInstanceAddress(
-          ZLinkMessageFlowOutcome.Backpressured,
-          ZLinkDispatchMessageKind.Send,
-          spotId,
-          message,
-          call.initialMeshName,
-          call.instanceSpotType,
-          undefined,
-          ZLinkDispatchErrorReason.Backpressure
+          existing.routerChannelId,
+          existing.stableType,
+          existing.targetNodeRid,
+          reason
         );
         throw error;
       }
-      if (selected.kind === 'unavailable') {
-        this.traceInstanceAddress(
-          ZLinkMessageFlowOutcome.Dropped,
-          ZLinkDispatchMessageKind.Send,
-          spotId,
-          message,
-          call.initialMeshName,
-          call.instanceSpotType,
-          undefined,
-          ZLinkDispatchErrorReason.StaleTarget
-        );
-        return { status: ZLinkSubmitStatus.RouteNotConnected };
-      }
-      deadline.setOwnerTimeout(this.sendTimeoutMsForMesh(selected.meshName));
-      const encoded = this.encode(ZLinkChannelMessageKind.Command, selected.meshName, message);
-      const sourceSpotId =
-        call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId);
-      const mapped = classifySubmitResult(
-        await awaitWithAbort(
-          selected.node.sendToMissingInstanceSpot(
-            selected.target,
-            encoded,
-            BigInt(deadline.deadlineUnixMs),
-            sourceSpotId,
-            call.metadata
-          ),
-          deadline.signal
-        ),
-        'Instance Spot submission'
-      );
+    }
+    if (!call.instanceSpot) {
+      return { status: ZLinkSubmitStatus.TargetNotFound };
+    }
+    const selected = this.selectMissingTarget(spotId, call);
+    if (selected.kind === 'unsupported') {
       this.traceInstanceAddress(
-        submitResultFlowOutcome(mapped.status),
+        ZLinkMessageFlowOutcome.Dropped,
         ZLinkDispatchMessageKind.Send,
         spotId,
         message,
-        selected.meshName,
-        selected.target.stableType,
-        selected.target.targetNodeRid,
-        mapped.status === ZLinkSubmitStatus.Submitted
-          ? undefined
-          : submitResultReason(mapped.status)
+        call.initialMeshName,
+        call.instanceSpotType,
+        undefined,
+        ZLinkDispatchErrorReason.StaleTarget
       );
-      return mapped;
-    } catch (error) {
-      if (deadline.expired()) {
-        return { status: ZLinkSubmitStatus.TimedOut };
-      }
-      throw error;
-    } finally {
-      deadline.close();
+      return { status: ZLinkSubmitStatus.TargetNotFound };
     }
+    if (selected.kind === 'capacity') {
+      const error = missingInstancePlacementCapacity(spotId, call.instanceSpotType);
+      this.traceInstanceAddress(
+        ZLinkMessageFlowOutcome.Backpressured,
+        ZLinkDispatchMessageKind.Send,
+        spotId,
+        message,
+        call.initialMeshName,
+        call.instanceSpotType,
+        undefined,
+        ZLinkDispatchErrorReason.Backpressure
+      );
+      throw error;
+    }
+    if (selected.kind === 'unavailable') {
+      this.traceInstanceAddress(
+        ZLinkMessageFlowOutcome.Dropped,
+        ZLinkDispatchMessageKind.Send,
+        spotId,
+        message,
+        call.initialMeshName,
+        call.instanceSpotType,
+        undefined,
+        ZLinkDispatchErrorReason.StaleTarget
+      );
+      return { status: ZLinkSubmitStatus.RouteNotConnected };
+    }
+    const encoded = this.encode(ZLinkChannelMessageKind.Command, selected.meshName, message);
+    const sourceSpotId =
+      call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId);
+    const mapped = classifySubmitResult(
+      await selected.node.sendToMissingInstanceSpot(
+        selected.target,
+        encoded,
+        activationDeadlineUnixMs,
+        sourceSpotId,
+        call.metadata
+      ),
+      'Instance Spot submission'
+    );
+    this.traceInstanceAddress(
+      submitResultFlowOutcome(mapped.status),
+      ZLinkDispatchMessageKind.Send,
+      spotId,
+      message,
+      selected.meshName,
+      selected.target.stableType,
+      selected.target.targetNodeRid,
+      mapped.status === ZLinkSubmitStatus.Submitted ? undefined : submitResultReason(mapped.status)
+    );
+    return mapped;
   }
 
   requestToSpotAddress<TReply = unknown>(
@@ -642,22 +615,6 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     return { kind: 'unavailable' };
   }
 
-  private sendTimeoutMsForMesh(meshName: string): number {
-    return (
-      this.options.sendTimeoutMsForMesh?.(meshName) ??
-      this.options.defaultSendTimeoutMs ??
-      this.options.defaultRequestTimeoutMs
-    );
-  }
-
-  private sendTimeoutMsForRouteChannel(routeChannelId: string): number {
-    return (
-      this.options.sendTimeoutMsForRouteChannel?.(routeChannelId) ??
-      this.options.defaultSendTimeoutMs ??
-      this.options.defaultRequestTimeoutMs
-    );
-  }
-
   private validateExisting(
     target: import('../spots/spot-routing-internal').ZLinkSpotRouteTarget,
     call: ZLinkSpotAddressCallOptions
@@ -845,21 +802,9 @@ function addressedInstanceErrorReason(error: unknown): ZLinkDispatchErrorReason 
   return ZLinkDispatchErrorReason.HandlerException;
 }
 
-function initialSendTimeoutMs(
-  options: ZLinkHostSpotAddressTransportOptions,
-  call: ZLinkSpotAddressCallOptions
-): number {
-  return call.initialMeshName === undefined
-    ? (options.defaultSendTimeoutMs ?? options.defaultRequestTimeoutMs)
-    : (options.sendTimeoutMsForMesh?.(call.initialMeshName) ??
-        options.defaultSendTimeoutMs ??
-        options.defaultRequestTimeoutMs);
-}
-
 interface ZLinkSpotAddressDeadline {
   readonly deadlineUnixMs: number;
   readonly signal: AbortSignal;
-  setOwnerTimeout(timeoutMs: number): void;
   requireRemaining(): number;
   expired(): boolean;
   close(): void;
@@ -871,7 +816,7 @@ function createSpotAddressDeadline(
 ): ZLinkSpotAddressDeadline {
   const startedAtMs = performance.now();
   const startedAtUnixMs = Date.now();
-  let deadlineMs = startedAtMs + Math.max(0, timeoutMs);
+  const deadlineMs = startedAtMs + Math.max(0, timeoutMs);
   const controller = new AbortController();
   let expired = false;
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -897,10 +842,6 @@ function createSpotAddressDeadline(
       return Math.round(startedAtUnixMs + (deadlineMs - startedAtMs));
     },
     signal: controller.signal,
-    setOwnerTimeout(ownerTimeoutMs: number) {
-      deadlineMs = startedAtMs + Math.max(0, ownerTimeoutMs);
-      arm();
-    },
     requireRemaining() {
       const remainingMs = deadlineMs - performance.now();
       if (remainingMs <= 0) {

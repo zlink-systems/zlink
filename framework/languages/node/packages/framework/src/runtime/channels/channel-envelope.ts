@@ -86,33 +86,18 @@ export function encodeChannelEnvelopeParts(
   createFlow = true,
   metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
 ): readonly MessageLike[] {
-  const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
-  const encoded = encodePayload(
+  return encodeChannelEnvelopePartsAtDeadline(
+    kind,
+    channelName,
+    packetName,
     payload,
-    codecsForFrameworkPacket(messageName, codecs),
-    messageName,
-    'payload'
+    timeoutMs === undefined ? undefined : Date.now() + timeoutMs,
+    topic,
+    codecs,
+    correlationId,
+    createFlow,
+    metadata
   );
-  const flow = createFlow ? currentOrCreateFlow('Application') : undefined;
-  const envelopeCorrelationId = correlationIdForOutboundKind(kind, correlationId);
-  return [
-    encodeChannelHeader(
-      kind,
-      channelName,
-      messageName,
-      encoded.contentType,
-      envelopeCorrelationId,
-      timeoutMs === undefined ? null : new Date(Date.now() + timeoutMs).toISOString(),
-      topic ?? null,
-      null,
-      null,
-      undefined,
-      applicationMetadataRecord(metadata),
-      flow?.flowId,
-      flow?.flowOrigin
-    ),
-    encoded.message
-  ];
 }
 
 /**
@@ -126,14 +111,17 @@ export function encodeChannelEnvelopePartsAtDeadline(
   channelName: string,
   packetName: string | undefined,
   payload: unknown,
-  deadlineUnixMs: number,
+  deadlineUnixMs: number | undefined,
   topic?: string,
   codecs?: ZLinkChannelEnvelopeCodecRegistry,
   correlationId?: string,
   createFlow = true,
   metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
 ): readonly MessageLike[] {
-  if (!Number.isSafeInteger(deadlineUnixMs) || deadlineUnixMs <= 0) {
+  if (
+    deadlineUnixMs !== undefined &&
+    (!Number.isSafeInteger(deadlineUnixMs) || deadlineUnixMs <= 0)
+  ) {
     throw new RangeError('deadlineUnixMs must be a positive safe integer.');
   }
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
@@ -152,7 +140,7 @@ export function encodeChannelEnvelopePartsAtDeadline(
       messageName,
       encoded.contentType,
       envelopeCorrelationId,
-      new Date(deadlineUnixMs).toISOString(),
+      deadlineUnixMs === undefined ? null : new Date(deadlineUnixMs).toISOString(),
       topic ?? null,
       null,
       null,

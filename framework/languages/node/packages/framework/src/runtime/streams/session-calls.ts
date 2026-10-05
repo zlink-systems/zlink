@@ -4,9 +4,6 @@ import type {
   ZLinkSessionSendCall
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
-import { ZLINK_MAX_SEND_TIMEOUT_MS } from '../../contracts/Configuration/SendTimeoutValidation';
-import { throwIfAborted } from '../abort';
-import { ZLinkConfigurationException } from '../configuration';
 import { ZLinkFrameworkInternalErrorKind } from '../framework-errors-internal';
 import { type ZLinkSubmitResult, requireOneWayCompletion } from '../messaging/submission-result';
 
@@ -23,19 +20,14 @@ export interface ZLinkBoundSessionSendRuntime {
     actorId: string,
     message: unknown,
     packetName: string | undefined,
-    metadata: ReadonlyMap<string, string>,
-    signal?: AbortSignal
+    metadata: ReadonlyMap<string, string>
   ): Promise<ZLinkSubmitResult>;
 }
 
 export interface ZLinkSessionCallContext {
   readonly stream: {
     writeRaw(payload: Message): boolean;
-    submitRaw(
-      payload: Message,
-      signal?: AbortSignal,
-      timeoutMs?: number
-    ): Promise<ZLinkSubmitResult>;
+    submitRaw(payload: Message): Promise<ZLinkSubmitResult>;
   };
   readonly dispatchHeader: ZLinkStreamFrameHeader | undefined;
   createJsonFrameMessage(
@@ -88,17 +80,15 @@ export class DefaultZLinkBoundSessionSendCall implements ZLinkBoundSessionSendCa
     return this;
   }
 
-  async submit(signal?: AbortSignal): Promise<void> {
+  async submit(): Promise<void> {
     ensureSingleSubmit(this.executed);
     const packetName = resolvePacketName(this.message, this.selectedPacketName);
     this.executed = true;
-    throwIfAborted(signal);
     const result = await this.runtime.sendBoundSession(
       this.actorId,
       this.message,
       packetName,
-      this.selectedMetadata,
-      signal
+      this.selectedMetadata
     );
     requireOneWayCompletion(
       result,
@@ -112,7 +102,6 @@ export class DefaultZLinkSessionSendCall implements ZLinkSessionSendCall {
   private selectedPacketName: string | undefined;
   private readonly selectedMetadata = new Map<string, string>();
   private compressionEnabled = false;
-  private selectedTimeoutMs: number | undefined;
   private executed = false;
 
   constructor(
@@ -135,21 +124,10 @@ export class DefaultZLinkSessionSendCall implements ZLinkSessionSendCall {
     return this;
   }
 
-  timeout(timeoutMs: number): this {
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > ZLINK_MAX_SEND_TIMEOUT_MS) {
-      throw new ZLinkConfigurationException(
-        `STREAM session send timeout must be an integer from 1 through ${ZLINK_MAX_SEND_TIMEOUT_MS} milliseconds.`
-      );
-    }
-    this.selectedTimeoutMs = timeoutMs;
-    return this;
-  }
-
-  async submit(signal?: AbortSignal): Promise<void> {
+  async submit(): Promise<void> {
     ensureSingleSubmit(this.executed);
     const packetName = resolvePacketName(this.message, this.selectedPacketName);
     this.executed = true;
-    throwIfAborted(signal);
     const message = this.context.createJsonFrameMessage(
       ZLinkStreamMessageKind.Send,
       packetName,
@@ -159,7 +137,7 @@ export class DefaultZLinkSessionSendCall implements ZLinkSessionSendCall {
       this.message
     );
     try {
-      const result = await this.context.stream.submitRaw(message, signal, this.selectedTimeoutMs);
+      const result = await this.context.stream.submitRaw(message);
       requireOneWayCompletion(result, 'STREAM session send');
       this.context.traceFrameWritten?.(ZLinkStreamMessageKind.Send, packetName, undefined);
     } finally {
@@ -182,7 +160,7 @@ export class DefaultZLinkSessionReplyCall implements ZLinkSessionReplyCall {
     return this;
   }
 
-  async submit(signal?: AbortSignal): Promise<void> {
+  async submit(): Promise<void> {
     ensureSingleSubmit(this.executed);
     this.executed = true;
     const requestHeader = this.context.dispatchHeader;
@@ -190,10 +168,6 @@ export class DefaultZLinkSessionReplyCall implements ZLinkSessionReplyCall {
       throw new Error('Reply is only available while handling a request packet.');
     }
     this.context.claimReply(requestHeader);
-    // Reply-token validity wins over caller cancellation. Claiming before the
-    // pre-cancel check keeps duplicate calls deterministic while still making
-    // a pre-cancelled first call perform no transport admission.
-    throwIfAborted(signal);
     const message = this.context.createJsonReplyFrameMessage(
       requestHeader,
       ZLinkStreamMessageKind.Response,
@@ -202,7 +176,7 @@ export class DefaultZLinkSessionReplyCall implements ZLinkSessionReplyCall {
       this.message
     );
     try {
-      const result = await this.context.stream.submitRaw(message, signal);
+      const result = await this.context.stream.submitRaw(message);
       requireOneWayCompletion(result, 'STREAM session reply');
       this.context.traceFrameWritten?.(
         ZLinkStreamMessageKind.Response,

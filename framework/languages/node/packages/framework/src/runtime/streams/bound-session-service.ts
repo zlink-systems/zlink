@@ -129,7 +129,7 @@ export class ZLinkBoundSessionService {
       if ((await this.routes.route(actorId))?.bindingToken !== route.bindingToken) {
         return { status: ZLinkSubmitStatus.TargetNotFound };
       }
-      return await route.context.stream.submitRaw(frame, signal);
+      return await route.context.stream.submitRaw(frame);
     } finally {
       frame.close();
     }

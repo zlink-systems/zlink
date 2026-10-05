@@ -1,3 +1,4 @@
+import { waitRequestReply } from '../../messaging/request-deadline';
 import {
   Message,
   Received,
@@ -7,7 +8,6 @@ import {
   createDealerSocket,
   createRouterSocket,
   ReceiveFlowState,
-  SubmitResult,
   type Context,
   type DealerSocket,
   type MonitorEvent,
@@ -18,11 +18,14 @@ import {
   type RequestOperation,
   type RequestSubmitOperation,
   type RouterSocket,
-  type SendOperation,
-  type SendSubmitOperation,
   type Socket
 } from '@zlink-systems/zlink';
-import { translateBindingResultError } from './node-backend-adapter-support';
+import {
+  translateBindingResultError,
+  bindingRequestReply,
+  closeBindingReply,
+  submitBindingAsyncSend
+} from './node-backend-adapter-support';
 import { isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
 import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
 import type {
@@ -266,15 +269,10 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     this.connect(endpoint);
   }
 
-  async send(targetRid: string, parts: readonly Uint8Array[]): Promise<void> {
+  send(targetRid: string, parts: readonly Uint8Array[]): Promise<void> {
     this.requireOpen();
-    const submission = appendSendParts(
-      this.socket.send(bindingRoutingId(targetRid)),
-      parts
-    ).submit();
-    if (submission.result === SubmitResult.Backpressured) {
-      await submission.admitted;
-    }
+    requireParts(parts);
+    return submitBindingAsyncSend(this.socket.send(bindingRoutingId(targetRid)), parts);
   }
 
   async request(
@@ -283,6 +281,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     timeoutMs: number
   ): Promise<readonly Buffer[]> {
     this.requireOpen();
+    const deadlineMs = performance.now() + timeoutMs;
     let submission: ReturnType<RequestSubmitOperation['submit']>;
     try {
       submission = appendRequestParts(this.socket.request(bindingRoutingId(targetRid)), parts)
@@ -292,7 +291,14 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
       throw translateBindingResultError(error, 'submit');
     }
     try {
-      const replies = await requestReply(submission);
+      const replies = await waitRequestReply(
+        bindingRequestReply(submission),
+        'Request',
+        deadlineMs,
+        undefined,
+        undefined,
+        closeBindingReply
+      );
       return copyAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error, 'completion');
@@ -338,16 +344,15 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
     this.socket.setRoutingId(bindingRoutingId(routingId));
   }
 
-  async send(parts: readonly Uint8Array[]): Promise<void> {
+  send(parts: readonly Uint8Array[]): Promise<void> {
     this.requireOpen();
-    const submission = appendSendParts(this.socket.send(), parts).submit();
-    if (submission.result === SubmitResult.Backpressured) {
-      await submission.admitted;
-    }
+    requireParts(parts);
+    return submitBindingAsyncSend(this.socket.send(), parts);
   }
 
   async request(parts: readonly Uint8Array[], timeoutMs: number): Promise<readonly Buffer[]> {
     this.requireOpen();
+    const deadlineMs = performance.now() + timeoutMs;
     let submission: ReturnType<RequestSubmitOperation['submit']>;
     try {
       submission = appendRequestParts(this.socket.request(), parts).timeout(timeoutMs).submit();
@@ -355,7 +360,14 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
       throw translateBindingResultError(error, 'submit');
     }
     try {
-      const replies = await requestReply(submission);
+      const replies = await waitRequestReply(
+        bindingRequestReply(submission),
+        'Request',
+        deadlineMs,
+        undefined,
+        undefined,
+        closeBindingReply
+      );
       return copyAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error, 'completion');
@@ -366,16 +378,6 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
     this.requireOpen();
     return receiveRecord(this.socket, dontWait);
   }
-}
-
-async function requestReply(
-  submission: ReturnType<RequestSubmitOperation['submit']>
-): Promise<Message[]> {
-  if (submission.result === SubmitResult.Backpressured) {
-    const [, replies] = await Promise.all([submission.admitted, submission.reply]);
-    return replies;
-  }
-  return submission.reply;
 }
 
 class NodeRawMonitorPort implements ZLinkRawMonitorPort {
@@ -408,18 +410,6 @@ class NodeRawMonitorPort implements ZLinkRawMonitorPort {
     this.closed = true;
     this.release();
   }
-}
-
-function appendSendParts(
-  operation: SendOperation,
-  parts: readonly Uint8Array[]
-): SendSubmitOperation {
-  requireParts(parts);
-  let next = operation.message(parts[0]);
-  for (let index = 1; index < parts.length; index += 1) {
-    next = next.message(parts[index]);
-  }
-  return next;
 }
 
 function appendRequestParts(

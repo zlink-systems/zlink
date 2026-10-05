@@ -7,7 +7,7 @@ export interface ZLinkActorClient {
 
 export interface ZLinkActorSendCall {
   metadata(key: string, value: string): this;
-  submit(signal?: AbortSignal): Promise<void>;
+  submit(): Promise<void>;
 }
 
 export interface ZLinkActorRequestCall {

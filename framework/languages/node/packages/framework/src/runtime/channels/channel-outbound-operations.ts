@@ -4,9 +4,14 @@ import {
   internalFrameworkErrorKind,
   requestResultToPublicErrorKind
 } from '../framework-errors-internal';
+import { waitRequestReply, remainingRequestTimeout } from '../messaging/request-deadline';
 import { isZLinkBackendResultError } from '../backend/runtime-values';
 import type { Message } from '../../contracts/Common/Message';
-import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
+import {
+  ZLinkSubmitStatus,
+  classifySubmitResult,
+  type ZLinkSubmitResult
+} from '../messaging/submission-result';
 import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   type ZLinkRuntimeMessageFlowResult,
@@ -18,6 +23,7 @@ import {
   closeMessages,
   decodeChannelReply,
   encodeChannelEnvelopeParts,
+  encodeChannelEnvelopePartsAtDeadline,
   newChannelCorrelationId,
   type ZLinkChannelEnvelopeCodecRegistry,
   ZLinkChannelMessageKind
@@ -72,7 +78,7 @@ export class ZLinkChannelOutboundOperations {
     throwIfAborted(signal);
     const dealer = await this.sockets.awaitClientDealerForOutbound(channelName, signal);
     if (dealer === undefined) {
-      return { status: ZLinkSubmitStatus.TimedOut };
+      return { status: ZLinkSubmitStatus.Shutdown };
     }
     const parts = encodeChannelEnvelopeParts(
       ZLinkChannelMessageKind.Command,
@@ -90,17 +96,8 @@ export class ZLinkChannelOutboundOperations {
       await dealer.send(parts);
     } catch (error) {
       closeMessages(parts);
-      if (isSubmitDeadline(error)) {
-        this.dispatchServices.beginOutbound(ZLinkMessageFlowOutcome.Backpressured)?.trace({
-          surface: ZLinkDispatchErrorSurface.Channel,
-          messageKind: ZLinkDispatchMessageKind.Send,
-          channelName,
-          channelRouteKind: 'client_server',
-          packetName,
-          correlationId: undefined,
-          result: 'backpressured'
-        });
-        return { status: ZLinkSubmitStatus.TimedOut };
+      if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+        return classifySubmitResult(error.result, 'One-way send', error.phase);
       }
       throw error;
     }
@@ -151,6 +148,8 @@ export class ZLinkChannelOutboundOperations {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<TReply> {
+    const deadlineMs = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
+    const deadlineUnixMs = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
     let correlationId: string | undefined;
     let selectedServerRid: string | undefined;
     let terminalRecorded = false;
@@ -170,7 +169,16 @@ export class ZLinkChannelOutboundOperations {
     };
     try {
       throwIfAborted(signal);
-      const dealer = await this.sockets.awaitClientDealerForOutbound(channelName, signal);
+      const readyWait = new AbortController();
+      const readySignal =
+        signal === undefined ? readyWait.signal : AbortSignal.any([signal, readyWait.signal]);
+      const dealer = await waitRequestReply(
+        this.sockets.awaitClientDealerForOutbound(channelName, readySignal),
+        `Channel request '${channelName}'`,
+        deadlineMs,
+        signal,
+        () => readyWait.abort()
+      );
       if (dealer === undefined) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
@@ -180,12 +188,12 @@ export class ZLinkChannelOutboundOperations {
       const serverRid = this.sockets.selectedClientServerRid(channelName, dealer);
       selectedServerRid = serverRid;
       correlationId = newChannelCorrelationId();
-      const parts = encodeChannelEnvelopeParts(
+      const parts = encodeChannelEnvelopePartsAtDeadline(
         ZLinkChannelMessageKind.Request,
         channelName,
         packetName,
         request,
-        timeoutMs,
+        deadlineUnixMs,
         undefined,
         this.codecs,
         correlationId,
@@ -205,7 +213,13 @@ export class ZLinkChannelOutboundOperations {
         let replyParts: readonly Message[] = [];
         try {
           try {
-            replyParts = await awaitWithAbort(dealer.request(parts, timeoutMs), signal);
+            replyParts = await awaitWithAbort(
+              dealer.request(
+                parts,
+                remainingRequestTimeout(`Channel request '${channelName}'`, deadlineMs)
+              ),
+              signal
+            );
           } catch (error) {
             if (signal?.aborted === true) throw error;
             //  Spec 32-framework-error-model:81-92 — classify the backend request
@@ -358,18 +372,8 @@ export class ZLinkChannelOutboundOperations {
     try {
       await router.send(targetNodeRid, parts);
     } catch (error) {
-      if (isSubmitDeadline(error)) {
-        this.dispatchServices.beginOutbound(ZLinkMessageFlowOutcome.Backpressured)?.trace({
-          surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
-          messageKind: ZLinkDispatchMessageKind.Send,
-          channelName: routerChannelId,
-          channelRouteKind: 'route_mesh',
-          packetName,
-          correlationId: undefined,
-          targetRid: targetNodeRid,
-          result: 'backpressured'
-        });
-        return { status: ZLinkSubmitStatus.TimedOut };
+      if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+        return classifySubmitResult(error.result, 'One-way send', error.phase);
       }
       throw error;
     }

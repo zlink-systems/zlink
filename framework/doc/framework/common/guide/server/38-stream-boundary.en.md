@@ -49,8 +49,9 @@ Limits and state transitions are covered in [Backpressure](33-backpressure.en.md
 Replies and pushes the server sends to a session queue up in Core's send buffer **per connection**.
 When the server sends faster than that connection actually drains and the buffer reaches its limit
 (HWM), a send to that connection waits until space frees up. Sends to other connections aren't
-affected. If the deadline passes while waiting, the send ends with `DeadlineExceeded`, and the
-framework doesn't resend the same content.
+affected. The wait has no time limit or caller cancellation. Connection termination while pending
+ends with `Unavailable`; socket close or runtime shutdown ends with `ShuttingDown`. The framework
+does not resend the same content.
 
 The client connector uses the runtime's own socket and keeps reading whatever arrives without a limit,
 so slow processing in the client application doesn't hold back the server's sends. Pushes (`Send`)
