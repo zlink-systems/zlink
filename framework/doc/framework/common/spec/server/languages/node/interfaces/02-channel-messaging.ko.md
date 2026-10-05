@@ -326,10 +326,9 @@ exceptional completion으로 끝난다. Token을 소비한 call이 실패로 끝
 다시 사용할 수 없다. 이미 사용한 token도 exceptional completion으로 처리한다. STREAM reply는 client request
 timeout을 전달받지 않는다.
 
-[Classic fanout](../../../00-foundation/02-glossary.ko.md#classic-fanout) publisher만 `sendTimeoutMs`를 사용한다. 공개 설정이 없으면
-1초를 사용한다. 이 millisecond 설정은 `1..2147483647` 범위의 유한 정수만
-허용한다. `undefined`는 기본값을 선택하며 `0`, 음수, 정수가 아닌 값과 상한 초과는
-`ZLinkConfigurationError`로 거부한다.
+[Classic fanout](../../../00-foundation/02-glossary.ko.md#classic-fanout) publisher만 `sendTimeoutMs`를 사용한다. 값 규칙과
+기본값은 [Submit과 완료 §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다. Node 설정은 정수 milliseconds를 받고, 거부는
+`ZLinkConfigurationError`로 알린다.
 
 Logical Multicast의 worker 수락, commit, terminal과 재시도 규칙은 [Interaction model §5](../../../00-foundation/04-interaction-model.ko.md#5-spot-logical-multicast)와 [Cancellation과 shutdown §4](../../../01-execution/03-cancellation-and-shutdown.ko.md#4-logical-multicast-cancellation)가 정한다.
 Node.js는 `ZLinkPublishCall.submit(...)`으로 호출한다.

@@ -143,5 +143,5 @@ public interface systems.zlink.framework.kotlin.ZLinkKotlinBoundSession {
 }
 ```
 
-Send·reply·relay의 대기에는 시간 상한이 없다. 기다리는 coroutine의 cancellation은 그 coroutine의 대기만
-끝내며 send를 멈추지 않는다([Submit과 completion §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)).
+Send·reply·relay의 대기 종료는 [Submit과 completion §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을, 기다리는 coroutine의 cancellation은
+[Cancellation과 shutdown §1](../../../01-execution/03-cancellation-and-shutdown.ko.md#1-협력적-cancellation)을 따른다.

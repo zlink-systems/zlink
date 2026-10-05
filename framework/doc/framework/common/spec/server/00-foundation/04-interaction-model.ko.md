@@ -414,8 +414,8 @@ STREAM session은 연결 lifecycle과 packet 순서를 소유한다.
   [Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따르며 caller request timeout을 reply에 사용하지 않는다.
 - **Reply sequence 또는 one-shot token이 유효하지 않거나 같은 reply call을 두 번 제출하면
   local exceptional completion으로 끝난다.** 유효한 첫 reply terminator는 transport admission
-  전에 token을 원자적으로 소비한다. 이 terminator가 backpressure, timeout 또는 cancellation으로
-  완료되어도 token은 재사용하지 않는다. 같은 token에서 만든 두 call이 경쟁하면 하나만
+  전에 token을 원자적으로 소비한다. Token을 소비한 terminator가 실패로 완료되어도 token은
+  재사용하지 않는다. 같은 token에서 만든 두 call이 경쟁하면 하나만
   transport admission을 시작한다.
 
 STREAM session의 연결 수락, 등록과 dispatch context는

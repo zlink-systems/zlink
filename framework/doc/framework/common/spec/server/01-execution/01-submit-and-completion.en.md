@@ -178,8 +178,9 @@ sequenceDiagram
 ## 5. Backpressure and Error Classification
 
 When local Framework capacity is unavailable, the Framework waits until capacity recovers or
-the runtime stops accepting new admissions. When a binding operation waits on Core HWM, Core owns the retry and completes the
-per-operation completion awaitable (the binding result object's `admitted`). The Framework does not
+the runtime stops accepting new admissions. When a binding operation waits on Core HWM, Core owns the WRITABLE
+notification, and the binding owns resubmission of the payload it kept and completion of the per-operation
+completion awaitable (the binding result object's `admitted`). The Framework does not
 create a separate readiness callback, retry waiter, or separate binding adapter, and follows these rules.
 
 - [`Backpressured`](../00-foundation/02-glossary.en.md#backpressured) — an internal state in
@@ -216,9 +217,9 @@ current eligible member of the same
 first binding operation. It may choose another eligible member only while checking route
 eligibility or source-local admission before any binding operation has started.
 
-Starting the binding operation fixes the selected target. Core owns HWM retry and
-completion; the Framework does not reselect for capacity or resubmit the binding operation.
-There is no automatic resubmission after completion. Only target removal and runtime termination are terminal for that operation. A new select-one operation may choose members eligible when it starts.
+Starting the binding operation fixes the selected target. The binding owns resubmission and
+completion after an HWM wait; the Framework does not reselect for capacity or resubmit the binding operation.
+There is no automatic resubmission after completion. Termination of a send wait follows [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). A new select-one operation may choose members eligible when it starts.
 
 ## 6. Logical Multicast and Classic Fanout
 
@@ -257,12 +258,13 @@ send ends only with one of these three events.
 | The route is lost while waiting — Core target removal ([Core wait-token termination](../../../../../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission)), STREAM connection close | `Unavailable` — the route of a target that existed at submit time was lost, so it is distinguished from target absence (`NotFound`) |
 | Socket close, runtime shutdown | `ShuttingDown` |
 
-There is no time limit and no cancellation so that a message is never sent after the caller has
-stopped waiting. Binding-operation cancellation ends only the caller's wait and does not withdraw a
-resubmission already started
+The Framework does not end a send operation by timeout or caller cancellation. Binding-operation
+cancellation ends only the caller's wait and does not withdraw a resubmission already started
 ([Binding async execution model §6](../../../../../../../bindings/doc/spec/async-execution-model.en.md#6-caller-wait-cancellation)),
-so a time limit or cancellation that ends the wait cannot guarantee "not sent". An application
-that needs the delivery result uses a request. The request timeout is defined by
+so ending a send by time or cancellation could let the message go out after a "not sent" result.
+A JVM caller's wait cancellation follows
+[Cancellation and shutdown §1](03-cancellation-and-shutdown.en.md#1-cooperative-cancellation). An
+application that needs the delivery result uses a request. The request timeout is defined by
 [§9](#9-request-completion--the-completion-race-and-timeout-budget).
 
 A [Classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) publish is a blocking
@@ -325,8 +327,8 @@ flowchart LR
 
 The request timeout covers outbound admission and the reply wait as a whole; a global object
 request also covers the current Ready authority resolve and the handler. A source only passes the
-remaining time, after subtracting what earlier stages used, to the next stage. Only the remaining
-request timeout can end the outbound admission stage, and it is not combined with a socket send
+remaining time, after subtracting what earlier stages used, to the next stage. The time limit of
+outbound admission is the remaining request timeout, and it is not combined with a socket send
 timeout. When a timeout or cancellation ends the caller's wait, that does not mean the request was
 not sent — a request that ended before admission can still be sent later by a resubmission the
 binding already started, and its reply is discarded because the correlation is closed. The resubmission boundary for a request after timeout or connection failure is defined by

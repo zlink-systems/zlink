@@ -137,8 +137,8 @@ failure로 완료한다. Caller는 별도 reply·retry를 하지 않는다. One-
 capability가 없으므로 admission만 반환한다. Handshake failure는 session 생성 전 runtime monitoring에만
 기록되며 `onError(...)`에 전달하지 않는다.
 
-Send·reply call의 대기에는 시간 상한이 없고, 반환한 stage의 `cancel(false)`는 caller의 대기만 끝내며
-send를 멈추지 않는다([Submit과 completion §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)).
+Send·reply call의 대기 종료는 [Submit과 completion §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을, 반환한 stage의 `cancel(false)`는
+[Cancellation과 shutdown §1](../../../01-execution/03-cancellation-and-shutdown.ko.md#1-협력적-cancellation)을 따른다.
 
 ## STREAM codec public signature
 

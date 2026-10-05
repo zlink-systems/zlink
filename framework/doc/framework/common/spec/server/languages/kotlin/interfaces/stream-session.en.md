@@ -157,6 +157,5 @@ public interface systems.zlink.framework.kotlin.ZLinkKotlinBoundSession {
 }
 ```
 
-The wait of a send, reply, or relay has no time limit. Cancellation of the awaiting coroutine
-ends only that coroutine's wait and doesn't stop the send
-([Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)).
+The wait termination of a send, reply, or relay follows [Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout), and
+cancellation of the awaiting coroutine follows [Cancellation and shutdown §1](../../../01-execution/03-cancellation-and-shutdown.en.md#1-cooperative-cancellation).

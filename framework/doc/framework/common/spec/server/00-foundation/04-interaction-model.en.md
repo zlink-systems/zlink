@@ -466,8 +466,8 @@ A STREAM session owns connection lifecycle and packet order.
 - **If the reply sequence or one-shot token is invalid, or the same reply call
   is submitted twice, it ends as a local exceptional completion.** The first
   valid reply terminator atomically consumes the token before transport
-  admission. Even if this terminator completes via backpressure, timeout, or
-  cancellation, the token isn't reused. If two calls built from the same token
+  admission. Even if the terminator that consumed the token completes with a
+  failure, the token isn't reused. If two calls built from the same token
   race, only one starts transport admission.
 
 Connection acceptance, registration, and dispatch context for a STREAM session

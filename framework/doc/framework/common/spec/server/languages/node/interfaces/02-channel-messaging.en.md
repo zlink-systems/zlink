@@ -370,10 +370,9 @@ again. An already-used token is also handled as exceptional completion. A
 STREAM reply isn't given the client request timeout.
 
 Only the [Classic fanout](../../../00-foundation/02-glossary.en.md#classic-fanout) publisher uses
-`sendTimeoutMs`. If there's no public setting, 1 second is used. This
-millisecond setting only allows a finite integer in range `1..2147483647`.
-`undefined` selects the default, and `0`, a negative value, a non-integer
-value, and exceeding the cap are rejected with `ZLinkConfigurationError`.
+`sendTimeoutMs`. Its value rules and default follow
+[Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). The Node setting takes integer
+milliseconds and reports a rejection with `ZLinkConfigurationError`.
 
 [Interaction model §5](../../../00-foundation/04-interaction-model.en.md#5-spot-logical-multicast)
 and [Cancellation and shutdown §4](../../../01-execution/03-cancellation-and-shutdown.en.md#4-logical-multicast-cancellation)

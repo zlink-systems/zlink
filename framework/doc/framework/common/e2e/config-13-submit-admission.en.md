@@ -275,8 +275,10 @@ it?
 
 - Start condition: `spot-a` is ready and can make a send pending.
   `spot-b` is the same stable type but a different ID.
-- Procedure: Confirm `spot-a`'s send is pending, then terminate the
-  owner route. Then recover the route and send a new operation ID.
+- Procedure: Confirm `spot-a`'s send is pending, then explicitly
+  remove that target route (the route removal of
+  [Submit and completion §7](../spec/server/01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)). After confirming `Unavailable`,
+  recover the route and send a new operation ID.
 - Verification: The previous operation is `Unavailable`, with no
   marker on either A or B's handler. Only the new operation is
   processed once, at A.
@@ -295,9 +297,9 @@ route loss not get automatically delivered after recovery, with only
 the new send processed?
 
 - Start condition: The Actor is ready and a pending send can be made.
-- Procedure: Terminate the owner route while pending, confirm the
-  terminal. After the route recovers to ready, send with a different
-  operation ID.
+- Procedure: Confirm the send is pending, then explicitly remove that
+  target route and confirm the `Unavailable` terminal. After the route
+  recovers to ready, send with a different operation ID.
 - Verification: The previous send is `Unavailable`, with no handler
   marker. The new send completes normally, processed once by the
   Actor handler.
@@ -455,10 +457,13 @@ not return to pending after route recovery.
 **Verification question:** After route recovery, is the previous
 marker not delivered, with only the new operation processed?
 
-- Start condition: Keep a route unavailable long enough to end one
-  send in terminal failure.
-- Procedure: Confirm the failure terminal, then recover the route,
-  and once public status is ready, send with a new operation ID.
+- Start condition: One send can be made pending. A transient transport
+  close doesn't end a pending send, so neither time nor a dropped
+  connection alone is used to create a terminal.
+- Procedure: Confirm the send is pending, then explicitly remove the
+  target route or close the STREAM connection. After confirming
+  `Unavailable`, recover the route, and once public status is ready,
+  send with a new operation ID.
 - Verification: The previous marker is absent from target evidence,
   and only the new marker is processed once. The previous awaitable's
   terminal also doesn't change.

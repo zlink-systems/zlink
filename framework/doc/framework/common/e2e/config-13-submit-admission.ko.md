@@ -213,8 +213,8 @@ Spot send가 pending인 동안 route가 사라져도 다른 Spot으로 target을
 
 - 시작 조건: `spot-a`가 ready이고 send를 pending으로 만들 수 있다. `spot-b`는 같은 stable type이지만 다른
   ID다.
-- 절차: `spot-a` send가 pending인 것을 확인한 뒤 owner route를 종료한다. 이후 route를 복구하고 새
-  operation ID를 보낸다.
+- 절차: `spot-a` send가 pending인 것을 확인한 뒤 그 target route를 명시적으로 제거한다([Submit과
+  completion §7](../spec/server/01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)의 route 제거). `Unavailable`을 확인한 뒤 route를 복구하고 새 operation ID를 보낸다.
 - 검증: 이전 operation은 `Unavailable`이고 A·B 어느 handler에도 marker가 없다. 새 operation만 A에서 한
   번 처리된다.
 - 세부 동작: [Failover policy §2](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을 검증한다.
@@ -228,8 +228,8 @@ Actor direct send도 original `ActorId`를 유지하며 route 복구를 이유�
 **검증 질문:** Actor route loss로 실패한 operation이 복구 뒤 자동 전달되지 않고 새 send만 처리되는가.
 
 - 시작 조건: Actor가 ready이고 pending send를 만들 수 있다.
-- 절차: Pending 중 owner route를 종료하여 terminal을 확인한다. Route ready 복구 뒤 다른 operation ID로
-  send한다.
+- 절차: Send가 pending임을 확인한 뒤 그 target route를 명시적으로 제거하고 `Unavailable` terminal을 확인한다.
+  Route ready 복구 뒤 다른 operation ID로 send한다.
 - 검증: 이전 send는 `Unavailable`이고 handler marker가 없다. 새 send는 정상 완료하고 Actor handler가 한
   번 처리한다.
 - 세부 동작: [Failover policy §4.1](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)을
@@ -349,9 +349,10 @@ Route 제거 또는 Shutdown으로 끝난 operation은 route가 복구되어도 
 
 **검증 질문:** Route 복구 뒤 이전 marker는 전달되지 않고 새 operation만 처리되는가.
 
-- 시작 조건: Route를 unavailable하게 유지하여 send 하나를 terminal failure로 끝낼 수 있다.
-- 절차: Failure terminal을 확인한 뒤 route를 복구하고 public status가 ready가 되면 새 operation ID로
-  send한다.
+- 시작 조건: Send 하나를 pending으로 만들 수 있다. 일시적인 transport 종료는 pending send를 끝내지 않으므로
+  시간이나 연결 끊김만으로 terminal을 만들지 않는다.
+- 절차: Send가 pending임을 확인한 뒤 target route를 명시적으로 제거하거나 STREAM 연결을 종료한다.
+  `Unavailable`을 확인한 뒤 route를 복구하고 public status가 ready가 되면 새 operation ID로 send한다.
 - 검증: 이전 marker는 target evidence에 없고 새 marker만 한 번 처리된다. 이전 awaitable의 terminal도
   바뀌지 않는다.
 - 세부 동작: [Transport liveness §6](../spec/server/02-channel-transport/05-transport-liveness.ko.md)의

@@ -156,9 +156,8 @@ reply capability, so it only returns admission. A handshake failure is
 only recorded in runtime monitoring before session creation, and isn't
 delivered to `onError(...)`.
 
-The wait of a send or reply call has no time limit, and `cancel(false)` on the returned stage
-ends only the caller's wait without stopping the send
-([Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)).
+The wait termination of a send or reply call follows [Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout), and
+`cancel(false)` on the returned stage follows [Cancellation and shutdown §1](../../../01-execution/03-cancellation-and-shutdown.en.md#1-cooperative-cancellation).
 
 ## STREAM Codec Public Signature
 
