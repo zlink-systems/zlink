@@ -132,13 +132,13 @@ It is a different unit from a CS physical connector and applies to S2S, AC, PS a
 One standalone client signals phase start through `applicationTriggerUrl`. This HTTP request and
 response are neither measured operations nor KOPS. `/perf/*` does not start load.
 
-Role config owns logical stream count, per-stream in-flight, duration and deadlines.
+Role config owns logical stream count, duration and deadlines.
 A trigger carries only `runId`, `cellId`, `resetSeq` and phase; it cannot alter those settings.
 A phase starts once; duplicate triggers return the same start acknowledgement.
 
 For cells measuring an outbound call inside a Spot handler, an application driver in the same
-process invokes the handler through public Spot request/send. It reserves the stream's in-flight
-slot before the call and holds it through the final echo outcome. Local driver calls are not
+process invokes the handler through public Spot request/send. Driver calls are also submitted
+continuously by the §4.3 request rule. Local driver calls are not
 additional KOPS. The driver call deadline is `driverTimeoutMs` from §5.2. The driver call wraps the
 measured remote call, so it must be able to receive that call's result even when the remote call ends
 at its own deadline.
@@ -150,6 +150,35 @@ operation's failure exactly once.
 Each interval includes source-admission waiting from its public-call start.
 A local driver request arriving after measured end starts no outbound call, returns
 `PerfDriveReply.started=false`, and increments `driver.notStarted`.
+
+### 4.3 Load principle
+
+Framework perf loads the system by the same principle as binding perf. **Server-driven cells set no
+in-flight cap and submit continuously up to the backpressure boundary; the only exception is the CS
+connector below.** An in-flight cap measures
+the concurrency the harness chose instead of the library's capacity, and keeps load off the
+Framework and Core backpressure paths ([binding perf policy §7.2][perf-inflight]).
+
+- **A server-driven stream starts the next call without waiting for a request reply or send/send echo.**
+  - A one-way call (send, the first send of send/send, publish) starts the next call after the
+    previous call's admission terminal. A one-way terminal ends at source-local admission
+    ([Submit §4][submit]), so when the HWM is full this wait is the backpressure. Send/send does not
+    wait for the echo.
+  - A request starts the next call without waiting for the reply. When the HWM is full, Framework and
+    Core hold that call at admission ([Submit §5][submit]). If Core rejects without a wait and the call
+    ends with public `Unavailable`, record that failure as is (§13).
+  - The continuous-submission loop runs on the language's public asynchronous execution model and
+    does not monopolize the execution context.
+- **A CS connector keeps one unresolved echo per connection.** A CS client is a STREAM client that
+  does not pass Core HWM admission, so it uses the same condition as binding perf's
+  [STREAM client exception][perf-stream]. This value is not a configurable option.
+- **A Classic fanout publisher enables [`NoDrop`][nodrop].** By default the publisher drops events
+  at the HWM and completes publish successfully, so no backpressure arises. With `NoDrop`, publish
+  waits at admission until every matching subscriber can accept.
+- **Latency under saturation includes queue and admission waiting.** It is measured at the
+  backpressure boundary, so do not compare it directly with latency measured at a fixed concurrency.
+- **The harness has no option, environment variable or code window that caps in-flight count.** It
+  records the maximum outstanding count observed as `load.inflight.max` (§14).
 
 ## 5. Common CLI
 
@@ -168,7 +197,6 @@ to applicable consumers.
 | `--warmup-seconds` | 5, finite > 0 | The same owner's warmup loop |
 | `--payload-size` | Scenario representative; 1024 or 4096 | `run_single.sh` and payload factory |
 | `--payload-sizes` | `1024,4096` | `run_perf.sh` matrix expansion; mutually exclusive with the single-value option |
-| `--inflight` | 1, positive int32 | Logical-operation cap per CS connector or server-driven stream; publish-admission cap for PS |
 | `--connect-concurrency` | 256, positive int32 | Concurrency of the §4 connect/setup phase: per client process connector connect/setup for CS, the source role's object preparation and per-target probe echo (§16.1) for server-driven cells |
 | `--spot-count` | 16, positive int32 | Spot Object Server preparation and stream→Spot mapping; §10.5 standard matrix uses 1/16 |
 | `--subscriber-count` | 8, positive int32 | Count of independent Subscriber processes the shared runner starts for PS |
@@ -244,7 +272,7 @@ Worker config records `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
 these only through each language's public worker options (§10.8). The worker queue has no limit
 ([Framework API](../spec/server/00-foundation/06-framework-api.en.md)). The Application job queue
 owns the limit on jobs a host accepts, and only the §23 manifest changes it.
-Ordinary workloads are closed-loop: a stream starts its next operation after completion.
+Section 4.3 defines how ordinary workloads submit.
 Inputs changing rate, bursts or Core/queue profiles belong only to the §23 manifest.
 
 ## 6. Standard Project Structure
@@ -322,7 +350,7 @@ Server-driven cells create no physical connectors. One source process runs `logi
 streams; the standalone client with `clientCount=1` only triggers the workload.
 Spot cells use `streamId mod spotCount`; AC maps each stream ID to one ActorId.
 CS binds one Actor per prepared connector ID. Record mapping and Actor count in config.
-Section 13 owns slot/count semantics, and §15 owns aggregation.
+Section 13 defines logical-operation completion and reconciliation, and §15 owns aggregation.
 
 ### 6.3 Server Role Separation
 
@@ -395,7 +423,7 @@ Scenario files correspond to §8.4 names. Comparison cells run as configuration 
 `PerfRunPlan` owns CS ID partitioning, `ConnectionPool` public connection preparation/cleanup,
 `ScenarioRunner` the phases driven by the shared runner's control-pipe commands and `ResultWriter`
 client original storage. The shared runner makes the admin endpoint calls (§6.5).
-If server code also needs correlation/in-flight instrumentation, keep one copy in `Shared`.
+If server code also needs correlation/outstanding-count instrumentation, keep one copy in `Shared`.
 
 ### 7.2 Server Folder
 
@@ -424,12 +452,12 @@ This is contract pseudocode for measurement flow, not an actual Framework API.
 Actual language calls follow the interface links in §10 and §11.
 
 ```text
-reserve one logical in-flight slot
 record start immediately before the measured public call
 invoke the public request or initial send once
-observe the first request terminal or harness echo outcome
-validate the echoed identity and payload
-record the outcome if its terminal is inside the window; release the slot
+continue with the next call by the §4.3 rule (one-way: after admission; request: without waiting)
+on the first request terminal or harness echo outcome:
+  validate the echoed identity and payload
+  record the outcome if its terminal is inside the window
 ```
 
 Send/send keeps correlation registration and the return handler visible.
@@ -619,7 +647,7 @@ other callbacks on the same Spot→Channel remote request. The [execution contra
 | Load/mode | Logical streams in Spot process; `request`; representative 4096 bytes |
 | Execution | Actor-free `SpotWide` User Spot direct request handler; streams evenly assigned to SpotIds |
 | Completion/owner | Spot handler: just before the public remote Channel request through reply validation after its terminal; driver RTT separate |
-| Fixed comparison inputs | Remote Channel process configuration, payload, logicalStreams, inflight, deadlines and execution mode |
+| Fixed comparison inputs | Remote Channel process configuration, payload, logicalStreams, deadlines and execution mode |
 | Location Store/Docker | Run-dedicated Docker Redis for User Spots and automatic mesh |
 | Null/unsupported | Exact suspended/resumed turns, resume latency and mailbox depth lack public observations; `spot.remoteCallLatency.*` and application Yield-call counts are measurable; worker/Actor/fanout inapplicable |
 
@@ -666,7 +694,7 @@ send handler on the original Spot. Application correlation follows [Spot outboun
 
 - **The source Spot handler returns after observing first-send admission.** Waiting there for the
   same Spot's return handler while retaining the turn would obstruct the [execution contract][turn].
-  The driver waits for application correlation outside that turn, holding in-flight through the final outcome.
+  The return handler records the echo through application correlation.
 - **The DTO carries the return address.** Do not assume the Channel context supplies a source SpotId.
 
 ### 10.7 `spot-no-await-echo`
@@ -790,7 +818,7 @@ subscribers with a matching topic subscription; completion and delivery refer to
 | Roles/processes | HTTP Client × 1, Publisher × 1, Subscriber × subscriberCount; distinct subscriber PIDs |
 | Load/mode | Publisher logical streams; `publish`, ordinary; representative 1024 bytes |
 | Completion/owners | Publisher public-publish admission and each Subscriber typed handler's unique delivery, aggregated separately |
-| In-flight | Limits publisher-local admission waits only; no subscriber ACK window |
+| Backpressure | `NoDrop` on the publisher channel; publish-admission waiting is the boundary (§4.3); no subscriber ACK window |
 | Preparation | Automatic discovery; per-subscriber public Ready and first warmup-marker receipt |
 | Location Store/Docker | Run-dedicated Docker Redis required for standard automatic discovery |
 | Null/unsupported | Echo completed/KOPS/echo latency inapplicable; one-way latency null without a verified clock domain; Spot/worker/Actor inapplicable |
@@ -894,9 +922,8 @@ Message registration uses stable packet names and typed handlers ([Framework API
 
 ## 13. Fairness Between The Request Style And The Send/Send Style
 
-A **logical operation** is the workload unit started by one measured public call.
-Reserve an in-flight slot before the public call and retain it through the request's first terminal
-or the final send/send echo-correlation outcome, including source-admission waiting.
+A **logical operation** is the workload unit started by one measured public call. A request ends at
+its first terminal and send/send at the final echo-correlation outcome, including source-admission waiting.
 The local Spot driver in §4.2 submits this unit; nested public calls are not extra KOPS.
 
 - **Do not count native DONTWAIT attempts, wait tokens or WRITABLE as operations.**
@@ -904,8 +931,8 @@ The local Spot driver in §4.2 submits this unit; nested public calls are not ex
   perf observes one public awaitable's result.
 - **All languages use harness correlationId for send/send.** Two one-way calls form an application
   echo regardless of whether Framework request correlation is available.
-- **Compare request and send/send with the same stream count, inflight, payload, placement and deadlines.**
-  Unbounded send accumulation or a different return target measures a different completion cost.
+- **Compare request and send/send with the same stream count, payload, placement, deadlines and the §4.3 submission rule.**
+  A different return target measures a different completion cost.
 
 Request terminal selection and conditions allowing remote work to remain belong to [Submit §9][submit].
 The harness records validated public-reply success, public failure and cancellation as exclusive outcomes.
@@ -938,10 +965,8 @@ messages.expired <= messages.timeout
 `sent` counts logical measured-call starts, not successful physical transmissions.
 Section 15.4 separately reconciles publications. Failed operations and `inflightAtEnd` do not enter success latency.
 
-If send/send echo arrives before the first-send terminal, preserve its echo timestamp. Release the
-in-flight slot only after observing both the final echo outcome and first-send terminal, so a new
-operation does not overlap a public call still awaiting admission. If the echo or the first-send
-terminal is still missing when the window ends, the operation is `inflightAtEnd`.
+If send/send echo arrives before the first-send terminal, preserve its echo timestamp. If the echo or
+the first-send terminal is still missing when the window ends, the operation is `inflightAtEnd`.
 
 ## 14. Metrics
 
@@ -953,7 +978,7 @@ object with dotted keys.
 | Key or key group | Unit/format | Measurement boundary |
 |---|---|---|
 | `connections.requested/connected/failed` | count, U64 string | Final CS setup outcomes; preserved separately from measured-counter reset |
-| `load.logicalStreams`, `load.inflightPerStream`, `load.inflight.max` | count, U64 string | Server-driven streams, configured per-stream cap and maximum total outstanding observed by the application |
+| `load.logicalStreams`, `load.inflight.max` | count, U64 string | Server-driven streams and maximum total outstanding observed by the application |
 | `messages.sent` | count, U64 string | Logical operations starting a measured public call inside the window |
 | `messages.admitted` | count, U64 string | Successful public admission terminals of initial one-way sends; null for requests |
 | `messages.completed` | count, U64 string | Window successes in §4.1 |
@@ -998,7 +1023,6 @@ Keep scalar keys for inapplicable standard families as null per §15.5 rather th
 `driver.*` applies only to the auxiliary local driver in §10.5–10.6. The local public caller
 interval in §10.7–10.8 is already primary latency and is not duplicated in driver histograms.
 Physical connection metrics are null for server-driven cells; CS has `load.logicalStreams=null`.
-Record CS in-flight through per-connector configuration and actual instrumentation.
 
 ### 14.1 Values Without Public Observations
 
@@ -1069,7 +1093,7 @@ Use `na` for inapplicable counts/topology in paths. `configHash` is the full low
 of comparison-input JSON UTF-8 bytes fixed before phase start. Preserve those exact input bytes in config.
 
 Comparison inputs include language, mode, terminal, topology/discovery, execution mode, Spot/Actor
-mapping rules/counts, subscriber count, connection/stream partition, in-flight, timeouts, worker workload/options,
+mapping rules/counts, subscriber count, connection/stream partition, timeouts, worker workload/options,
 CPU/memory/runtime options, serializer, and §23 workload hash/repetition. Exclude runId, PIDs,
 dynamic ports and output paths from the comparison hash; retain them as environment metadata.
 Generate concrete run/cell SpotIds and ActorIds after fixing the hash; hash placement/partition rules
@@ -1623,7 +1647,7 @@ Do not impose an arbitrary initial threshold; retain throughput, p99, errors and
 `provenance` records commit hash, Core/binding/Framework versions, artifact hashes, actual loaded paths,
 build mode, CPU model/effective processors/quota/cpuset/executor maximum, memory limit, OS/kernel/container,
 FD limit, role PID/host/endpoints, serializer name/version/options and clock evidence.
-Config records actual connection/stream counts and partition, payload, duration, warmup, inflight,
+Config records actual connection/stream counts and partition, payload, duration, warmup,
 deadlines, Spot/Actor mapping, topology/discovery and worker settings.
 
 | Result status | Meaning and comparison use |
@@ -1701,7 +1725,9 @@ transport implementation state.
 - Running `session-echo-only` and local Spot baselines records the §11 boundaries, with local Spot referencing a single §10.7 result.
 - Sending a CS request yields an original STREAM reply with matching identity/payload, without create/bind setup time in the echo histogram.
 - Running no-bind Actor cells records configured global ActorIds and public request/send results, without session-binding evidence.
-- Running request/send-send with matching inputs records the same logical in-flight definition and separate send-admission/echo-completion metrics.
+- Running request/send-send with matching inputs records the same stream count and submission rule and separate send-admission/echo-completion metrics.
+- Running a server-driven cell shows no in-flight cap in config or code and records the maximum outstanding count observed in `load.inflight.max`.
+- Running a PS cell records `NoDrop=true` for the publisher channel in config.
 - Running worker cells records the public callback checksum, iterations, actual callback time and selected ordinary/Yield value.
 
 **Phases and results**
@@ -1739,7 +1765,7 @@ inputs for the same value. The manifest identifies these inputs and consumers.
 | Manifest input | Consumer |
 |---|---|
 | `scenario`, `payloadDistribution`, `requestOneWayRatio` | Application generator: packet-kind/logical-byte proportions |
-| `logicalStreams` or `connections`, `inflight`, `ratePerSecond`, `burstRatePerSecond`, `burstDurationMs` | Corresponding CS/source generator: steady/burst load |
+| `logicalStreams` or `connections`, `ratePerSecond`, `burstRatePerSecond`, `burstDurationMs` | Corresponding CS/source generator: steady/burst load |
 | `handlerCpuWork`, `handlerIoWork` | Public application handler/worker: fixed CPU/I/O ratio |
 | `warmupSeconds=30`, `measuredSeconds=60`, `repetitions=5`, deadline values | Phase owner; recorded explicit inputs |
 | `requestedProcessors=[4,8,16]`, `cpuQuota`, `cpuset`, `executorMaximum` | Process/container execution and public executor configuration |
@@ -1912,3 +1938,6 @@ labels according to their [owning metric contract][metrics].
 [n-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/typescript/03-stream-connector.en.md
 [workspace]: ../../../../../doc/building/framework-workspace.md
 [local-package]: ../../../../../scripts/local-package/README.md
+[perf-inflight]: ../../../../../doc/perf/PERF_POLICY.md#72-inflightoutstanding-옵션-금지
+[perf-stream]: ../../../../../doc/perf/PERF_POLICY.md#stream-client-예외-검증-인프라
+[nodrop]: ../../../../../framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic
