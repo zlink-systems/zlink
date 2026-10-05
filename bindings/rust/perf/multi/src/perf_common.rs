@@ -33,47 +33,6 @@ pub const BENCHMARK_RUN_ID: u32 = 1;
 const DEFAULT_MULTI_MONITOR_HWM_BYTES: u64 = 4_096_000;
 const DEFAULT_MULTI_CONNECT_READY_TIMEOUT_MS: usize = 10_000;
 
-struct ThreadWake(Thread);
-
-impl Wake for ThreadWake {
-    fn wake(self: Arc<Self>) {
-        self.0.unpark();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.0.unpark();
-    }
-}
-
-/// Poll a dynamically sized batch of same-type futures concurrently.
-///
-/// Multi perf uses this tiny executor instead of serial `block_on` calls so
-/// Core completion, rather than a binding-owned window, controls admission.
-pub fn block_on_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
-    let mut futures: Vec<_> = futures.into_iter().map(Box::pin).collect();
-    let mut outputs = Vec::with_capacity(futures.len());
-    let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
-    let mut context = TaskContext::from_waker(&waker);
-    while !futures.is_empty() {
-        let mut index = 0;
-        let mut progressed = false;
-        while index < futures.len() {
-            match futures[index].as_mut().poll(&mut context) {
-                Poll::Ready(output) => {
-                    outputs.push(output);
-                    drop(futures.swap_remove(index));
-                    progressed = true;
-                }
-                Poll::Pending => index += 1,
-            }
-        }
-        if !progressed && !futures.is_empty() {
-            thread::park();
-        }
-    }
-    outputs
-}
-
 #[derive(Clone, Copy)]
 struct ReadyTask {
     slot: usize,
@@ -236,10 +195,6 @@ impl<F: Future> ConcurrentTasks<F> {
 
     pub fn any_pending(&self) -> bool {
         self.pending != 0
-    }
-
-    pub fn wait_for_wake(&self, timeout: Duration) {
-        thread::park_timeout(timeout);
     }
 
     fn install(&mut self, slot: usize, future: F) {
@@ -1200,9 +1155,11 @@ impl MultiSettings {
                 env_or_u64("PERF_MULTI_HWM", 0),
             ),
             send_timeout_ms: env_or("PERF_MULTI_SNDTIMEO_MS", DEFAULT_TIMEOUT_MS)
-                .try_into().expect("PERF_MULTI_SNDTIMEO_MS exceeds Core milliseconds"),
+                .try_into()
+                .expect("PERF_MULTI_SNDTIMEO_MS exceeds Core milliseconds"),
             receive_timeout_ms: env_or("PERF_MULTI_RCVTIMEO_MS", DEFAULT_TIMEOUT_MS)
-                .try_into().expect("PERF_MULTI_RCVTIMEO_MS exceeds Core milliseconds"),
+                .try_into()
+                .expect("PERF_MULTI_RCVTIMEO_MS exceeds Core milliseconds"),
         }
     }
 }

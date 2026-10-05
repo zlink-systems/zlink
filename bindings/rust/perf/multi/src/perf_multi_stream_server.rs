@@ -100,8 +100,9 @@ fn main() {
     let mut packet = StreamPacket::empty();
     loop {
         if stopping.load(Ordering::Acquire) && drain_deadline.is_none() {
-            drain_deadline =
-                Some(Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1) as u64));
+            drain_deadline = Some(
+                Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1) as u64),
+            );
         }
 
         let received_packet = match stream.recv_packet(&mut packet, RecvFlags::DONT_WAIT) {

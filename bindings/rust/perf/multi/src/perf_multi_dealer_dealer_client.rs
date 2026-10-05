@@ -5,7 +5,7 @@ mod common;
 
 use std::io::{self, BufRead, Write};
 use std::time::{Duration, Instant};
-use zlink::{DealerSocket, Message, RoutingId, SocketMonitor};
+use zlink::{DealerSocket, Message, POLLCOMPLETION, PollEvent, Poller, RoutingId, SocketMonitor};
 
 fn main() {
     let args = common::MultiArgs::parse();
@@ -59,12 +59,21 @@ fn main() {
     }
     ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
+    let poller = Poller::new().expect("poller");
+    for (index, socket) in sockets.iter().enumerate() {
+        poller
+            .add_socket(socket, POLLCOMPLETION, index)
+            .expect("poller add");
+    }
+    let mut poll_events = vec![PollEvent::default(); sockets.len().max(1)];
+
     let deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
     let drain_deadline = deadline + common::resolve_multi_send_drain_timeout();
     let payload_size = args.msg_size.max(common::HEADER_SIZE);
     let mut sequence = 1u64;
     let mut tasks = common::ConcurrentTasks::new(sockets.len());
     while Instant::now() < deadline || (tasks.any_pending() && Instant::now() < drain_deadline) {
+        let mut submitted = false;
         if Instant::now() < deadline {
             for (slot, socket) in sockets.iter().enumerate() {
                 if tasks.is_pending(slot) {
@@ -81,6 +90,7 @@ fn main() {
                     sequence += 1;
                     let submission = perf_submit_measurement_async!(socket.send(), msg)
                         .unwrap_or_else(|err| panic!("send failed: {err}"));
+                    submitted = true;
                     if submission.result == zlink::SubmitResult::Backpressured {
                         tasks.insert(slot, submission.admitted);
                         break;
@@ -89,19 +99,28 @@ fn main() {
             }
         }
         let ready = tasks.poll_ready();
+        let progressed = submitted || !ready.is_empty();
         for (_, result) in &ready {
             if let Err(err) = result {
                 panic!("send failed: {err}");
             }
         }
-        if ready.is_empty() && tasks.any_pending() {
-            let wait_deadline = if Instant::now() < deadline {
-                deadline
-            } else {
-                drain_deadline
-            };
-            tasks.wait_for_wake(wait_deadline.saturating_duration_since(Instant::now()));
+        if Instant::now() >= deadline && !tasks.any_pending() {
+            break;
         }
+        let wait_deadline = if Instant::now() < deadline {
+            deadline
+        } else {
+            drain_deadline
+        };
+        let wait_ms = if progressed {
+            0
+        } else {
+            common::poll_timeout_until(wait_deadline)
+        };
+        poller
+            .wait(&mut poll_events, wait_ms)
+            .unwrap_or_else(|err| panic!("poller wait failed: {err}"));
     }
     assert!(!tasks.any_pending(), "send admission drain timed out");
     if let Some(socket) = sockets.first() {
@@ -113,19 +132,24 @@ fn main() {
             "dealer",
         );
     }
-    let stop_futures = sockets
-        .iter()
-        .map(|socket| {
-            socket
-                .send()
-                .message(Message::try_from(common::STOP_TOKEN).expect("stop token"))
-                .submit()
-                .expect("stop token submit")
-                .admitted
-        })
-        .collect();
-    for result in common::block_on_all(stop_futures) {
-        result.unwrap_or_else(|err| panic!("stop token send failed: {err}"));
+    for (slot, socket) in sockets.iter().enumerate() {
+        let submission = socket
+            .send()
+            .message(Message::try_from(common::STOP_TOKEN).expect("stop token"))
+            .submit()
+            .unwrap_or_else(|err| panic!("stop token submit failed: {err}"));
+        tasks.insert(slot, submission.admitted);
+    }
+    while tasks.any_pending() {
+        let ready = tasks.poll_ready();
+        for (_, result) in ready {
+            result.unwrap_or_else(|err| panic!("stop token send failed: {err}"));
+        }
+        if tasks.any_pending() {
+            poller
+                .wait(&mut poll_events, -1)
+                .unwrap_or_else(|err| panic!("poller wait failed: {err}"));
+        }
     }
 
     println!("CLIENT_DONE,{}", args.msg_size);
