@@ -129,7 +129,7 @@ number lives.
 |---|---|---|
 | `MaxQueuedApplicationJobs`, pause/resume ratio | see document | [Application Job Queue And Backpressure](04-application-job-queue-and-backpressure.en.md) |
 | Owner occupancy time budget, lifecycle consecutive-execution cap | 10 ms, 8 turns | [Handler Turn And Execution Gate "7. Lane Separation And Priority (Implementation)"](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation) |
-| Send timeout default, admission deadline owner | 1 second per family | [Submit And Completion "7. Admission Deadline — Owner And Value Rules"](01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules) |
+| One-way send wait termination, Classic fanout send timeout default | No time limit for sends, 1 second for Classic fanout | [Submit And Completion "7. One-Way Send Wait Termination And Classic Fanout Send Timeout"](01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout) |
 | Dispatcher concurrent-callback cap | None — never exceeds the number of in-progress operations | [Submit And Completion "11. The Execution Turn Of The Completion Callback (Implementation)"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation) |
 | [MaxMessageSize](../00-foundation/02-glossary.en.md#maxmessagesize), the maximum message size a listener can receive (StreamNode) | 64 KiB | [Application Job Queue And Backpressure](04-application-job-queue-and-backpressure.en.md) |
 

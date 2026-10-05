@@ -125,8 +125,6 @@ public interface ZLinkMeshNodeSocketConfig {
  void setReceiveHighWaterMark(long value);
  Optional<Duration> receiveTimeout();
  void setReceiveTimeout(Duration value);
- Optional<Duration> sendTimeout();
- void setSendTimeout(Duration value);
 }
 
 @FunctionalInterface
@@ -467,8 +465,6 @@ public interface systems.zlink.framework.configuration.ZLinkMeshNodeSocketConfig
  public abstract void setReceiveHighWaterMark(long);
  public abstract java.util.Optional<java.time.Duration> receiveTimeout();
  public abstract void setReceiveTimeout(java.time.Duration);
- public abstract java.util.Optional<java.time.Duration> sendTimeout();
- public abstract void setSendTimeout(java.time.Duration);
 }
 public final class systems.zlink.framework.configuration.ZLinkMeshPeerConnection extends java.lang.Record {
  public systems.zlink.framework.configuration.ZLinkMeshPeerConnection(java.lang.String, java.util.Optional<systems.zlink.contracts.core.RoutingId>);

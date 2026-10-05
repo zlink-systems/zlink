@@ -12,24 +12,18 @@ import java.util.Optional;
 
 final class MeshNodeRegistrationSubmitTimeoutTest {
     @Test
-    void routerAndPublisherRejectNonPositiveOrOverflowingSendTimeouts() {
+    void classicPublisherRejectsNonPositiveOrOverflowingSendTimeouts() {
         MeshNodeRegistration registration = new MeshNodeRegistration("mesh");
-
-        assertThrows(
-                ZLinkConfigurationException.class,
-                () -> registration.configureRouterSocket().setSendTimeout(Duration.ZERO));
-        assertThrows(
-                ZLinkConfigurationException.class,
-                () -> registration.configureSpotPublisher().setSendTimeout(Duration.ofMillis(-1)));
-        assertThrows(
-                ZLinkConfigurationException.class,
-                () -> registration.configureRouterSocket().setSendTimeout(Duration.ofDays(365)));
-        assertThrows(
-                ZLinkConfigurationException.class,
-                () ->
-                        registration
-                                .configureRouterSocket()
-                                .setSendTimeout(Duration.ofMillis((long) Integer.MAX_VALUE + 1L)));
+        for (Duration timeout :
+                new Duration[] {
+                    Duration.ZERO,
+                    Duration.ofMillis(-1),
+                    Duration.ofMillis((long) Integer.MAX_VALUE + 1L)
+                }) {
+            assertThrows(
+                    ZLinkConfigurationException.class,
+                    () -> registration.configureSpotPublisher().setSendTimeout(timeout));
+        }
     }
 
     @Test
@@ -37,15 +31,11 @@ final class MeshNodeRegistrationSubmitTimeoutTest {
         MeshNodeRegistration registration = new MeshNodeRegistration("mesh");
         Duration value = Duration.ofNanos(1);
 
-        registration.configureRouterSocket().setSendTimeout(value);
         registration.configureSpotPublisher().setSendTimeout(value);
 
-        assertEquals(value, registration.configureRouterSocket().sendTimeout().orElseThrow());
         assertEquals(value, registration.configureSpotPublisher().sendTimeout().orElseThrow());
 
-        registration.configureRouterSocket().setSendTimeout(null);
         registration.configureSpotPublisher().setSendTimeout(null);
-        assertEquals(Optional.empty(), registration.configureRouterSocket().sendTimeout());
         assertEquals(Optional.empty(), registration.configureSpotPublisher().sendTimeout());
     }
 
@@ -54,10 +44,8 @@ final class MeshNodeRegistrationSubmitTimeoutTest {
         MeshNodeRegistration registration = new MeshNodeRegistration("mesh");
         Duration maximum = Duration.ofMillis(Integer.MAX_VALUE);
 
-        registration.configureRouterSocket().setSendTimeout(maximum);
         registration.configureSpotPublisher().setSendTimeout(maximum);
 
-        assertEquals(maximum, registration.configureRouterSocket().sendTimeout().orElseThrow());
         assertEquals(maximum, registration.configureSpotPublisher().sendTimeout().orElseThrow());
     }
 

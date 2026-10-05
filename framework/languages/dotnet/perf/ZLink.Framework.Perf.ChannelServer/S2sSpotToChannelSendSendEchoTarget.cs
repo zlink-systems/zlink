@@ -14,38 +14,77 @@ public static class S2sSpotToChannelSendSendEchoTarget
 {
     public static async Task RunAsync(RoleConfig config)
     {
-        if (config.role != "channel" || config.source) throw new ArgumentException("The Channel role is the echo target of this scenario.");
-        var builder = ServerApplication.Builder(config, options =>
-        {
-            var mesh = options.AddRouteMesh(config.meshName!).SetRoutingIdPrefix("perf-channel").Listen(config.transportEndpoints["mesh"]);
-            mesh.Objects().Client();
-            mesh.Channel(config.channelName!).Server().AddSendHandler<S2sReturnToSpotHandler, PerfEchoRequest>();
-        });
+        if (config.role != "channel" || config.source)
+            throw new ArgumentException("The Channel role is the echo target of this scenario.");
+        var builder = ServerApplication.Builder(
+            config,
+            options =>
+            {
+                var mesh = options
+                    .AddRouteMesh(config.meshName!)
+                    .SetRoutingIdPrefix("perf-channel")
+                    .Listen(config.transportEndpoints["mesh"]);
+                mesh.Objects().Client();
+                mesh.Channel(config.channelName!)
+                    .Server()
+                    .AddSendHandler<S2sReturnToSpotHandler, PerfEchoRequest>();
+            }
+        );
         var app = builder.Build();
         ServerApplication.Map(app);
         await app.RunAsync();
     }
 }
 
-public sealed class S2sReturnToSpotHandler(Measurement measurement, IZLinkSpotClient spots, RoleConfig config) : IZLinkSendHandler<PerfEchoRequest>
+public sealed class S2sReturnToSpotHandler(
+    Measurement measurement,
+    IZLinkSpotClient spots,
+    RoleConfig config
+) : IZLinkSendHandler<PerfEchoRequest>
 {
-    public async ValueTask HandleAsync(PerfEchoRequest message, IZLinkMessageContext context, CancellationToken cancellationToken)
+    public async ValueTask HandleAsync(
+        PerfEchoRequest message,
+        IZLinkMessageContext context,
+        CancellationToken cancellationToken
+    )
     {
         var received = PerfClock.Now;
         measurement.HandlerEnter();
         try
         {
-            if (message.clientId < 0 || config.spotIds.Length == 0 || string.IsNullOrEmpty(message.returnSpotId))
-                throw new PerfValidationException("IdentityMismatch", "The request has no source Spot in this cell.");
+            if (
+                message.clientId < 0
+                || config.spotIds.Length == 0
+                || string.IsNullOrEmpty(message.returnSpotId)
+            )
+                throw new PerfValidationException(
+                    "IdentityMismatch",
+                    "The request has no source Spot in this cell."
+                );
             var expectedReturnSpotId = config.spotIds[message.clientId % config.spotIds.Length];
             measurement.ValidateRequest(message, returnSpotId: expectedReturnSpotId);
             var reply = PayloadPattern.Reply(message, received);
             measurement.RecordApplicationCall(message, "send");
-            await spots.SendToSpot(message.returnSpotId, reply).Async(cancellationToken);
-            if (measurement.Phase == "setup") measurement.SetupEvidence =
-                [new { kind = "typedProbeReply", source = "IZLinkSendHandler<PerfEchoRequest> -> IZLinkSpotClient.SendToSpot", observedValue = message.correlationId }];
+            await spots.SendToSpot(message.returnSpotId, reply).Async();
+            if (measurement.Phase == "setup")
+                measurement.SetupEvidence =
+                [
+                    new
+                    {
+                        kind = "typedProbeReply",
+                        source = "IZLinkSendHandler<PerfEchoRequest> -> IZLinkSpotClient.SendToSpot",
+                        observedValue = message.correlationId,
+                    },
+                ];
         }
-        catch (Exception error) { measurement.RecordDiagnostic(error); throw; }
-        finally { measurement.HandlerExit(); }
+        catch (Exception error)
+        {
+            measurement.RecordDiagnostic(error);
+            throw;
+        }
+        finally
+        {
+            measurement.HandlerExit();
+        }
     }
 }

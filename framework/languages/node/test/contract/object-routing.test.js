@@ -1182,89 +1182,34 @@ test('Ready Instance owner loss does not enter cold activation', async () => {
   assert.equal(coldActivations, 0);
 });
 
-test('Spot address deadline includes authority resolution and prevents a late submit', async () => {
+test('Spot send route resolution has no time limit and submits once when authority becomes ready', async () => {
   let resolveAuthority;
   let submits = 0;
-  const authorityRead = new Promise((resolve) => { resolveAuthority = resolve; });
+  const authorityRead = new Promise(resolve => { resolveAuthority = resolve; });
   const addressTransport = new internal.ZLinkHostSpotAddressTransport({
-    resolver: () => ({
-      async resolve() {
-        await authorityRead;
-        return {
-          routerChannelId: 'play',
-          targetNodeRid: 'node-a',
-          spotId: 'spot-1',
-          spotKind: framework.ZLinkSpotKind.User
-        };
-      }
-    }),
+    resolver: () => ({ async resolve() { await authorityRead; return {
+      routerChannelId: 'play', targetNodeRid: 'node-a', spotId: 'spot-1', spotKind: framework.ZLinkSpotKind.User
+    }; } }),
     routed: {
-      async sendToSpot() {
+      async sendToSpot(_target, _message, options) {
+        assert.equal(options.timeoutMs, undefined);
+        assert.equal(options.signal, undefined);
         submits += 1;
         return { status: ZLinkSubmitStatus.Submitted };
-      },
-      async requestToSpot() {
-        submits += 1;
-        return 'unexpected';
       }
     },
-    meshNames: () => [],
-    meshNode: () => undefined,
-    completions: () => undefined,
+    meshNames: () => [], meshNode: () => undefined, completions: () => undefined,
     defaultRequestTimeoutMs: 20
   });
-
-  const result = await addressTransport.sendToSpotAddress('spot-1', { value: 1 }, {
-    instanceSpot: false
-  });
-  assert.deepEqual(result, { status: ZLinkSubmitStatus.TimedOut });
+  let completed = false;
+  const pending = addressTransport.sendToSpotAddress('spot-1', { value: 1 }, { instanceSpot: false })
+    .finally(() => { completed = true; });
+  await new Promise(resolve => setTimeout(resolve, 3100));
+  assert.equal(completed, false);
   assert.equal(submits, 0);
   resolveAuthority();
-});
-
-test('Spot one-way address uses the selected Mesh send timeout instead of request timeout', async () => {
-  let releaseAuthority;
-  let submits = 0;
-  const authorityRead = new Promise((resolve) => { releaseAuthority = resolve; });
-  const startedAt = Date.now();
-  const addressTransport = new internal.ZLinkHostSpotAddressTransport({
-    resolver: () => ({
-      async resolve() {
-        await authorityRead;
-        return {
-          routerChannelId: 'play',
-          targetNodeRid: 'node-a',
-          spotId: 'spot-1',
-          spotKind: framework.ZLinkSpotKind.User
-        };
-      }
-    }),
-    routed: {
-      async sendToSpot() {
-        submits += 1;
-        return { status: ZLinkSubmitStatus.Submitted };
-      },
-      async requestToSpot() {
-        throw new Error('request is not used by this test.');
-      }
-    },
-    meshNames: () => ['play'],
-    meshNode: () => undefined,
-    completions: () => undefined,
-    defaultRequestTimeoutMs: 5_000,
-    defaultSendTimeoutMs: 500,
-    sendTimeoutMsForMesh: (mesh) => mesh === 'play' ? 40 : 500,
-    sendTimeoutMsForRouteChannel: (route) => route === 'play' ? 40 : 500
-  });
-
-  const result = await addressTransport.sendToSpotAddress('spot-1', { value: 1 }, {
-    instanceSpot: false,
-    initialMeshName: 'play'
-  });
-  assert.deepEqual(result, { status: ZLinkSubmitStatus.TimedOut });
-  assert.equal(submits, 0);
-  assert.ok(Date.now() - startedAt < 500);
-  releaseAuthority();
+  assert.deepEqual(await pending, { status: ZLinkSubmitStatus.Submitted });
+  assert.equal(submits, 1);
 });
 
 test('Missing Instance send directly awaits binding admission and submits once', async () => {

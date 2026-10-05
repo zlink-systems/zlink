@@ -98,7 +98,7 @@ serializer 선택은 framework가 처리한다.
 | `not_connected`, `route_not_connected` | `unavailable` |
 | `not_found`, `request_target_not_found`, `handler_not_found` | `not_found` |
 | typed 결과가 없는 admission 또는 filter 거부 | `rejected` |
-| queue에 자리가 없음 | 오류가 아니다. 자리가 날 때까지 기다리고, 시간이 다 되면 `deadline_exceeded` |
+| queue에 자리가 없음 | 오류가 아니다. 자리가 날 때까지 기다린다. Request만 request timeout이 다 되면 `deadline_exceeded` |
 | `busy` | `unavailable` |
 | `protocol_error`, `request_protocol_error` | `protocol_error` |
 
@@ -277,8 +277,8 @@ target_link_libraries(app PRIVATE zlink::framework_codec_protobuf)
 SPOT과 STREAM의 backpressure는 public **call object, timeout, result error kind**로만 관찰한다.
 
 - **application handler가 framework queue를 직접 제어하는 API를 두지 않는다.**
-- **queue가 가득 찼다고 실패로 끝내지 않는다.** 자리가 날 때까지 기다리고, 기다리다 시간이 다
- 되면 `deadline_exceeded`다. one-way·send·request가 모두 같고, local이든 remote든 같다
+- **queue가 가득 찼다고 실패로 끝내지 않는다.** 자리가 날 때까지 기다린다. One-way send에는 시간 상한이
+ 없고, request는 request timeout이 다 되면 `deadline_exceeded`다. local이든 remote든 같다
  ([Spot 메시징 §5.3](../../../03-spot-actor/02-spot-messaging.ko.md)).
 
 이 규칙은 일반 SPOT·STREAM 실행 queue에 적용된다. Message Follow relay가 잠시 보관하는

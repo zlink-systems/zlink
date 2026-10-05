@@ -321,7 +321,7 @@ def export_section(lang: str, section: str, ref: str, root: pathlib.Path) -> int
 
 
 def export_root_files(lang: str, ref: str, root: pathlib.Path) -> None:
-    if lang == "cpp":
+    if lang in ("cpp", "java", "kotlin"):
         name = "samples/windows-process-common.ps1"
         src = "framework/languages/dotnet/" + name
         data = run(["git", "-c", "core.autocrlf=false", "show", "%s:%s" % (ref, src)])

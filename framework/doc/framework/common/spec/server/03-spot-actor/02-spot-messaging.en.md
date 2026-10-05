@@ -385,19 +385,14 @@ is used, so `InMesh(...)` doesn't move the existing Spot.
 Spot direct send only provides `Async(...)`. A separate API that doesn't build an
 async call and returns completion immediately isn't provided.
 
-If the owner MeshNode's ROUTER queue is temporarily full, it waits, up to a finite
-send timeout, for the queue to be able to accept the message.
+If the owner MeshNode's ROUTER queue is temporarily full, it waits for the queue to be able to
+accept the message. This wait has no time limit and no caller cancellation
+([Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)).
 
 A regular direct send to a Ready Spot completes with no return value once the
 source's send path accepts the message. This completion doesn't mean the target
-Spot's handler ran. If it isn't accepted by the send timeout, it fails with the
-Framework exception raised when an operation doesn't satisfy its completion
-condition by the allowed deadline,
-[`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded); if there is no Spot
-or route, `NotFound`; if the runtime is
-shutting down, `ShuttingDown`. The detailed boundary of cancellation and errors
-occurring in the caller process follows
-[Async Execution Policy §1.3](../01-execution/01-submit-and-completion.en.md).
+Spot's handler ran. If there is no Spot or route, it fails with `NotFound`; if the runtime is
+shutting down, `ShuttingDown`.
 
 A submit needing cold activation also completes once the send path to the selected
 target accepts the activation envelope. It doesn't wait for the target to secure
@@ -611,9 +606,8 @@ of the common contract.
 Logical Multicast doesn't provide a publish-only delivery policy option.
 
 The framework limits the number of publish operations that can be processed
-concurrently. If every worker is in use, it waits, up to a finite send timeout, for
-a worker and source-local outbound capacity. If it can't secure them in time, it
-fails with `DeadlineExceeded` without sending a message to any target. If
+concurrently. If every worker is in use, it waits with no time limit for
+a worker and source-local outbound capacity. If
 cancellation or runtime shutdown is confirmed before publish starts, it completes
 with the existing typed cancellation or `ShuttingDown` error respectively.
 
@@ -654,8 +648,8 @@ sequenceDiagram
     participant Local as Local Spot queue
 
     Caller->>Executor: submit publish
-    alt no worker available
-        Executor-->>Caller: DeadlineExceeded without target processing
+    alt cancellation or shutdown before a worker is secured
+        Executor-->>Caller: cancellation or ShuttingDown without target processing
     else worker available
         Executor->>Runtime: start processing the fixed target list
         Executor-->>Caller: complete normally with no return value
@@ -795,11 +789,11 @@ together.
 
 | Family | Saturated queue | Result the caller gets |
 |---|---|---|
-| Send/one-way | An outbound or Spot/Actor queue **on the same runtime** | Follows [Async Execution Policy §1](../01-execution/01-submit-and-completion.en.md) — waits for a slot up to send timeout; if the time runs out, `DeadlineExceeded` |
+| Send/one-way | An outbound or Spot/Actor queue **on the same runtime** | Waits until a slot frees up. There is no time limit and no caller cancellation ([Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)) |
 | Send/one-way | A Spot/Actor queue **on a different node** | **No result.** Send completion follows [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary). A later target admission failure is recorded in metric/log/trace |
-| Publish (before starting) | A worker slot or source-local outbound | Waits up to send timeout. If it can't be secured, `DeadlineExceeded` |
+| Publish (before starting) | A worker slot or source-local outbound | Waits with no time limit. Ends only with cancellation or shutdown before starting |
 | Publish (after starting) | Local Spot queue | **Waits until room appears.** Publish has already completed, so waiting does not change the caller's result. Only a failure for a reason other than capacity is recorded as an observation (§4.3) |
-| Request | A Spot/Actor queue in the same runtime or on another node | Same as send — it waits for room, and ends with `DeadlineExceeded` when the time runs out ([Framework error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure)). |
+| Request | A Spot/Actor queue in the same runtime or on another node | It waits for room, and ends with `DeadlineExceeded` when the request timeout runs out ([Framework error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure)). |
 | Control claim | A control limit in the same runtime or on another node | The same as above ([Framework error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure)). |
 
 Publish's two rows differ because **the completion point sits between them.**

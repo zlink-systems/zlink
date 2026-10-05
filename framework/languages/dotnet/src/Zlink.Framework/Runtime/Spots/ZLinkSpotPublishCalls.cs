@@ -125,7 +125,6 @@ internal sealed class ZLinkExternalSpotPublishCall<TEvent>(
                     () => bundle.Spot.Publish(channelName, topic, parts, SendFlags.None, metadata),
                     cancellationToken,
                     runtime.ShutdownToken,
-                    runtime.Registration.DefaultSocketSendTimeout,
                     ReleaseWorkerResources,
                     runtime.ErrorSink
                 )
@@ -147,7 +146,6 @@ internal static class ZLinkLogicalMulticastSubmitter
         Action publish,
         CancellationToken cancellationToken,
         CancellationToken shutdownToken,
-        TimeSpan admissionTimeout,
         Action release,
         IZLinkRuntimeFailureReporter errorSink
     )
@@ -185,7 +183,6 @@ internal static class ZLinkLogicalMulticastSubmitter
                 .SubmitDirectAsync(
                     operation.Run,
                     operation.FailShutdownBeforeStart,
-                    admissionTimeout,
                     admissionCancellation.Token
                 )
                 .ConfigureAwait(false);

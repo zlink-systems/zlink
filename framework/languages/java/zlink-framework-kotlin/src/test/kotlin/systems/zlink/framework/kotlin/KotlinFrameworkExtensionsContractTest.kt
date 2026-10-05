@@ -26,6 +26,7 @@ import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.actors.ZLinkActorRequestCall
 import systems.zlink.framework.actors.ZLinkActorSendCall
 import systems.zlink.framework.channels.ZLinkRequestCall
+import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.channels.ZLinkSendCall
 import systems.zlink.framework.errors.ZLinkConfigurationException
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
@@ -43,6 +44,34 @@ import systems.zlink.framework.streams.ZLinkSessionActor
 import systems.zlink.framework.streams.ZLinkSessionContext
 
 class KotlinFrameworkExtensionsContractTest {
+    @Test
+    fun `send coroutine cancellation leaves Java submission pending`() = runBlocking {
+        val stage = RecordingCancellationFuture<Void>()
+        val call =
+            object : ZLinkSendCall {
+                override fun metadata(key: String, value: String): ZLinkSendCall = this
+
+                override fun metadata(values: Map<String, String>): ZLinkSendCall = this
+
+                override fun submit(): CompletionStage<Void> = stage
+            }
+        val client =
+            java.lang.reflect.Proxy.newProxyInstance(
+                ZLinkRouteClient::class.java.classLoader,
+                arrayOf(ZLinkRouteClient::class.java),
+            ) { _, method, _ ->
+                if (method.name == "sendToNode") call else error(method.name)
+            } as ZLinkRouteClient
+        val job =
+            launch(start = CoroutineStart.UNDISPATCHED) {
+                client.kotlin().sendToNode("mesh", RoutingId.from("node"), "message").await()
+            }
+        job.cancelAndJoin()
+        assertFalse(stage.isDone)
+        assertEquals(0, stage.cancellations)
+        assertTrue(stage.complete(null))
+    }
+
     @Test
     fun `Kotlin manager wrappers preserve fluent state and coroutine terminals`() = runBlocking {
         val actorManager = RecordingActorManager()

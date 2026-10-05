@@ -13,9 +13,7 @@ export class ZLinkLocalSpotRouteTransport {
     spotId: RoutingId,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>,
-    timeoutMs?: number
+    metadata?: ReadonlyMap<string, string>
   ): Promise<void> {
     if (this.dispatcher === undefined) {
       throw new ZLinkConfigurationException(
@@ -24,8 +22,6 @@ export class ZLinkLocalSpotRouteTransport {
     }
     await this.dispatcher.send(spotId, packetName, message, {
       channelName: routerChannelId,
-      admissionTimeoutMs: timeoutMs ?? this.defaultRequestTimeoutMs,
-      signal,
       metadata
     });
   }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.27.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.28.0 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
@@ -978,7 +978,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-  target_link_libraries(test_cpp_framework_submit_result_contract PRIVATE zlink::cpp Threads::Threads)
+  target_link_libraries(test_cpp_framework_submit_result_contract PRIVATE
+    zlink::cpp
+    opentelemetry-cpp::api
+    Threads::Threads)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_submit_result_contract
     COMMAND test_cpp_framework_submit_result_contract

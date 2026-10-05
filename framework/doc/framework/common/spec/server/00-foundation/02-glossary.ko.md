@@ -771,8 +771,8 @@ handler 실행과 reply까지 하나의 end-to-end deadline을 적용할 수 있
 | 형태 | Absolute end-to-end time boundary |
 | .NET 표기 | Caller는 `TimeSpan` timeout을 지정하고 Framework와 lifecycle context는 고정된 `DateTimeOffset Deadline`을 사용한다. |
 | 공개 구성 | Terminal submit을 시작할 때 한 번 계산한 마지막 시점 하나다. 단계별 timeout의 합이 아니다. |
-| 생성·관리 | Source Framework가 caller timeout과 현재 시각으로 고정한다. |
-| 수명 | Resolve, reservation, factory, Ready barrier, handler와 reply가 공유하며 terminal completion 뒤 폐기한다. |
+| 생성·관리 | Request는 source Framework가 caller timeout과 현재 시각으로 고정한다. One-way의 Instance activation deadline은 [Spot 주소 메시징 §5](../03-spot-actor/06-spot-address-messaging.ko.md#5-existing-owner를-향한-direct-call과-완료-경계)가 정한다. |
+| 수명 | Request deadline은 resolve, reservation, factory, Ready barrier, handler와 reply가 공유하며 terminal completion 뒤 폐기한다. |
 
 <a id="factory"></a>
 ### Factory
@@ -1054,8 +1054,9 @@ Permits in use가 configured pause 경계 이상이면 host pressure state가 `p
 
 Operation에 허용된 deadline까지 해당 operation의 완료 조건을 만족하지 못했을 때
 발생하는 Framework exception이다. 완료 조건은 operation마다 다르다. 예를 들어
-one-way send는 source queue가 message를 수락하는 시점, object 생성은 `Ready` 또는
-생성 실패 결과가 확정되는 시점까지 기다린다.
+request는 reply가 확정되는 시점, object 생성은 `Ready` 또는 생성 실패 결과가 확정되는
+시점까지 기다린다. One-way send에는 deadline이 없으며, Classic fanout publish만 publisher
+send timeout을 쓴다([Submit과 completion §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)).
 
 Public submit status가 아니며 request handler가 application reply를 반환하지 못한
 상태와도 구분한다.
@@ -2060,7 +2061,7 @@ Typed handler의 reply 반환과 STREAM의 명시적 Reply call은 이 권한을
 | .NET 표기 | 독립 token type 없음. Typed request handler의 reply 반환 또는 STREAM context의 `Reply(...)` call로 사용한다. |
 | 공개 구성 | Current request correlation에 연결된 opaque capability다. 내부 handle과 route는 공개하지 않는다. |
 | 생성·관리 | Framework가 request dispatch에 연결한다. Typed handler completion의 reply 변환과 STREAM의 명시적 reply 제출은 각 표면의 계약을 따른다. |
-| 수명 | Typed handler의 권한은 첫 terminal reply, error 또는 request cancellation·timeout으로 닫힌다. STREAM token의 소비 시점과 responder admission deadline은 [Submit과 completion §8](../01-execution/01-submit-and-completion.ko.md#8-stream-reply-token)이 소유하며, typed handler의 수명 문장을 STREAM에 적용하지 않는다. |
+| 수명 | Typed handler의 권한은 첫 terminal reply, error 또는 request cancellation·timeout으로 닫힌다. STREAM token의 소비 시점과 reply의 대기는 [Submit과 completion §8](../01-execution/01-submit-and-completion.ko.md#8-stream-reply-token)이 소유하며, typed handler의 수명 문장을 STREAM에 적용하지 않는다. |
 
 <a id="downstream-request"></a>
 ### Downstream request

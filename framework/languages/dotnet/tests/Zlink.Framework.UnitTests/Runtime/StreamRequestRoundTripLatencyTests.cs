@@ -112,7 +112,7 @@ public sealed class StreamRequestRoundTripLatencyTests(Xunit.Abstractions.ITestO
             CancellationToken cancellationToken
         )
         {
-            await Context.Client.Reply(new EchoReply("reply")).Async(cancellationToken);
+            await Context.Client.Reply(new EchoReply("reply")).Async();
         }
     }
 }

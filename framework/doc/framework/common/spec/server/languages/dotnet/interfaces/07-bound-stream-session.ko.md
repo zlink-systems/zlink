@@ -17,8 +17,7 @@ public interface IZLinkBoundSession
 public interface IZLinkBoundSessionSendCall
     : IZLinkMetadataCall<IZLinkBoundSessionSendCall>
 {
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+    ValueTask Async();
 }
 ```
 

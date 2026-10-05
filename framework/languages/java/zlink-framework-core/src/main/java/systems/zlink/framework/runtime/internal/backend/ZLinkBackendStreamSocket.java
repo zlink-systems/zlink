@@ -73,10 +73,13 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
         try {
             return sendBoundSessionPush(routingId, parts, SendFlags.DONT_WAIT)
                     ? CompletableFuture.completedFuture(null)
-                    : CompletableFuture.failedFuture(
-                            new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+                    : systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                            CompletableFuture.failedFuture(
+                                    new ZlinkSubmitException(SubmitResult.BACKPRESSURED)),
+                            true);
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            return systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                    CompletableFuture.failedFuture(failure), true);
         }
     }
 
@@ -99,16 +102,14 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
         try {
             return send(routingId, header, parts, SendFlags.DONT_WAIT)
                     ? CompletableFuture.completedFuture(null)
-                    : CompletableFuture.failedFuture(
-                            new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+                    : systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                            CompletableFuture.failedFuture(
+                                    new ZlinkSubmitException(SubmitResult.BACKPRESSURED)),
+                            true);
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            return systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                    CompletableFuture.failedFuture(failure), true);
         }
-    }
-
-    default CompletionStage<Void> sendAsync(
-            RoutingId routingId, ZLinkStreamHeader header, List<Message> parts, Duration timeout) {
-        return sendAsync(routingId, header, parts);
     }
 
     /** Admits an ordered Session control synchronously and returns its physical terminal. */
@@ -136,10 +137,13 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
         try {
             return reply(routingId, header, parts, SendFlags.DONT_WAIT)
                     ? CompletableFuture.completedFuture(null)
-                    : CompletableFuture.failedFuture(
-                            new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+                    : systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                            CompletableFuture.failedFuture(
+                                    new ZlinkSubmitException(SubmitResult.BACKPRESSURED)),
+                            true);
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            return systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                    CompletableFuture.failedFuture(failure), true);
         }
     }
 
@@ -171,10 +175,13 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
         try {
             return relayBoundActor(sessionRid, actorId, header, parts, SendFlags.DONT_WAIT)
                     ? CompletableFuture.completedFuture(null)
-                    : CompletableFuture.failedFuture(
-                            new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+                    : systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                            CompletableFuture.failedFuture(
+                                    new ZlinkSubmitException(SubmitResult.BACKPRESSURED)),
+                            true);
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            return systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                    CompletableFuture.failedFuture(failure), true);
         }
     }
 
@@ -194,10 +201,13 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
                             parts,
                             SendFlags.DONT_WAIT)
                     ? CompletableFuture.completedFuture(null)
-                    : CompletableFuture.failedFuture(
-                            new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+                    : systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                            CompletableFuture.failedFuture(
+                                    new ZlinkSubmitException(SubmitResult.BACKPRESSURED)),
+                            true);
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            return systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                    CompletableFuture.failedFuture(failure), true);
         }
     }
 

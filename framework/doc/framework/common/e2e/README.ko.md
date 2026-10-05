@@ -554,7 +554,7 @@ namespace를 사용하므로 지원하지 않는다.
 | [Config 10 — Spot actor join/relocation](config-10-spot-actor-relocation.ko.md) | Location·Relocation Store + Actor node 2 + Session gateway 2 + caller | Local·remote Join, state와 이동 중 message 순서, Session binding route 갱신, Message Follow, PerActor·SpotWide relocation |
 | [Config 11 — 관측·운영 배포](config-11-observability-ops.ko.md) | Session + Play 2 + workflow 2 + Stores | Public flow correlation·metrics, maintenance Relocate·Shutdown, patch와 drain의 client·application 결과 |
 | [Config 12 — Channel egress routing](config-12-channel-egress-routing.ko.md) | Session·Play·API + ClientServer service 2 | ChannelName routing, local egress 선택, weight·shutdown·restart와 request·send terminal |
-| [Config 13 — One-way submit admission](config-13-submit-admission.ko.md) | RouteMesh·ClientServer·Spot·Actor·Stream targets | One-way admission completion, 공통 timeout·shutdown과 지원 언어의 cancellation, zero target, ordering과 hidden retry 금지 |
+| [Config 13 — One-way submit admission](config-13-submit-admission.ko.md) | RouteMesh·ClientServer·Spot·Actor·Stream targets | One-way admission completion, 시간 상한 없는 send 대기, route 제거·shutdown, Logical Multicast commit 전 cancellation, zero target, ordering과 hidden retry 금지 |
 | [Config 14 — Instance Spot activation](config-14-instance-spot.ko.md) | Location·Relocation Store + caller 2 + owner 2 + User Spot owner | Cold activation, concurrent first call, first-message ordering, crash·deadline·capacity·relocation과 cross-language 결과 |
 
 ## 3.1 구성 축 — config를 관통하는 변형

@@ -492,7 +492,6 @@ export interface ZLinkBackendDealerSocket extends ZLinkBackendConnectableSocket 
   sendHighWaterMark: number;
   receiveHighWaterMark: number;
   receiveTimeoutMs: number;
-  sendTimeoutMs: number;
   maxMessageSize: number;
   send(message: Message | readonly Message[]): Promise<void>;
   request(message: Message | readonly Message[], timeoutMs?: number): Promise<readonly Message[]>;
@@ -523,7 +522,6 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
   sendHighWaterMark: number;
   receiveHighWaterMark: number;
   receiveTimeoutMs: number;
-  sendTimeoutMs: number;
   maxMessageSize: number;
   setRoutingId(routingId: RoutingId): void;
   recv(flags?: ZLinkBackendRecvFlags): Received | undefined;
@@ -577,7 +575,6 @@ export interface ZLinkBackendStreamPacket {
 }
 
 export interface ZLinkBackendStreamSocket extends ZLinkBackendSocket {
-  readonly sendTimeoutMs: number;
   readonly sendHighWaterMark: number;
   /** Framework stream ingress uses this bound for packet payload validation. */
   maxMessageSize: number;
@@ -588,11 +585,7 @@ export interface ZLinkBackendStreamSocket extends ZLinkBackendSocket {
     payload: Message | readonly Message[],
     flags: ZLinkBackendSendFlags
   ): boolean;
-  submit(
-    routingId: RoutingId,
-    payload: Message | readonly Message[],
-    timeoutMs?: number
-  ): Promise<void>;
+  submit(routingId: RoutingId, payload: Message | readonly Message[]): Promise<void>;
   disconnectPeer(routingId: RoutingId): void;
   bindActor(
     sessionRid: RoutingId,

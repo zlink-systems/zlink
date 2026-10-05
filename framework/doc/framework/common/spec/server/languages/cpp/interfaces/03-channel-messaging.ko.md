@@ -98,7 +98,6 @@ struct mesh_node_socket_config_t {
     zlink::byte_count_t receive_high_water_mark =
         zlink::byte_count_t::bytes(4'096'000);
     std::optional<std::chrono::milliseconds> receive_timeout;
-    std::optional<std::chrono::milliseconds> send_timeout;
 };
 
 enum class object_role_t : std::uint8_t {
@@ -647,7 +646,6 @@ public:
     stream_send_call_t &metadata(std::string key, std::string value);
     stream_send_call_t &packet_name(std::string packet_name);
     stream_send_call_t &compress();
-    stream_send_call_t &timeout(std::chrono::milliseconds timeout);
     task_t<void> async();
     void submit();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
 };
@@ -773,7 +771,7 @@ offload 실행 정책을 명시한다.
 request handler 반환값은 `TReply` 또는 `task_t<TReply>`를 허용한다. `task_t<TReply>`를
 반환하는 handler는 `.NET`의 `async Task<TReply>` handler와 같은 의미이며, 내부
 request처럼 결과를 기다려야 하는 호출은 `co_await call.async()` 형태로 사용한다.
-one-way send/push는 `co_await call.async()`으로 send timeout까지 bounded admission 결과를 받는다.
+one-way send/push는 `co_await call.async()`으로 admission 결과를 받는다. 대기 종료는 [Submit과 완료 §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이 정한다.
 즉시 수락되면 준비된 task가 바로 완료될 수 있으며 remote handler 완료는 기다리지 않는다.
 
 Handler coroutine은 blocking wait 없이 `task_t<T>`로 완료된다. 같은 task의 terminal 결과는 한 번만
@@ -957,31 +955,23 @@ publisher local queue가 event를 수락하면 정상 완료한다.
 모든 server one-way call의 `async()`과 session Actor `relay(...)`는 정상 완료 값을 만들지 않는다. 정상
 완료는 operation family가 정의한 source-local queue가 message를 수락했다는 뜻이다. Remote handler 실행,
 subscriber 수신, remote Spot queue 수락과 application callback 완료는 기다리지 않는다. Queue capacity가
-부족하면 해당 family의 send timeout까지 capacity signal을 기다리고, deadline 안에 공간이 생기면 message를
-정확히 한 번 제출한다. `backpressured`는 public terminal result나 즉시 발생하는 application exception이
-아니다. Timeout은 `deadline_exceeded`, route 단절은 `unavailable`, runtime 종료는
+부족하면 capacity signal을 기다리고, 공간이 생기면 message를 정확히 한 번 제출한다. 이 대기에는 시간 상한이
+없다([Submit과 완료 §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)). `backpressured`는 public terminal result나 즉시 발생하는 application exception이
+아니다. Route 단절은 `unavailable`, runtime 종료는
 `shutting_down` kind의 `framework_exception_t`로 완료한다. Actor·Spot·Mesh·session target 부재는 operation
 family가 정의한 기존 error kind를 사용한다. C++ server call에는 별도 cancellation 인자가 없다.
-반환된 task를 보관하지 않거나 파괴해도 operation이 취소된다고 보장하지 않으며 timeout이나 shutdown 뒤에
+반환된 task를 보관하지 않거나 파괴해도 operation은 취소되지 않으며 shutdown 뒤에
 같은 operation을 자동으로 다시 제출하지 않는다. 잘못된 argument·state와 중복 submit은
 `framework_exception_t`로 완료한다. STREAM reply의 유효한 첫 terminator는
 transport를 시작하기 전에 one-shot reply token을 원자적으로
 claim하고 소비한다. 같은 token에서 만든 두 call이 경쟁하면 claim에 실패한 call은 transport를 시도하지 않고
-`framework_exception_t`로 완료한다. Token을 소비한 call이 `deadline_exceeded`로 끝나도 token을
+`framework_exception_t`로 완료한다. Token을 소비한 call이 실패로 끝나도 token을
 다시 사용할 수 없으며 이미 사용한 token도 exceptional completion으로 처리한다. STREAM reply는 client
-request timeout을 전달받지 않으며 해당 STREAM socket의 send timeout만 사용한다.
+request timeout을 전달받지 않는다.
 
-RouteMesh node·Channel·[Spot](../../../00-foundation/02-glossary.ko.md#spot)·Actor는 선택한 MeshNode ROUTER, ClientServer는 client DEALER, [classic fanout](../../../00-foundation/02-glossary.ko.md#classic-fanout)은
-publisher socket, STREAM send·reply는 해당 STREAM socket의 send timeout을 사용한다. Bound session은
-local·remote Actor route가 바뀌어도 framework socket send timeout 하나를 사용한다. 일반 one-way call에는
-per-call `timeout(...)`을 두지 않지만 `stream_send_call_t`는 admission 대기 시간을 호출별로 더 짧게 제한할
-수 있다. 생략하면 STREAM socket send timeout을 사용하고 지정하면 둘 중 짧은 값을 사용하므로 socket
-timeout을 늘릴 수 없다. 값은 `1..INT_MAX` milliseconds이며 다른 단위에서 변환할 때 남은 fraction은 다음
-millisecond로 올린다. 만료되면 `deadline_exceeded`로 terminal-once 완료하고 이후 admission이나 replay를
-시작하지 않는다. STREAM reply에는 이 modifier를 제공하지 않는다. Socket 또는 MeshNode 설정이 없으면 무한 대기 대신 1초 기본값을
-사용한다. One-way admission에 사용하는 socket·MeshNode `std::chrono::milliseconds` 값은 `1..INT_MAX`
-범위만 허용한다. `0`, 음수와 상한 초과는 설정 시점 또는 늦어도 startup에서 configuration error로
-거부하며 기본값으로 바꾸지 않는다.
+[Classic fanout](../../../00-foundation/02-glossary.ko.md#classic-fanout) publisher만 send timeout을 사용하며, 값 규칙과
+기본값은 [Submit과 완료 §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이 정한다. 그 밖의 one-way call과 STREAM send·reply에는 per-call
+`timeout(...)`도 socket send timeout도 없다.
 
 Logical Multicast의 worker 수락, commit, terminal과 재시도 규칙은 [Interaction model §5](../../../00-foundation/04-interaction-model.ko.md#5-spot-logical-multicast)와 [Cancellation과 shutdown §4](../../../01-execution/03-cancellation-and-shutdown.ko.md#4-logical-multicast-cancellation)가 정한다.
 C++의 `publish_call_t::async()`는 `task_t<void>`를 반환한다.

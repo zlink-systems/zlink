@@ -204,7 +204,7 @@ public interface IZLinkSpotSendCall : IZLinkMetadataCall<IZLinkSpotSendCall>
 
     IZLinkSpotSendCall InMesh(string meshName);
 
-    ValueTask Async(CancellationToken cancellationToken = default);
+    ValueTask Async();
 }
 
 public interface IZLinkSpotRequestCall : IZLinkMetadataCall<IZLinkSpotRequestCall>

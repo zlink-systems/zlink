@@ -30,7 +30,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptio
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
@@ -49,7 +48,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
 
 final class ZLinkFanoutNoDropTest {
     private static final String CHANNEL = "events";
@@ -347,11 +345,6 @@ final class ZLinkFanoutNoDropTest {
             return delegate.createMonitoringAdapter(options);
         }
 
-        @Override
-        public Function<ZLinkBackendObject, Duration> admissionTimeout() {
-            return delegate.admissionTimeout();
-        }
-
         private PubSocket publisher() {
             return channels.publisher();
         }
@@ -376,8 +369,7 @@ final class ZLinkFanoutNoDropTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(
-                ZLinkBackendContext ignored, Duration sendTimeout) {
+        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext ignored) {
             throw new UnsupportedOperationException();
         }
 

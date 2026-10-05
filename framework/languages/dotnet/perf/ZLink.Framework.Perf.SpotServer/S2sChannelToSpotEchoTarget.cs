@@ -14,16 +14,25 @@ public static class S2sChannelToSpotEchoTarget
     public static async Task RunAsync(RoleConfig config)
     {
         var request = config.scenario == "s2s-channel-to-spot-request-echo";
-        var builder = request ? SpotRole.Builder<PerfEchoSpot>(config, callsChannel: false)
-                              : SpotRole.Builder<S2sSendEchoSpot>(config, callsChannel: true);   // the echo goes to the caller return ChannelName
-        builder.Services.AddSingleton(sp => new ScenarioMetrics(sp.GetRequiredService<Measurement>()).SpotInternalsUnsupported());
+        var builder = request
+            ? SpotRole.Builder<PerfEchoSpot>(config, callsChannel: false)
+            : SpotRole.Builder<S2sSendEchoSpot>(config, callsChannel: true); // the echo goes to the caller return ChannelName
+        builder.Services.AddSingleton(sp =>
+            new ScenarioMetrics(sp.GetRequiredService<Measurement>()).SpotInternalsUnsupported()
+        );
         var app = builder.Build();
         _ = app.Services.GetRequiredService<ScenarioMetrics>();
         ServerApplication.Map(app);
         await app.StartAsync();
-        var objects = await SpotRole.CreateSpotsAsync(config, app.Services.GetRequiredService<IZLinkSpotManager>(),
-            app.Services.GetRequiredService<IZLinkRouteMeshRuntime>(), app.Services.GetRequiredService<Measurement>(), app.Lifetime.ApplicationStopping);
-        if (objects is not null) SpotRole.Publish(app.Services.GetRequiredService<ObjectsReadiness>(), objects);
+        var objects = await SpotRole.CreateSpotsAsync(
+            config,
+            app.Services.GetRequiredService<IZLinkSpotManager>(),
+            app.Services.GetRequiredService<IZLinkRouteMeshRuntime>(),
+            app.Services.GetRequiredService<Measurement>(),
+            app.Lifetime.ApplicationStopping
+        );
+        if (objects is not null)
+            SpotRole.Publish(app.Services.GetRequiredService<ObjectsReadiness>(), objects);
         await app.WaitForShutdownAsync();
     }
 }
@@ -31,27 +40,52 @@ public static class S2sChannelToSpotEchoTarget
 public sealed class S2sSendEchoSpot(IZLinkSpotContext context) : IZLinkSpot
 {
     public IZLinkSpotContext Context { get; } = context;
+
     public void Configure() => Context.Handlers.AddPacket<S2sSendEchoHandler>();
 }
 
 // §10.4: the echo goes back as a second one-way send to the caller's own return ChannelName (in the DTO).
-public sealed class S2sSendEchoHandler(Measurement measurement, RoleConfig config) : IZLinkSpotPacketHandler<S2sSendEchoSpot, PerfEchoRequest>
+public sealed class S2sSendEchoHandler(Measurement measurement, RoleConfig config)
+    : IZLinkSpotPacketHandler<S2sSendEchoSpot, PerfEchoRequest>
 {
-    public async ValueTask HandleAsync(S2sSendEchoSpot spot, PerfEchoRequest message, CancellationToken cancellationToken)
+    public async ValueTask HandleAsync(
+        S2sSendEchoSpot spot,
+        PerfEchoRequest message,
+        CancellationToken cancellationToken
+    )
     {
         var received = PerfClock.Now;
         measurement.HandlerEnter();
         try
         {
             measurement.ValidateRequest(message, returnChannel: config.channelName);
-            if (string.IsNullOrEmpty(message.returnChannel)) throw new PerfValidationException("IdentityMismatch", "No return Channel in the request.");
+            if (string.IsNullOrEmpty(message.returnChannel))
+                throw new PerfValidationException(
+                    "IdentityMismatch",
+                    "No return Channel in the request."
+                );
             var reply = PayloadPattern.Reply(message, received);
             measurement.RecordApplicationCall(message, "send");
-            await spot.Context.Outbound.SendToChannel(message.returnChannel, reply).Async(cancellationToken);
-            if (measurement.Phase == "setup") measurement.SetupEvidence =
-                [new { kind = "typedProbeReply", source = "IZLinkSpotPacketHandler<PerfEchoRequest> -> SendToChannel", observedValue = message.correlationId }];
+            await spot.Context.Outbound.SendToChannel(message.returnChannel, reply).Async();
+            if (measurement.Phase == "setup")
+                measurement.SetupEvidence =
+                [
+                    new
+                    {
+                        kind = "typedProbeReply",
+                        source = "IZLinkSpotPacketHandler<PerfEchoRequest> -> SendToChannel",
+                        observedValue = message.correlationId,
+                    },
+                ];
         }
-        catch (Exception error) { measurement.RecordDiagnostic(error); throw; }
-        finally { measurement.HandlerExit(); }
+        catch (Exception error)
+        {
+            measurement.RecordDiagnostic(error);
+            throw;
+        }
+        finally
+        {
+            measurement.HandlerExit();
+        }
     }
 }

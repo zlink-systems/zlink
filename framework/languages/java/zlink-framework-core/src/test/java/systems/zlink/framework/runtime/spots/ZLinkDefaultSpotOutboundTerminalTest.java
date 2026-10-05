@@ -72,9 +72,6 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                                                                     .ZLinkBackendReceived
                                                             ::close);
                                         }
-                                        if (method.getName().equals("admissionTimeout")) {
-                                            return Duration.ofSeconds(1);
-                                        }
                                         if (method.getReturnType() == void.class) {
                                             return null;
                                         }

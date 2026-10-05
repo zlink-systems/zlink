@@ -198,7 +198,7 @@ export interface ZLinkSpotSendCall {
  instanceSpot(): this;
  instanceSpot(instanceSpotType: string): this;
  inMesh(meshName: string): this;
- submit(signal?: AbortSignal): Promise<void>;
+ submit(): Promise<void>;
 }
 
 export interface ZLinkSpotRequestCall {
@@ -311,7 +311,7 @@ Manager create/get-or-create is not provided for Instance Spot.
 `sendToSpot` and `requestToSpot` take the global SpotId and return `ZLinkSpotSendCall`
 or `ZLinkSpotRequestCall`. Marker overloads are `instanceSpot()` and
 `instanceSpot(instanceSpotType: string)`; the Mesh input is `inMesh(meshName: string)`.
-Send `submit(signal?: AbortSignal)` returns `Promise<void>`; request
+Send `submit()` returns `Promise<void>`; request
 `submit<TReply>(signal?: AbortSignal)` and `yield<TReply>(signal?: AbortSignal)` return
 `Promise<TReply>`. Exact declarations appear in [§2](#2-handler-and-outbound).
 

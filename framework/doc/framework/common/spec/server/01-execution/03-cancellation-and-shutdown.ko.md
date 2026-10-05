@@ -19,19 +19,24 @@ title: "Cancellation과 shutdown"
 - Cancellation은 협력적 요청이다.
 - 이미 완료된 결과를 cancellation으로 바꾸지 않으며, 이미 수락한 one-way 메시지의
   전달을 취소하지 않는다.
+- **One-way send에는 cancellation 입력이 없다.** 대기가 끝나는 경우는
+  [Submit과 completion §7](01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이 정한다. Cancellation 입력은
+  request, commit 전 Logical Multicast publish([§4](#4-logical-multicast-cancellation))처럼 그 operation의
+  계약이 cancellation을 정한 곳에만 있다.
 - Framework queue 대기와 binding operation의 cancellation 소유 경계는 [§3](#3-cancellation의-경쟁-처리)을 따른다.
 - 언어별 표면은 `.NET` `CancellationToken`, Java
   `CompletionStage.toCompletableFuture().cancel(false)`, Kotlin coroutine
   cancellation, Node.js `AbortSignal`을 사용한다.
-- Java Framework가 반환한 stage의 `toCompletableFuture()`는 원본 pending admission의
-  cancellation과 cleanup에 연결된다.
-- C++ one-way `async()` terminal은 별도 public cancellation 입력을 제공하지 않는다.
+- Java Framework가 반환한 stage의 `toCompletableFuture()`는 cancellation을 지원하는
+  operation에서만 원본 pending admission의 cancellation과 cleanup에 연결된다. Send stage의
+  `cancel(false)`와 그 stage를 기다리는 Kotlin coroutine의 cancellation은 caller의 대기만 끝내며
+  send는 계속 진행한다.
 - C++ task를 사용하지 않거나 Java stage를 단순히 보관하지 않는 것만으로 operation이
   취소됐다고 보장하지 않는다.
 
 ## 2. Pre-cancelled call
 
-Call이 pre-cancelled 상태로 도착했을 때의 규칙은 다음과 같다.
+Cancellation 입력이 있는 call이 pre-cancelled 상태로 도착했을 때의 규칙은 다음과 같다.
 
 - Call은 argument, handle과 one-shot state를 먼저 검증한다.
 - `.NET`의 pre-cancelled `CancellationToken`과 Node.js의 이미 abort된 `AbortSignal`은
@@ -149,7 +154,8 @@ public terminal, MeshNode 상태 전환이 관찰되는 placement·routing 결�
 **협력적 cancellation**
 
 - 이미 완료된 call에 cancellation을 요청해도 완료 결과가 바뀌지 않는다.
-- 이미 수락한 one-way message는 cancellation 요청 뒤에도 전달된다.
+- Java send stage의 `cancel(false)`나 그 stage를 기다리는 Kotlin coroutine의 cancellation 뒤에도
+  send는 pending으로 남고 capacity가 회복되면 정확히 한 번 전달된다.
 - Pre-cancelled `.NET` `CancellationToken`이나 이미 abort된 Node.js `AbortSignal`로
   만든 call은 runtime admission을 시작하지 않고 cancelled awaitable로 완료한다.
 - JVM에서 stage 반환 뒤 `cancel(false)`를 호출해도 이미 시작한 첫 admission 시도는

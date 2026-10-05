@@ -32,7 +32,7 @@ internal sealed class CourierOfferPort(Zlink.Framework.Contracts.Actors.IZLinkAc
                     delivery.DropoffAddress
                 )
             )
-            .Async(cancellationToken);
+            .Async();
     }
     // --8<-- [end:doc-dd-offer-send]
 }

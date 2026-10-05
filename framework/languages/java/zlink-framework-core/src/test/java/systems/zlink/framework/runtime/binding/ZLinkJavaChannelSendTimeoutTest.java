@@ -13,10 +13,12 @@ final class ZLinkJavaChannelSendTimeoutTest {
     void clientDealerAndFanoutPublisherReceiveSendTimeoutAtCreation() {
         ZLinkJavaChannelBackendAdapter backend = new ZLinkJavaChannelBackendAdapter();
         try (ZLinkBackendContext context = backend.createContext();
-                var dealer = backend.createDealerSocket(context, Duration.ofSeconds(1));
+                var defaultDealer =
+                        ((ZLinkJavaContext) context).nativeContext().createDealerSocket();
+                var dealer = backend.createDealerSocket(context);
                 var publisher = backend.createPublisherSocket(context, Duration.ofSeconds(1))) {
             assertEquals(
-                    Duration.ofSeconds(1),
+                    defaultDealer.options().sendTimeout(),
                     ((ZLinkJavaSocketBacked) dealer).nativeSocket().options().sendTimeout());
             assertEquals(
                     Duration.ofSeconds(1),
@@ -26,14 +28,15 @@ final class ZLinkJavaChannelSendTimeoutTest {
 
     @Test
     void configuredClientDealerAndFanoutPublisherUseTheRequestedSendTimeout() {
-        Duration clientTimeout = Duration.ofMillis(375);
         Duration publisherTimeout = Duration.ofMillis(625);
         ZLinkJavaChannelBackendAdapter backend = new ZLinkJavaChannelBackendAdapter();
         try (ZLinkBackendContext context = backend.createContext();
-                var dealer = backend.createDealerSocket(context, clientTimeout);
+                var defaultDealer =
+                        ((ZLinkJavaContext) context).nativeContext().createDealerSocket();
+                var dealer = backend.createDealerSocket(context);
                 var publisher = backend.createPublisherSocket(context, publisherTimeout)) {
             assertEquals(
-                    clientTimeout,
+                    defaultDealer.options().sendTimeout(),
                     ((ZLinkJavaSocketBacked) dealer).nativeSocket().options().sendTimeout());
             assertEquals(
                     publisherTimeout,

@@ -6130,7 +6130,8 @@ void verify_remote_user_spot_create_close_terminal_once ()
       [] (const spot_id_t &, const detail::spot_activation_intent_t &,
           const std::optional<runtime::spot_address_t> &, const std::string &, std::type_index,
           std::function<serialized_payload_t (serializer_registry_t &)>,
-          const std::map<std::string, std::string> &) -> task_t<result_t<void>> {
+          const std::map<std::string, std::string> &,
+          std::chrono::system_clock::time_point) -> task_t<result_t<void>> {
           co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                              "unused one-way activation");
       },

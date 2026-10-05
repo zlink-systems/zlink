@@ -221,8 +221,6 @@ const HOST_SHUTDOWN_POLL_INTERVAL_MS = 100;
 const HANDOFF_ACCEPTANCE_POLL_INTERVAL_MS = 10;
 const DEFAULT_HOST_CONTROL_TIMEOUT_MS = 30_000;
 
-const LEGACY_MESH_SEND_TIMEOUT_MS = 1000;
-
 export interface ZLinkFrameworkRuntimeLifecycle {
   readonly isStarted: boolean;
   readonly locationRuntimeQuery?: ZLinkLocationRuntimeQuery;
@@ -367,25 +365,6 @@ export class ZLinkFrameworkRuntimeHost
     );
     this.meshRouters = new MeshRouterResolver(options.registration);
     this.spotRouterChannelIdForMesh = this.meshRouters.spotRouterChannelIdByMesh();
-    const sendTimeoutMsForSpotMesh = (meshName: string): number =>
-      options.registration.spotNodes.get(meshName)?.router?.sendTimeoutMs ??
-      LEGACY_MESH_SEND_TIMEOUT_MS;
-    const sendTimeoutMsForSpotRouteChannel = (routeChannelId: string): number => {
-      const routeChannel = options.registration.routeChannelOptions.get(routeChannelId);
-      if (routeChannel !== undefined) {
-        return routeChannel.sendTimeoutMs ?? LEGACY_MESH_SEND_TIMEOUT_MS;
-      }
-      return sendTimeoutMsForSpotMesh(routeChannelId);
-    };
-    const defaultSpotSendTimeoutMs = Math.max(
-      LEGACY_MESH_SEND_TIMEOUT_MS,
-      ...[...options.registration.spotNodes.values()].map(
-        (node) => node.router?.sendTimeoutMs ?? LEGACY_MESH_SEND_TIMEOUT_MS
-      ),
-      ...[...options.registration.routeChannelOptions.values()].map(
-        (route) => route.sendTimeoutMs ?? LEGACY_MESH_SEND_TIMEOUT_MS
-      )
-    );
     this.routeTransport = new ZLinkRuntimeRouteTransport(
       () => this.channelRuntime,
       (routerChannelId) => this.meshRouters.canUseRouterChannel(routerChannelId),
@@ -410,9 +389,6 @@ export class ZLinkFrameworkRuntimeHost
       completions: (meshName) => this.spotNodeRuntime?.meshCompletionTable(meshName),
       codecs: { serializers: options.registration.messageSerializers },
       defaultRequestTimeoutMs: options.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      defaultSendTimeoutMs: defaultSpotSendTimeoutMs,
-      sendTimeoutMsForMesh: sendTimeoutMsForSpotMesh,
-      sendTimeoutMsForRouteChannel: sendTimeoutMsForSpotRouteChannel,
       dispatchErrors: this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink)
     });
     this.locationOwner = new ZLinkLocationRuntimeOwner({
@@ -463,8 +439,8 @@ export class ZLinkFrameworkRuntimeHost
               options
             );
       },
-      relay: (actor, header, payload, signal) =>
-        this.boundSessionRelay.actorPackets.relayActorPacket(actor, header, payload, signal),
+      relay: (actor, header, payload) =>
+        this.boundSessionRelay.actorPackets.relayActorPacket(actor, header, payload),
       notifyDisconnected: (actor, signal) =>
         this.boundSessionRelay.actorPackets.notifyBoundActorDisconnected(actor, signal)
     });

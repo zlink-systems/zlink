@@ -52,7 +52,7 @@ internal sealed class WorldAnnounceSubscriber(
                         zoneId,
                         new DeliverAnnounceMsg(message.AnnouncementId, message.Text)
                     )
-                    .Async(cancellationToken);
+                    .Async();
             }
             catch (Exception error)
             {

@@ -19,7 +19,7 @@
 #                         perf project uses this to reuse this script
 cmake_minimum_required(VERSION 3.24)
 
-set(ZLINK_FRAMEWORK_CPP_VERSION "0.27.0")
+set(ZLINK_FRAMEWORK_CPP_VERSION "0.28.0")
 set(ZLINK_RELEASES "https://github.com/zlink-systems/zlink/releases/download")
 
 if(NOT ZLINK_PROJECT_DIR)

@@ -18,7 +18,7 @@ export interface ZLinkSubmitResult {
   readonly status: ZLinkSubmitStatus;
 }
 
-/** Projects the Core submit result once; phase only determines capacity refusal meaning. */
+/** Projects immediate refusal and pending admission failure from their Core phase. */
 export function submitToRequestResult(result: number, phase: 'submit' | 'completion'): number {
   switch (result) {
     case SubmitResult.Ok:
@@ -28,7 +28,7 @@ export function submitToRequestResult(result: number, phase: 'submit' | 'complet
     case SubmitResult.NotConnected:
       return RequestResult.NotConnected;
     case SubmitResult.NotFound:
-      return RequestResult.NotFound;
+      return phase === 'submit' ? RequestResult.NotFound : RequestResult.NotConnected;
     case SubmitResult.NotAdmitted:
       return RequestResult.Rejected;
     case SubmitResult.InvalidHandle:
@@ -49,7 +49,7 @@ export function submitToRequestResult(result: number, phase: 'submit' | 'complet
 export function classifySubmitResult(
   result: number,
   operation: string,
-  phase: 'submit' | 'completion' = 'completion'
+  phase: 'submit' | 'completion' = 'submit'
 ): ZLinkSubmitResult {
   const terminal = submitToRequestResult(result, phase);
   switch (terminal) {
@@ -80,10 +80,15 @@ export function requireOneWayCompletion(
     case ZLinkSubmitStatus.Submitted:
       return;
     case ZLinkSubmitStatus.TimedOut:
-    case ZLinkSubmitStatus.Backpressured:
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
         `${operation} did not obtain admission before its deadline.`,
+        true
+      );
+    case ZLinkSubmitStatus.Backpressured:
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+        `${operation} has no admission wait token.`,
         true
       );
     case ZLinkSubmitStatus.TargetNotFound:
@@ -104,6 +109,15 @@ export function requireOneWayCompletion(
 
 export function requirePublishCompletion(result: ZLinkSubmitResult, operation: string): void {
   requireOneWayCompletion(result, operation);
+}
+
+export function requireClassicFanoutCompletion(result: ZLinkSubmitResult, operation: string): void {
+  requireOneWayCompletion(
+    result.status === ZLinkSubmitStatus.Backpressured
+      ? { status: ZLinkSubmitStatus.TimedOut }
+      : result,
+    operation
+  );
 }
 
 export function throwAlreadySubmitted(operation: string): never {

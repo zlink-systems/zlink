@@ -141,11 +141,6 @@ class capability_builder_t
     capability_builder_t &max_message_size (zlink::byte_size_t value);
     capability_builder_t &peer_weight (zlink::peer_weight_t value);
     capability_builder_t &service_weight (int value);
-    template <typename Rep, typename Period>
-    capability_builder_t &send_timeout (std::chrono::duration<Rep, Period> timeout)
-    {
-        return set_send_timeout (detail::normalize_channel_send_timeout (timeout));
-    }
 
     channel_capability_snapshot_t snapshot () const;
 
@@ -480,7 +475,7 @@ class message_bus_t
                     return serializers.template get<TMessage> ().serialize_with_content_type (
                       *message_value);
                 },
-                std::chrono::milliseconds::zero (), metadata);
+                metadata);
           });
     }
 
@@ -542,7 +537,6 @@ class message_bus_t
                               std::string packet_name,
                               std::type_index message_type,
                               payload_encoder_t encode_payload,
-                              std::chrono::milliseconds timeout,
                               const send_call_t::metadata_map_t &metadata);
     task_t<void> submit_publish (std::string channel_name,
                                  std::string topic,

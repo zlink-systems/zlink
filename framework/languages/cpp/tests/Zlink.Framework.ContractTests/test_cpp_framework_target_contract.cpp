@@ -1200,26 +1200,16 @@ int main ()
       "CPP-CONTRACT-ROLE-001",
       "ClientServer calls do not distinguish a missing Client role from a missing target");
 
-    /* CPP-CONTRACT-STREAM-001 — STREAM send alone exposes the per-call
-     * admission bound and narrows the existing socket admission context.
-     * The binding async terminal owns that admission deadline, and the
-     * Framework awaits its completion after releasing the socket lock. */
+    /* CPP-CONTRACT-STREAM-001 — send and reply await binding admission
+     * without changing the socket timeout or accepting a per-call bound. */
     gate.require (
-      call_hpp.find ("stream_send_call_t &timeout (std::chrono::milliseconds timeout)")
-          != std::string::npos
-        && stream_runtime.find ("_submit (header, payload, _timeout)") != std::string::npos
-        && stream_host.find ("_core_socket->options ().send_timeout (*timeout);")
-             != std::string::npos
+      call_hpp.find ("stream_send_call_t &timeout") == std::string::npos
+        && stream_runtime.find ("_submit (header, payload)") != std::string::npos
+        && stream_host.find ("_core_socket->options ().send_timeout") == std::string::npos
         && stream_host.find ("_core_socket->send (rid).message (std::move (frame)).async ()")
              != std::string::npos
-        && stream_host.find ("_core_socket->options ().send_timeout (configured_timeout);")
-             != std::string::npos
-        && stream_host.find ("co_await std::move (*pending)") != std::string::npos
-        && stream_host.find ("_core_socket->send (rid).message (std::move (frame)).submit ()")
-             == std::string::npos
-        && !tree_contains (root / "framework/src/runtime/streams", "async_submit_runtime"),
-      "CPP-CONTRACT-STREAM-001",
-      "STREAM send does not propagate its per-call deadline to binding-owned admission");
+        && stream_host.find ("co_await std::move (*pending)") != std::string::npos,
+      "CPP-CONTRACT-STREAM-001", "STREAM send still accepts or applies a timeout");
 
     /* CPP-CONTRACT-MESH-SOCKET-001 — MeshNode ReceiveTimeout follows the
      * existing socket configuration path into the binding ROUTER receive
@@ -1232,6 +1222,14 @@ int main ()
              != std::string::npos,
       "CPP-CONTRACT-MESH-SOCKET-001",
       "MeshNode ReceiveTimeout does not reach the binding ROUTER recv_timeout option");
+
+    gate.require (
+      app_runtime.find ("started_at + selected.value ().source->default_request_timeout ()")
+          != std::string::npos
+        && app_runtime.find ("time_since_epoch () + timeout") == std::string::npos,
+      "CPP-CONTRACT-INSTANCE-DEADLINE-001",
+      "Instance send activation deadline must be fixed at submission start from the source "
+      "MeshNode request timeout");
 
     /* CPP-LAYER-002 — in-flight calls do not reuse the public Actor Join
      * OperationId type or name. */

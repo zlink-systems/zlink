@@ -100,7 +100,6 @@ export interface ZLinkMeshNodeSocketConfig {
   sendHighWaterMark: number;
   receiveHighWaterMark: number;
   receiveTimeoutMs?: number;
-  sendTimeoutMs?: number;
 }
 
 export interface ZLinkStreamSocketConfig {

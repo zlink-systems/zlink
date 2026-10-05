@@ -154,4 +154,4 @@ matching ACK를 15초 안에 받아야 하는 profile로 고정한다. 다른 in
 취급하지 않는다.
 
 [Logical Multicast](../../../00-foundation/02-glossary.ko.md#logical-multicast) publisher는 publish 전용 전달 정책 option을 제공하지 않는다. 각 remote target은
-MeshNode ROUTER의 HWM과 send timeout을 따르고, local Spot queue는 독립적으로 수락하거나 drop한다.
+MeshNode ROUTER의 HWM을 따르고, local Spot queue는 독립적으로 수락하거나 drop한다.

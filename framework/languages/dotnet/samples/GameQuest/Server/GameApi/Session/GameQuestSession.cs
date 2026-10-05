@@ -41,7 +41,7 @@ internal sealed class GameQuestSession(IZLinkSessionContext context) : IZLinkSes
                     "A GameQuest session may bind exactly one player actor."
                 ),
             };
-            await actor.RelayAsync(payload, cancellationToken);
+            await actor.RelayAsync(payload);
         }
     }
 }

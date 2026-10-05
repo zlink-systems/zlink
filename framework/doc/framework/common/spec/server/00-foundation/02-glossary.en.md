@@ -821,8 +821,8 @@ deadline can apply across Spot lookup, cold activation, handler execution, and r
 | Shape | Absolute end-to-end time boundary |
 | .NET notation | The caller specifies a `TimeSpan` timeout, while the framework and lifecycle context use a fixed `DateTimeOffset Deadline`. |
 | Public composition | A single final time point computed once when the terminal submit starts. Not the sum of per-stage timeouts. |
-| Creation/management | Fixed by the source framework from the caller's timeout and the current time. |
-| Lifetime | Shared by resolve, reservation, factory, Ready barrier, handler, and reply; discarded after terminal completion. |
+| Creation/management | For a request, fixed by the source framework from the caller's timeout and the current time. A one-way Instance activation deadline is defined by [Spot address messaging §5](../03-spot-actor/06-spot-address-messaging.en.md#5-direct-call-to-an-existing-owner-and-the-completion-boundary). |
+| Lifetime | A request deadline is shared by resolve, reservation, factory, Ready barrier, handler, and reply; discarded after terminal completion. |
 
 <a id="factory"></a>
 ### Factory
@@ -1116,8 +1116,10 @@ or transport liveness.
 
 A framework exception raised when the completion condition for an operation isn't
 met by its allowed deadline. The completion condition differs per operation — for
-example, a one-way send waits for the source queue to accept the message; object
-creation waits until `Ready` or a creation-failure result is confirmed.
+example, a request waits until its reply is confirmed; object creation waits until `Ready`
+or a creation-failure result is confirmed. A one-way send has no deadline; only a Classic
+fanout publish uses the publisher send timeout
+([Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)).
 
 Not a public submit status, and distinct from a state where a request handler simply
 hasn't returned an application reply yet.
@@ -2162,7 +2164,7 @@ A typed handler's reply return and an explicit STREAM Reply call use this capabi
 | .NET notation | No independent token type. Used through a typed request handler's reply return or the STREAM context's `Reply(...)` call. |
 | Public composition | An opaque capability tied to the current request correlation. The internal handle and route are not public. |
 | Creation/management | The Framework associates it with request dispatch. Conversion of typed handler completion into a reply and explicit STREAM reply submission follow their respective surface contracts. |
-| Lifetime | The typed handler capability closes on the first terminal reply, error, or request cancellation/timeout. [Submit and completion §8](../01-execution/01-submit-and-completion.en.md#8-stream-reply-token) owns STREAM token consumption and the responder admission deadline; the typed-handler lifetime statement does not apply to STREAM. |
+| Lifetime | The typed handler capability closes on the first terminal reply, error, or request cancellation/timeout. [Submit and completion §8](../01-execution/01-submit-and-completion.en.md#8-stream-reply-token) owns STREAM token consumption and the reply's wait; the typed-handler lifetime statement does not apply to STREAM. |
 
 <a id="downstream-request"></a>
 ### Downstream Request

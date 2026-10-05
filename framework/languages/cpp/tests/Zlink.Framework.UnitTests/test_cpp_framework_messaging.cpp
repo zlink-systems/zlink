@@ -557,7 +557,7 @@ int main ()
         using zlink::framework::runtime::messaging::map_submit_result_error_kind;
         using zlink::framework::runtime::messaging::map_submit_result_exception;
         if (map_submit_result_error_kind (zlink::submit_result_t::backpressured)
-              != framework_error_kind_t::deadline_exceeded
+              != framework_error_kind_t::unavailable
             || map_submit_result_error_kind (zlink::submit_result_t::not_connected)
                  != framework_error_kind_t::unavailable
             || map_submit_result_error_kind (zlink::submit_result_t::not_found)
@@ -580,9 +580,9 @@ int main ()
           map_submit_result_exception (zlink::submit_result_t::terminated, "native submit");
         const auto submit_not_found =
           map_submit_result_exception (zlink::submit_result_t::not_found, "native submit");
-        if (submit_backpressured.kind () != framework_error_kind_t::deadline_exceeded
+        if (submit_backpressured.kind () != framework_error_kind_t::unavailable
             || zlink::framework::detail::boundary_state (submit_backpressured)
-                 != zlink::framework::detail::boundary_error_t::timed_out
+                 != zlink::framework::detail::boundary_error_t::disconnected
             || submit_disconnected.kind () != framework_error_kind_t::unavailable
             || zlink::framework::detail::boundary_state (submit_disconnected)
                  != zlink::framework::detail::boundary_error_t::disconnected

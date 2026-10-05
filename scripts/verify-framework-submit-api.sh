@@ -59,7 +59,7 @@ if (mode === '--contract') {
       'monitoring snapshot, metric 또는 runtime event로 제공하지 않는다']],
     [scenario, 'Config 13', [
       '원격 handler 실행 완료를 뜻하지 않는다',
-      'timeout 예외',
+      '시간 상한과 caller cancellation이 없으며',
       'Shutdown']]
   ]) {
     for (const fragment of fragments) {
@@ -190,7 +190,7 @@ if (mode === '--contract') {
   for (const fragment of [
     '즉시 수락',
     'capacity 대기',
-    'timeout 예외',
+    '시간을 이유로 끝나지 않는다',
     'cancellation',
     'Shutdown',
     'target',

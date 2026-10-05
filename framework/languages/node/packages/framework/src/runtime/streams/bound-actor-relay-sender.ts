@@ -5,7 +5,6 @@ import {
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { throwIfAborted } from '../abort';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import { flowIfEnabled } from '../diagnostics';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
@@ -33,8 +32,7 @@ export interface ZLinkBoundActorRelaySenderOptions {
   readonly relay?: (
     actor: ZLinkSessionActor,
     header: ZLinkStreamFrameHeader,
-    payload: Message,
-    signal?: AbortSignal
+    payload: Message
   ) => Promise<boolean>;
   readonly notifyDisconnected?: (actor: ZLinkSessionActor, signal?: AbortSignal) => Promise<void>;
 }
@@ -53,7 +51,6 @@ export class ZLinkBoundActorRelaySender {
   async relay(
     actor: DefaultZLinkSessionActor,
     payload: ZLinkMessage,
-    signal?: AbortSignal,
     dispatchHeader?: ZLinkStreamFrameHeader
   ): Promise<ZLinkSubmitResult> {
     const header =
@@ -64,18 +61,16 @@ export class ZLinkBoundActorRelaySender {
       const operation = async (): Promise<ZLinkSubmitResult> => {
         const admission = await this.routes.beginAcceptedRequestFrameWhenReady(
           actor.actorId,
-          actor.bindingToken,
-          signal
+          actor.bindingToken
         );
         try {
-          return await this.relayAcceptedFrame(actor, payload, signal, header, admission);
+          return await this.relayAcceptedFrame(actor, payload, header, admission);
         } finally {
           await admission.complete();
         }
       };
       return await operation();
     }
-    throwIfAborted(signal);
     const held = await this.routes.acceptOneWay(actor.actorId, actor.bindingToken, () => {
       let heldMessage: Message | undefined = encodeFrameworkPayloadMessage(
         payload,
@@ -87,8 +82,7 @@ export class ZLinkBoundActorRelaySender {
             const result = await this.routes.runAcceptedFrameWhenReady(
               actor.actorId,
               actor.bindingToken,
-              () =>
-                this.relayAcceptedFrame(actor, payload, undefined, header, undefined, heldMessage)
+              () => this.relayAcceptedFrame(actor, payload, header, undefined, heldMessage)
             );
             if (result.status !== ZLinkSubmitStatus.Submitted) {
               this.traceHeldDrop(
@@ -116,11 +110,8 @@ export class ZLinkBoundActorRelaySender {
     if (held) {
       return { status: ZLinkSubmitStatus.Submitted };
     }
-    return this.routes.runAcceptedFrameWhenReady(
-      actor.actorId,
-      actor.bindingToken,
-      () => this.relayAcceptedFrame(actor, payload, signal),
-      signal
+    return this.routes.runAcceptedFrameWhenReady(actor.actorId, actor.bindingToken, () =>
+      this.relayAcceptedFrame(actor, payload)
     );
   }
 
@@ -150,7 +141,6 @@ export class ZLinkBoundActorRelaySender {
   private async relayAcceptedFrame(
     actor: DefaultZLinkSessionActor,
     payload: ZLinkMessage,
-    signal?: AbortSignal,
     header?: ZLinkStreamFrameHeader,
     requestAdmission?: { beginSubmission(signal?: AbortSignal): Promise<void> | undefined },
     acceptedPayload?: Message
@@ -160,7 +150,6 @@ export class ZLinkBoundActorRelaySender {
       const completion = this.relayInsideLifecycle(
         actor,
         payload,
-        signal,
         activeHeader,
         requestAdmission,
         acceptedPayload
@@ -207,20 +196,18 @@ export class ZLinkBoundActorRelaySender {
   private async relayInsideLifecycle(
     actor: DefaultZLinkSessionActor,
     payload: ZLinkMessage,
-    signal: AbortSignal | undefined,
     currentHeader?: ZLinkStreamFrameHeader,
     requestAdmission?: { beginSubmission(signal?: AbortSignal): Promise<void> | undefined },
     acceptedPayload?: Message
   ): Promise<ZLinkSubmitResult> {
     const header = currentHeader ?? (await this.currentHeader(actor));
-    const held = requestAdmission?.beginSubmission(signal);
+    const held = requestAdmission?.beginSubmission();
     if (held !== undefined) await held;
-    throwIfAborted(signal);
     const payloadMessage =
       acceptedPayload ?? encodeFrameworkPayloadMessage(payload, this.options.messageSerializers);
     try {
       if (this.options.relay !== undefined) {
-        const handled = await this.options.relay(actor, header, payloadMessage, signal);
+        const handled = await this.options.relay(actor, header, payloadMessage);
         if (handled) {
           return { status: ZLinkSubmitStatus.Submitted };
         }
@@ -234,11 +221,10 @@ export class ZLinkBoundActorRelaySender {
         messageToBytes(payloadMessage)
       );
       try {
-        return await route.context.stream.submitBoundActor(
-          actor.actorId,
-          [headerMessage, framePayloadMessage],
-          signal
-        );
+        return await route.context.stream.submitBoundActor(actor.actorId, [
+          headerMessage,
+          framePayloadMessage
+        ]);
       } finally {
         headerMessage.close();
         framePayloadMessage.close();

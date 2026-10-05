@@ -364,10 +364,9 @@ client 하나를 선택한다. 선택 결과는 이 절이 정한다.
 - Index에 없는 이름은 `NotFound`로 끝내고 다른 MeshNode나 ClientServer client를 검색하거나 relay하지 않는다.
 - RouteMesh 송신 경로는 기다리지 않는다. [ready target](02-glossary.ko.md#ready-target) snapshot 자체가 없으면
   `NotFound`, ready target pipe가 없으면 `Unavailable`로 끝난다.
-- ClientServer 송신 경로는 ready target이 없으면 admission deadline
-  ([Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙)) 안에서
-  기다린다([Channel messaging](../02-channel-transport/02-channel-messaging.ko.md#clientserver-ready-wait)). 그 안에
-  ready target이 생기지 않으면 `DeadlineExceeded`로 끝난다.
+- ClientServer 송신 경로는 ready target이 없으면 ready target이 생길 때까지 기다린다
+  ([Channel messaging](../02-channel-transport/02-channel-messaging.ko.md#clientserver-ready-wait)). Send의 대기 종료는
+  [Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout), request의 대기 종료는 [Submit과 완료 §9](../01-execution/01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)를 따른다.
 
 <a id="no-eligible-select-one-member"></a>
 [Select-one](02-glossary.ko.md#select-one) ChannelName에 ready target이 있지만 eligibility와 drain 조건을 적용한
@@ -400,9 +399,8 @@ Operation별 call object는 해당 기능에 유효한 설정만 제공한다.
 Server package의 one-way send·publish·명시적 STREAM reply는
 [비동기 실행 정책](../01-execution/01-submit-and-completion.ko.md)의 async-only admission 계약을 따른다. Public call은
 즉시 한 번만 시도하는 동기 terminator를 함께 제공하지 않는다. 별도 stream connector package의 send
-builder는 connector package 계약을 따른다. Send timeout은 transport admission 대기에, request timeout은
-reply 대기에 적용한다. Global object request의 admission 대기와 timeout budget은
-[Submit과 완료 §7·§9](../01-execution/01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙)가 정한다.
+builder는 connector package 계약을 따른다. One-way send의 대기 종료는 [Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이,
+request timeout budget은 [Submit과 완료 §9](../01-execution/01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)가 정한다.
 최초 non-blocking transport submit이 즉시 수락되면 Framework scheduler나 별도 work queue에 추가하지
 않고 이미 완료되었거나 resolved된 언어별 awaitable을 반환한다.
 
@@ -413,10 +411,8 @@ metadata를 자동 복사하지 않는다.
 ## 8. Logical Multicast 완료
 
 MeshNode와 Spot publish API는 publish 전용 전달 정책 option을 제공하지 않는다. Framework의 I/O
-executor는 publish operation의 admission을 send timeout까지 기다린다. Timeout 전에 시작하지 못하면,
-operation에 허용된 deadline까지 완료 조건을 만족하지 못했을 때 발생하는 Framework exception인
-[`DeadlineExceeded`](02-glossary.ko.md#deadlineexceeded), cancellation 또는 `ShuttingDown` 중
-먼저 확정된 예외로 완료한다. 시작한 뒤에는
+executor는 publish operation의 admission을 시간 상한 없이 기다린다. 시작하기 전에 cancellation이나
+`ShuttingDown`이 확정되면 그 예외로 완료한다. 시작한 뒤에는
 확정한 target snapshot을 정확히 한 번 처리하며 cancellation이나 shutdown으로 나머지 target 제출을
 중단하지 않는다.
 
@@ -927,12 +923,12 @@ RouteMesh·ClientServer select-one의 target 확정과 HWM 재시도 경계는
 | host [shutdown](02-glossary.ko.md#shutdown)으로 신규 admission이 닫힘 | `ShuttingDown` |
 | invalid argument·state, 지원하지 않는 operation 또는 내부 불변 조건 위반 | 언어별 local call 오류. remote error reply로 바꾸지 않음 |
 
-`DeadlineExceeded`는 일반 one-way 제출이 family별 send timeout까지 수락되지 않았을 때
-Framework가 만드는 exception이다. Cancellation은 해당 언어의 cancelled awaitable로 표현한다. Invalid
+One-way send는 `DeadlineExceeded`로 끝나지 않는다. `DeadlineExceeded`는 request timeout과 Classic
+fanout publisher send timeout처럼 시간 상한이 있는 operation에서만 만든다. Cancellation은 해당 언어의 cancelled awaitable로 표현한다. Invalid
 argument·handle·state, 이미 사용한 reply token과 중복 terminator 실행은 exceptional completion이다.
 STREAM reply의 유효한 첫 terminator는 transport 시도 전에 one-shot token을 원자적으로 소비한다.
 송신 queue의 상한으로 송신 속도를 제한하는 흐름 제어인
-[Backpressure](02-glossary.ko.md#backpressure), timeout 또는 cancellation으로 완료되어도 해당
+[Backpressure](02-glossary.ko.md#backpressure) 대기 뒤 실패로 완료되어도 해당
 token을 다시 사용할 수 없다. 같은
 token의 두 call이 경쟁하면 하나만 transport admission을 시작한다.
 Direct pending one-way operation은 Node RID, global Spot·Actor ID 또는 session [binding token](02-glossary.ko.md#binding-token)을 유지한다.

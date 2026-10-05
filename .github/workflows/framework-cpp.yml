@@ -82,8 +82,8 @@ jobs:
               nlohmann-json3-dev libssl-dev \
               protobuf-compiler libprotobuf-dev
 
-      # Install the async Redis client and its libuv CMake config from the same
-      # vcpkg graph as vcpkg.json. Other ports stay on the system toolchain path.
+      # Install OpenTelemetry and the async Redis client with its libuv CMake
+      # config from the vcpkg graph. Other ports stay on the system toolchain path.
       - name: Resolve the runner vcpkg
         id: vcpkg
         run: |

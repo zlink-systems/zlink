@@ -642,8 +642,7 @@ export class ZLinkRemoteBoundSessionRelay {
         packetName,
         requestSeq,
         response,
-        replyOptions,
-        signal
+        replyOptions
       );
       return;
     }
@@ -698,8 +697,7 @@ export class ZLinkRemoteBoundSessionRelay {
         packetName,
         requestSeq,
         error,
-        metadata,
-        signal
+        metadata
       );
       return;
     }
@@ -731,8 +729,7 @@ export class ZLinkRemoteBoundSessionRelay {
     packetName: string,
     requestSeq: bigint,
     message: unknown,
-    replyOptions: ZLinkActorResponseOptions,
-    signal?: AbortSignal
+    replyOptions: ZLinkActorResponseOptions
   ): Promise<void> {
     const actorPacketTarget = encodeRemoteActorPacketTarget(
       this.options.actorPacketTargetForState(actorId)
@@ -747,8 +744,7 @@ export class ZLinkRemoteBoundSessionRelay {
         metadata: replyOptions.metadata,
         compressPayload: replyOptions.compressPayload,
         actorPacketTarget
-      }),
-      signal
+      })
     );
   }
 
@@ -758,8 +754,7 @@ export class ZLinkRemoteBoundSessionRelay {
     packetName: string,
     requestSeq: bigint,
     error: unknown,
-    metadata: ReadonlyMap<string, string>,
-    signal?: AbortSignal
+    metadata: ReadonlyMap<string, string>
   ): Promise<void> {
     await this.sendRemoteBoundSessionControl(
       target,
@@ -772,15 +767,13 @@ export class ZLinkRemoteBoundSessionRelay {
         actorPacketTarget: encodeRemoteActorPacketTarget(
           this.options.actorPacketTargetForState(actorId)
         )
-      }),
-      signal
+      })
     );
   }
 
   private async sendRemoteBoundSessionControl(
     target: ZLinkRemoteBoundSessionTarget,
-    payload: Record<string, unknown>,
-    signal?: AbortSignal
+    payload: Record<string, unknown>
   ): Promise<void> {
     const packetName = payload.packetName;
     if (typeof packetName !== 'string') {
@@ -796,8 +789,7 @@ export class ZLinkRemoteBoundSessionRelay {
       target.routerChannelId,
       String(target.targetNodeRid),
       packetName,
-      payload,
-      signal
+      payload
     );
     if (result.status !== ZLinkSubmitStatus.Submitted) {
       throw new Error(

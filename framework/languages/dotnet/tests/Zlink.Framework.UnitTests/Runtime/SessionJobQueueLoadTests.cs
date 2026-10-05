@@ -142,9 +142,6 @@ public sealed class SessionJobQueueLoadTests
             ZLinkSessionDispatchContext dispatch,
             ZLinkMessage payload,
             CancellationToken cancellationToken
-        ) =>
-            Context
-                .Client.Reply(new EchoReply(payload.Decode<EchoRequest>().Value))
-                .Async(cancellationToken);
+        ) => Context.Client.Reply(new EchoReply(payload.Decode<EchoRequest>().Value)).Async();
     }
 }

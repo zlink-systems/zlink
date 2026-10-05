@@ -10,11 +10,7 @@ class BingoSession implements ZLinkSession {
   constructor(readonly context: ZLinkSessionContext) {}
 
   // --8<-- [start:doc-bingo-session-relay]
-  async onDispatch(
-    dispatch: ZLinkSessionDispatchContext,
-    payload: ZLinkMessage,
-    signal?: AbortSignal
-  ): Promise<void> {
+  async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
     if (await this.context.handlers.tryHandle(dispatch, payload)) {
       return;
     }
@@ -22,7 +18,7 @@ class BingoSession implements ZLinkSession {
     if (actor === undefined) {
       throw new Error(`Client must authenticate before relaying packet '${dispatch.packetName}'.`);
     }
-    await actor.relay(payload, signal);
+    await actor.relay(payload);
   }
   // --8<-- [end:doc-bingo-session-relay]
 

@@ -16,18 +16,13 @@ export class ZLinkSpotNodeRouteTransport {
     private readonly targets: ZLinkSpotRouteTargetResolver
   ) {}
 
-  async send(
-    target: ZLinkSpotRouteTarget,
-    parts: readonly Message[],
-    signal?: AbortSignal
-  ): Promise<boolean> {
+  async send(target: ZLinkSpotRouteTarget, parts: readonly Message[]): Promise<boolean> {
     const router = this.targets.spotNodeRouter(target.routerChannelId);
     if (router === undefined) {
       return false;
     }
     try {
-      throwIfAborted(signal);
-      await awaitWithAbort(router.sendToSpot(target.targetNodeRid, target.spotId, parts), signal);
+      await router.sendToSpot(target.targetNodeRid, target.spotId, parts);
       return true;
     } finally {
       closeMessages(parts);

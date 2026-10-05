@@ -32,7 +32,7 @@ internal sealed class CourierActor(string actorId, IZLinkActorContext context) :
                     offer.DropoffAddress
                 )
             )
-            .Async(cancellationToken);
+            .Async();
     }
 
     // --8<-- [end:doc-dd-offer-push]

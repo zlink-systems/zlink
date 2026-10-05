@@ -259,7 +259,7 @@ public sealed class BlockingSubmitTests
 
         public IZLinkSendCall Metadata(ZLinkMessageMetadata metadata) => this;
 
-        public ValueTask Async(CancellationToken cancellationToken = default)
+        public ValueTask Async()
         {
             Submissions++;
             SubmittingThreadId = Environment.CurrentManagedThreadId;

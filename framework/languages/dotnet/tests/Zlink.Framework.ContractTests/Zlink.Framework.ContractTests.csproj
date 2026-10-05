@@ -45,6 +45,7 @@
         <Compile Include="Actors/ActorContracts.cs"/>
         <Compile Include="Actors/ActorFactoryContracts.cs"/>
         <Compile Include="Channels/ChannelContracts.cs"/>
+        <Compile Include="Channels/OneWaySendContracts.cs"/>
         <Compile Include="Codecs/CodecContracts.cs"/>
         <Compile Include="Configuration/BuilderContracts.cs"/>
         <Compile Include="Configuration/ConnectionAndConfigContracts.cs"/>

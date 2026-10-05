@@ -166,15 +166,23 @@ final class ZLinkProviderDescriptorRepository {
     }
 
     CompletionStage<Optional<ZLinkMeshNodeDescriptor>> readMeshNode(
-            ZLinkMeshNodeDescriptorKey key, ZLinkStoreCancellation cancellation) {
+            ZLinkMeshNodeDescriptorKey key,
+            List<ZLinkStoreCondition> conditions,
+            ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(cancellation, "cancellation");
         return provider.read(meshKey(key.meshName(), key.rid()), cancellation)
                 .thenApply(
-                        result ->
-                                result instanceof ZLinkStoreReadFound found
-                                        ? Optional.of(decodeMeshNodeRecord(found.value().bytes()))
-                                        : Optional.empty());
+                        result -> {
+                            if (!(result instanceof ZLinkStoreReadFound found)) {
+                                return Optional.empty();
+                            }
+                            conditions.add(
+                                    new ZLinkStoreVersionCondition(
+                                            meshKey(key.meshName(), key.rid()),
+                                            found.value().version()));
+                            return Optional.of(decodeMeshNodeRecord(found.value().bytes()));
+                        });
     }
 
     CompletionStage<ZLinkLocationWriteResult> updateClientServer(

@@ -75,7 +75,6 @@ public interface IZLinkMeshNodeSocketConfig
     ulong SendHighWaterMark { get; set; }     // 송신 방향 socket HWM.
     ulong ReceiveHighWaterMark { get; set; }  // 수신 방향 socket HWM.
     TimeSpan? ReceiveTimeout { get; set; }
-    TimeSpan? SendTimeout { get; set; }
 }
 ```
 
@@ -586,8 +585,9 @@ complete transport message의 byte 상한)가 없다. RouteMesh의
 ServerServer(SS) transport는 listener message-size setter를 제공하지 않으며, Framework-level
 `MaxMessageSize`를 이유로 complete message를 별도로 거부하지 않는다.
 
-`ConfigureRouterSocket()`의 `SendHighWaterMark`와 `ReceiveHighWaterMark`, `SendTimeout`과
-`ReceiveTimeout`은 서로 다른 방향의 socket option으로 적용한다.
+`ConfigureRouterSocket()`의 `SendHighWaterMark`와 `ReceiveHighWaterMark`는 서로 다른 방향의
+socket option으로 적용한다. MeshNode ROUTER에는 send timeout option이 없다 — one-way send의 대기
+종료는 [Submit과 completion §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이 정한다.
 
 메시지는 transport와 service-wire protocol의 표현 한계, 그리고 process memory 한계를 계속
 따른다. 이 하위 한계에서 message가 거부되면 payload 일부를 handler에 전달하지 않고 request는

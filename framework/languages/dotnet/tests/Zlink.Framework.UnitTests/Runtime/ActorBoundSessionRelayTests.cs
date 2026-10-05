@@ -152,6 +152,49 @@ public sealed class ActorBoundSessionRelayTests
     }
 
     [Fact]
+    public async Task Previous_Session_Unbind_Does_Not_Invalidate_Prepared_Replacement()
+    {
+        var state = new ZLinkActorRuntimeState("actor-previous-unbind-race");
+        _ = Bind(state, "binding-a", "session-a", authorityGeneration: 1);
+        var replacement = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
+
+        state.UnbindSession("binding-a");
+        state.PublishSessionReplacement(replacement);
+        state.CompleteSessionReplacement(replacement);
+
+        Assert.Null(await replacement.Completion);
+        Assert.True(state.TryGetBoundSession(out var current));
+        Assert.Equal("binding-b", current.BindingToken);
+
+        state.UnbindSession("binding-a");
+        Assert.True(state.TryGetBoundSession(out current));
+        Assert.Equal("binding-b", current.BindingToken);
+
+        var delayedOld = Assert.Throws<ZLinkFrameworkException>(() =>
+            Bind(state, "binding-a", "session-a", authorityGeneration: 1)
+        );
+        Assert.Equal(ZLinkRetryAdvice.DoNotRetry, delayedOld.RetryAdvice);
+
+        state.UnbindSession("binding-b");
+        Assert.False(state.TryGetBoundSession(out _));
+    }
+
+    [Fact]
+    public async Task Replacement_Token_Unbind_Cancels_Only_That_Replacement()
+    {
+        var state = new ZLinkActorRuntimeState("actor-replacement-unbind");
+        _ = Bind(state, "binding-a", "session-a", authorityGeneration: 1);
+        var replacement = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
+
+        state.UnbindSession("binding-b");
+
+        var failure = Assert.IsType<ZLinkFrameworkException>(await replacement.Completion);
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.True(state.TryGetBoundSession(out var current));
+        Assert.Equal("binding-a", current.BindingToken);
+    }
+
+    [Fact]
     public async Task Prepared_Replacement_Rolls_Back_Before_Publication()
     {
         var state = new ZLinkActorRuntimeState("actor-prepared-forward-completion");

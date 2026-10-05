@@ -165,12 +165,8 @@ final class ZLinkSpotDirectOutbound {
                         metadata.values(),
                         captureOutboundFlow());
         return ZLinkOneWayCalls.adaptOneWay(
-                        spot.sendToSpot(
-                                targetNodeRid, spotId, spotGeneration, metadata.encode(), parts))
-                .whenComplete((ignored, failure) -> parts.forEach(Message::close))
-                // Keep the admission future private. The public stage must not
-                // allow callers to complete an operation that is still pending.
-                .thenApply(ignored -> null);
+                spot.sendToSpot(targetNodeRid, spotId, spotGeneration, metadata.encode(), parts)
+                        .whenComplete((ignored, failure) -> parts.forEach(Message::close)));
     }
 
     <TReply> CompletionStage<TReply> submitRequest(
@@ -277,11 +273,10 @@ final class ZLinkSpotDirectOutbound {
                         metadata.values(),
                         captureOutboundFlow());
         CompletionStage<Void> result =
-                ZLinkOneWayCalls.adaptOneWay(
-                        spot.publishAsync(
-                                channelName, topic, metadata.encode(), parts, SendFlags.DONT_WAIT));
+                spot.publishAsync(
+                        channelName, topic, metadata.encode(), parts, SendFlags.DONT_WAIT);
         result.whenComplete((ignored, failure) -> parts.forEach(Message::close));
-        return result;
+        return ZLinkOneWayCalls.adaptOneWay(result);
     }
 
     private void trace(

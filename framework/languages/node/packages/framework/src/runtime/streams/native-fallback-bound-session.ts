@@ -32,7 +32,6 @@ import {
   type ZLinkStreamFrameHeader
 } from './protocol';
 import type { ZLinkNativeFallbackBoundSessionPort } from './stream-binding-runtime-ports';
-import { throwIfAborted } from '../abort';
 import type { ZLinkBackendActorSessionNode } from '../backend';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import { currentOrCreateFlow, runWithOutboundFlow } from '../diagnostics/flow-context';
@@ -87,8 +86,7 @@ export class ZLinkNativeFallbackBoundSession implements ZLinkBoundSession {
         return;
       }
       await this.options.routedTransport.sendToSpot(target, payload, {
-        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-        signal
+        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
       });
       return;
     }
@@ -126,7 +124,7 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
     return this;
   }
 
-  async submit(signal?: AbortSignal): Promise<void> {
+  async submit(): Promise<void> {
     if (this.executed) {
       throwAlreadySubmitted('Bound session send call');
     }
@@ -136,8 +134,7 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
       'Bound session'
     );
     this.executed = true;
-    throwIfAborted(signal);
-    const result = await this.execute(packetName, signal);
+    const result = await this.execute(packetName);
     requireOneWayCompletion(
       result,
       'Bound session send',
@@ -145,19 +142,16 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
     );
   }
 
-  private execute(packetName: string, signal?: AbortSignal): Promise<ZLinkSubmitResult> {
+  private execute(packetName: string): Promise<ZLinkSubmitResult> {
     // Call-scoped flow (spec 27 §4): the relay JSON flow pair and any nested
     // routed-transport envelope share one ambient flow that does not outlive
     // this submit call.
     return runWithOutboundFlow(this.options.flowCreationEnabled?.() ?? true, () =>
-      this.executeScoped(packetName, signal)
+      this.executeScoped(packetName)
     );
   }
 
-  private async executeScoped(
-    packetName: string,
-    signal?: AbortSignal
-  ): Promise<ZLinkSubmitResult> {
+  private async executeScoped(packetName: string): Promise<ZLinkSubmitResult> {
     const localActor = this.options.localActorProvider?.() === true;
     const remoteTarget = this.options.remoteBoundSessionTargetProvider();
     let nativeAttempted = false;
@@ -166,8 +160,7 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
         this.options.actorId,
         this.message,
         packetName,
-        this.selectedMetadata,
-        signal
+        this.selectedMetadata
       );
       if (result.status !== ZLinkSubmitStatus.TargetNotFound) {
         this.traceSubmitted(result, packetName);
@@ -188,8 +181,7 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
           actorRef,
           this.message,
           packetName,
-          this.selectedMetadata,
-          signal
+          this.selectedMetadata
         );
         if (result.status !== ZLinkSubmitStatus.TargetNotFound) {
           this.traceSubmitted(result, packetName);
@@ -234,15 +226,14 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
                 spotKind: ZLinkSpotKind.Entry
               },
               payload,
-              { packetName: ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET, signal }
+              { packetName: ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET }
             )
           : await submit.call(
               this.options.routedTransport,
               remoteTarget.routerChannelId,
               String(remoteTarget.targetNodeRid),
               ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET,
-              payload,
-              signal
+              payload
             );
       this.traceSubmitted(result, packetName);
       return result;
@@ -251,8 +242,7 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
       this.options.actorId,
       this.message,
       packetName,
-      this.selectedMetadata,
-      signal
+      this.selectedMetadata
     );
     if (localResult.status !== ZLinkSubmitStatus.TargetNotFound) {
       this.traceSubmitted(localResult, packetName);
@@ -272,8 +262,7 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
         actorRef,
         this.message,
         packetName,
-        this.selectedMetadata,
-        signal
+        this.selectedMetadata
       );
       this.traceSubmitted(result, packetName);
       return result;
@@ -289,8 +278,7 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
       this.options.actorId,
       this.message,
       packetName,
-      this.selectedMetadata,
-      signal
+      this.selectedMetadata
     );
     this.traceSubmitted(result, packetName);
     return result;

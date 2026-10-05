@@ -183,7 +183,6 @@ export interface ZLinkChannelOptions {
     readonly weight?: number;
     readonly sendHighWaterMark?: number;
     readonly receiveHighWaterMark?: number;
-    readonly sendTimeoutMs?: number;
     readonly maxMessageSize?: number;
   };
   readonly subscriber?: ZLinkClientCapabilityOptions;
@@ -193,7 +192,6 @@ export interface ZLinkClientCapabilityOptions {
   readonly manualConnections?: readonly string[];
   readonly sendHighWaterMark?: number;
   readonly receiveHighWaterMark?: number;
-  readonly sendTimeoutMs?: number;
   readonly maxMessageSize?: number;
 }
 
@@ -214,7 +212,6 @@ export interface ZLinkRouteMeshChannelOptions {
   readonly weight?: number;
   readonly sendHighWaterMark?: number;
   readonly receiveHighWaterMark?: number;
-  readonly sendTimeoutMs?: number;
   readonly sendHandlers?: readonly ZLinkRouteChannelSendHandlerRegistration[];
   readonly requestHandlers?: readonly ZLinkRouteChannelRequestHandlerRegistration[];
   readonly handlers?: readonly ZLinkRouteChannelHandlerOptions[];
@@ -230,7 +227,6 @@ export interface ZLinkRouteChannelOptions {
   readonly weight?: number;
   readonly sendHighWaterMark?: number;
   readonly receiveHighWaterMark?: number;
-  readonly sendTimeoutMs?: number;
   readonly sendHandlers?: readonly ZLinkRouteChannelSendHandlerRegistration[];
   readonly requestHandlers?: readonly ZLinkRouteChannelRequestHandlerRegistration[];
   readonly handlers?: readonly ZLinkRouteChannelHandlerOptions[];
@@ -430,7 +426,6 @@ export interface ZLinkSpotRouterCapabilityOptions {
   readonly sendHighWaterMark?: number;
   readonly receiveHighWaterMark?: number;
   readonly receiveTimeoutMs?: number;
-  readonly sendTimeoutMs?: number;
 }
 
 export interface ZLinkSpotRouterPeerConnectionOptions {

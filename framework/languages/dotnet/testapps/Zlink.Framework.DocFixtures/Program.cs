@@ -381,6 +381,6 @@ internal sealed class FixtureActorPacketSession(
     {
         _ = dispatch;
         var actor = _actor ?? throw new InvalidOperationException("Actor is not bound.");
-        await actor.RelayAsync(payload, cancellationToken);
+        await actor.RelayAsync(payload);
     }
 }

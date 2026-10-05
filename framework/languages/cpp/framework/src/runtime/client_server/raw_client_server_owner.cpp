@@ -3,7 +3,6 @@
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/dispatch/application_job_receive_flow.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
-#include "runtime/channels/channel_socket_options.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/transport/listener_identity.hpp"
@@ -200,7 +199,6 @@ void raw_client_server_server_t::start ()
           router->options ().handover (true);
           router->options ().mandatory (true);
           router->options ().linger (std::chrono::milliseconds (0));
-          router->options ().send_timeout (std::chrono::seconds (1));
           router->options ().max_message_size (
             zlink::byte_size_t::bytes (_options.descriptor.effective_max_message_bytes));
           trace_client_server_lazy ("server-socket-options", [&] {
@@ -812,7 +810,6 @@ task_t<void> raw_client_server_client_t::start_task ()
         }
         auto dealer = std::make_unique<zlink::dealer_socket_t> (*_context);
         dealer->options ().linger (std::chrono::milliseconds (0));
-        detail::apply_channel_send_timeout (*dealer, _options.send_timeout);
         dealer->options ().max_message_size (
           zlink::byte_size_t::bytes (_options.admission.effective_max_message_bytes));
         trace_client_server_lazy ("client-socket-options", [&] {
@@ -1390,6 +1387,7 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     if (timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("ClientServer request timeout must be positive");
     }
+    const auto deadline = std::chrono::steady_clock::now () + timeout;
     const auto state = co_await _lane.run_task ([this] {
         struct state_t
         {
@@ -1431,7 +1429,11 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
                + " wire_bytes=" + std::to_string (raw_message_bytes (wire));
     });
     pending_request_guard_t pending_request (_pending_requests);
-    auto completion = co_await port->request (wire, timeout);
+    const auto remaining =
+      std::chrono::ceil<std::chrono::milliseconds> (deadline - std::chrono::steady_clock::now ());
+    if (remaining <= std::chrono::milliseconds::zero ())
+        co_return client_server_request_completion_t{foundation::operation_terminal_t::timed_out};
+    auto completion = co_await port->request (wire, remaining);
     trace_client_server_lazy ("client-request-complete", [&] {
         return "channel=" + channel + " correlation=" + correlation_id
                + " result=" + std::to_string (static_cast<int> (completion.terminal))

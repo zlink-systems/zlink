@@ -8,9 +8,11 @@
 One-way send and publish don't return a payload. Normal completion
 means that operation family's source admission accepted the message —
 it doesn't mean remote handler execution finished. If the queue can't
-accept immediately, it waits for capacity within the public send
-deadline, and ends with exactly one of timeout or
-Shutdown, whichever is confirmed first.
+accept immediately, a send waits for capacity. This wait has no time
+limit and no caller cancellation, and ends with exactly one of admission
+after capacity recovers, route removal, or Shutdown, whichever is
+confirmed first ([Submit and completion §7](../spec/server/01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)). Only a Classic fanout
+publish uses the publisher send timeout.
 
 This config verifies the completion and failure of the public one-way
 API across real processes. The client calls the role server's
@@ -21,7 +23,7 @@ socket buffer size, and a test-only snapshot barrier aren't used.
 ## 1. Verification Scope
 
 - Immediate admission, and admission after capacity recovers
-- Bounded pending admission, deadline, Shutdown, and cancellation in supporting languages
+- Pending admission with no time limit, and route-removal/Shutdown terminals
 - One-way semantics for Node/Channel/Spot/Actor/Session/STREAM/classic
   fanout
 - Logical Multicast's partial delivery and the absence of a per-target
@@ -63,7 +65,7 @@ payload size, socket buffer, repeat count, or queue cap during the run.
 Send terminal and remote execution are judged with separate evidence.
 Confirm the normal send terminal first, then confirm handler
 completion after opening the application gate. An operation that ended
-in deadline or cancellation must not run on the handler even after the
+in route removal or Shutdown must not run on the handler even after the
 gate and route recover.
 
 Logical Multicast doesn't return a per-target delivery report. Only
@@ -100,8 +102,8 @@ while ready, with the target handler running once?
 
 Priority: `P0`
 
-Even if all target shared permits are reserved, if a handler starts and returns one before
-the deadline, the application must not call
+Even if all target shared permits are reserved, if a handler starts and returns one,
+the application must not call
 the same operation again — the original awaitable must complete.
 
 **Verification question:** After shared job capacity recovers, does the pending send
@@ -117,51 +119,29 @@ complete normally, processed at most once by the handler?
 - Detailed behavior: verifies waiting for send-ready from
   [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
 
-#### SA-E2E-03 End A Pending Send In A Bounded Terminal
+#### SA-E2E-03 A Pending Send Never Ends Because Of Time
 
 Priority: `P0`
 
-Even during shared job capacity wait, a bounded set
-of sends must each have a terminal result within its own deadline.
-This scenario doesn't verify the internal pending waiter's size.
+A send in a shared job capacity wait stays pending regardless of elapsed
+time, and gets a terminal only from capacity recovery or Shutdown. This
+scenario doesn't verify the size of an internal pending waiter.
 
-**Verification question:** Do sends pending on shared capacity not stay
-indefinitely, each ending once in either success or
-`DeadlineExceeded`?
+**Verification question:** Does a pending send that waits a long time not
+end with `DeadlineExceeded`, and end exactly once with normal completion
+after capacity recovers or with `ShuttingDown` after Shutdown?
 
-- Start condition: Set `MaxQueuedApplicationJobs = 1` and a handler-start gate on two
-  target processes. Send a blocker job to each and confirm reserved/queued 1. Set both send
-  deadlines short and finite.
-- Procedure: Start a send with a different operation ID to each
-  target. Open the first target's gate before its deadline, and keep
-  the second target's gate closed through its deadline.
-- Verification: Every awaitable has exactly one terminal within the
-  bounded time. The first target's marker appears at most once, and
-  the second target's operation ends in `DeadlineExceeded`, absent
-  from handler evidence.
-- Detailed behavior: verifies
-  [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
-
-#### SA-E2E-04 Late Capacity After Deadline Doesn't Revive The Operation
-
-Priority: `P0`
-
-If the send deadline ended first, subsequent queue capacity must not
-submit a completed operation.
-
-**Verification question:** After opening the gate following
-`DeadlineExceeded`, is the previous marker not delivered to the
-handler?
-
-- Start condition: Configure `MaxQueuedApplicationJobs = 1` and the handler-start gate so a send
-  becomes pending.
-- Procedure: Keep the gate closed until the public send deadline ends.
-  After confirming the `DeadlineExceeded` terminal, open the gate and
-  send with a new operation ID.
-- Verification: The previous marker is absent from handler evidence,
-  and only the new marker is processed once.
-- Detailed behavior: verifies blocking late admission from
-  [Error Model §4](../spec/server/00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
+- Start condition: Set `MaxQueuedApplicationJobs = 1` and a handler-start
+  gate on two different target processes. Send a blocker job to each
+  target first and confirm reserved/queued 1.
+- Procedure: Start a send with a different operation ID to each target.
+  Hold both gates for 3 seconds and confirm both awaitables are pending.
+  Open the first target's gate. Shut down the second source host.
+- Verification: At 3 seconds, neither awaitable has a terminal. The first
+  send completes normally with no result payload, and its marker is
+  processed once. The second send ends with `ShuttingDown`, and is absent
+  from handler evidence even after its gate opens.
+- Detailed behavior: verifies [Submit and completion §7](../spec/server/01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout).
 
 #### SA-E2E-05 Distinguish Target Absence From Route Disconnection
 
@@ -209,21 +189,22 @@ ShuttingDown get rejected with the formal terminal?
 
 Priority: `P1`
 
-If timeout or Shutdown ends pending admission first, the handler must
-not run. Languages with public admission cancellation also run that
-variant. Once Logical Multicast submit completes normally, ending the
-caller scope does not roll back fanout already started.
+If Shutdown ends a pending send first, the handler must not run. A Logical
+Multicast can be stopped from starting by cancellation before commit, and
+once its submit completes normally, ending the caller scope does not roll
+back fanout already started.
 
-**Verification question:** Do pre-commit timeout/Shutdown and supported-language cancellation block
-delivery, while ending the caller scope after a normal publish terminal does not cancel existing
-delivery?
+**Verification question:** Do Shutdown of a pending send and cancellation of a publish before commit
+block delivery, while ending the caller scope after a normal publish terminal does not cancel
+existing delivery?
 
 - Start condition: Configure a normal send to become pending, and a
   multicast target handler to wait at the application gate.
-- Procedure: End the pending send by timeout or Shutdown; supporting
-  languages run cancellation on a separate fixture. Publish a separate
-  multicast, receive a normal terminal, then end the caller scope
-  and open the handler gate.
+- Procedure: End the pending send by Shutdown. Languages with a publish
+  cancellation input run, on a separate fixture, a variant that cancels
+  a publish before commit while every worker is occupied. Publish a
+  separate multicast, receive a normal terminal, then end the caller
+  scope and open the handler gate.
 - Verification: There's no terminal send marker. The multicast marker
   is processed at most once at the accepted target, and the public
   publish terminal doesn't change.
@@ -253,30 +234,29 @@ produce the same terminal and handler evidence?
 - Detailed behavior: verifies
   [Interaction Model §3](../spec/server/00-foundation/04-interaction-model.en.md#3-node-direct-and-channel-select-one).
 
-#### SA-E2E-09 Apply The Send Deadline For Each Channel Topology
+#### SA-E2E-09 Confirm The Send Wait For Each Channel Topology
 
 Priority: `P0`
 
-RouteMesh and ClientServer Channel sends must wait until the family
-send deadline when queue capacity is unavailable, then end in the same
-single public terminal.
+RouteMesh and ClientServer Channel sends wait until capacity recovers when
+there is no queue capacity, and then end with the same single public
+terminal. ClientServer also waits for a ready server when none exists.
 
-**Verification question:** In both RouteMesh and ClientServer, is a
-Channel send pending before capacity recovers, does it succeed when
-capacity recovers before the deadline, and does it return the same
-timeout result when capacity does not recover?
+**Verification question:** Are RouteMesh and ClientServer Channel sends
+pending regardless of time before capacity recovers, and do they complete
+normally after it recovers?
 
-- Start condition: Configure RouteMesh and ClientServer as actual,
-  separate topologies. In each topology, the success and timeout
-  variants use different ChannelNames and target processes. Set a small
-  `MaxQueuedApplicationJobs = 1` and a handler-start gate on each target, and use a blocker
-  job to confirm reserved/queued and pending state.
-- Procedure: For each topology, start a send to the success target and
-  open its gate before the deadline. Keep the timeout target's gate
-  closed through the deadline while a separate send is pending.
-- Verification: In both topologies, the success send has a payload-less
-  normal terminal and one handler execution. The timeout send is
-  `DeadlineExceeded` with zero handler executions.
+- Start condition: Configure RouteMesh and ClientServer as genuinely
+  separate topologies. Set `MaxQueuedApplicationJobs = 1` and a
+  handler-start gate on each target, and confirm the blocker job's
+  reserved/queued state. The ClientServer ready-wait variant uses a
+  separate ChannelName whose server process isn't started.
+- Procedure: Start a send in each topology, hold the gate for 3 seconds,
+  then open it. The ready-wait variant starts a send and starts the
+  server 3 seconds later.
+- Verification: At 3 seconds every awaitable is pending. All then
+  complete normally with no result payload, and the handler processes
+  each marker once.
 - Detailed behavior: verifies
   [Channel Messaging §7](../spec/server/02-channel-transport/02-channel-messaging.en.md#8-failure-and-termination)
   and
@@ -295,8 +275,10 @@ it?
 
 - Start condition: `spot-a` is ready and can make a send pending.
   `spot-b` is the same stable type but a different ID.
-- Procedure: Confirm `spot-a`'s send is pending, then terminate the
-  owner route. Then recover the route and send a new operation ID.
+- Procedure: Confirm `spot-a`'s send is pending, then explicitly
+  remove that target route (the route removal of
+  [Submit and completion §7](../spec/server/01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)). After confirming `Unavailable`,
+  recover the route and send a new operation ID.
 - Verification: The previous operation is `Unavailable`, with no
   marker on either A or B's handler. Only the new operation is
   processed once, at A.
@@ -315,9 +297,9 @@ route loss not get automatically delivered after recovery, with only
 the new send processed?
 
 - Start condition: The Actor is ready and a pending send can be made.
-- Procedure: Terminate the owner route while pending, confirm the
-  terminal. After the route recovers to ready, send with a different
-  operation ID.
+- Procedure: Confirm the send is pending, then explicitly remove that
+  target route and confirm the `Unavailable` terminal. After the route
+  recovers to ready, send with a different operation ID.
 - Verification: The previous send is `Unavailable`, with no handler
   marker. The new send completes normally, processed once by the
   Actor handler.
@@ -377,21 +359,22 @@ The one-way terminal semantics must not change based on whether the
 Session owner and Actor owner are local or remote.
 
 **Verification question:** Do local/remote bound Session send and
-Actor relay use the same deadline and non-replay rule?
+Actor relay use the same wait, Shutdown, and non-replay rule?
 
 - Start condition: Configure a local binding and a remote binding on
   fresh Sessions each. The pending variants place each Session on a
   separate gateway process so they don't share host job capacity, and create the capacity
   wait with that gateway's `MaxQueuedApplicationJobs = 1` and handler-start gate.
-- Procedure: Run a normal send once for each of the four combinations,
-  and a separate pending send that doesn't open capacity through the
-  deadline.
+- Procedure: Run a normal send once for each of the four combinations.
+  A separate pending send keeps capacity closed for 3 seconds, and then
+  the source gateway is shut down.
 - Verification: Normal sends complete with no result payload, and
-  target evidence appears once each. Pending sends are
-  `DeadlineExceeded` and don't replay after a later capacity recovery.
+  target evidence appears once each. Pending sends have no terminal at
+  3 seconds, end with `ShuttingDown` after Shutdown, and don't replay
+  after a later capacity recovery.
 - Detailed behavior: verifies
   [One-Way Submit](../spec/server/01-execution/README.en.md),
-  [Admission Deadline](../spec/server/01-execution/01-submit-and-completion.en.md), and
+  [One-Way Send Wait Termination](../spec/server/01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout), and
   [Session Actor Inbound Dispatch](../spec/server/04-session/02-session-actor-binding.en.md).
 
 #### SA-E2E-16 Keep Server Stream Send Order
@@ -399,25 +382,20 @@ Actor relay use the same deadline and non-replay rule?
 Priority: `P0`
 
 Server sends accepted on the same Stream Session must keep the
-application submission order. A send that failed through its public
-per-call `Timeout(...)` modifier must not
-later show up at the client.
+application submission order.
 
-**Verification question:** Does the Stream client receive only the
-successful sequence in submission order?
+**Verification question:** Does the Stream client receive server sends
+in submission order with no duplicates?
 
 - Start condition: The public stream connector is connected to the
   server Session, and the server send HWM is set small. Keep the
-  server send gate closed, and set a long call timeout for the success
-  marker and a shorter timeout for the `timeout` marker.
-- Procedure: Start server sends in order `1`, `timeout`, `2`, `3`.
-  After confirming the `timeout` operation ended by deadline, open the
-  gate before the long deadline ends.
-- Verification: The success sequence `1,2,3` the client received
-  matches the source's successful-terminal order with no duplicates.
-  The `timeout` marker doesn't arrive at the client.
+  server send gate closed.
+- Procedure: Start server sends in order `1`, `2`, `3`, confirm that a
+  waiting awaitable exists, then open the gate.
+- Verification: The sequence `1,2,3` the client received matches the
+  source's successful-terminal order with no duplicates.
 - Detailed behavior: verifies
-  [Async Execution — Per-STREAM-Send-Call Timeout](../spec/server/01-execution/README.en.md) and
+  [Submit and completion §7](../spec/server/01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout) and
   [Stream Session Codec-Layer Separation](../spec/server/04-session/01-stream-session.en.md).
 
 #### SA-E2E-17 A Stream Reply Token Is Used Only Once
@@ -425,9 +403,8 @@ successful sequence in submission order?
 Priority: `P0`
 
 A request reply token is used by whichever valid first reply call
-uses it. Even if the first call ends in normal completion, socket send
-timeout, or Shutdown, the same token cannot be reused. Cancellation is
-an additional variant only in supporting languages.
+uses it. Even if the first call ends in normal completion or Shutdown,
+the same token cannot be reused.
 
 **Verification question:** Of two calls on the same reply token, does
 only one start admission, with the client reply also at most one?
@@ -435,9 +412,8 @@ only one start admission, with the client reply also at most one?
 - Start condition: A Stream peer sends a request and the server
   handler receives the public reply token.
 - Procedure: Build two reply calls with the same token and start them
-  at an application barrier simultaneously. Repeat the normal,
-  socket-send-timeout and Shutdown variants on fresh requests, plus
-  cancellation in supporting languages.
+  at an application barrier simultaneously. Repeat the normal and
+  Shutdown variants on fresh requests.
 - Verification: For each request, only one call gets a normal or first
   terminal, and the other gets a local invalid-state error. The client
   reply is at most one, and reusing a terminal token doesn't
@@ -475,17 +451,19 @@ ready member?
 
 Priority: `P0`
 
-An operation that ended in timeout, connection loss, or Shutdown does
-not return to pending after route recovery. Languages with public
-admission cancellation also run that variant.
+An operation that ended in route removal or Shutdown does
+not return to pending after route recovery.
 
 **Verification question:** After route recovery, is the previous
 marker not delivered, with only the new operation processed?
 
-- Start condition: Keep a route unavailable long enough to end one
-  send in terminal failure.
-- Procedure: Confirm the failure terminal, then recover the route,
-  and once public status is ready, send with a new operation ID.
+- Start condition: One send can be made pending. A transient transport
+  close doesn't end a pending send, so neither time nor a dropped
+  connection alone is used to create a terminal.
+- Procedure: Confirm the send is pending, then explicitly remove the
+  target route or close the STREAM connection. After confirming
+  `Unavailable`, recover the route, and once public status is ready,
+  send with a new operation ID.
 - Verification: The previous marker is absent from target evidence,
   and only the new marker is processed once. The previous awaitable's
   terminal also doesn't change.
@@ -524,7 +502,7 @@ remote handler is still waiting?
   state combined with public `MaxQueuedApplicationJobs` and handler-start gate, and fails
   if not reproduced within the setup timeout. It isn't retried by
   changing a runtime value.
-- Exactly one of normal terminal, timeout, cancellation, or Shutdown
+- Exactly one of normal terminal, route removal, or Shutdown
   result occurs per operation.
 - Capacity/route recovery after terminal doesn't automatically
   resubmit an existing operation.

@@ -41,7 +41,7 @@ One of the following happens.
 ZLink uses the third approach. **Flow control that propagates the receiver's processing delay
 back to the sender by making it wait is called backpressure.** An application message that has
 already been accepted is never dropped because of load. So under load, the application-visible
-symptom isn't "the message vanished" — it's "`send` got slow" or "`DeadlineExceeded` happened."
+symptom isn't "the message vanished" — it's "`send` got slow." A Classic fanout publish ends with `DeadlineExceeded` when its wait limit is reached.
 
 ## 2. Core HWM and the Application Job Queue
 
@@ -116,7 +116,7 @@ The receiving handler can't keep up
   → send waits until it can be accepted
 ```
 
-The sender only knows that its submit wasn't accepted. A timeout result alone cannot
+The sender only knows that its submit wasn't accepted. The duration of that wait cannot
 distinguish a remote handler delay, network delay, or local Core queue pressure, so inspect
 Core HWM and application job queue status on both sides
 ([12-operations](12-operations.en.md) §1).
@@ -170,10 +170,11 @@ slot to send into.**
 --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-send-call"
 ```
 
-The framework starts one binding operation. If there is no room, Core owns the HWM wait and
-internal retries for that same operation and completes its per-operation completion within
-`DefaultSocketSendTimeout` (1 second by default). If room never opens up, it ends in a
-`DeadlineExceeded` exception.
+The framework starts one binding operation. Core owns the capacity-wait token; the binding owns
+resubmission and the `admitted` completion. A send waits with no time limit or caller cancellation.
+Admission after capacity recovers completes normally. Route removal while pending ends with
+`Unavailable`; socket close or runtime shutdown ends with `ShuttingDown`. Only a Classic fanout
+publisher uses a send timeout.
 
 **The framework does not create or resend a second operation** — after a terminal failure,
 whether to start a new operation, drop it, or tell the user it failed is up to the
@@ -195,16 +196,14 @@ hasn't drained yet and grows the congestion, so leave a gap between retries.
 
 Only that call is suspended during the wait; the execution thread handles other work.
 
-**There's one case that fails immediately instead of waiting until the ceiling:** when even
-the space that holds calls waiting for a slot is full. In that case, the payload isn't held
-at all — it ends immediately in `DeadlineExceeded`. If the configured ceiling is 1 second and
-`send` failed instantly, that means the queue isn't full — **too many calls are waiting** —
-so look at the sender's concurrency first.
+A Classic fanout publisher ends with `DeadlineExceeded` if capacity does not recover within its wait
+limit. An ordinary send has no failure due to elapsed time; inspect sender concurrency and receiver
+throughput together.
 
 The target is fixed once, before the binding operation starts. A call that directly names a
 node or sends by Spot/Actor ID uses that exact target; a channel call selects one current channel
 candidate immediately before starting the operation. **After the operation starts, no call
-reselects its target while Core performs the HWM wait and retry.** A later, new channel operation
+reselects its target while Core waits for capacity and the binding resubmits.** A later, new channel operation
 can observe and select a candidate that has changed by then.
 
 ### 4.2 request's Timeout Boundary
@@ -225,7 +224,7 @@ is neither cancelled nor rolled back.
 
 | Option | What it sets | Where it's configured |
 | --- | --- | --- |
-| `DefaultSocketSendTimeout` | The ceiling to wait when there's no slot to send into (1 second by default) | Root option |
+| `DefaultSocketSendTimeout` | Classic fanout publisher wait ceiling (1 second by default) | .NET root option |
 | — | The value actually applied **differs by send path** (below) | — |
 | `SendHighWaterMark` | Bytes that can be held **to send**, per peer. `0` means unlimited | `ConfigureRouterSocket()` |
 | `ReceiveHighWaterMark` | Bytes that can be held **after receiving**, per peer. `0` means unlimited | `ConfigureRouterSocket()` |
@@ -233,29 +232,13 @@ is neither cancelled nor rolled back.
 | `CoreHwmMemoryLimitBytes` · `CoreHwmBudgetBytes` · `CoreHwmProfile` | The Core context's ordinary-queue byte budget | root inbound-dispatch configuration |
 | `ApplicationJobQueueProfile` · `MaxQueuedApplicationJobs` · pause/resume thresholds | The host instance's queued-application-job limit and flow-transition boundaries | root inbound-dispatch configuration |
 
-**"The ceiling for waiting on a send slot" isn't a single global value.** The value actually
-used is owned by the socket that call uses.
+Send, reply, relay, and each target submission of a committed Logical Multicast have no time limit
+or caller cancellation. Route resolution and ClientServer ready waits follow the same contract.
+A request timeout bounds outbound admission and reply waiting together, without combining with a
+socket send timeout. A STREAM reply does not receive the client's request timeout.
 
-| Send path | Which ceiling it uses |
-| --- | --- |
-| RouteMesh node/channel, Spot, Actor | The chosen MeshNode's send ceiling. **Includes the time spent finding the location** |
-| ClientServer | The client-side send ceiling |
-| Logical Multicast | The chosen MeshNode's send ceiling, applied per target |
-| classic pub/sub | The publish socket's send ceiling |
-| session relay / bound session send | The Framework socket's send ceiling |
-| STREAM send / reply | That STREAM socket's send ceiling |
-
-The last row is an especially easy place to get confused. **A reply doesn't use the request
-timeout the caller specified.** Just because the client decided to wait 5 seconds doesn't
-mean the server's reply submission waits 5 seconds.
-
-A STREAM one-way send can use a per-call timeout modifier to shorten this wait. It never
-extends the socket timeout; the earlier deadline wins, with no late admission or replay
-afterward. This modifier does not apply to a reply.
-
-If unspecified, each path uses 1 second. The value is rounded up to milliseconds and must be
-`1` or greater — `0`, a negative number, or infinity are **rejected at host startup** —
-they're never silently swapped for the default.
+Only a Classic fanout publisher uses a send timeout. Its default and value rules follow
+[Submit and completion §7](../../../common/spec/server/01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout).
 
 The two HWMs differ only in direction, not in character. Each sets **how many bytes your own
 node will hold**, and that limit carries through to the peer's flow. When deciding a value,
@@ -401,14 +384,14 @@ settings and status/reset semantics.
 
 | Symptom | Cause and what to inspect |
 | --- | --- |
-| `send` ends in `DeadlineExceeded` | A send slot never opened up. Before raising the ceiling, inspect the receiver's Core `blocked_ratio`, application job queue waiters, and handler execution time. |
+| Classic fanout publish ends in `DeadlineExceeded` | A send slot never opened up. Before raising the ceiling, inspect the receiver's Core `blocked_ratio`, application job queue waiters, and handler execution time. |
 | Core-accounted bytes are low, but receiving waits | Application job queue permits may be full. Inspect `reserved`, `queued`, `in_use`, and capacity waiters. |
 | Application job queue `queued` is low, but the limit is reached | `in_use` also counts the short pre-receive `reserved` permits. Size a manual limit from `reserved + queued`. |
 | A handler appears scheduled, but the job count has not dropped | Permit release occurs at the user's actual first callback instruction, not executor task publication. Check the handler-start gate. |
 | `MaxQueuedApplicationJobs = 0` fails startup | `0` is not unlimited. Omit the manual value to select Auto. |
 | The same profile label does not move byte and job limits by the same ratio | `CoreHwmProfile` and `ApplicationJobQueueProfile` share labels only; their units and calculations are independent. |
 | Replies still complete while the application job queue is full | Terminal reply/error completion identifiable before receive bypasses the shared permit and ordinary Core HWM, so this is expected. |
-| Raising the ceiling made the symptom show up later | Congestion absorbed into memory surfaces the failure later. To fail fast and switch to a different path, lower the ceiling and shrink `DefaultSocketSendTimeout`. |
+| Raising the ceiling made the symptom show up later | Congestion absorbed into memory surfaces the failure later. Review the queue ceiling and receiver throughput together. `DefaultSocketSendTimeout` controls only the Classic fanout publisher wait. |
 | `Publish` completed normally, but the subscriber never received it | Publish completion means only that it was ready to send and the runtime accepted the submission. Delivery, resend, and ack aren't provided ([Channel Messaging](30-channel-patterns.en.md#7-what-it-means-for-a-call-to-be-finished)). |
 | A request inside a handler hangs for a long time | If both sides' processing is delayed at the same time, a finite timeout is where recovery starts. Give a nested request a `Timeout(...)`. |
 | One slow node is also delaying other calls | The send queue is separate per peer, but waiting inside the same handler also occupies that handler's execution slot. Do not put a call to a slow-responding target in the same handler as other calls. |

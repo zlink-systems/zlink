@@ -2,6 +2,7 @@
 
 #include "runtime/backend/raw_dealer_port.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
+#include "runtime/messaging/request_deadline.hpp"
 
 #include <zlink/Contracts/Eventing/poll_event.hpp>
 #include <zlink/Contracts/Eventing/poller.hpp>
@@ -66,7 +67,8 @@ task_t<zlink::submit_result_t> raw_dealer_port_t::send_result (const raw_message
         co_return zlink::submit_result_t::ok;
     }
     catch (const zlink::submit_error_t &error) {
-        co_return error.result ();
+        co_return pending ? runtime::messaging::map_submit_completion_result (error.result ())
+                          : error.result ();
     }
 }
 
@@ -76,6 +78,7 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
     if (parts.empty () || timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("raw dealer request requires parts and timeout");
     }
+    const auto deadline = std::chrono::steady_clock::now () + timeout;
     auto messages = materialize_binding_parts (parts);
     auto source = std::make_shared<task_completion_source_t<raw_request_completion_t>> ();
     std::optional<request_submission_stages_t> stages;
@@ -90,7 +93,7 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
                 operation = std::move (operation).message (messages[index]);
             }
             stages.emplace (submit_request_once (
-              [&] { return std::move (operation).timeout (timeout).async (); }));
+              [&] { return std::move (operation).timeout (timeout).async (); }, deadline));
         }
     }
     catch (const zlink::submit_error_t &error) {
@@ -100,8 +103,9 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
           raw_request_failure_t{raw_request_failure_phase_t::initial_admission, error.result (),
                                 error.internal_errno ()}};
     }
+    const auto caller_deadline = stages->caller_deadline;
     observe_request_completion (std::move (*stages), source);
-    co_return co_await source->task ();
+    co_return co_await runtime::messaging::with_request_deadline (source->task (), caller_deadline);
 }
 
 std::optional<raw_message_t> raw_dealer_port_t::try_receive ()

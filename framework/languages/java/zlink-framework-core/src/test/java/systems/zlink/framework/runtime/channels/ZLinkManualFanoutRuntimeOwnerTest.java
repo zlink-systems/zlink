@@ -316,8 +316,7 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(
-                ZLinkBackendContext context, Duration sendTimeout) {
+        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             throw new UnsupportedOperationException();
         }
 

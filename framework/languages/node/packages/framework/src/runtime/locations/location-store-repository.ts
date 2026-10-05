@@ -1193,7 +1193,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         this.provider.read(leaseKey, signal)
       ]);
       const descriptor = liveTargetDescriptor(descriptorRead, leaseRead, request.target);
-      if (descriptor === undefined) {
+      if (descriptor === undefined || descriptor.state !== ZLinkFrameworkRuntimeState.Serving) {
         return { kind: 'conflict', current: { kind: 'missing', storeNow: current.storeNow } };
       }
       const [capacityRead, objectGenerationRead, authorityOwnerGenerationRead] = await Promise.all([
@@ -1394,9 +1394,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       ) {
         return { kind: 'stale' };
       }
+      const descriptorKey = meshKey(request.target.meshName, request.target.nodeRid);
       const leaseKey = ownerKey(request.target.owner.ownerId);
       const capacityRowKey = capacityKey(request.target.meshName, String(request.target.nodeRid));
-      const [leaseRead, capacityRead] = await Promise.all([
+      const [descriptorRead, leaseRead, capacityRead] = await Promise.all([
+        this.provider.read(descriptorKey, signal),
         this.provider.read(leaseKey, signal),
         this.provider.read(capacityRowKey, signal)
       ]);
@@ -1406,7 +1408,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         // rather than read the absence as expiry.
         throw new Error('Location Store owner lease record is invalid.');
       }
-      if (!sameLiveOwner(leaseRead, record.snapshot)) return { kind: 'stale' };
+      if (liveTargetDescriptor(descriptorRead, leaseRead, request.target) === undefined)
+        return { kind: 'stale' };
       const capacity =
         capacityRead.kind === 'missing'
           ? emptyCapacityRecord()
@@ -1415,6 +1418,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         {
           conditions: [
             { kind: 'version', key: rowKey, expected: current.value.version },
+            versionCondition(descriptorKey, descriptorRead),
             leaseValueCondition(leaseKey, {
               ownerId: record.snapshot.ownerId,
               leaseGeneration: record.snapshot.ownerLeaseGeneration
@@ -3904,7 +3908,6 @@ function liveTargetDescriptor(
     descriptor.ownerId === target.owner.ownerId &&
     descriptor.leaseGeneration === target.owner.leaseGeneration &&
     descriptor.objectRole === ZLinkObjectRole.Server &&
-    descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
     lease.ownerId === target.owner.ownerId &&
     BigInt(lease.leaseGeneration) === target.owner.leaseGeneration &&
     leaseRead.value.expiresAt !== undefined &&

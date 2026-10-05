@@ -414,10 +414,10 @@ RouteMesh MeshNode or ClientServer client. This section decides the selection re
 - A RouteMesh send path doesn't wait. If the [ready target](02-glossary.en.md#ready-target)
   snapshot itself doesn't exist, it ends with `NotFound`; if there's no ready target pipe, it
   ends with `Unavailable`.
-- A ClientServer send path with no ready target waits within the admission deadline
-  ([Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules))
+- A ClientServer send path with no ready target waits until a ready target appears
   ([Channel messaging](../02-channel-transport/02-channel-messaging.en.md#clientserver-ready-wait)).
-  If no ready target appears within it, it ends with `DeadlineExceeded`.
+  A send's wait termination follows [Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout), and a request's follows
+  [Submit and completion §9](../01-execution/01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget).
 
 <a id="no-eligible-select-one-member"></a>
 When a [select-one](02-glossary.en.md#select-one) ChannelName has a ready target but applying
@@ -457,10 +457,9 @@ The server package's one-way send/publish/explicit STREAM reply follows the asyn
 admission contract of the
 [Async Execution Policy](../01-execution/01-submit-and-completion.en.md). Public calls don't also
 provide a synchronous terminator that tries once immediately. The separate stream connector
-package's send builder follows the connector package's contract. Send timeout applies to
-waiting for transport admission, and request timeout to waiting for a reply. The admission
-wait and timeout budget of a global object request are set by
-[Submit and completion §§7, 9](../01-execution/01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules). If the
+package's send builder follows the connector package's contract. A one-way send's wait
+termination is set by [Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout), and the request timeout budget by
+[Submit and completion §9](../01-execution/01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget). If the
 initial non-blocking transport submit is accepted immediately, an already-completed or
 resolved language-specific awaitable is returned without adding to the framework scheduler
 or a separate work queue.
@@ -473,10 +472,8 @@ auto-copy request metadata.
 ## 8. Logical Multicast Completion
 
 The MeshNode and Spot publish APIs don't provide a publish-only delivery-policy option.
-Framework's I/O executor admits a publish operation up to the send timeout. If it
-can't start before the timeout, it completes with whichever is confirmed first — the Framework
-exception raised when an operation's allowed deadline passes before its completion condition is
-met, [`DeadlineExceeded`](02-glossary.en.md#deadlineexceeded), cancellation, or `ShuttingDown`.
+Framework's I/O executor admits a publish operation with no time limit. If cancellation or
+`ShuttingDown` is decided before it starts, it completes with that exception.
 Once started, it processes the
 confirmed target snapshot exactly once, and doesn't stop submitting to remaining targets due
 to cancellation or shutdown.
@@ -1058,13 +1055,14 @@ The RouteMesh/ClientServer select-one target commitment and HWM retry boundary a
 | New admission closed by host [shutdown](02-glossary.en.md#shutdown) | `ShuttingDown` |
 | Invalid argument/state, an unsupported operation, or an internal invariant violation | a language-specific local call error. Not turned into a remote error reply |
 
-`DeadlineExceeded` is an exception Framework creates when a regular one-way submission
-isn't accepted by the per-family send timeout. Cancellation is expressed as that
+A one-way send never ends with `DeadlineExceeded`. Framework creates `DeadlineExceeded` only for
+operations with a time limit, such as a request timeout or the Classic fanout publisher send
+timeout. Cancellation is expressed as that
 language's cancelled awaitable. Invalid argument/handle/state, an already-used reply token,
 and duplicate terminator execution are exceptional completions. A STREAM reply's first valid
 terminator atomically consumes the one-shot token before attempting transport. Even if it
 completes via the send-rate-limiting flow control that caps a send queue,
-[backpressure](02-glossary.en.md#backpressure), timeout, or cancellation, that token can't be
+[backpressure](02-glossary.en.md#backpressure), and then with a failure, that token can't be
 reused. If two
 calls race on the same token, only one starts transport admission.
 A direct pending one-way operation keeps a Node RID, global Spot/Actor ID, or session

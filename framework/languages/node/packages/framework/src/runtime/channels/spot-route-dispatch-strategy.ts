@@ -32,8 +32,6 @@ export interface ZLinkLocalSpotRouteDispatcher {
     message: unknown,
     context: {
       readonly channelName: string;
-      readonly admissionTimeoutMs?: number;
-      readonly signal?: AbortSignal;
       readonly metadata?: ReadonlyMap<string, string>;
     }
   ): Promise<void>;
@@ -101,14 +99,12 @@ export class ZLinkSpotRouteDispatchStrategy {
     spotRouteTarget: ZLinkSpotRouteTarget,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>,
-    timeoutMs?: number
+    metadata?: ReadonlyMap<string, string>
   ): Promise<void> {
     // Call-scoped flow (spec 27 §4): the envelope flow pair lives only for
     // the duration of this outbound call, never in the caller's context.
     return runWithOutboundFlow(this.options.flowCreationEnabled?.() ?? true, () =>
-      this.routeSendToSpotScoped(spotRouteTarget, packetName, message, signal, metadata, timeoutMs)
+      this.routeSendToSpotScoped(spotRouteTarget, packetName, message, metadata)
     );
   }
 
@@ -116,11 +112,8 @@ export class ZLinkSpotRouteDispatchStrategy {
     spotRouteTarget: ZLinkSpotRouteTarget,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>,
-    timeoutMs?: number
+    metadata?: ReadonlyMap<string, string>
   ): Promise<void> {
-    throwIfAborted(signal);
     const localSpotRouteNode = this.targets.localRouteNode(spotRouteTarget);
     if (localSpotRouteNode !== undefined) {
       await this.localTransport.send(
@@ -128,9 +121,7 @@ export class ZLinkSpotRouteDispatchStrategy {
         spotRouteTarget.spotId,
         packetName,
         message,
-        signal,
-        metadata,
-        timeoutMs
+        metadata
       );
       return;
     }
@@ -148,22 +139,22 @@ export class ZLinkSpotRouteDispatchStrategy {
     ) as readonly Message[];
     if (
       this.targets.hasNamedSpotNode(spotRouteTarget.routerChannelId) &&
-      (await this.spotNodeTransport.send(spotRouteTarget, parts, signal))
+      (await this.spotNodeTransport.send(spotRouteTarget, parts))
     ) {
       return;
     }
     if (this.bridgeTransport.has(spotRouteTarget.routerChannelId)) {
-      await this.bridgeTransport.send(spotRouteTarget, parts, signal);
+      await this.bridgeTransport.send(spotRouteTarget, parts);
       return;
     }
     if (this.targets.hasBoundRouteRouter(spotRouteTarget.routerChannelId)) {
-      await this.routerSocketTransport.send(spotRouteTarget, parts, ZLINK_SEND_DONT_WAIT, signal);
+      await this.routerSocketTransport.send(spotRouteTarget, parts, ZLINK_SEND_DONT_WAIT);
       return;
     }
-    if (await this.spotNodeTransport.send(spotRouteTarget, parts, signal)) {
+    if (await this.spotNodeTransport.send(spotRouteTarget, parts)) {
       return;
     }
-    await this.routerSocketTransport.send(spotRouteTarget, parts, ZLINK_SEND_DONT_WAIT, signal);
+    await this.routerSocketTransport.send(spotRouteTarget, parts, ZLINK_SEND_DONT_WAIT);
   }
 
   routeRequestToSpot<TReply>(
@@ -291,19 +282,9 @@ export class ZLinkSpotRouteDispatchStrategy {
     spotRouteTarget: ZLinkSpotRouteTarget,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>,
-    timeoutMs?: number
+    metadata?: ReadonlyMap<string, string>
   ): Promise<void> {
-    await this.sourceSpotRouter.send(
-      sourceSpot,
-      spotRouteTarget,
-      packetName,
-      message,
-      signal,
-      metadata,
-      timeoutMs
-    );
+    await this.sourceSpotRouter.send(sourceSpot, spotRouteTarget, packetName, message, metadata);
   }
 
   routeRequestRawFromSpotToSpot(

@@ -6,7 +6,7 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Zlink.Stream.Connector" Version="0.27.0" />
+    <PackageReference Include="Zlink.Stream.Connector" Version="0.28.0" />
     <Compile Remove="Validation/**/*.cs" />
   </ItemGroup>
 </Project>

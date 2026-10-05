@@ -66,7 +66,7 @@ gate uses the name `Yield`/`yield`.
 
 Verification uses the completion representations and outcomes actually exposed by Framework terminators to check that shared state does not contaminate results already returned for other calls or results of later calls. It does not require the Framework to expose binding result-object structures or a `Backpressured` result.
 
-The layer returning the completion representation owns its isolation. [Cancellation and shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the boundaries between cancellation of Framework queue waits, caller-wait cancellation of binding operations, and late-completion cleanup. Isolating a returned representation must not remove an existing cancellation connection for a pending stage or introduce binding operation state, registries, or resubmission logic into the Framework.
+The layer returning the completion representation owns its isolation. [Cancellation and shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the boundaries between cancellation of Framework queue waits, caller-wait cancellation of binding operations, and late-completion cleanup. Isolating a returned representation must not remove the cancellation connection of a pending stage that supports cancellation or introduce binding operation state, registries, or resubmission logic into the Framework.
 
 **Asynchronous results completed by the application, and bounded observation.** The application can create an asynchronous result that an external event completes, and can observe that result for a bounded time on an application thread.
 
@@ -177,9 +177,10 @@ sequenceDiagram
 
 ## 5. Backpressure and Error Classification
 
-When local Framework capacity is unavailable, the Framework waits up to that family's send
-timeout. When a binding operation waits on Core HWM, Core owns the retry and completes the
-per-operation completion awaitable (the binding result object's `admitted`). The Framework does not
+When local Framework capacity is unavailable, the Framework waits until capacity recovers or
+the runtime stops accepting new admissions. When a binding operation waits on Core HWM, Core owns the WRITABLE
+notification, and the binding owns resubmission of the payload it kept and completion of the per-operation
+completion awaitable (the binding result object's `admitted`). The Framework does not
 create a separate readiness callback, retry waiter, or separate binding adapter, and follows these rules.
 
 - [`Backpressured`](../00-foundation/02-glossary.en.md#backpressured) — an internal state in
@@ -187,11 +188,9 @@ create a separate readiness callback, retry waiter, or separate binding adapter,
   result.
 - If capacity becomes available first, the message is submitted exactly once and completes
   normally.
-- Timeout, shutdown, and cancellation races during Framework queue waiting before binding handoff
-  follow [Cancellation and shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race).
-  Binding-operation cancellation and native-completion cleanup reference the ownership boundary there.
-- The Framework builds no waiting queue of its own. A call that waits for room and runs out of
-  time ends with `DeadlineExceeded`.
+- A one-way send's wait has no time limit and no caller cancellation. The cases that end the
+  wait are defined by [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout).
+- The Framework builds no waiting queue of its own.
 - If Core reports a capacity shortage without a wait token (for example, a saturated request
   completion slot), there is nothing to wait on, so the Framework ends the call immediately with
   `Unavailable`.
@@ -204,7 +203,7 @@ create a separate readiness callback, retry waiter, or separate binding adapter,
 | No Mesh | `NotFound` |
 | ChannelName target selection fails | Follows [the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result) |
 | No route available | `Unavailable` |
-| Admission deadline expired | `DeadlineExceeded` |
+| The route is lost while waiting | Follows [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout) |
 | Runtime not accepting new admission | `ShuttingDown` |
 | Same call's terminal invoked twice | `InvalidOperation` |
 | The binding doesn't admit a one-way send (`NOT_ADMITTED`) | `Rejected` |
@@ -218,9 +217,9 @@ current eligible member of the same
 first binding operation. It may choose another eligible member only while checking route
 eligibility or source-local admission before any binding operation has started.
 
-Starting the binding operation fixes the selected target. Core owns HWM retry and
-completion; the Framework does not reselect for capacity or resubmit the binding operation.
-There is no automatic resubmission after completion. A later detach or timeout is terminal for that operation. A new select-one operation may choose members eligible when it starts.
+Starting the binding operation fixes the selected target. The binding owns resubmission and
+completion after an HWM wait; the Framework does not reselect for capacity or resubmit the binding operation.
+There is no automatic resubmission after completion. Termination of a send wait follows [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). A new select-one operation may choose members eligible when it starts.
 
 ## 6. Logical Multicast and Classic Fanout
 
@@ -228,8 +227,10 @@ There is no automatic resubmission after completion. A later detach or timeout i
 
 - It fixes a target snapshot when the operation starts and attempts each target exactly
   once.
-- If the operation itself cannot be submitted to the local executor, it waits up to the send
-  timeout.
+- If the operation itself cannot be submitted to the local executor, it waits until a worker
+  slot is secured or the runtime stops accepting new admissions. This wait has no time limit and
+  can be ended by caller cancellation only before commit
+  ([Cancellation and shutdown §4](03-cancellation-and-shutdown.en.md#4-logical-multicast-cancellation)).
 - Once the source-local room has been secured to start the
   transaction, the public terminal completes normally with no return data, and per-target
   submission continues internally.
@@ -243,52 +244,42 @@ There is no automatic resubmission after completion. A later detach or timeout i
 socket queue accepts the message, even with no subscribers. Subscriber count and receipt are
 not exposed as a public result.
 
-## 7. Admission Deadline — Owner and Value Rules
+## 7. One-Way Send Wait Termination and Classic Fanout Send Timeout
 
-The one-way admission deadline and the outbound admission deadline of a global object request are owned by the outbound socket or a
-[MeshNode](../00-foundation/02-glossary.en.md#meshnode) — a runtime node that participates in a
-RouteMesh to send or receive messages — that the operation actually uses.
+**A one-way send has no time limit and no caller cancellation.** This covers RouteMesh
+node/Channel, Spot, Actor, ClientServer, bound session and session Actor relay sends, per-target
+submission of a committed Logical Multicast, and STREAM send/reply. Stages before a binding
+operation starts, such as route resolve and the ClientServer ready wait, are the same. A pending
+send ends only with one of these three events.
 
-| Operation family | deadline owner | Default rule |
-|---|---|---|
-| [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) node/channel, Spot, Actor | The selected MeshNode's ROUTER send timeout | Includes global object route resolve time; 1 second if unset |
-| ClientServer | The client's DEALER send timeout | 1 second if unset |
-| Logical Multicast | The selected MeshNode ROUTER's per-target send timeout | Applies to each remote target of a committed publish transaction |
-| classic fanout | The publisher socket's send timeout | 1 second if unset |
-| bound session/session Actor relay | The Framework socket's send timeout | Same deadline even if the local/remote Actor route changes |
-| STREAM send/reply | The matching STREAM socket's send timeout | The reply does not use the caller's request timeout |
+| Ending event | Result |
+|---|---|
+| Admission after capacity recovers | Normal completion |
+| The route is lost while waiting — Core target removal ([Core wait-token termination](../../../../../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission)), STREAM connection close | `Unavailable` — the route of a target that existed at submit time was lost, so it is distinguished from target absence (`NotFound`) |
+| Socket close, runtime shutdown | `ShuttingDown` |
 
-The Framework's public send timeout follows these value rules.
+The Framework does not end a send operation by timeout or caller cancellation. Binding-operation
+cancellation ends only the caller's wait and does not withdraw a resubmission already started
+([Binding async execution model §6](../../../../../../../bindings/doc/spec/async-execution-model.en.md#6-caller-wait-cancellation)),
+so ending a send by time or cancellation could let the message go out after a "not sent" result.
+A JVM caller's wait cancellation follows
+[Cancellation and shutdown §1](03-cancellation-and-shutdown.en.md#1-cooperative-cancellation). An
+application that needs the delivery result uses a request. The request timeout is defined by
+[§9](#9-request-completion--the-completion-race-and-timeout-budget).
+
+A [Classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) publish is a blocking
+submission, so it waits for admission up to the publisher socket send timeout and ends with
+`DeadlineExceeded` if not accepted by then. The publisher send timeout follows these value rules.
 
 - It must be a finite duration whose value, rounded up to milliseconds, falls in
   `1..INT_MAX`.
 - A positive sub-millisecond value rounds up to 1ms.
 - `0`, negative values, infinity, and values above the upper bound are rejected no later than
   host startup, and are never silently substituted with a valid default.
-- If no value is specified, that family's 1-second default is chosen.
+- If no value is specified, the 1-second default is chosen.
 - An existing public root fallback, if present, applies with the same meaning, but that does
   not mean every language must add the same root option.
 - If a runtime setter exists, an invalid value is rejected immediately at the setter call.
-
-An admission that carries a caller-side deadline uses whichever comes first, the socket send
-timeout or that deadline; the caller-side value never extends the socket send timeout. The
-caller-side deadlines are the STREAM one-way send admission-timeout modifier below and the
-remaining request timeout of a global object request
-([§9](#9-request-completion--the-completion-race-and-timeout-budget)).
-
-A STREAM one-way send call provides an optional per-call admission-timeout modifier. This
-value is not reply wait time; it is the maximum time that send can wait for acceptance by
-the STREAM transport queue.
-
-- If omitted, the matching STREAM socket's send timeout is used.
-- If specified, the caller-side deadline rule above applies.
-- Validation and millisecond rounding use the same `1..INT_MAX` rules above.
-- If the deadline wins, the call completes once with `DeadlineExceeded`; later capacity does
-  not admit or replay that send.
-- This modifier does not apply to a STREAM reply call. A reply uses the socket send timeout
-  and the one-shot token contract.
-- Races between per-language cancellation and timeout follow
-  [Cancellation and shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race).
 
 ## 8. STREAM Reply Token
 
@@ -301,13 +292,12 @@ The one-shot [reply token](../00-foundation/02-glossary.en.md#reply-token) rules
 - The request sequence and the token are preserved when the call is created.
 - The first valid terminator invocation atomically claims and consumes the token before the
   transport admission attempt.
-- Even if that terminator completes with a `DeadlineExceeded`, cancellation, or runtime
-  shutdown exception, the token cannot be reused.
+- Even if that terminator completes with a failure, the token cannot be reused.
 - If two calls made from the same token race, only the one that wins the claim starts
   transport admission; the other ends as an exceptional completion with no transport
   attempt.
-- The caller's request timeout is not carried on the reply wire, so it is not used as the
-  STREAM reply's admission deadline.
+- The reply's wait follows [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). The caller's request timeout is not carried on the
+  reply wire and does not end the reply's wait.
 - Even if a late-accepted reply doesn't match on the client's correlation, the transport
   admission result does not become the request's result.
 
@@ -335,10 +325,13 @@ flowchart LR
     C5 -.-> D
 ```
 
-The global object request timeout covers the current Ready authority resolve, outbound
-admission, handler, and reply as a whole. A source only passes the remaining time, after
-subtracting what earlier stages used, to the next stage. The deadline of the outbound
-admission stage is set by [§7](#7-admission-deadline--owner-and-value-rules). The resubmission boundary for a request after timeout or connection failure is defined by
+The request timeout covers outbound admission and the reply wait as a whole; a global object
+request also covers the current Ready authority resolve and the handler. A source only passes the
+remaining time, after subtracting what earlier stages used, to the next stage. The time limit of
+outbound admission is the remaining request timeout, and it is not combined with a socket send
+timeout. When a timeout or cancellation ends the caller's wait, that does not mean the request was
+not sent — a request that ended before admission can still be sent later by a resubmission the
+binding already started, and its reply is discarded because the correlation is closed. The resubmission boundary for a request after timeout or connection failure is defined by
 [§5](#5-backpressure-and-error-classification).
 
 How a request sent within the same handler turn releases and reacquires the gate while
@@ -587,23 +580,19 @@ slot is registered — are owned, with their rules, by §10/§11 and are not rep
 **Submit and admission**
 
 - Verify one-way completion and failure against [§4](#4-one-way-submit--the-admission-boundary) and [§5](#5-backpressure-and-error-classification).
-- A send whose local capacity is unavailable waits up to the family send timeout; if
-  capacity becomes available first it's submitted exactly once and completes normally; if
-  the timeout is decided first it completes with `DeadlineExceeded`.
-- A capacity shortage with a wait token continues as that wait, and only a call that runs out
-  of time ends with `DeadlineExceeded`. A rejection without a token ends with `Unavailable` as
+- A send whose local capacity is unavailable or that received a wait token never ends because
+  time has passed; when capacity recovers it is submitted exactly once and completes normally.
+  Route loss and runtime termination while waiting end with the results of [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). A
+  rejection without a token ends with `Unavailable` as
   [§5](#5-backpressure-and-error-classification) states.
 - Logical Multicast completes normally with no return data even with zero targets, and an
   individual target's failure after starting does not change the public return value.
 - Verify completion of Classic fanout with no subscribers against the publish rule in [§6](#6-logical-multicast-and-classic-fanout).
 
-**Deadline and reply token**
+**Send timeout and reply token**
 
-- Setting the send timeout to `0`, a negative value, infinity, or a value above the upper
-  bound is rejected at host startup or at the setter call.
-- If a STREAM send call's admission-timeout modifier expires before the socket timeout, the
-  call completes with `DeadlineExceeded`, and the same send is not later admitted or
-  replayed.
+- Setting the Classic fanout publisher send timeout to `0`, a negative value, infinity, or a
+  value above the upper bound is rejected at host startup or at the setter call.
 - If two calls made from the same STREAM reply token are submitted at the same time, only
   one starts transport admission; the other ends as an exceptional completion with no
   transport attempt.

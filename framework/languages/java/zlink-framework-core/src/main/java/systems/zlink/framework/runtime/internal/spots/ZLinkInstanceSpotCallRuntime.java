@@ -10,6 +10,8 @@ import java.util.concurrent.CompletionStage;
 
 /** Internal bridge from the public fluent call to Instance Spot activation. */
 public interface ZLinkInstanceSpotCallRuntime {
+    long activationDeadline(String meshName);
+
     default String metricMeshName(String requestedMesh, String callerMesh) {
         return callerMesh;
     }
@@ -21,7 +23,8 @@ public interface ZLinkInstanceSpotCallRuntime {
             Message payload,
             Optional<String> packetName,
             String contentType,
-            Map<String, String> metadata);
+            Map<String, String> metadata,
+            long activationDeadline);
 
     CompletionStage<List<Message>> request(
             String spotId,

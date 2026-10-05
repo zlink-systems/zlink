@@ -37,7 +37,7 @@ Core HWM은 Core queue의 byte를, Application job queue는 handler 시작을 �
 ZLink는 세 번째 방식을 사용한다. 이렇게 **받는 쪽의 처리 지연을 보내는 쪽의 송신 대기로
 되돌리는 흐름 제어를 backpressure라고 한다.** 한 번 받아들인 application message는 부하를
 이유로 버리지 않는다. 따라서 부하가 걸린 상태에서 application에 나타나는 증상은
-"message가 사라졌다"가 아니라 "`send`가 느려졌다" 또는 "`DeadlineExceeded`가 발생했다"다.
+"message가 사라졌다"가 아니라 "`send`가 느려졌다"다. Classic fanout publish는 대기 상한에 도달하면 `DeadlineExceeded`로 끝난다.
 
 ## 2. Core HWM과 Application job queue
 
@@ -104,7 +104,7 @@ operation의 HWM 대기를 처리한다. Framework는 기다리는 operation을 
 ```
 
 조절할 수 있는 두 상한은 [영향을 주는 옵션](#5-영향을-주는-옵션)에 있다. 관찰할 수 있는 것은 `send`가
-기다리다가 deadline에서 끝난다는 사실뿐이며, timeout만으로 어디에서 막혔는지는 알 수 없으므로
+capacity를 기다린다는 사실뿐이며, 대기 시간만으로 어디에서 막혔는지는 알 수 없으므로
 [정체 발생 확인 방법](#6-정체-발생-확인-방법)에서 양쪽 상태를 함께 확인한다. Framework는 message를
 버리지도, 재시도하지도, 다른 대상으로 바꾸지도 않는다.
 
@@ -145,9 +145,10 @@ send는 응답을 기다리지 않지만, 기다려야 하는 대상이 하나 �
 --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-send-call"
 ```
 
-Framework는 binding operation 하나만 시작한다. 자리가 없으면 Core가 그 같은 operation의 HWM
-대기와 내부 재시도를 소유하고 `DefaultSocketSendTimeout`(기본 1초) 안에 operation별 completion을
-완료한다. 자리가 끝까지 생기지 않으면 `DeadlineExceeded` 예외로 끝난다.
+Framework는 binding operation 하나만 시작한다. Core는 capacity 대기 토큰을, binding은 재제출과
+`admitted` completion을 소유한다. Send는 시간 상한과 caller cancellation 없이 기다린다. Capacity 회복
+뒤 admission이면 정상 완료하고, 대기 중 route 제거는 `Unavailable`, socket close나 runtime shutdown은
+`ShuttingDown`으로 끝난다. Classic fanout publisher만 송신 timeout을 사용한다.
 
 **Framework는 두 번째 operation을 만들거나 다시 보내지 않는다** — 최종 실패 뒤 새
 operation으로 재시도할지, 버릴지, 사용자에게 실패를 알릴지는 application이 정한다.
@@ -168,15 +169,13 @@ operation으로 재시도할지, 버릴지, 사용자에게 실패를 알릴지�
 
 기다리는 동안 대기하는 것은 그 호출뿐이며, 실행 thread는 다른 작업을 처리한다.
 
-**상한까지 기다리지 않고 즉시 실패하는 경우가 하나 있다.** 자리를 기다리는 호출을 담아 두는
-공간까지 모두 찼을 때다. 이때는 payload를 보관하지 않고 바로 `DeadlineExceeded`로 끝낸다.
-설정한 상한이 1초인데 send가 즉시 실패했다면 queue가 찬 것이 아니라 **대기하는 호출이
-너무 많다**는 뜻이므로, 보내는 쪽 동시성을 먼저 본다.
+Classic fanout publisher는 정해진 대기 상한까지 capacity가 회복되지 않으면 `DeadlineExceeded`로 끝난다.
+일반 send에는 대기 시간에 따른 실패가 없으므로 보내는 쪽 동시성과 수신 처리량을 함께 확인한다.
 
 Target은 binding operation을 시작하기 전에 한 번 확정한다. Node를 직접 지정하거나 Spot · Actor
 ID로 보내는 호출은 지정한 exact target을 사용하고, channel 이름으로 보내는 호출은 operation을
-시작하기 직전에 그 channel의 현재 후보 하나를 고른다. **Operation을 시작한 뒤 Core가 HWM을
-기다리고 재시도하는 동안에는 어느 호출도 target을 다시 선택하지 않는다.** 이후 시작한 새 channel
+시작하기 직전에 그 channel의 현재 후보 하나를 고른다. **Operation을 시작한 뒤 Core capacity 대기와 binding 재제출이
+진행되는 동안에는 어느 호출도 target을 다시 선택하지 않는다.** 이후 시작한 새 channel
 operation은 그때 바뀐 후보를 고를 수 있다.
 
 ### 4.2 request의 timeout 경계
@@ -196,7 +195,7 @@ timeout으로 끝나도 이미 시작된 remote handler의 실행은 취소되�
 
 | 옵션 | 무엇을 정하나 | 설정 자리 |
 | --- | --- | --- |
-| `DefaultSocketSendTimeout` | 보낼 자리가 없을 때 기다리는 상한(기본 1초) | 루트 옵션 |
+| `DefaultSocketSendTimeout` | Classic fanout publisher가 보낼 자리를 기다리는 상한(기본 1초) | .NET 루트 옵션 |
 | — | 실제로 적용되는 값은 **보내는 경로마다 다르다**(아래) | — |
 | `SendHighWaterMark` | 상대별로 **보내려고** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
 | `ReceiveHighWaterMark` | 상대별로 **받아서** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
@@ -204,27 +203,13 @@ timeout으로 끝나도 이미 시작된 remote handler의 실행은 취소되�
 | `core_hwm_memory_limit_bytes` · `core_hwm_budget_bytes` · `CoreHwmProfile` | Core context의 ordinary queue byte budget | root inbound-dispatch 설정 |
 | `ApplicationJobQueueProfile` · `max_queued_application_jobs` · pause/resume threshold | host instance의 queued application job 상한과 flow 전이 경계 | root inbound-dispatch 설정 |
 
-**"보낼 자리를 기다리는 상한"은 하나의 전역 값이 아니다.** 실제로 쓰이는 값은 그 호출이
-사용하는 socket이 소유한다.
+Send·reply·relay와 commit된 Logical Multicast의 target별 제출에는 시간 상한과 caller cancellation이 없다.
+Route resolve와 ClientServer ready 대기도 같은 계약을 따른다. Request timeout은 outbound admission과
+reply 대기를 함께 제한하며 socket send timeout과 결합하지 않는다. STREAM reply에는 client의 request
+timeout을 전달하지 않는다.
 
-| 보내는 경로 | 어느 상한을 쓰나 |
-| --- | --- |
-| RouteMesh node · channel, Spot, Actor | 고른 MeshNode의 송신 상한. **위치를 찾는 시간까지 포함한다** |
-| ClientServer | client 쪽 송신 상한 |
-| Logical Multicast | 고른 MeshNode의 송신 상한을 target마다 적용 |
-| classic pub/sub | 발행 socket의 송신 상한 |
-| session relay · bound session send | Framework socket의 송신 상한 |
-| STREAM send · reply | 그 STREAM socket의 송신 상한 |
-
-마지막 줄이 특히 헷갈리는 자리다. **reply에는 호출자가 지정한 request timeout을 쓰지
-않는다.** client가 5초를 기다리기로 했다고 해서 서버의 reply 제출이 5초를 기다리지 않는다.
-
-STREAM one-way send는 call별 timeout modifier로 이 대기를 더 짧게 제한할 수 있다. Socket
-timeout을 연장하지 않고 둘 중 먼저 도달하는 deadline을 사용하며, deadline 뒤에는 late
-admission이나 replay가 없다. 이 modifier는 reply에 적용하지 않는다.
-
-지정하지 않으면 각 경로가 1초를 사용한다. 값은 millisecond로 올림해 `1` 이상이어야 하며,
-`0` · 음수 · 무한대는 **host 시작에서 거부한다** — 조용히 기본값으로 바뀌지 않는다.
+Classic fanout publisher만 송신 timeout을 사용한다. 기본값과 값의 범위는
+[Submit과 completion §7](../../../common/spec/server/01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다.
 
 두 HWM은 방향만 다를 뿐 성격이 같다. 각각 **자기 node가 들고 있을 byte**를 정하고, 그
 한도가 상대 쪽 흐름으로 이어진다. 값을 정할 때는 다음을 확인한다.
@@ -233,7 +218,7 @@ admission이나 replay가 없다. 이 modifier는 reply에 적용하지 않는�
 - **이 값은 socket 방향별 physical queue에 적용되는 manual 상한이다.** Core context 전체
   budget이나 Application job queue 상한으로 해석하지 않는다.
 - **high-water mark를 올리는 것이 기본 대응은 아니다.** 상한을 키우면 혼잡이 memory로
-  흡수되어 `DeadlineExceeded`가 늦게 나타나고, 그만큼 원인도 늦게 파악하게 된다. 처리
+  흡수되어 처리 지연이 커진다. 처리
   지연이 계속된다면 상한이 아니라 처리 쪽(수신 node 수, handler 실행 시간)을 확인한다.
 
 Manual socket HWM을 지정하지 않아도 Framework가 connection 수 구간표를 계산하지 않는다.
@@ -353,14 +338,14 @@ gauge를 유지하고 peak를 current로 재기준화하며 현재 epoch의 coun
 
 | 증상 | 원인과 확인할 것 |
 | --- | --- |
-| `send`가 `DeadlineExceeded`로 끝난다 | 보낼 자리가 끝까지 생기지 않았다. 상한을 올리기 전에 받는 쪽의 Core `blocked_ratio`, Application job queue waiter와 handler 실행 시간을 확인한다. |
+| Classic fanout publish가 `DeadlineExceeded`로 끝난다 | 보낼 자리가 끝까지 생기지 않았다. 상한을 올리기 전에 받는 쪽의 Core `blocked_ratio`, Application job queue waiter와 handler 실행 시간을 확인한다. |
 | Core 보유 byte는 낮은데 수신이 기다린다 | Application job queue의 처리 자리가 찼을 수 있다. `reserved`, `queued`, `in_use`와 capacity waiter를 확인한다. |
 | Application job queue의 `queued`가 낮은데 상한에 닿는다 | receive 직전에 확보한 `reserved` 자리도 `in_use`에 포함한다. Manual 상한은 `reserved + queued` 기준으로 정한다. |
 | Handler가 시작됐는데 job 수가 줄지 않는다 | executor task 게시가 아니라 사용자 callback의 실제 첫 instruction에서 처리 자리를 비운다. 시작 gate가 열렸는지 확인한다. |
 | `MaxQueuedApplicationJobs = 0`을 주었더니 시작이 실패한다 | `0`은 unlimited가 아니다. Auto 값을 사용하려면 manual 값을 지정하지 않는다. |
 | 두 profile을 같은 값으로 바꿨는데 byte와 job 상한이 같은 비율로 움직이지 않는다 | `CoreHwmProfile`과 `ApplicationJobQueueProfile`은 label만 같고 계산과 단위가 다르다. |
 | Application job queue가 포화됐는데 reply는 완료된다 | receive 전에 식별할 수 있는 최종 reply·error는 shared 처리 자리와 일반 Core HWM을 우회하므로 정상이다. |
-| 상한을 올렸더니 증상이 늦게 나타난다 | 혼잡이 memory로 흡수되면 실패가 늦게 드러난다. 빠르게 실패시켜 다른 경로로 전환하려면 상한을 낮추고 `DefaultSocketSendTimeout`을 줄인다. |
+| 상한을 올렸더니 증상이 늦게 나타난다 | 혼잡이 memory로 흡수되면 실패가 늦게 드러난다. 혼잡을 줄이려면 상한과 수신 처리량을 함께 검토한다. Classic fanout publisher의 대기 상한은 `DefaultSocketSendTimeout`으로 정한다. |
 | `publish`는 정상 완료했는데 구독자가 받지 못했다 | publish의 완료는 보낼 준비가 끝나 runtime이 제출을 받아들였다는 뜻까지다. 전달·재전송·ack는 제공하지 않는다([Channel 메시징](30-channel-patterns.ko.md#7-호출이-끝났다는-것의-의미)). |
 | handler 안의 request가 오래 멈춘다 | 양쪽 처리가 동시에 지연되면 유한한 timeout이 회복의 시작점이다. nested request에 `timeout(...)`을 지정한다. |
 | 한 node가 느린데 다른 호출까지 늦다 | 송신 queue는 상대별로 따로 있지만, 같은 handler 안에서 기다리면 그 handler의 실행 자리도 함께 점유된다. 응답이 느린 대상으로 보내는 호출은 같은 handler에 함께 두지 않는다. |

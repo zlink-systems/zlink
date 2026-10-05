@@ -91,7 +91,7 @@ internal sealed class QuestProgressMsgActorHandler
     {
         await actor
             .Context.BoundSession.Send(new QuestProgressNotify(message.PlayerId, message.Progress))
-            .Async(cancellationToken);
+            .Async();
     }
 }
 
@@ -113,6 +113,6 @@ internal sealed class QuestCompletedMsgActorHandler
             .Context.BoundSession.Send(
                 new QuestCompletedNotify(message.PlayerId, message.Progress, message.RewardGranted)
             )
-            .Async(cancellationToken);
+            .Async();
     }
 }

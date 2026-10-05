@@ -130,12 +130,14 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `send_timeout` | 보낼 자리가 나기를 기다리는 상한 | 1초 |
+| Classic fanout publisher의 `send_timeout` | publish가 보낼 자리를 기다리는 상한 | 1초 |
 | `receive_timeout` | 받는 방향의 대기 상한 | 지정 안 함 |
 | `SendHighWaterMark` · `ReceiveHighWaterMark` | 상대별로 보관할 byte. `0`은 무제한 | 지정 안 함 — Core가 계산 |
 
-상한에 도달하면 보내는 쪽이 `send_timeout`까지 기다리고, 끝까지 자리가 나지 않으면 그 호출은
-deadline 초과로 끝난다. 자동으로 다시 보내지 않으므로 재시도 여부는 application이 정한다.
+Send는 capacity가 회복될 때까지 기다리며 시간 상한과 caller cancellation이 없다. 대기 중 route가 제거되면
+`Unavailable`, socket이나 runtime이 종료되면 `ShuttingDown`으로 끝난다. Classic fanout publish만 publisher의
+`send_timeout`을 사용하며, 상한까지 capacity가 회복되지 않으면 `DeadlineExceeded`로 끝난다.
+
 **MeshNode 사이의 연결에는 message 크기 상한 설정이 없다** — 그 상한은 STREAM node와
 ClientServer listener가 소유한다([Backpressure](33-backpressure.ko.md)).
 

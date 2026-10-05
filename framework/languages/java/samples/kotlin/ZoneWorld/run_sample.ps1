@@ -5,7 +5,13 @@ param(
 
 Set-StrictMode -Version Latest
 . "$PSScriptRoot/../../redis-common.ps1"
-. "$PSScriptRoot/../../../../dotnet/samples/windows-process-common.ps1"
+if ($IsWindows) {
+    $windowsProcessHelper = Join-Path $PSScriptRoot "../../windows-process-common.ps1"
+    if (-not (Test-Path -LiteralPath $windowsProcessHelper)) {
+        $windowsProcessHelper = Join-Path $PSScriptRoot "../../../../dotnet/samples/windows-process-common.ps1"
+    }
+    . $windowsProcessHelper
+}
 $ErrorActionPreference = "Stop"
 
 $SampleDir = Split-Path -Parent $MyInvocation.MyCommand.Path

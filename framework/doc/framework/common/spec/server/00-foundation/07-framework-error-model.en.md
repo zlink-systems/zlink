@@ -84,7 +84,7 @@ configuration exception. Neither of these is turned into a remote error reply.
 
 A Framework failure discovered while waiting on outbound queue acceptance, route resolution,
 or a remote reply is delivered as a per-language Framework exception or as a `result`'s
-`ErrorKind`. A binding `NOT_FOUND` maps to `NotFound` when a named target is absent. Channel selection results follow [the Framework API channel selection result](06-framework-api.en.md#channel-selection-result). Other results are classified by the meaning of the Core result on that call path.
+`ErrorKind`. A binding `NOT_FOUND` maps to `NotFound` when a named target is absent. A pending send whose route was removed ends with `Unavailable` as [Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout) states. Channel selection results follow [the Framework API channel selection result](06-framework-api.en.md#channel-selection-result). Other results are classified by the meaning of the Core result on that call path.
 
 ## 4. `Send` Completion and Failure
 
@@ -95,7 +95,7 @@ The normal `Send` completion boundary is defined by
 |---|---|
 | The logical target or route doesn't exist (including [TargetNotFound](02-glossary.en.md#target-not-found)) | `NotFound` |
 | The connection or current owner is currently unavailable (including [RouteNotConnected](02-glossary.en.md#route-not-connected)) | `Unavailable` |
-| The outbound queue doesn't accept the message before the send timeout | `DeadlineExceeded` |
+| The Classic fanout publisher's queue doesn't accept the message before the send timeout | `DeadlineExceeded` |
 | The runtime has stopped new admission | `ShuttingDown` |
 
 Even if target activation, admission, or handler execution fails after `Send` completes, that

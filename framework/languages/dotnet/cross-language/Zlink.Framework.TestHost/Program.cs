@@ -92,7 +92,7 @@ internal sealed class ChannelClientStartupRequestHostedService(
             await client
                 .SendToChannel(channelName, new TestHostProfileSend(value + "-send"))
                 .Metadata("tenant-id", metadataValue)
-                .Async(cancellationToken);
+                .Async();
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
@@ -1182,6 +1182,6 @@ internal sealed class TestHostRawStreamSession(
         _ = cancellationToken;
         _ = dispatch;
         recorder.RecordPayload(payload.Decode<string>());
-        await Context.Client.Reply("pong").Compress().Async(cancellationToken);
+        await Context.Client.Reply("pong").Compress().Async();
     }
 }

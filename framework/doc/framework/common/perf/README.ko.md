@@ -254,8 +254,8 @@ Subscriber는 `role=subscriber`, `roleInstance=subscriberId`로 각각 한 항�
 `driverTimeoutMs=2000`, `setupTimeoutMs=30000`, `adminTimeoutMs=5000`을 기록한다.
 앞의 request 값은 public request call, expiry는 harness correlation, driver는 §4.2의 local driver 호출,
 setup은 공통 runner/준비 caller, admin 값은 HTTP client가 소비한다. 이 값의 소유자는 공통 runner이며
-role과 client는 role config에서 읽기만 한다. Family send timeout은
-public socket 설정의 실제 값(표준 1000ms)을 기록한다([설정 소유 계약][submit]).
+role과 client는 role config에서 읽기만 한다. Send에는 시간 상한이 없다. Classic fanout publisher만
+public socket 설정의 송신 timeout 실제 값(표준 1000ms)을 기록한다([설정 소유 계약][submit]).
 
 Worker config에는 `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
 `idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`와 executor의 실효 제한을 기록한다.

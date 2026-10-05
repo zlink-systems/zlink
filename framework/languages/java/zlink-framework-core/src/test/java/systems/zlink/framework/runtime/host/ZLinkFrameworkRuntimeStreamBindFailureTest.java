@@ -192,14 +192,6 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
                 ZLinkBackendAdapterOptions options) {
             return delegate.createMonitoringAdapter(options);
         }
-
-        @Override
-        public java.util.function.Function<
-                        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
-                        java.time.Duration>
-                admissionTimeout() {
-            return delegate.admissionTimeout();
-        }
     }
 
     public static final class FirstSession extends NoopSession {

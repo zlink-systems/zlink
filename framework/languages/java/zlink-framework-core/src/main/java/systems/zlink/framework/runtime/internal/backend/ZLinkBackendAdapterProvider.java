@@ -1,8 +1,5 @@
 package systems.zlink.framework.runtime.internal.backend;
 
-import java.time.Duration;
-import java.util.function.Function;
-
 public interface ZLinkBackendAdapterProvider {
     ZLinkChannelBackendAdapter createChannelAdapter(ZLinkBackendAdapterOptions options);
 
@@ -15,8 +12,4 @@ public interface ZLinkBackendAdapterProvider {
     ZLinkStreamBackendAdapter createStreamAdapter(ZLinkBackendAdapterOptions options);
 
     ZLinkMonitoringBackendAdapter createMonitoringAdapter(ZLinkBackendAdapterOptions options);
-
-    default Function<ZLinkBackendObject, Duration> admissionTimeout() {
-        return ignored -> Duration.ofSeconds(1);
-    }
 }

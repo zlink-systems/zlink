@@ -205,12 +205,6 @@ internal sealed class ZLinkChannelRuntimeManager(
                     backendAdapterFactory.CreateMonitoringAdapter(),
                     state.Context,
                     channel.Client!.SocketConfig,
-                    ZLinkBackendSocketOptionsMapper
-                        .ResolveSendTimeout(
-                            channel.Client.SocketConfig,
-                            registration.DefaultSocketSendTimeout
-                        )!
-                        .Value,
                     state.StopTokenSource.Token,
                     state.ApplicationJobQueue,
                     state.ErrorSink,

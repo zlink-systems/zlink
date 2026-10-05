@@ -233,12 +233,11 @@ TEST (CppFrameworkRouteClientChannelRouting, ResolvesRouteMeshAndClientServerCha
     runtime.bind_client_server_transport (
       "client-server-channel",
       [&] (std::string packet_name, std::string content_type, zlink::message_t payload,
-           std::chrono::milliseconds timeout, std::map<std::string, std::string> metadata) {
+           std::map<std::string, std::string> metadata) {
           const auto decoded = serializers.get<route_event_t> ().deserialize (
             zlink::framework::detail::encoded_payload_from_raw (payload));
           if (packet_name != route_event_t::packet_name
               || content_type != "application/x-route-event" || decoded.value != 31
-              || timeout != 0ms
               || metadata != std::map<std::string, std::string>{{"tenant-id", "tenant-42"}}) {
               client_server_send_error = "ClientServer send did not receive the typed payload";
               return zlink::framework::task_t<void> (internal_failure (client_server_send_error));

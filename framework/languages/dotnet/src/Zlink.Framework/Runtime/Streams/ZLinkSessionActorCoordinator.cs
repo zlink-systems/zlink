@@ -831,7 +831,6 @@ internal sealed class ZLinkSessionActorCoordinator(
             cancellationToken,
             runtime.ShutdownToken
         );
-        terminal.CancelAfter(runtime.Registration.DefaultRequestTimeout);
         try
         {
             await runtime
@@ -858,14 +857,6 @@ internal sealed class ZLinkSessionActorCoordinator(
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ShuttingDown,
                 "Remote actor session relay was interrupted by runtime shutdown."
-            );
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.DeadlineExceeded,
-                "Remote actor session relay timed out.",
-                ZLinkRetryAdvice.RetryAfterBackoff
             );
         }
     }

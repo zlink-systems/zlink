@@ -482,69 +482,26 @@ test('Node registration rejects invalid Spot timer options before startup', () =
   );
 });
 
-test('Node one-way send timeout accepts only integer milliseconds in the public range', () => {
-  const invalid = [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648];
-  for (const sendTimeoutMs of invalid) {
-    assert.throws(
-      () => framework.createFrameworkRegistration({
-        channels: {
-          api: {
-            client: {
-              manualConnections: ['tcp://127.0.0.1:7101'],
-              sendTimeoutMs
-            }
-          }
-        }
-      }),
-      /between 1 and 2147483647 milliseconds/
-    );
-    assert.throws(
-      () => framework.createFrameworkRegistration({
-        spotNodes: {
-          play: {
-            router: { bind: 'tcp://127.0.0.1:7102' },
-            publisherConfig: { sendTimeoutMs }
-          }
-        }
-      }),
-      /between 1 and 2147483647 milliseconds/
-    );
+test('Classic fanout publisher timeout retains integer milliseconds validation', () => {
+  for (const sendTimeoutMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {
+    for (const options of [
+      { channels: { events: { publisher: { bind: 'tcp://127.0.0.1:0', sendTimeoutMs } } } },
+      { spotNodes: { play: { router: { bind: 'tcp://127.0.0.1:0' }, publisherConfig: { sendTimeoutMs } } } }
+    ]) assert.throws(() => framework.createFrameworkRegistration(options), /between 1 and 2147483647 milliseconds/);
   }
-
-  framework.createFrameworkRegistration({
-    channels: {
-      api: {
-        client: {
-          manualConnections: ['tcp://127.0.0.1:7101'],
-          sendTimeoutMs: 2_147_483_647
-        }
-      }
-    }
-  });
+  framework.createFrameworkRegistration({ channels: {
+    events: { publisher: { bind: 'tcp://127.0.0.1:0', sendTimeoutMs: 2_147_483_647 } }
+  } });
 });
 
-test('Node live socket send timeout setter applies the same public range', () => {
-  const socket = {
-    peerWeight: 100,
-    sendHighWaterMark: 1000,
-    receiveHighWaterMark: 1000,
-    sendTimeoutMs: 1000,
-    maxMessageSize: 1024
-  };
+test('live ClientServer and RouteMesh socket configuration exposes no send timeout', () => {
+  const socket = { peerWeight: 100, sendHighWaterMark: 1000, receiveHighWaterMark: 1000, maxMessageSize: 1024 };
   const options = new framework.DefaultZLinkChannelRuntimeOptions(() => ({
-    clientServerServerSocket() { return socket; },
-    routeMeshSocket() { return socket; }
+    clientServerServerSocket() { return socket; }, routeMeshSocket() { return socket; }
   }));
-  const config = options.serverChannel('api');
-
-  for (const sendTimeoutMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {
-    assert.throws(
-      () => { config.sendTimeoutMs = sendTimeoutMs; },
-      /between 1 and 2147483647 milliseconds/
-    );
+  for (const config of [options.serverChannel('api'), options.routeChannel('game')]) {
+    assert.equal('sendTimeoutMs' in config, false);
   }
-  config.sendTimeoutMs = 2_147_483_647;
-  assert.equal(socket.sendTimeoutMs, 2_147_483_647);
 });
 
 test('ClientServer role builders allow one Client and one Server for the same ChannelName', () => {

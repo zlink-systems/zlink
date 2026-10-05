@@ -461,9 +461,8 @@ class stream_write_call_t
     void submit ();
 
   private:
-    using submit_fn_t = std::function<task_t<void> (const detail::stream_header_t &,
-                                                    const zlink::message_t &,
-                                                    std::optional<std::chrono::milliseconds>)>;
+    using submit_fn_t =
+      std::function<task_t<void> (const detail::stream_header_t &, const zlink::message_t &)>;
 
     friend class stream_t;
     friend class detail::stream_write_call_state_t;
@@ -492,14 +491,12 @@ class stream_send_call_t
     stream_send_call_t &metadata (std::string key, std::string value);
     stream_send_call_t &packet_name (std::string packet_name);
     stream_send_call_t &compress ();
-    stream_send_call_t &timeout (std::chrono::milliseconds timeout);
     task_t<void> async ();
     void submit ();
 
   private:
-    using submit_fn_t = std::function<task_t<void> (const detail::stream_header_t &,
-                                                    const zlink::message_t &,
-                                                    std::optional<std::chrono::milliseconds>)>;
+    using submit_fn_t =
+      std::function<task_t<void> (const detail::stream_header_t &, const zlink::message_t &)>;
 
     friend class stream_t;
 

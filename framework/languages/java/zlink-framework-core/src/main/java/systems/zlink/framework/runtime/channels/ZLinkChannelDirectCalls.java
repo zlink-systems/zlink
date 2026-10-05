@@ -96,6 +96,10 @@ final class PublishCall implements ZLinkFanoutPublishCall {
                 publisher.publish(topic, publishParts, SendFlags.NONE);
                 return ZLinkOneWayCalls.oneWayStatus(ZLinkOneWayCalls.SUBMITTED);
             } catch (ZlinkSubmitException failure) {
+                if (failure.getResult()
+                        == systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
+                    return ZLinkOneWayCalls.oneWayStatus(ZLinkOneWayCalls.TIMED_OUT);
+                }
                 return ZLinkOneWayCalls.adaptOneWay(CompletableFuture.failedFuture(failure));
             } finally {
                 publishParts.forEach(Message::close);

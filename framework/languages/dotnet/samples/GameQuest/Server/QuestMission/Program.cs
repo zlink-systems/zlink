@@ -92,9 +92,7 @@ internal static class Program
             "/self-check/owner/{playerId}/close",
             async (string playerId, IZLinkSpotClient spots, CancellationToken cancellationToken) =>
             {
-                await spots
-                    .SendToSpot(playerId, new ClosePlayerQuestMsg())
-                    .Async(cancellationToken);
+                await spots.SendToSpot(playerId, new ClosePlayerQuestMsg()).Async();
                 return Results.Ok();
             }
         );

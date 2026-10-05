@@ -339,7 +339,7 @@ export declare function ZLinkSend(packetName?: string): MethodDecorator;
 export interface ZLinkSendCall {
  metadata(key: string, value: string): this;
  metadata(metadata: ZLinkMessageMetadata): this;
- submit(signal?: AbortSignal): Promise<void>;
+ submit(): Promise<void>;
 }
 
 export interface ZLinkSendHandler<TMessage> {
@@ -347,44 +347,32 @@ export interface ZLinkSendHandler<TMessage> {
 }
 ```
 
-Every server one-way call's `submit(signal?)` and session Actor
+Every server one-way call's `submit()` and session Actor
 `relay(...)` don't produce a normal-completion value. Normal completion
 means the source-local queue the operation family defines accepted the
 message. It doesn't wait for remote handler execution, subscriber
 receipt, remote Spot queue admission, or application callback
 completion. If queue capacity is insufficient, it waits for a capacity
-signal up to that family's send timeout, and submits the message
-exactly once if room opens up within the deadline. `Backpressured` isn't
+signal and submits the message exactly once when room opens up. This wait
+has no time limit and no `AbortSignal`
+([Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)). `Backpressured` isn't
 a public terminal result or an immediately raised application exception.
-The Promise rejects with `DeadlineExceeded` on timeout, `Unavailable` on
-a route break, and `ShuttingDown` on runtime shutdown. Absence of an
-Actor/Spot/Mesh/session target uses `NotFound`.
+The Promise rejects with `Unavailable` on a route break and `ShuttingDown`
+on runtime shutdown. Absence of an Actor/Spot/Mesh/session target uses
+`NotFound`. The same operation isn't resubmitted after shutdown. An invalid
+argument/handle/state and a duplicate submit are handled as exceptional
+completion. A valid first terminator of a STREAM reply atomically claims
+and consumes the one-shot reply token before starting transport. If two
+calls created from the same token race, the one that fails the claim
+doesn't attempt transport and ends with exceptional completion. Even if the
+call that consumed the token ends with a failure, the token can't be used
+again. An already-used token is also handled as exceptional completion. A
+STREAM reply isn't given the client request timeout.
 
-If `AbortSignal` is already aborted before `submit(...)` or `relay(...)`,
-runtime admission isn't started, and it rejects with `AbortError`. Once
-admission has started, only the terminal result confirmed first among
-abort, timeout, shutdown, and acceptance remains, and the same operation
-isn't resubmitted after an abort or timeout. An invalid argument/handle/
-state and a duplicate submit are handled as exceptional completion. A
-valid first terminator of a STREAM reply atomically claims and consumes
-the one-shot reply token before starting transport. If two calls created
-from the same token race, the one that fails the claim doesn't attempt
-transport and ends with exceptional completion. Even if the call that
-consumed the token ends with `DeadlineExceeded`, runtime shutdown, or
-abort, the token can't be used again. An already-used token is also
-handled as exceptional completion. A STREAM reply isn't given the client
-request timeout — it only uses that STREAM socket's send timeout.
-
-RouteMesh node/Channel/Spot/Actor use the send timeout of the selected
-MeshNode ROUTER, ClientServer uses the client DEALER,
-[classic fanout](../../../00-foundation/02-glossary.en.md#classic-fanout) uses the
-publisher socket, and STREAM send/reply use that STREAM socket. A
-bound session uses one framework socket send timeout even if the
-local/remote Actor route changes. If there's no public setting, 1 second
-is used. The millisecond setting used for one-way admission only allows
-a finite integer in range `1..2147483647`. `undefined` selects the
-default, and `0`, a negative value, a non-integer value, and exceeding
-the cap are rejected with `ZLinkConfigurationError`.
+Only the [Classic fanout](../../../00-foundation/02-glossary.en.md#classic-fanout) publisher uses
+`sendTimeoutMs`. Its value rules and default follow
+[Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). The Node setting takes integer
+milliseconds and reports a rejection with `ZLinkConfigurationError`.
 
 [Interaction model §5](../../../00-foundation/04-interaction-model.en.md#5-spot-logical-multicast)
 and [Cancellation and shutdown §4](../../../01-execution/03-cancellation-and-shutdown.en.md#4-logical-multicast-cancellation)
@@ -406,9 +394,8 @@ export interface ZLinkSession {
 export interface ZLinkSessionActor {
  readonly actorId: ActorId;
  readonly ref: ActorRef;
- relay(payload: ZLinkMessage, signal?: AbortSignal): Promise<void>;
- relay(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage,
- signal?: AbortSignal): Promise<void>;
+ relay(payload: ZLinkMessage): Promise<void>;
+ relay(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void>;
  notifyDisconnected(signal?: AbortSignal): Promise<void>;
 }
 
@@ -457,15 +444,14 @@ export interface ZLinkSessionPacketHandler<TSessionContext, TMessage = ZLinkMess
 
 export interface ZLinkSessionReplyCall {
  compress(enabled?: boolean): this;
- submit(signal?: AbortSignal): Promise<void>;
+ submit(): Promise<void>;
 }
 
 export interface ZLinkSessionSendCall {
  metadata(key: string, value: string): this;
  metadata(metadata: ZLinkMessageMetadata): this;
  compress(enabled?: boolean): this;
- timeout(timeoutMs: number): this;
- submit(signal?: AbortSignal): Promise<void>;
+ submit(): Promise<void>;
 }
 ```
 
@@ -476,14 +462,6 @@ rejects new inbound application dispatch. The application may notify the client 
 terminal, the framework schedules a non-blocking timer and releases the turn immediately. The timer
 revalidates the retired session identity and closes the connection at 100 ms; it never sleeps
 or occupies a session serial lane or worker. The new bind does not wait for the callback or close.
-
-`ZLinkSessionSendCall.timeout(...)` only shortens this send's admission wait.
-Omission uses the STREAM socket send timeout; specifying it uses the shorter
-of the two, so it cannot extend the socket timeout. The value is an integer
-number of milliseconds in `1..2_147_483_647`. Expiry rejects terminal-once as
-`DeadlineExceeded` and does not start later admission or replay. `AbortSignal`
-keeps the existing Node cancellation meaning, and the reply call doesn't
-provide this modifier.
 
 After bind, relay/request relay and `notifyDisconnected(...)` use the
 per-Actor stored route and don't query the Location Store per message. A

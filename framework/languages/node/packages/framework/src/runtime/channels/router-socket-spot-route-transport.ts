@@ -15,15 +15,11 @@ export class ZLinkRouterSocketSpotRouteTransport {
   async send(
     target: ZLinkSpotRouteTarget,
     parts: readonly Message[],
-    flags: ZLinkBackendSendFlags,
-    signal?: AbortSignal
+    flags: ZLinkBackendSendFlags
   ): Promise<void> {
     const router = this.sockets.routeRouter(target.routerChannelId);
     try {
-      await awaitWithAbort(
-        router.sendToSpot(target.targetNodeRid, target.spotId, parts, flags),
-        signal
-      );
+      await router.sendToSpot(target.targetNodeRid, target.spotId, parts, flags);
     } finally {
       closeMessages(parts);
     }

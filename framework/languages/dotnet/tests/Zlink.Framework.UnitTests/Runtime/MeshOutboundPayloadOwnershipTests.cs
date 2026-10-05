@@ -94,23 +94,22 @@ public sealed class MeshOutboundPayloadOwnershipTests
             await WaitForPeerAsync(source, targetNode.Node.RoutingId);
             var client = source.Services.GetRequiredService<IZLinkRouteClient>();
             var payload = new BytesValue { Value = ByteString.CopyFrom(new byte[4096]) };
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            if (request)
             {
-                if (request)
-                {
-                    var call = channel
-                        ? client.RequestToChannel(Channel, payload)
-                        : client.RequestToNode(Mesh, targetNode.Node.RoutingId, payload);
-                    await call.Async<BytesValue>(cancellation.Token);
-                }
-                else
-                {
-                    var call = channel
-                        ? client.SendToChannel(Channel, payload)
-                        : client.SendToNode(Mesh, targetNode.Node.RoutingId, payload);
-                    await call.Async(cancellation.Token);
-                }
-            });
+                var call = channel
+                    ? client.RequestToChannel(Channel, payload)
+                    : client.RequestToNode(Mesh, targetNode.Node.RoutingId, payload);
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                    call.Async<BytesValue>(cancellation.Token).AsTask()
+                );
+            }
+            else
+            {
+                var call = channel
+                    ? client.SendToChannel(Channel, payload)
+                    : client.SendToNode(Mesh, targetNode.Node.RoutingId, payload);
+                await call.Async();
+            }
             Assert.Equal(1, Assert.Single(tracking.Owners).RefCount);
         }
         finally

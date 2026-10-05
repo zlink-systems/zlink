@@ -1131,8 +1131,6 @@ internal sealed class ZLinkActorRuntimeState(
             )
             {
                 _boundSession = null;
-                if (_sessionReplacement is not null)
-                    _sessionReplacement = null;
             }
             else if (
                 _pendingSessionRoute is { Route.BindingToken: var pendingToken }

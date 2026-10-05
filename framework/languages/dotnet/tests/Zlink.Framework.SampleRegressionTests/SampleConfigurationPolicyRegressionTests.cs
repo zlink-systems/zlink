@@ -1148,7 +1148,7 @@ public sealed partial class RegressionTests
         );
 
         Assert.Contains("SendToActor(playerId, new BotTickMsg())", spot, StringComparison.Ordinal);
-        Assert.Contains(".Async(cancellationToken)", spot, StringComparison.Ordinal);
+        Assert.Contains(".Async()", spot, StringComparison.Ordinal);
         Assert.DoesNotContain("FindAsync(playerId", spot, StringComparison.Ordinal);
         Assert.Contains(
             "IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, BotTickMsg>",

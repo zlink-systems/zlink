@@ -37,9 +37,7 @@ internal sealed class OpsReportAdapter(
         {
             try
             {
-                await channels
-                    .SendToChannel(ZoneWorldNames.ReportChannel, message)
-                    .Async(cancellationToken);
+                await channels.SendToChannel(ZoneWorldNames.ReportChannel, message).Async();
                 return;
             }
             catch (ZLinkFrameworkException error)
@@ -76,7 +74,7 @@ internal sealed class OpsReportAdapter(
                     maintenanceEnabled
                 )
             )
-            .Async(cancellationToken);
+            .Async();
 }
 
 /// <summary>Reports this node's status every second so Ops can fill in PlayerCount (§8.1).</summary>

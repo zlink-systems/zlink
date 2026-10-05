@@ -105,11 +105,6 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // RouteMesh receive admission yet.
     }
 
-    default void setRouterSendTimeout(Duration value) {
-        // Optional for test and alternate backends that do not expose Core
-        // RouteMesh admission yet.
-    }
-
     default void setRouterReceiveTimeout(Duration value) {
         // Optional for test and alternate backends that do not expose Core
         // RouteMesh admission yet.
@@ -561,16 +556,6 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             List<Message> parts) {
         return CompletableFuture.failedFuture(
                 new UnsupportedOperationException("Remote Instance Spot send is unavailable"));
-    }
-
-    default CompletionStage<Void> submitInstanceSpotSend(
-            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
-            String stableType,
-            String sourceSpotId,
-            byte[] metadata,
-            List<Message> parts,
-            Duration timeout) {
-        return submitInstanceSpotSend(route, stableType, sourceSpotId, metadata, parts);
     }
 
     default CompletionStage<List<Message>> requestInstanceSpot(

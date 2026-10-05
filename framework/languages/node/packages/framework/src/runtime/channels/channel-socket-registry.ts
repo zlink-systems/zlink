@@ -300,8 +300,7 @@ export class ZLinkChannelSocketRegistry {
       dealer.setRoutingId(deriveRoutingId(channel.routingId, 'dealer'));
     }
     applySocketConfig(dealer, {
-      ...client,
-      sendTimeoutMs: configuredSendTimeoutMs(client.sendTimeoutMs)
+      ...client
     });
     return dealer;
   }
@@ -455,8 +454,7 @@ export class ZLinkChannelSocketRegistry {
       dealer.setChannelName(channelName);
       dealer.setRoutingId(`cs-client-${randomUUID()}`);
       applySocketConfig(dealer, {
-        ...client,
-        sendTimeoutMs: configuredSendTimeoutMs(client.sendTimeoutMs)
+        ...client
       });
       connection.readablePoller = this.adapter.createReadablePoller(dealer);
       created.push(connection.readablePoller);
@@ -692,7 +690,7 @@ export class ZLinkChannelSocketRegistry {
     return undefined;
   }
 
-  /** Observes discovery changes until the client DEALER admission deadline. */
+  /** Observes discovery changes until a server is ready or the runtime closes. */
   async awaitClientDealerForOutbound(
     channelName: string,
     signal?: AbortSignal
@@ -711,12 +709,8 @@ export class ZLinkChannelSocketRegistry {
     };
     const dealer = select();
     if (dealer !== undefined) return dealer;
-    const sendTimeoutMs = configuredSendTimeoutMs(
-      this.registration.channels.get(channelName)?.client?.sendTimeoutMs
-    );
     return new Promise((resolve, reject) => {
       const cleanup = (): void => {
-        clearTimeout(deadline);
         unsubscribe();
         signal?.removeEventListener('abort', abort);
       };
@@ -737,10 +731,6 @@ export class ZLinkChannelSocketRegistry {
         }
       };
       const unsubscribe = this.clientServerDiscovery.onClientServerChanged(changed);
-      const deadline = setTimeout(() => {
-        cleanup();
-        resolve(undefined);
-      }, sendTimeoutMs);
       signal?.addEventListener('abort', abort, { once: true });
       // Registration and selection share one event-loop turn; recheck after subscribing.
       changed();
@@ -2016,7 +2006,6 @@ function applySocketConfig(
     readonly sendHighWaterMark?: number;
     readonly receiveHighWaterMark?: number;
     readonly receiveTimeoutMs?: number;
-    readonly sendTimeoutMs?: number;
     readonly maxMessageSize?: number;
   }
 ): void {
@@ -2028,9 +2017,6 @@ function applySocketConfig(
   }
   if (config.receiveTimeoutMs !== undefined) {
     socket.receiveTimeoutMs = config.receiveTimeoutMs;
-  }
-  if (config.sendTimeoutMs !== undefined) {
-    socket.sendTimeoutMs = config.sendTimeoutMs;
   }
   if (config.maxMessageSize !== undefined) {
     socket.maxMessageSize = config.maxMessageSize;

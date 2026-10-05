@@ -55,12 +55,12 @@ internal sealed class ZLinkSessionActor : IZLinkSessionActor
             );
     }
 
-    public ValueTask RelayAsync(ZLinkMessage payload, CancellationToken cancellationToken = default)
+    public ValueTask RelayAsync(ZLinkMessage payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
         var raw = payload.ToRawMessage(Context.Runtime.Registration.Codecs);
         return Context
-            .RelayActorRefAsync(this, raw, cancellationToken)
+            .RelayActorRefAsync(this, raw, Context.Runtime.ShutdownToken)
             .EnsureAcceptedAsync("Session Actor relay", ZLinkFrameworkErrorKind.NotFound);
     }
 

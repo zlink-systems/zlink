@@ -50,7 +50,6 @@ public sealed partial class EntrySpotActorDispatchTests
             "membership-node",
             "membership-channel",
             TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.SpotWide,
             ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
         );

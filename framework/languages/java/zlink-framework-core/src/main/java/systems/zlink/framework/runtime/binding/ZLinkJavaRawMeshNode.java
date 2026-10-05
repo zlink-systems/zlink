@@ -2811,34 +2811,11 @@ final class ZLinkJavaRawMeshNode
             String sourceSpotId,
             byte[] metadata,
             List<Message> parts) {
-        return sendInstanceSpot(route, stableType, sourceSpotId, metadata, parts);
-    }
-
-    @Override
-    public CompletionStage<Void> submitInstanceSpotSend(
-            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
-            String stableType,
-            String sourceSpotId,
-            byte[] metadata,
-            List<Message> parts,
-            Duration timeout) {
         Objects.requireNonNull(route, "route");
         Objects.requireNonNull(parts, "parts");
-        Objects.requireNonNull(timeout, "timeout");
-        return dispatchInstanceSpotSend(
-                route, stableType, sourceSpotId, metadata, parts, addDeadlineNanos(timeout));
-    }
-
-    private CompletionStage<Void> dispatchInstanceSpotSend(
-            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
-            String stableType,
-            String sourceSpotId,
-            byte[] metadata,
-            List<Message> parts,
-            long deadlineNanos) {
         if (route.targetNodeRid().equals(routingId)) {
             return dispatchLocalInstanceSpot(
-                            route, stableType, sourceSpotId, metadata, parts, false, deadlineNanos)
+                            route, stableType, sourceSpotId, metadata, parts, false, 0)
                     .thenAccept(replyParts -> replyParts.forEach(Message::close));
         }
         return sendInstanceSpot(route, stableType, sourceSpotId, metadata, parts);

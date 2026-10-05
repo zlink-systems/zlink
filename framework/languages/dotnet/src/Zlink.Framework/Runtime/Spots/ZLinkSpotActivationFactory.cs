@@ -73,8 +73,6 @@ internal sealed class ZLinkSpotActivationFactory(
                 registration.SpotNodeName,
                 spotChannelName,
                 frameworkRegistration.DefaultRequestTimeout,
-                registration.Router?.SocketConfig.SendTimeout
-                    ?? frameworkRegistration.DefaultSocketSendTimeout,
                 registration.UserSpotFactoryOptions.TryGetValue(spotType, out var userSpotOptions)
                     ? userSpotOptions.ExecutionMode
                     : ZLinkUserSpotExecutionMode.SpotWide,
@@ -147,8 +145,6 @@ internal sealed class ZLinkSpotActivationFactory(
                 registration.SpotNodeName,
                 spotChannelName,
                 frameworkRegistration.DefaultRequestTimeout,
-                registration.Router?.SocketConfig.SendTimeout
-                    ?? frameworkRegistration.DefaultSocketSendTimeout,
                 restoreLogicalTimers: restoreLogicalTimers,
                 timerScheduler: timerScheduler
             );

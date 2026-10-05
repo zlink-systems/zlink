@@ -105,7 +105,7 @@ sequenceDiagram
 - **When multiple Spots match on the same node, a reference to the
   immutable message storage is shared and enqueued in each Spot's
   queue.** This avoids duplicating the message body once per Spot.
-- **The HWM, send timeout, and backpressure of a remote send follow the
+- **The HWM and backpressure of a remote send follow the
   ordinary ROUTER rules as-is.** This is because Logical Multicast does
   not have a separate flow-control path.
 - **A later target's failure does not cancel a submit already accepted

@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -22,8 +23,164 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 final class ZLinkJavaRequestCapacityContractTest {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void rawMeshServiceRequestUsesTheSameAdmissionDeadline(boolean admitBeforeDeadline)
+            throws Exception {
+        var request = new PendingRequest(SubmitResult.BACKPRESSURED);
+        var router =
+                (systems.zlink.contracts.sockets.RouterSocket)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                systems.zlink.contracts.sockets.RouterSocket.class.getClassLoader(),
+                                new Class<?>[] {systems.zlink.contracts.sockets.RouterSocket.class},
+                                (proxy, method, args) ->
+                                        switch (method.getName()) {
+                                            case "hashCode" -> System.identityHashCode(proxy);
+                                            case "equals" -> proxy == args[0];
+                                            case "setRoutingId", "close" -> null;
+                                            case "request" -> request;
+                                            default -> throw new AssertionError(method.getName());
+                                        });
+        var context =
+                (systems.zlink.contracts.core.Context)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                systems.zlink.contracts.core.Context.class.getClassLoader(),
+                                new Class<?>[] {systems.zlink.contracts.core.Context.class},
+                                (proxy, method, args) -> {
+                                    assertEquals("createRouterSocket", method.getName());
+                                    return router;
+                                });
+        try (var port = new ZLinkJavaRawServicePort(context)) {
+            var caller = port.openRouter(systems.zlink.contracts.core.RoutingId.from("caller"));
+            var completion =
+                    port.request(
+                                    caller,
+                                    systems.zlink.contracts.core.RoutingId.from("target"),
+                                    List.of(new byte[] {1}),
+                                    Duration.ofMillis(100))
+                            .toCompletableFuture();
+            if (admitBeforeDeadline) request.admitted.complete(null);
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> completion.get(1, TimeUnit.SECONDS));
+            assertEquals(
+                    RequestResult.TIMED_OUT,
+                    assertInstanceOf(ZlinkRequestException.class, failure.getCause()).getResult());
+            assertFalse(request.reply.isDone(), "binding completion must remain active");
+            request.admitted.complete(null);
+            var lateReply = Message.from(new byte[] {2});
+            request.completeReply(List.of(lateReply));
+            assertEquals(0, lateReply.size());
+        }
+    }
+
+    @Test
+    void backpressuredRequestExpiresBeforeAdmissionAndBindingDiscardsLateReply() throws Exception {
+        assertBackpressuredDeadline(false);
+    }
+
+    @Test
+    void backpressuredRequestKeepsOriginalDeadlineAfterAdmission() throws Exception {
+        assertBackpressuredDeadline(true);
+    }
+
+    private void assertBackpressuredDeadline(boolean admitBeforeDeadline) throws Exception {
+        var request = new PendingRequest(SubmitResult.BACKPRESSURED);
+        try (var message = Message.from(new byte[] {1})) {
+            var completion =
+                    ZLinkJavaSocketSupport.submitRequest(
+                                    request, List.of(message), Duration.ofMillis(100))
+                            .toCompletableFuture();
+            if (admitBeforeDeadline) request.admitted.complete(null);
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> completion.get(1, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            assertFalse(request.reply.isDone(), "binding completion must remain active");
+            if (!admitBeforeDeadline) {
+                assertFalse(request.admitted.isDone(), "caller deadline must not stop admission");
+                request.admitted.complete(null);
+            }
+            var lateReply = Message.from(new byte[] {2});
+            request.completeReply(List.of(lateReply));
+            assertEquals(0, lateReply.size(), "binding must close an unaccepted late reply");
+        }
+    }
+
+    @Test
+    void immediatelyAdmittedRequestHasNoFrameworkDeadline() throws Exception {
+        var request = new PendingRequest(SubmitResult.OK);
+        try (var message = Message.from(new byte[] {1})) {
+            var completion =
+                    ZLinkJavaSocketSupport.submitRequest(
+                                    request, List.of(message), Duration.ofMillis(30))
+                            .toCompletableFuture();
+            assertThrows(TimeoutException.class, () -> completion.get(150, TimeUnit.MILLISECONDS));
+            assertFalse(request.reply.isCancelled());
+            request.completeReply(List.of(Message.from(new byte[] {2})));
+            try (var received = completion.get(1, TimeUnit.SECONDS)) {
+                assertEquals(1, received.parts().size());
+            }
+        }
+    }
+
+    private static final class PendingRequest implements RequestOperation, RequestSubmitOperation {
+        private final SubmitResult result;
+        private final CompletableFuture<Void> admitted = new CompletableFuture<>();
+        private final CompletableFuture<List<Message>> reply = new CompletableFuture<>();
+
+        private PendingRequest(SubmitResult result) {
+            this.result = result;
+        }
+
+        void completeReply(List<Message> parts) {
+            assertTrue(reply.complete(parts), "binding must still deliver its completion");
+        }
+
+        @Override
+        public RequestSubmitOperation message(Message part) {
+            return this;
+        }
+
+        @Override
+        public RequestSubmitOperation timeout(Duration timeout) {
+            return this;
+        }
+
+        @Override
+        public RequestSubmission submit() {
+            return new RequestSubmission() {
+                @Override
+                public SubmitResult result() {
+                    return result;
+                }
+
+                @Override
+                public CompletionStage<Void> admitted() {
+                    return admitted;
+                }
+
+                @Override
+                public CompletionStage<List<Message>> reply() {
+                    return reply;
+                }
+            };
+        }
+
+        @Override
+        public List<Message> submit_sync() {
+            throw new UnsupportedOperationException();
+        }
+    }
+
     @ParameterizedTest
     @CsvSource({
         "NOT_ADMITTED, REJECTED",

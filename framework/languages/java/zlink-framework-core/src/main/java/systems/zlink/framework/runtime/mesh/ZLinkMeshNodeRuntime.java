@@ -6,7 +6,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationRece
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
-import java.time.Duration;
 import java.util.function.Consumer;
 
 /** Configures and starts one MeshNode that {@link ZLinkMeshNodesRuntime} already owns. */
@@ -51,8 +50,6 @@ final class ZLinkMeshNodeRuntime {
                 .configureRouterSocket()
                 .receiveTimeout()
                 .ifPresent(node::setRouterReceiveTimeout);
-        node.setRouterSendTimeout(
-                registration.configureRouterSocket().sendTimeout().orElse(Duration.ofSeconds(1)));
         if (receiver instanceof ZLinkMeshApplicationReceiver applicationReceiver) {
             node.setApplicationReceiver(applicationReceiver);
         }

@@ -7,8 +7,8 @@ public sealed class ErrorContracts
 {
     [Theory]
     [InlineData(false, ZLinkFrameworkErrorKind.Unavailable)]
-    [InlineData(true, ZLinkFrameworkErrorKind.DeadlineExceeded)]
-    public async Task Tokenless_submit_rejection_and_writable_timeout_keep_distinct_terminals(
+    [InlineData(true, ZLinkFrameworkErrorKind.Unavailable)]
+    public async Task Tokenless_submit_rejection_is_unavailable_in_both_phases(
         bool completionFailure,
         ZLinkFrameworkErrorKind expected
     )
@@ -34,7 +34,7 @@ public sealed class ErrorContracts
 
     [Theory]
     [InlineData(false, ZLinkFrameworkErrorKind.Unavailable)]
-    [InlineData(true, ZLinkFrameworkErrorKind.DeadlineExceeded)]
+    [InlineData(true, ZLinkFrameworkErrorKind.Unavailable)]
     public async Task Durable_request_preserves_admission_terminal_without_replaying(
         bool completionFailure,
         ZLinkFrameworkErrorKind expected

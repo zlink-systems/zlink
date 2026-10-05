@@ -478,6 +478,7 @@ class mesh_node_runtime_t
     std::optional<std::uint32_t>
     negotiated_receive_chunk_limit_bytes (const actor_ref_t &actor) const;
     std::string mesh_name () const;
+    std::chrono::milliseconds default_request_timeout () const;
     std::optional<zlink::routing_id_t> routing_id () const;
     std::string listen_endpoint () const;
     object_role_t object_role () const;

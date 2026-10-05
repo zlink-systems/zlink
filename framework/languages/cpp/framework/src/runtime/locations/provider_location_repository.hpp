@@ -881,7 +881,7 @@ class provider_location_repository_t final : public location_repository_t
             }
             if (snapshot.allocation.state != placement_allocation_state_t::reserved)
                 co_return object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}};
-            auto target = co_await read_target_descriptor_async (request.fence.target);
+            auto target = co_await read_target_descriptor_async (request.fence.target, false);
             if (!target)
                 co_return object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}};
             auto capacity = co_await read_capacity_async (request.fence.target, &*target);
@@ -954,6 +954,7 @@ class provider_location_repository_t final : public location_repository_t
                 co_return object_abort_result_t{object_abort_conflict_t{snapshot}};
             store_write_request_t write_request{
               {version_condition (authority_key, stored_authority->value.version),
+               owner_condition (request.fence.target.owner),
                version_condition (target->key, target->provider_version), capacity.condition},
               {store_delete_t{authority_key},
                store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}};

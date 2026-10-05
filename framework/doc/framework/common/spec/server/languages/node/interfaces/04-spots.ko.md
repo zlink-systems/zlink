@@ -181,7 +181,7 @@ export interface ZLinkSpotSendCall {
  instanceSpot(): this;
  instanceSpot(instanceSpotType: string): this;
  inMesh(meshName: string): this;
- submit(signal?: AbortSignal): Promise<void>;
+ submit(): Promise<void>;
 }
 
 export interface ZLinkSpotRequestCall {
@@ -283,7 +283,7 @@ Instance Spot에는 manager create·get-or-create를 제공하지 않는다.
 `sendToSpot`과 `requestToSpot`은 global SpotId를 받고 `ZLinkSpotSendCall` 또는
 `ZLinkSpotRequestCall`을 반환한다. Marker overload는 `instanceSpot()`과
 `instanceSpot(instanceSpotType: string)`이며, Mesh 입력은 `inMesh(meshName: string)`이다.
-Send의 `submit(signal?: AbortSignal)`은 `Promise<void>`, request의
+Send의 `submit()`은 `Promise<void>`, request의
 `submit<TReply>(signal?: AbortSignal)`·`yield<TReply>(signal?: AbortSignal)`는
 `Promise<TReply>`를 반환한다. 정확한 선언은 [§2](#2-handler와-outbound)에 있다.
 

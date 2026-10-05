@@ -116,9 +116,7 @@ public static class DispatchServerHostFactory
                     request.PickupAddress,
                     request.DropoffAddress
                 );
-                await channels
-                    .SendToChannel(SampleNames.DispatchChannel, assign)
-                    .Async(cancellationToken);
+                await channels.SendToChannel(SampleNames.DispatchChannel, assign).Async();
                 loggerFactory
                     .CreateLogger("DeliveryDispatch.Server.Dispatch")
                     .LogInformation(

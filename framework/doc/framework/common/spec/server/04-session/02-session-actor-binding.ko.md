@@ -377,8 +377,8 @@ lifecycle·session RID·retired binding generation이 여전히 교체 대상인
 안내를 보내는 데 그보다 오래 걸리는 배포에서는 설정으로 늘리거나 줄인다.
 
 이전 session 통지의 전송 실패, callback 실패와 연결 종료 지연은 제한된 diagnostics로
-기록하지만 새 binding을 복원하거나 제거하지 않는다. 이 통지의 전송도 일반 규칙을 따른다 — queue가 가득 차면
-send timeout까지 admission을 기다리고, 그때까지 수락되지 않으면 `DeadlineExceeded`로 끝난다.
+기록하지만 새 binding을 복원하거나 제거하지 않는다. 이 통지의 전송도 one-way send의 일반 규칙
+([Submit과 completion §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout))을 따른다.
 Framework는 그 위에 별도 재시도를 하지 않으며 bind terminal을 지연시키지도 않는다. 연결이
 끊긴 경우의 복구는 Core의 reconnect가 담당한다. 이전 owner에 끝내 도달할 수 없으면 physical close는 해당 owner의 일반
 connection liveness와 shutdown에 맡기며 새 binding을 되돌리지 않는다. 통지가
@@ -695,8 +695,7 @@ public interface IZLinkSessionActor
     // 원래 request 정보와 session sequence를 보존해 current Actor route로 제출한다 (command 24).
     ValueTask RelayAsync(
         ZLinkSessionDispatchContext dispatch,
-        ZLinkMessage payload,
-        CancellationToken cancellationToken = default);
+        ZLinkMessage payload);
     // connection이 유지된 상태에서 이 Actor 하나에 논리적 disconnect 통지를 보낸다.
     // Actor를 destroy하거나 Spot membership을 바꾸지 않는다 (§7).
     ValueTask NotifyDisconnectedAsync(
@@ -710,8 +709,7 @@ var boundActor = await session.Actors
 
 await boundActor.RelayAsync(
     dispatch,
-    payload,
-    cancellationToken); // 원래 request 정보와 session sequence를 보존해 제출한다.
+    payload); // 원래 request 정보와 session sequence를 보존해 제출한다.
 ```
 
 ## 14. 검증 요구

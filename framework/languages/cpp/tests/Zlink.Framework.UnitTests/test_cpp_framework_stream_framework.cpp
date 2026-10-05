@@ -1468,8 +1468,7 @@ int main ()
     auto failed_reply_stream = runtime.open_session ("client-stream");
     std::size_t failed_reply_attempts = 0;
     runtime.attach_transport_writer (
-      failed_reply_stream, [&failed_reply_attempts] (const auto &, const auto &,
-                                                     std::optional<std::chrono::milliseconds>) {
+      failed_reply_stream, [&failed_reply_attempts] (const auto &, const auto &) {
           ++failed_reply_attempts;
           return zlink::framework::task_t<void> (zlink::framework::result_t<void>::failure (
             framework_error_kind_t::internal_failure, "stream transport rejected reply"));
@@ -1536,8 +1535,7 @@ int main ()
         auto closing_stream = runtime.open_session ("client-stream");
         zlink::framework::task_completion_source_t<void> admission;
         runtime.attach_transport_writer (
-          closing_stream,
-          [&admission] (const auto &, const auto &, auto) { return admission.task (); });
+          closing_stream, [&admission] (const auto &, const auto &) { return admission.task (); });
         bool physically_closed = false;
         auto lifetime = std::make_shared<int> (0);
         std::weak_ptr<int> retained = lifetime;
@@ -1783,23 +1781,6 @@ int main ()
         return 23;
     }
 
-    const auto rejects_stream_timeout = [&] (std::chrono::milliseconds timeout) {
-        try {
-            (void) failed_reply_stream
-              .write_packet (zlink::message_t::from (std::string ("invalid-timeout")))
-              .timeout (timeout);
-            return false;
-        }
-        catch (const zlink::framework::framework_exception_t &error) {
-            return error.kind () == framework_error_kind_t::not_configured;
-        }
-    };
-    if (!rejects_stream_timeout (std::chrono::milliseconds::zero ())
-        || !rejects_stream_timeout (std::chrono::milliseconds (-1))
-        || !rejects_stream_timeout (std::chrono::milliseconds (
-          static_cast<std::int64_t> (std::numeric_limits<int>::max ()) + 1))) {
-        return 241;
-    }
     const auto close_result = fluent_stream.close ().result ();
     const auto write_rejected_disconnected = [] (auto &&write_fn) {
         try {

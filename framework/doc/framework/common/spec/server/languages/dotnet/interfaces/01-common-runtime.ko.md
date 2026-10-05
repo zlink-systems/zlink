@@ -34,8 +34,7 @@ public sealed class ZLinkMessageMetadata
 
 public interface IZLinkSendCall : IZLinkMetadataCall<IZLinkSendCall>
 {
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+    ValueTask Async();
     void Submit();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
 }
 
@@ -77,17 +76,17 @@ public interface IZLinkWorkerOptions
 }
 ```
 
-One-way admission, timeout과 terminal completion은
+One-way admission과 terminal completion은
 [Submit과 completion](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.
 .NET `Async()`는 결과 없는 `ValueTask`를 반환하며 실패를 exceptional completion으로 전달한다.
 
-One-way send timeout과 기본값은
-[Submit과 completion](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.
+One-way send에는 시간 상한과 `CancellationToken`이 없다. 대기 종료와 Classic fanout publisher send timeout은
+[Submit과 completion §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이 정한다.
 
 `IZLinkPublishCall`은 결과 없는 `ValueTask`를 반환한다. Logical Multicast의 완료 경계는
 [Submit과 completion §6](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.
 
-`CancellationToken`의 취소와 admission·timeout·shutdown의 terminal 경쟁은
+Request·publish 같은 operation에서 `CancellationToken`의 취소와 admission·timeout·shutdown의 terminal 경쟁은
 [Submit과 completion](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.
 .NET은 취소를 cancelled `ValueTask`로 전달한다.
 

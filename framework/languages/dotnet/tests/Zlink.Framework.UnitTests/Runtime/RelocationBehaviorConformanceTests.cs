@@ -2348,7 +2348,7 @@ internal sealed class BehaviorTargetSpot(IZLinkSpotContext context, RelocationBe
         if (trace.SendTargetLifecyclePush)
             await actor
                 .Context.BoundSession.Send(new BehaviorLifecyclePush("target-ready"))
-                .Async(cancellationToken);
+                .Async();
     }
 
     public ValueTask OnLeaveActorAsync(BehaviorActor actor, CancellationToken cancellationToken) =>

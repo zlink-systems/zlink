@@ -361,10 +361,10 @@ int bound_actors_are_current_ordered_snapshot ()
     auto runtime = stream_runtime_t::from (builder);
     auto stream = runtime.open_session ("bound-snapshot");
     const auto session_id = stream.session_id ();
-    runtime.attach_transport_writer (stream, [] (const stream_header_t &, const zlink::message_t &,
-                                                 std::optional<std::chrono::milliseconds>) {
-        return task_t<void> (result_t<void>::success ());
-    });
+    runtime.attach_transport_writer (stream,
+                                     [] (const stream_header_t &, const zlink::message_t &) {
+                                         return task_t<void> (result_t<void>::success ());
+                                     });
     session_actor_manager_access_t::attach (manager, std::move (stream));
     session_actor_manager_access_t::bind_native (manager, [] (actor_ref_t, std::uint64_t) {
         return task_t<void> (result_t<void>::success ());
@@ -409,8 +409,7 @@ int bind_or_get_reuses_same_physical_session_generation ()
     auto old_stream_copy = old_stream;
     std::atomic_int old_stream_writes{0};
     old_runtime.attach_transport_writer (
-      old_stream_copy, [&old_stream_writes] (const stream_header_t &, const zlink::message_t &,
-                                             std::optional<std::chrono::milliseconds>) {
+      old_stream_copy, [&old_stream_writes] (const stream_header_t &, const zlink::message_t &) {
           ++old_stream_writes;
           return task_t<void> (result_t<void>::success ());
       });
@@ -438,8 +437,7 @@ int bind_or_get_reuses_same_physical_session_generation ()
     auto new_stream_copy = new_stream;
     std::atomic_int new_stream_writes{0};
     new_runtime.attach_transport_writer (
-      new_stream_copy, [&new_stream_writes] (const stream_header_t &, const zlink::message_t &,
-                                             std::optional<std::chrono::milliseconds>) {
+      new_stream_copy, [&new_stream_writes] (const stream_header_t &, const zlink::message_t &) {
           ++new_stream_writes;
           return task_t<void> (result_t<void>::success ());
       });
@@ -2039,8 +2037,7 @@ int authority_only_route_update_keeps_physical_session_current ()
     std::atomic_int local_stream_calls{0};
     std::atomic_int replacement_sink_calls{0};
     runtime.attach_transport_writer (
-      stream, [&local_stream_calls] (const stream_header_t &, const zlink::message_t &,
-                                     std::optional<std::chrono::milliseconds>) {
+      stream, [&local_stream_calls] (const stream_header_t &, const zlink::message_t &) {
           ++local_stream_calls;
           return task_t<void> (result_t<void>::success ());
       });
@@ -6037,8 +6034,7 @@ int actor_unbound_waits_for_accepted_push_fifo ()
     std::vector<std::string> events;
     runtime.attach_transport_writer (
       stream, [push_terminal, &events_mutex, &events] (const stream_header_t &header,
-                                                       const zlink::message_t &,
-                                                       std::optional<std::chrono::milliseconds>) {
+                                                       const zlink::message_t &) {
           {
               std::lock_guard lock (events_mutex);
               events.emplace_back (header.packet_name ());
@@ -6100,10 +6096,10 @@ int session_disconnect_uses_actor_slot_issue_order ()
     builder.stream ("disconnect-slot-order").bind ("tcp://127.0.0.1:0");
     auto runtime = stream_runtime_t::from (builder);
     auto stream = runtime.open_session ("disconnect-slot-order");
-    runtime.attach_transport_writer (stream, [] (const stream_header_t &, const zlink::message_t &,
-                                                 std::optional<std::chrono::milliseconds>) {
-        return task_t<void> (result_t<void>::success ());
-    });
+    runtime.attach_transport_writer (stream,
+                                     [] (const stream_header_t &, const zlink::message_t &) {
+                                         return task_t<void> (result_t<void>::success ());
+                                     });
     session_actor_manager_access_t::attach (manager, stream);
     session_actor_manager_access_t::bind_native (
       manager, [] (actor_ref_t, std::uint64_t, std::uint16_t) {

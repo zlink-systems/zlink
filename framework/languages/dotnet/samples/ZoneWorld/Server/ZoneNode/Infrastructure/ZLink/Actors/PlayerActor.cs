@@ -197,7 +197,7 @@ public sealed class PlayerActor(string actorId, IZLinkActorContext context) : IZ
 
         await Context
             .BoundSession.Send(new MoveRejectedNotify(reason, Position.X, Position.Y))
-            .Async(cancellationToken);
+            .Async();
     }
 
     private async ValueTask SendJoinWorldResultAsync(
@@ -207,15 +207,12 @@ public sealed class PlayerActor(string actorId, IZLinkActorContext context) : IZ
     ) =>
         await Context
             .BoundSession.Send(new JoinWorldRes(ActorId, target.ZoneId, target.X, target.Y, error))
-            .Async(cancellationToken);
+            .Async();
 
     private async ValueTask SendCrashProbeResultAsync(
         string? error,
         CancellationToken cancellationToken
-    ) =>
-        await Context
-            .BoundSession.Send(new CrashRelocationProbeRes(error))
-            .Async(cancellationToken);
+    ) => await Context.BoundSession.Send(new CrashRelocationProbeRes(error)).Async();
 
     public void ReverseDirection()
     {

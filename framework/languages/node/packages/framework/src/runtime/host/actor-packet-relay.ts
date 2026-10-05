@@ -464,13 +464,12 @@ export class ZLinkActorPacketRelay {
   async relayActorPacket(
     actor: ZLinkSessionActor,
     frameHeader: ZLinkStreamFrameHeader,
-    payload: Message,
-    signal?: AbortSignal
+    payload: Message
   ): Promise<boolean> {
-    if (await this.relayRemoteActorPacket(actor, frameHeader, payload, signal)) {
+    if (await this.relayRemoteActorPacket(actor, frameHeader, payload)) {
       return true;
     }
-    return this.relayLocalActorPacket(actor, frameHeader, payload, signal);
+    return this.relayLocalActorPacket(actor, frameHeader, payload);
   }
 
   async confirmRemoteSessionBinding(
@@ -581,8 +580,7 @@ export class ZLinkActorPacketRelay {
   async relayRemoteActorPacket(
     actor: ZLinkSessionActor,
     frameHeader: ZLinkStreamFrameHeader,
-    payload: Message,
-    signal?: AbortSignal
+    payload: Message
   ): Promise<boolean> {
     const streamRuntime = this.options.streamBindingRuntime();
     const responseTarget = await streamRuntime.captureBoundSessionResponseTarget(actor);
@@ -671,8 +669,7 @@ export class ZLinkActorPacketRelay {
         remoteAddress.routerChannelId,
         String(remoteAddress.targetNodeRid),
         ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-        request,
-        signal
+        request
       );
       if (result.status !== ZLinkSubmitStatus.Submitted) {
         throw new Error(`Actor '${actor.actorId}' remote node relay was not admitted.`);
@@ -681,8 +678,7 @@ export class ZLinkActorPacketRelay {
     }
     if (frameHeader.kind === ZLinkStreamMessageKind.Send || frameHeader.requestSeq === undefined) {
       await this.options.routeTransport.sendToSpot(remoteAddress, request, {
-        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-        signal
+        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
       });
       return true;
     }
@@ -702,8 +698,7 @@ export class ZLinkActorPacketRelay {
           throw new Error(`Remote actor packet relay reply was empty for '${actor.actorId}'.`);
         }
         return JSON.parse(parts[0].getString('utf8')) as typeof reply;
-      },
-      signal
+      }
     );
     const actorPacketTarget = this.targets.decodeFromWire(reply.actorPacketTarget);
     const currentStoredRoute = await streamRuntime.sessionRouteFence(actor.actorId);
@@ -863,10 +858,8 @@ export class ZLinkActorPacketRelay {
   private async relayLocalActorPacket(
     actor: ZLinkSessionActor,
     frameHeader: ZLinkStreamFrameHeader,
-    payload: Message,
-    signal?: AbortSignal
+    payload: Message
   ): Promise<boolean> {
-    void signal;
     const state = this.options.actorManager()?.getState(actor.actorId);
     const spotId = state?.spotId as RoutingId | undefined;
     const hasActiveSpot =

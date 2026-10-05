@@ -136,13 +136,16 @@ rather than the number of objects.
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `sendTimeout` | How long a send waits for room | 1 second |
+| Classic fanout publisher `sendTimeout` | How long a publish waits for room | 1 second |
 | `ReceiveTimeout` | Wait limit in the receive direction | Not set |
 | `sendHighWaterMark` · `receiveHighWaterMark` | Bytes held per peer. `0` is unlimited | Not set — the Core computes it |
 
-Once a limit is reached, the sender waits up to `sendTimeout`, and the call ends as a deadline
-overrun if no room ever appears. Nothing is sent again automatically, so the application decides
-whether to retry. **Connections between MeshNodes have no message size limit setting** — that
+A send waits until capacity recovers, with no time limit or caller cancellation. Removing its route
+while pending ends it with `Unavailable`; closing the socket or runtime ends it with `ShuttingDown`.
+Only Classic fanout publish uses the publisher `sendTimeout`, ending with `DeadlineExceeded` if
+capacity does not recover within that limit.
+
+**Connections between MeshNodes have no message size limit setting** — that
 limit belongs to the STREAM node and the ClientServer listener
 ([Backpressure](33-backpressure.en.md)).
 

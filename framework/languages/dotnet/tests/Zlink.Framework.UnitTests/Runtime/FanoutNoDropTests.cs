@@ -69,7 +69,7 @@ public sealed class FanoutNoDropTests
         var bindingFailure = Assert.Throws<ZlinkSubmitException>(() => pair.Publish(TargetPayload));
         var elapsed = Stopwatch.GetElapsedTime(started);
         var mapped = Assert.IsType<ZLinkFrameworkException>(
-            ZLinkRequestFailureMapper.CreateSubmitException(bindingFailure, "Fanout publish")
+            ZLinkSubmitFailureMapper.CreateFanoutException(bindingFailure)
         );
 
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, mapped.Kind);
@@ -134,29 +134,13 @@ public sealed class FanoutNoDropTests
     }
 
     [Fact]
-    public void ClientDealerSendTimeout_UsesConfiguredValueOrFrameworkDefault()
+    public void ClientDealerConfig_DoesNotApplyPublisherTimeout()
     {
-        var defaultSendTimeout = TimeSpan.FromMilliseconds(700);
-        var configuredSendTimeout = TimeSpan.FromMilliseconds(250);
         using var context = Systems.Zlink.Zlink.CreateContext();
-        using var defaultDealer = context.CreateDealerSocket();
-        using var configuredDealer = context.CreateDealerSocket();
-        var defaultConfig = new ZLinkSocketConfig();
-        var configuredConfig = new ZLinkSocketConfig { SendTimeout = configuredSendTimeout };
-
-        ZLinkChannelBundleFactory.ApplySocketConfig(
-            defaultDealer.Options,
-            defaultConfig,
-            defaultSendTimeout
-        );
-        ZLinkChannelBundleFactory.ApplySocketConfig(
-            configuredDealer.Options,
-            configuredConfig,
-            defaultSendTimeout
-        );
-
-        Assert.Equal(defaultSendTimeout, defaultDealer.Options.SendTimeout);
-        Assert.Equal(configuredSendTimeout, configuredDealer.Options.SendTimeout);
+        using var dealer = context.CreateDealerSocket();
+        var nativeDefault = dealer.Options.SendTimeout;
+        ZLinkChannelBundleFactory.ApplySocketConfig(dealer.Options, new ZLinkSocketConfig());
+        Assert.Equal(nativeDefault, dealer.Options.SendTimeout);
     }
 
     private static ZLinkFrameworkRegistration CreateRegistration(bool? noDrop)
@@ -208,10 +192,10 @@ public sealed class FanoutNoDropTests
             SlowSubscriber = _context.CreateSubSocket();
 
             var registration = CreateRegistration(noDrop);
-            registration.Channels["events"].Publisher!.SocketConfig.SendTimeout = sendTimeout;
             ZLinkChannelBundleFactory.ApplyPublisherSocketConfig(
                 Publisher.Options,
-                registration.Channels["events"]
+                registration.Channels["events"],
+                sendTimeout
             );
             Assert.Equal(sendTimeout, Publisher.Options.SendTimeout);
             Assert.Equal(noDrop ?? false, Publisher.Options.NoDrop);

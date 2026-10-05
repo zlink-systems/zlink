@@ -93,7 +93,6 @@ public interface systems.zlink.framework.streams.ZLinkSessionReplyCall {
 public interface systems.zlink.framework.streams.ZLinkSessionSendCall {
  public abstract systems.zlink.framework.streams.ZLinkSessionSendCall metadata(java.lang.String, java.lang.String);
  public abstract systems.zlink.framework.streams.ZLinkSessionSendCall compress();
- public abstract systems.zlink.framework.streams.ZLinkSessionSendCall timeout(java.time.Duration);
  public abstract java.util.concurrent.CompletionStage<java.lang.Void> submit();
 }
 public interface systems.zlink.framework.streams.ZLinkStreamCompressionCodec {
@@ -138,11 +137,8 @@ failure로 완료한다. Caller는 별도 reply·retry를 하지 않는다. One-
 capability가 없으므로 admission만 반환한다. Handshake failure는 session 생성 전 runtime monitoring에만
 기록되며 `onError(...)`에 전달하지 않는다.
 
-`ZLinkSessionSendCall.timeout(...)`은 이 send의 admission 대기만 줄인다. 생략하면 STREAM socket send
-timeout을 사용하고 지정하면 두 값 중 짧은 값을 사용하므로 socket timeout을 늘릴 수 없다. Duration은
-양수이며 milliseconds로 올림한 값이 `1..Integer.MAX_VALUE` 범위여야 한다. 만료되면
-`DEADLINE_EXCEEDED`로 terminal-once 완료하고 이후 admission이나 replay를 시작하지 않는다. Reply call에는
-이 modifier를 제공하지 않는다.
+Send·reply call의 대기 종료는 [Submit과 completion §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을, 반환한 stage의 `cancel(false)`는
+[Cancellation과 shutdown §1](../../../01-execution/03-cancellation-and-shutdown.ko.md#1-협력적-cancellation)을 따른다.
 
 ## STREAM codec public signature
 

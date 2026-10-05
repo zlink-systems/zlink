@@ -22,8 +22,20 @@ int main ()
     if (messaging::map_submit_request_result (zlink::submit_result_t::backpressured, false)
           != zlink::request_result_t::not_connected
         || messaging::map_submit_request_result (zlink::submit_result_t::backpressured, true)
-             != zlink::request_result_t::timed_out) {
-        std::cerr << "capacity refusal lost its phase-specific terminal\n";
+             != zlink::request_result_t::internal_error) {
+        std::cerr << "capacity snapshot escaped as a public terminal\n";
+        return 1;
+    }
+    if (messaging::map_submit_completion_result (zlink::submit_result_t::not_found)
+          != zlink::submit_result_t::not_connected
+        || messaging::map_submit_result_exception (zlink::submit_result_t::not_found, "initial")
+               .kind ()
+             != zlink::framework::framework_error_kind_t::not_found
+        || messaging::map_submit_result_exception (
+             messaging::map_submit_completion_result (zlink::submit_result_t::not_found), "pending")
+               .kind ()
+             != zlink::framework::framework_error_kind_t::unavailable) {
+        std::cerr << "route removal lost its admission phase\n";
         return 1;
     }
     using namespace std::chrono_literals;

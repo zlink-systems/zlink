@@ -788,7 +788,7 @@ verifies detailed behavior — messaging, connection, spot, codec, etc.
 | [Config 10 — Spot actor join/relocation](config-10-spot-actor-relocation.en.md) | Location/Relocation Store + 2 Actor nodes + 2 Session gateways + caller | Local/remote Join, state and message order during a move, Session-binding route refresh, Message Follow, PerActor/SpotWide relocation |
 | [Config 11 — Observability/operational deployment](config-11-observability-ops.en.md) | Session + 2 Play + 2 workflow + Stores | Public flow correlation/metrics, maintenance Relocate/Shutdown, client/application result of patch and drain |
 | [Config 12 — Channel egress routing](config-12-channel-egress-routing.en.md) | Session/Play/API + 2 ClientServer services | ChannelName routing, local-egress selection, weight/shutdown/restart, and request/send terminal |
-| [Config 13 — One-way submit admission](config-13-submit-admission.en.md) | RouteMesh/ClientServer/Spot/Actor/Stream targets | One-way admission completion, common timeout/shutdown, cancellation in supporting languages, zero target, ordering, and hidden-retry prohibition |
+| [Config 13 — One-way submit admission](config-13-submit-admission.en.md) | RouteMesh/ClientServer/Spot/Actor/Stream targets | One-way admission completion, send wait with no time limit, route removal/shutdown, Logical Multicast cancellation before commit, zero target, ordering, and hidden-retry prohibition |
 | [Config 14 — Instance Spot activation](config-14-instance-spot.en.md) | Location/Relocation Store + 2 callers + 2 owners + User Spot owner | Cold activation, concurrent first call, first-message ordering, crash/deadline/capacity/relocation, and cross-language result |
 
 ## 3.1 Configuration Axes — Variations That Run Across Configs

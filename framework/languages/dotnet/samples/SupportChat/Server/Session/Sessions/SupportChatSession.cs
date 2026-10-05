@@ -105,7 +105,7 @@ internal sealed class SupportChatSession(
                     authenticated.Role
                 )
             )
-            .Async(cancellationToken);
+            .Async();
     }
 
     private async ValueTask JoinConversationAsync(
@@ -121,7 +121,7 @@ internal sealed class SupportChatSession(
         // customer join just refreshes state on the bound identity actor.
         if (string.Equals(_identityRole, SupportChatRoles.Customer, StringComparison.Ordinal))
         {
-            await RequireIdentityActor().RelayAsync(payload, cancellationToken);
+            await RequireIdentityActor().RelayAsync(payload);
             return;
         }
 
@@ -142,7 +142,7 @@ internal sealed class SupportChatSession(
         );
 
         var boundActor = await Context.Actors.BindOrGetAsync(actor, cancellationToken);
-        await boundActor.RelayAsync(payload, cancellationToken);
+        await boundActor.RelayAsync(payload);
         // --8<-- [end:doc-sc-agent-join]
         logger.LogInformation(
             "session: agent conversation join submitted. roster={RosterActorId}, conversation={ConversationId}",
@@ -160,7 +160,7 @@ internal sealed class SupportChatSession(
         // --8<-- [start:doc-sc-actor-relay]
         var target = dispatch.Actor ?? RequireIdentityActor();
         // --8<-- [end:doc-sc-actor-relay]
-        await target.RelayAsync(payload, cancellationToken);
+        await target.RelayAsync(payload);
     }
 
     private IZLinkSessionActor RequireIdentityActor()

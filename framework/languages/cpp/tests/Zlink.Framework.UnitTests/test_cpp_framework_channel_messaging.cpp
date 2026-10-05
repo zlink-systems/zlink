@@ -1193,8 +1193,7 @@ int main ()
     bool protobuf_strict_decode_succeeded = false;
     protobuf_client_runtime.bind_client_server_transport (
       "protobuf-client",
-      [] (std::string, std::string, zlink::message_t, std::chrono::milliseconds,
-          std::map<std::string, std::string>) {
+      [] (std::string, std::string, zlink::message_t, std::map<std::string, std::string>) {
           return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
       },
       [&] (std::string packet_name, std::string content_type, zlink::message_t payload,
@@ -1243,7 +1242,7 @@ int main ()
     cancellation_client_runtime.bind_serializers (protobuf_serializers);
     cancellation_client_runtime.bind_client_server_transport (
       cancellation_channel,
-      [cancellation] (std::string, std::string, zlink::message_t, std::chrono::milliseconds,
+      [cancellation] (std::string, std::string, zlink::message_t,
                       std::map<std::string, std::string>) {
           return zlink::framework::task_t<void> (
             zlink::framework::detail::result_access_t::failure<void> (cancellation));
@@ -3357,7 +3356,8 @@ int main ()
       [&] (const zlink::framework::spot_id_t &spot_id,
            const zlink::framework::detail::spot_activation_intent_t &intent,
            const std::optional<zlink::framework::runtime::spot_address_t> &cached_route,
-           const std::string &, std::type_index, auto, const std::map<std::string, std::string> &)
+           const std::string &, std::type_index, auto, const std::map<std::string, std::string> &,
+           std::chrono::system_clock::time_point)
         -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           if (std::string (spot_id) != "cart-17" || intent.mesh_name != "commerce"
               || intent.stable_type != "shopping-cart") {

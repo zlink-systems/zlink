@@ -64,8 +64,8 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
             );
             expected.Add(payload);
             var submission = reply
-                ? session.Client.Reply(payload).Async(fixture.Token).AsTask()
-                : session.Client.Send(payload).Async(fixture.Token).AsTask();
+                ? session.Client.Reply(payload).Async().AsTask()
+                : session.Client.Send(payload).Async().AsTask();
             await Task.WhenAny(submission, Task.Delay(100, fixture.Token));
             fixture.Token.ThrowIfCancellationRequested();
             if (!submission.IsCompleted)
@@ -83,13 +83,12 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
         output.WriteLine(
             $"public typed {(reply ? "Reply" : "Send")} admission pending after {expected.Count} submissions"
         );
+        await Task.Delay(TimeSpan.FromMilliseconds(3100), fixture.Token);
+        Assert.False(pending.IsCompleted);
         if (reply)
         {
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                session
-                    .Client.Reply(new BackpressurePayload("duplicate"))
-                    .Async(fixture.Token)
-                    .AsTask()
+                session.Client.Reply(new BackpressurePayload("duplicate")).Async().AsTask()
             );
         }
 
@@ -119,6 +118,52 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
         output.WriteLine(
             "typed JSON frames delivered once in order; admission completed without terminal refusal"
         );
+    }
+
+    [Theory]
+    [InlineData(false, ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData(true, ZLinkFrameworkErrorKind.ShuttingDown)]
+    public async Task SessionSend_PendingRouteRemovalAndSocketCloseHaveDistinctTerminals(
+        bool closeSocket,
+        ZLinkFrameworkErrorKind expected
+    )
+    {
+        await using var fixture = await SaturatedStream.CreateAsync(output);
+        using var runtime = new RuntimeFixture();
+        IZLinkSessionContext session = new ZLinkSessionContext(
+            runtime.Runtime,
+            fixture.Stream,
+            new TestSessionHandlerRegistry(),
+            static () => ValueTask.CompletedTask,
+            static _ => ValueTask.CompletedTask
+        );
+        Task? pending = null;
+        for (var sequence = 0; sequence < 10000; sequence++)
+        {
+            var submission = session
+                .Client.Send(
+                    new BackpressurePayload($"terminal-{sequence}:" + new string('x', 2048))
+                )
+                .Async()
+                .AsTask();
+            await Task.WhenAny(submission, Task.Delay(100, fixture.Token));
+            fixture.Token.ThrowIfCancellationRequested();
+            if (!submission.IsCompleted)
+            {
+                pending = submission;
+                break;
+            }
+            await submission;
+        }
+        Assert.NotNull(pending);
+        Assert.False(pending.IsCompleted);
+        if (closeSocket)
+            fixture.Socket.Dispose();
+        else
+            fixture.Socket.DisconnectRid(fixture.RoutingId);
+        await fixture.PumpUntilAsync(pending);
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => pending);
+        Assert.Equal(expected, failure.Kind);
     }
 
     [Fact]
@@ -415,6 +460,15 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
         }
 
         private void PumpCompletions() => _completionPoller.Wait(_completionEvents, TimeSpan.Zero);
+
+        public async Task PumpUntilAsync(Task pending)
+        {
+            while (!pending.IsCompleted)
+            {
+                PumpCompletions();
+                await Task.Delay(10, Token);
+            }
+        }
 
         public async Task<byte[]> ReadFrameAsync()
         {

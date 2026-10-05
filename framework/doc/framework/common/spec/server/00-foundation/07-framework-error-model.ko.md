@@ -78,7 +78,7 @@ code만 담는 실패에서 `ShuttingDown`은 `routeNotConnected`로 보내고(�
 configuration exception으로 전달한다. 이런 오류를 remote error reply로 바꾸지 않는다.
 
 Outbound queue 수락, route resolve 또는 remote reply를 기다리는 중에 확인한 Framework
-실패는 언어별 Framework exception이나 `result`의 `ErrorKind`로 전달한다. Binding의 `NOT_FOUND`는 지정한 target이 없을 때 `NotFound`로 전달한다. Channel 선택의 결과 분류는 [Framework API의 Channel 선택 결과](06-framework-api.ko.md#channel-selection-result)를 따른다. 그 밖의 결과는 해당 호출 경로의 Core 결과 의미에 따라 분류한다.
+실패는 언어별 Framework exception이나 `result`의 `ErrorKind`로 전달한다. Binding의 `NOT_FOUND`는 지정한 target이 없을 때 `NotFound`로 전달한다. 대기 중인 send의 route가 제거된 결과는 [Submit과 completion §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)대로 `Unavailable`이다. Channel 선택의 결과 분류는 [Framework API의 Channel 선택 결과](06-framework-api.ko.md#channel-selection-result)를 따른다. 그 밖의 결과는 해당 호출 경로의 Core 결과 의미에 따라 분류한다.
 
 ## 4. Send 완료와 실패
 
@@ -89,7 +89,7 @@ Outbound queue 수락, route resolve 또는 remote reply를 기다리는 중에 
 |---|---|
 | Logical target이나 route가 존재하지 않음([TargetNotFound](02-glossary.ko.md#target-not-found) 등) | `NotFound` |
 | Connection 또는 current owner를 현재 사용할 수 없음([RouteNotConnected](02-glossary.ko.md#route-not-connected) 등) | `Unavailable` |
-| Send timeout까지 outbound queue가 message를 수락하지 않음 | `DeadlineExceeded` |
+| Classic fanout publisher의 send timeout까지 queue가 message를 수락하지 않음 | `DeadlineExceeded` |
 | Runtime이 신규 admission을 중단함 | `ShuttingDown` |
 
 `Send`가 완료된 뒤 target activation, admission 또는 handler 실행이 실패해도 이미 완료된

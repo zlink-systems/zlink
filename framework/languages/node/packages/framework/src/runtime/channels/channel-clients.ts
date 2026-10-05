@@ -20,6 +20,7 @@ import {
 import {
   requireOneWayCompletion,
   requirePublishCompletion,
+  requireClassicFanoutCompletion,
   throwAlreadySubmitted,
   ZLinkSubmitStatus,
   type ZLinkSubmitResult
@@ -176,14 +177,13 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   sendToNode(meshName: string, targetNodeRid: string, message: unknown): ZLinkSendCall {
     return new DefaultZLinkSendCall(
       () => this.requireMesh(meshName),
-      async (packetName, metadata, signal) =>
+      async (packetName, metadata) =>
         normalizeSubmitResult(
           await this.requireTransport().submit(
             meshName,
             targetNodeRid,
             packetName,
             message,
-            signal,
             metadata
           )
         )
@@ -210,7 +210,7 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   sendToChannel(channelName: string, message: unknown): ZLinkSendCall {
     return new DefaultZLinkSendCall(
       () => this.requireChannelRoute(channelName),
-      async (packetName, metadata, signal) => {
+      async (packetName, metadata) => {
         const route = this.requireChannelRoute(channelName);
         if (route.kind === 'route-mesh') {
           return normalizeSubmitResult(
@@ -219,19 +219,12 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
               channelName,
               packetName,
               message,
-              signal,
               metadata
             )
           );
         }
         return normalizeSubmitResult(
-          await this.requireChannelTransport().send(
-            channelName,
-            packetName,
-            message,
-            signal,
-            metadata
-          )
+          await this.requireChannelTransport().send(channelName, packetName, message, metadata)
         );
       }
     );
@@ -271,9 +264,8 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
       () => {
         this.requireSpotTransport();
       },
-      async (_packetName, metadata, signal) => {
+      async (_packetName, metadata) => {
         await sendToSpotHandle(this.requireSpotTransport(), spot, message, {
-          signal,
           metadata,
           spotRouterChannelIdForMesh: this.spotRouterChannelIdForMesh
         });
@@ -431,8 +423,7 @@ class DefaultZLinkSendCall implements ZLinkSendCall {
     private readonly validate: () => void,
     private readonly submitter: (
       packetName: string | undefined,
-      metadata: ReadonlyMap<string, string>,
-      signal?: AbortSignal
+      metadata: ReadonlyMap<string, string>
     ) => Promise<ZLinkSubmitResult>
   ) {}
 
@@ -450,12 +441,11 @@ class DefaultZLinkSendCall implements ZLinkSendCall {
     return this;
   }
 
-  async submit(signal?: AbortSignal): Promise<void> {
+  async submit(): Promise<void> {
     ensureNotExecuted(this.executed);
     this.validate();
     this.executed = true;
-    throwIfAborted(signal);
-    const result = await this.submitter(undefined, new Map(this.selectedMetadata), signal);
+    const result = await this.submitter(undefined, new Map(this.selectedMetadata));
     requireOneWayCompletion(result, 'One-way send');
   }
 }
@@ -580,6 +570,6 @@ class DefaultZLinkFanoutPublishCall implements ZLinkFanoutPublishCall {
     this.executed = true;
     throwIfAborted(signal);
     const result = await this.submitter(signal);
-    requireOneWayCompletion(result, 'Classic fanout publish');
+    requireClassicFanoutCompletion(result, 'Classic fanout publish');
   }
 }

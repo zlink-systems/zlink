@@ -36,6 +36,6 @@ internal sealed class CustomerSession(IZLinkSessionContext context) : IZLinkSess
         }
 
         var actor = Context.Actors.Bound.Single();
-        await actor.RelayAsync(payload, cancellationToken);
+        await actor.RelayAsync(payload);
     }
 }

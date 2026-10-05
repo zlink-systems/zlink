@@ -82,19 +82,19 @@ internal sealed class PlayActor(string actorId, IZLinkActorContext context) : IZ
                     .BoundSession.Send(
                         new JoinGameNotify(reply.Decode<TicTacToeGameJoinRes>().State)
                     )
-                    .Async(cancellationToken);
+                    .Async();
                 break;
 
             case ZLinkActorJoinCompletion.Rejected:
                 await Context
                     .BoundSession.Send(new JoinGameFailedNotify(roomId, "Rejected"))
-                    .Async(cancellationToken);
+                    .Async();
                 break;
 
             case ZLinkActorJoinCompletion.Failed failed:
                 await Context
                     .BoundSession.Send(new JoinGameFailedNotify(roomId, failed.Kind.ToString()))
-                    .Async(cancellationToken);
+                    .Async();
                 break;
         }
 

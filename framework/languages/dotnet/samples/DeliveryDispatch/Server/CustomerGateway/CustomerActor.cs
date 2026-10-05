@@ -24,7 +24,7 @@ internal sealed class CustomerActor(string actorId, IZLinkActorContext context) 
                     status.OccurredAtUnixMs
                 )
             )
-            .Async(cancellationToken);
+            .Async();
     }
     // --8<-- [end:doc-dd-bound-session-push]
 }

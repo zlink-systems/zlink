@@ -37,10 +37,6 @@ public static class SessionServerHostFactory
         builder.Services.AddHostedService<SupportChatReadinessReporter>();
         builder.Services.AddZLinkFramework(options =>
         {
-            // Channel clients wire through Redis discovery; the session's first
-            // authenticate can arrive before the api-channel dealer connects,
-            // so the submit window covers the discovery hand-off.
-            options.DefaultSocketSendTimeout = TimeSpan.FromSeconds(10);
             options.AddLocationStore(
                 new ZLinkRedisLocationStore(redis =>
                 {

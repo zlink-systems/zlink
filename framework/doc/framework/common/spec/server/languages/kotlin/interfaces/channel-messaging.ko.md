@@ -156,7 +156,7 @@ type처럼 호출 지점에서 `T`를 유지할 수 없으면 두 번째 overloa
 
 `ZLinkKotlinRequestCall.yield()`는 Java call의 coroutine bridge다. 유효 문맥과 수락은 [Execution gate](../../../01-execution/02-handler-turn-and-execution-gate.ko.md)가 정한다.
 
-One-way 수락과 terminal 결과는 [Submit과 completion](../../../01-execution/01-submit-and-completion.ko.md)이 정한다. Kotlin은 취소를 coroutine cancellation으로 표현한다.
+One-way 수락과 terminal 결과는 [Submit과 completion](../../../01-execution/01-submit-and-completion.ko.md)이 정한다. One-way send를 기다리는 coroutine의 cancellation은 [Cancellation과 shutdown §1](../../../01-execution/03-cancellation-and-shutdown.ko.md#1-협력적-cancellation)을 따른다. Request는 취소를 coroutine cancellation으로 표현한다.
 
 Topic을 받는 `publishToTopic(...)`에 전달하거나 Java builder의 `subscribe`에 등록하는 topic이
 [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 금지한 값이면 Java runtime의 `ZLinkConfigurationException`을 발생시킨다.

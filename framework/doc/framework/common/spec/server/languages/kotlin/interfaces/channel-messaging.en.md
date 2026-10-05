@@ -167,7 +167,7 @@ the first value, and a failure from the first call is delivered again.
 
 `ZLinkKotlinRequestCall.yield()` bridges the Java call to a coroutine; [Execution gate](../../../01-execution/02-handler-turn-and-execution-gate.en.md) defines eligibility and admission.
 
-[Submit and completion](../../../01-execution/01-submit-and-completion.en.md) defines one-way admission and terminal outcomes; Kotlin maps cancellation to coroutine cancellation.
+[Submit and completion](../../../01-execution/01-submit-and-completion.en.md) defines one-way admission and terminal outcomes. Cancellation of a coroutine awaiting a one-way send follows [Cancellation and shutdown §1](../../../01-execution/03-cancellation-and-shutdown.en.md#1-cooperative-cancellation). A request maps cancellation to coroutine cancellation.
 
 A topic passed to `publishToTopic(...)`, which takes a topic, or registered with the Java
 builder's `subscribe`, that [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic) forbids raises the Java runtime's

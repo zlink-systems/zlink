@@ -41,9 +41,7 @@ internal sealed class AuthenticatePlaySessionHandler(
 
         await EnsureActorBoundAsync(context, authenticated.Player, cancellationToken);
 
-        await context
-            .Client.Reply(new AuthenticateRes(authenticated.Player))
-            .Async(cancellationToken);
+        await context.Client.Reply(new AuthenticateRes(authenticated.Player)).Async();
     }
 
     private async ValueTask EnsureActorBoundAsync(

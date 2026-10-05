@@ -615,12 +615,6 @@ class client_server_channel_builder_t
           "client/server channel");
     }
 
-    void set_client_send_timeout (std::chrono::milliseconds timeout)
-    {
-        _client_send_timeout = timeout;
-        apply_channel ();
-    }
-
     void apply_channel ()
     {
         const auto channel_name = _channel_name;
@@ -629,7 +623,6 @@ class client_server_channel_builder_t
         const auto server_bind_host_override = _server_bind_host_override;
         const auto server_weight = _server_weight;
         const auto client_enabled = _client_enabled;
-        const auto client_send_timeout = _client_send_timeout;
         const auto client_endpoints =
           _options->client_endpoint_connections[_channel_name].list_connections ();
         if (server_port) {
@@ -646,10 +639,8 @@ class client_server_channel_builder_t
         }
         if (client_enabled) {
             _options->client_server_client_actions[channel_name] =
-              [client_endpoints, client_send_timeout] (channel_builder_t &channel) {
+              [client_endpoints] (channel_builder_t &channel) {
                   auto client = channel.enable_client ();
-                  if (client_send_timeout)
-                      client.send_timeout (*client_send_timeout);
                   for (const auto &endpoint : client_endpoints) {
                       client.connect (endpoint);
                   }
@@ -690,21 +681,12 @@ class client_server_channel_builder_t
     std::optional<std::uint16_t> _server_port;
     int _server_weight = 100;
     bool _client_enabled = false;
-    std::optional<std::chrono::milliseconds> _client_send_timeout;
     std::size_t _inline_handler_sequence = 0;
 };
 
 class client_server_channel_client_builder_t
 {
   public:
-    template <typename Rep, typename Period>
-    client_server_channel_client_builder_t &
-    set_send_timeout (std::chrono::duration<Rep, Period> timeout)
-    {
-        _channel->set_client_send_timeout (detail::normalize_channel_send_timeout (timeout));
-        return *this;
-    }
-
     client_server_channel_client_builder_t &connect (std::string endpoint)
     {
         _channel->connect_client (std::move (endpoint));
@@ -1016,7 +998,7 @@ class fanout_channel_builder_t
                     routing_id.has_value () || automatic_routing_id_prefix.has_value ());
                   publisher.set_no_drop (no_drop);
                   if (send_timeout)
-                      publisher.send_timeout (*send_timeout);
+                      publisher.set_send_timeout (*send_timeout);
                   if (routing_id) {
                       publisher.set_routing_id (*routing_id);
                   } else if (automatic_routing_id_prefix) {

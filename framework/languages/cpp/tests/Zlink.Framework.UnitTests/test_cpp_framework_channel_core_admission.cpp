@@ -15,6 +15,7 @@
 
 #include "runtime/channels/channel_host_service.hpp"
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/channels/channel_socket_options.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
@@ -27,6 +28,7 @@
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
 #include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
+#include <zlink/Contracts/Sockets/pubsub_socket_contracts.hpp>
 
 #include <gtest/gtest.h>
 
@@ -361,7 +363,7 @@ TEST (ChannelCoreAdmission, ClientRequestWaitsOnCoreAdmissionNotFrameworkReadine
 
     zlink::framework::zlink_builder_t client_builder =
       zlink::framework::test::runtime_failure_builder ();
-    client_builder.channel (channel).enable_client ().send_timeout (10s).connect (endpoint);
+    client_builder.channel (channel).enable_client ().connect (endpoint);
     auto client_runtime =
       zlink::framework::detail::channel_runtime_t::from (client_builder.message_bus ());
     client_runtime.bind_core_context (context);
@@ -410,7 +412,7 @@ TEST (ChannelCoreAdmissionContract, ClientClassifiesByBindingTypedResultOnly)
     EXPECT_EQ (std::string::npos, source.find ("wait_for_connection_ready"));
 }
 
-TEST (ChannelCoreAdmission, RequestTimeoutStartsAfterCoreAdmission)
+TEST (ChannelCoreAdmission, RequestTimeoutIncludesCoreAdmission)
 {
     constexpr auto reply_budget = 50ms;
     constexpr auto admission_observation = 200ms;
@@ -454,13 +456,15 @@ TEST (ChannelCoreAdmission, RequestTimeoutStartsAfterCoreAdmission)
     const auto reply = pending.result ();
     handler.release ();
     host.stop ();
-    EXPECT_FALSE (before_admission.has_value ()) << "reply timeout ran before Core admission";
+    ASSERT_TRUE (before_admission.has_value ()) << "request budget did not include admission";
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::deadline_exceeded,
+               before_admission->error_kind ());
     EXPECT_TRUE (entered) << "Core admission did not deliver the request to the handler";
     EXPECT_FALSE (reply);
     EXPECT_EQ (zlink::framework::framework_error_kind_t::deadline_exceeded, reply.error_kind ());
 }
 
-TEST (ChannelCoreAdmission, MissingServerExpiresAtDefaultAdmissionTimeout)
+TEST (ChannelCoreAdmission, MissingServerExpiresAtRequestTimeout)
 {
     auto context = std::make_shared<zlink::context_t> ();
     zlink::framework::serializer_registry_t serializers;
@@ -474,72 +478,159 @@ TEST (ChannelCoreAdmission, MissingServerExpiresAtDefaultAdmissionTimeout)
     const auto started = std::chrono::steady_clock::now ();
     const auto result = builder.request_client (channel)
                           .request (request_t{7})
-                          .timeout (10s)
+                          .timeout (200ms)
                           .async<reply_t> ()
                           .result ();
     const auto elapsed = std::chrono::steady_clock::now () - started;
     EXPECT_FALSE (result);
     EXPECT_EQ (zlink::framework::framework_error_kind_t::deadline_exceeded, result.error_kind ());
-    EXPECT_GE (elapsed, 900ms);
-    EXPECT_LT (elapsed, 3s);
+    EXPECT_GE (elapsed, 150ms);
+    EXPECT_LT (elapsed, 1s);
 }
 
-TEST (ChannelCoreAdmission, SendAdmissionDefaultIsIndependentOfRequestTimeout)
+struct counted_send_handler_t
+{
+    std::atomic_size_t calls{0};
+    void handle (const request_t &) { calls.fetch_add (1, std::memory_order_relaxed); }
+};
+
+TEST (ChannelCoreAdmission, SendWaitsBeyondThreeSecondsAndAdmitsExactlyOnce)
+{
+    auto context = std::make_shared<zlink::context_t> ();
+    zlink::framework::serializer_registry_t serializers;
+    add_serializers (serializers);
+    const auto endpoint = unique_inproc_endpoint ();
+    const std::string channel = "core-send-no-deadline";
+    zlink::framework::zlink_builder_t client = zlink::framework::test::runtime_failure_builder ();
+    client.channel (channel).enable_client ().connect (endpoint);
+    auto client_runtime = zlink::framework::detail::channel_runtime_t::from (client.message_bus ());
+    client_runtime.bind_core_context (context);
+    client_runtime.bind_serializers (serializers);
+    zlink::framework::zlink_builder_t server = zlink::framework::test::runtime_failure_builder ();
+    server.channel (channel).enable_server ().bind (endpoint);
+    auto server_runtime = zlink::framework::detail::channel_runtime_t::from (server.message_bus ());
+    server_runtime.bind_core_context (context);
+    server_runtime.bind_serializers (serializers);
+    zlink::framework::service_collection_t services;
+    services.add_singleton<counted_send_handler_t> ();
+    auto provider = services.build_provider ();
+    auto &handler = provider.get_required<counted_send_handler_t> ();
+    zlink::framework::handler_registry_t handlers;
+    handlers.on_send<counted_send_handler_t, request_t> (
+      channel, "command", &counted_send_handler_t::handle, {.packet_name = request_t::packet_name});
+    zlink::framework::runtime::channel_host_service_t host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
+      server.message_bus (), server_runtime.channel_snapshots (), handlers, serializers, {});
+    auto pending = client.message_bus ().send (channel, request_t{7}).async ();
+    const auto before_capacity = pending.result_for (3100ms);
+    host.start (provider);
+    const auto admitted = pending.result_for (2s);
+    const auto received_by = std::chrono::steady_clock::now () + 2s;
+    while (handler.calls.load (std::memory_order_relaxed) == 0
+           && std::chrono::steady_clock::now () < received_by)
+        std::this_thread::yield ();
+    host.stop ();
+    EXPECT_FALSE (before_capacity.has_value ());
+    ASSERT_TRUE (admitted.has_value ());
+    EXPECT_TRUE (*admitted);
+    EXPECT_EQ (1, handler.calls.load (std::memory_order_relaxed));
+}
+
+TEST (ChannelCoreAdmission, SendShutdownEndsShuttingDown)
 {
     auto context = std::make_shared<zlink::context_t> ();
     zlink::framework::serializer_registry_t serializers;
     add_serializers (serializers);
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
-    const std::string channel = "core-send-admission-missing";
-    auto configured = builder.channel (channel);
-    configured.default_request_timeout (10s);
-    configured.enable_client ().connect (unique_inproc_endpoint ());
+    const std::string channel = "core-send-shutdown";
+    builder.channel (channel).enable_client ().connect (unique_inproc_endpoint ());
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_core_context (context);
     runtime.bind_serializers (serializers);
-    const auto started = std::chrono::steady_clock::now ();
-    const auto result = builder.message_bus ().send (channel, request_t{7}).async ().result ();
-    const auto elapsed = std::chrono::steady_clock::now () - started;
-    EXPECT_FALSE (result);
-    EXPECT_EQ (zlink::framework::framework_error_kind_t::deadline_exceeded, result.error_kind ());
-    EXPECT_GE (elapsed, 900ms);
-    EXPECT_LT (elapsed, 3s);
+    auto pending = builder.message_bus ().send (channel, request_t{7}).async ();
+    EXPECT_FALSE (pending.result_for (3100ms).has_value ());
+    runtime.shutdown ();
+    const auto result = pending.result_for (2s);
+    ASSERT_TRUE (result.has_value ());
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::shutting_down, result->error_kind ());
 }
 
-TEST (ChannelCoreAdmission, SendTimeoutConfigurationRoundsUpAndRejectsInvalidValues)
+TEST (ChannelCoreAdmission, PublisherTimeoutConfigurationRoundsUpAndRejectsInvalidValues)
 {
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
-    auto client = builder.channel ("send-timeout-values").enable_client ();
-    EXPECT_FALSE (client.snapshot ().send_timeout);
-    client.send_timeout (1us);
-    ASSERT_TRUE (client.snapshot ().send_timeout);
-    EXPECT_EQ (1ms, *client.snapshot ().send_timeout);
-    client.send_timeout (1500us);
-    EXPECT_EQ (2ms, *client.snapshot ().send_timeout);
-    const auto maximum = (std::numeric_limits<int>::max) ();
-    client.send_timeout (std::chrono::milliseconds (maximum));
-    EXPECT_EQ (std::chrono::milliseconds (maximum), *client.snapshot ().send_timeout);
-    EXPECT_THROW (client.send_timeout (0ms), std::invalid_argument);
-    EXPECT_THROW (client.send_timeout (-1ms), std::invalid_argument);
-    EXPECT_THROW (client.send_timeout (std::chrono::milliseconds (
-                    static_cast<std::chrono::milliseconds::rep> (maximum) + 1)),
-                  std::invalid_argument);
-    EXPECT_THROW (client.send_timeout (std::chrono::duration<double, std::milli> (
-                    (std::numeric_limits<double>::infinity) ())),
-                  std::invalid_argument);
-    EXPECT_THROW (client.send_timeout (std::chrono::duration<double, std::milli> (
-                    (std::numeric_limits<double>::quiet_NaN) ())),
-                  std::invalid_argument);
     zlink::framework::service_collection_t services;
     zlink::framework::handler_registry_t handlers;
     zlink::framework::serializer_registry_t serializers;
     zlink::framework::zlink_framework_options_t options (services, handlers, serializers, builder);
-    auto configured_client = options.add_client_server_channel ("client-timeout-values").client ();
-    EXPECT_NO_THROW (configured_client.set_send_timeout (1us));
-    EXPECT_THROW (configured_client.set_send_timeout (0ms), std::invalid_argument);
     auto publisher = options.add_fanout_channel ("publisher-timeout-values");
-    EXPECT_NO_THROW (publisher.set_send_timeout (1500us));
+    const auto check_rounding = [] (auto configured, auto expected) {
+        zlink::framework::zlink_builder_t configured_builder =
+          zlink::framework::test::runtime_failure_builder ();
+        zlink::framework::service_collection_t configured_services;
+        zlink::framework::handler_registry_t configured_handlers;
+        zlink::framework::serializer_registry_t configured_serializers;
+        zlink::framework::zlink_framework_options_t configured_options (
+          configured_services, configured_handlers, configured_serializers, configured_builder);
+        configured_options.add_fanout_channel ("publisher-timeout-values")
+          .enable_publisher (unique_inproc_endpoint ())
+          .set_send_timeout (configured);
+        configured_options.apply ();
+        EXPECT_EQ (expected, zlink::framework::detail::channel_runtime_t::from (
+                               configured_builder.message_bus ())
+                               .channel_snapshots ()
+                               .front ()
+                               .publisher.send_timeout);
+    };
+    check_rounding (1us, 1ms);
+    check_rounding (1500us, 2ms);
+    const auto maximum = (std::numeric_limits<int>::max) ();
+    EXPECT_NO_THROW (publisher.set_send_timeout (std::chrono::milliseconds (maximum)));
+    EXPECT_THROW (publisher.set_send_timeout (0ms), std::invalid_argument);
     EXPECT_THROW (publisher.set_send_timeout (-1ms), std::invalid_argument);
+    EXPECT_THROW (publisher.set_send_timeout (std::chrono::milliseconds (
+                    static_cast<std::chrono::milliseconds::rep> (maximum) + 1)),
+                  std::invalid_argument);
+    EXPECT_THROW (publisher.set_send_timeout (std::chrono::duration<double, std::milli> (
+                    (std::numeric_limits<double>::infinity) ())),
+                  std::invalid_argument);
+    EXPECT_THROW (publisher.set_send_timeout (std::chrono::duration<double, std::milli> (
+                    (std::numeric_limits<double>::quiet_NaN) ())),
+                  std::invalid_argument);
+}
+
+TEST (ChannelCoreAdmission, OnlyPublisherSnapshotCarriesSendTimeout)
+{
+    auto builder = zlink::framework::test::runtime_failure_builder ();
+    zlink::framework::service_collection_t services;
+    zlink::framework::handler_registry_t handlers;
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::zlink_framework_options_t options (services, handlers, serializers, builder);
+    builder.channel ("client").enable_client ().connect (unique_inproc_endpoint ());
+    options.add_fanout_channel ("publisher")
+      .enable_publisher (unique_inproc_endpoint ())
+      .set_send_timeout (137ms);
+    options.apply ();
+    const auto snapshots =
+      zlink::framework::detail::channel_runtime_t::from (builder.message_bus ())
+        .channel_snapshots ();
+    bool client_seen = false;
+    bool publisher_seen = false;
+    zlink::context_t context;
+    zlink::pub_socket_t publisher (context);
+    for (const auto &snapshot : snapshots) {
+        EXPECT_FALSE (snapshot.client.send_timeout.has_value ());
+        if (snapshot.name == "client")
+            client_seen = snapshot.client.enabled;
+        if (snapshot.name == "publisher") {
+            publisher_seen = snapshot.publisher.enabled;
+            EXPECT_EQ (137ms, snapshot.publisher.send_timeout);
+            zlink::framework::detail::apply_channel_send_timeout (publisher,
+                                                                  snapshot.publisher.send_timeout);
+            EXPECT_EQ (137ms, publisher.options ().send_timeout ());
+        }
+    }
+    EXPECT_TRUE (client_seen);
+    EXPECT_TRUE (publisher_seen);
 }
 
 } // namespace
