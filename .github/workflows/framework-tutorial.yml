@@ -85,12 +85,28 @@ jobs:
         shell: bash
         working-directory: framework/languages/dotnet/tutorial
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
           dotnet run --project Server/Server.csproj -c Release --no-build > server.log 2>&1 &
+          server_pid=$!
           dotnet run --project Client/Client.csproj -c Release --no-build > client.log 2>&1 &
+          client_pid=$!
+          cleanup() {
+            kill "$1" "$2" 2>/dev/null || true
+            wait "$1" "$2" 2>/dev/null || true
+          }
+          trap "cleanup '${client_pid}' '${server_pid}'" EXIT
 
-          fail() { echo "::error::$1"; echo '--- server.log ---'; cat server.log; echo '--- client.log ---'; cat client.log; exit 1; }
+          fail() {
+            trap - ERR
+            echo "::error::$1"
+            echo '--- server.log ---'
+            tail -n 120 server.log 2>/dev/null || true
+            echo '--- client.log ---'
+            tail -n 120 client.log 2>/dev/null || true
+            exit 1
+          }
+          trap 'fail "line ${LINENO}: ${BASH_COMMAND} (exit $?)"' ERR
 
           # Wait until the two processes have found each other. The channel path
           # and the object path come up at different times, and during startup one
@@ -273,9 +289,9 @@ jobs:
         working-directory: framework/languages/java/tutorial
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
-          run_language() {
+          run_language() (
             local language="$1"
             local client_port="$2"
             local admin_port="$3"
@@ -285,6 +301,18 @@ jobs:
             local http_client_bin="$7"
             local log_dir="run-${language}-ci"
 
+            fail() {
+              trap - ERR
+              echo "::error::${language}: $1"
+              echo "--- ${log_dir}/server.log ---"
+              tail -n 120 "${log_dir}/server.log" 2>/dev/null || true
+              echo "--- ${log_dir}/client.log ---"
+              tail -n 120 "${log_dir}/client.log" 2>/dev/null || true
+              exit 1
+            }
+
+            trap 'fail "line ${LINENO}: ${BASH_COMMAND} (exit $?)"' ERR
+
             mkdir -p "${log_dir}"
             "${server_bin}" > "${log_dir}/server.log" 2>&1 &
             local server_pid=$!
@@ -292,18 +320,10 @@ jobs:
             local client_pid=$!
 
             cleanup() {
-              kill "${client_pid}" "${server_pid}" 2>/dev/null || true
-              wait "${client_pid}" 2>/dev/null || true
-              wait "${server_pid}" 2>/dev/null || true
+              kill "$1" "$2" 2>/dev/null || true
+              wait "$1" "$2" 2>/dev/null || true
             }
-            trap cleanup EXIT
-
-            fail() {
-              echo "::error::${language}: $1"
-              tail -n 120 "${log_dir}/server.log"
-              tail -n 120 "${log_dir}/client.log"
-              exit 1
-            }
+            trap "cleanup '${client_pid}' '${server_pid}'" EXIT
 
             local ready=0
             for _ in $(seq 1 90); do
@@ -346,9 +366,9 @@ jobs:
             echo "${http_output}" | grep -q '^download stream: chunks [1-9][0-9]* bytes [1-9][0-9]*$' || fail "download"
             echo "${http_output}" | grep -q '^upload stream: imported 3$' || fail "upload"
             echo "${http_output}" | grep -q '^error kinds: bad request INTERNAL_FAILURE connection refused UNAVAILABLE$' || fail "error kinds"
-            cleanup
+            cleanup "${client_pid}" "${server_pid}"
             trap - EXIT
-          }
+          )
 
           run_language java 5280 5281 \
             ./java/Server/build/install/Server/bin/Server \
@@ -422,25 +442,27 @@ jobs:
         shell: bash
         working-directory: framework/languages/node/tutorial
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
           npm run server > server.log 2>&1 &
           server_pid=$!
           npm run client > client.log 2>&1 &
           client_pid=$!
           cleanup() {
-            kill "${client_pid}" "${server_pid}" 2>/dev/null || true
-            wait "${client_pid}" "${server_pid}" 2>/dev/null || true
+            kill "$1" "$2" 2>/dev/null || true
+            wait "$1" "$2" 2>/dev/null || true
           }
-          trap cleanup EXIT
+          trap "cleanup '${client_pid}' '${server_pid}'" EXIT
           fail() {
+            trap - ERR
             echo "::error::$1"
             echo '--- server.log ---'
-            cat server.log
+            tail -n 120 server.log 2>/dev/null || true
             echo '--- client.log ---'
-            cat client.log
+            tail -n 120 client.log 2>/dev/null || true
             exit 1
           }
+          trap 'fail "line ${LINENO}: ${BASH_COMMAND} (exit $?)"' ERR
 
           warmup="warmup-$$-${RANDOM}"
           streak=0
@@ -575,11 +597,25 @@ jobs:
         shell: bash
         working-directory: framework/languages/cpp/tutorial
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
           ./build/tutorial_server > server.log 2>&1 & server_pid=$!
           ./build/tutorial_client > client.log 2>&1 & client_pid=$!
-          cleanup() { kill "${server_pid}" "${client_pid}" 2>/dev/null || true; }
-          trap cleanup EXIT
+          cleanup() {
+            kill "$1" "$2" 2>/dev/null || true
+            wait "$1" "$2" 2>/dev/null || true
+          }
+          trap "cleanup '${client_pid}' '${server_pid}'" EXIT
+
+          fail() {
+            trap - ERR
+            echo "::error::$1"
+            echo '--- server.log ---'
+            tail -n 120 server.log 2>/dev/null || true
+            echo '--- client.log ---'
+            tail -n 120 client.log 2>/dev/null || true
+            exit 1
+          }
+          trap 'fail "line ${LINENO}: ${BASH_COMMAND} (exit $?)"' ERR
 
           for _ in $(seq 1 90); do
             if curl -sf http://127.0.0.1:5180/players/p1/profile > /dev/null; then
