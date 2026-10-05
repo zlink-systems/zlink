@@ -47,11 +47,8 @@ export class ZLinkSourceSpotRouter {
     target: ZLinkSpotRouteTarget,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>,
-    timeoutMs?: number
+    metadata?: ReadonlyMap<string, string>
   ): Promise<void> {
-    throwIfAborted(signal);
     const parts = [
       encodeSpotDirectEnvelope(
         ZLinkChannelMessageKind.Command,
@@ -62,11 +59,7 @@ export class ZLinkSourceSpotRouter {
       )
     ] as readonly Message[];
     try {
-      void timeoutMs;
-      await awaitWithAbort(
-        sourceSpot.sendToSpot(target.targetNodeRid, target.spotId, parts),
-        signal
-      );
+      await sourceSpot.sendToSpot(target.targetNodeRid, target.spotId, parts);
     } finally {
       closeMessages(parts);
     }

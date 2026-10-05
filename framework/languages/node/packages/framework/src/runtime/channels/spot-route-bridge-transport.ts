@@ -20,20 +20,13 @@ export class ZLinkSpotRouteBridgeTransport {
     return this.bridges.has(routerChannelId);
   }
 
-  async send(
-    target: ZLinkSpotRouteTarget,
-    parts: readonly Message[],
-    signal?: AbortSignal
-  ): Promise<void> {
+  async send(target: ZLinkSpotRouteTarget, parts: readonly Message[]): Promise<void> {
     const bridge = this.requireBridge(target.routerChannelId);
     try {
-      await awaitWithAbort(
-        appendParts(
-          bridge.send(target.routerChannelId, target.targetNodeRid, target.spotId),
-          parts
-        ).submit(),
-        signal
-      );
+      await appendParts(
+        bridge.send(target.routerChannelId, target.targetNodeRid, target.spotId),
+        parts
+      ).submit();
     } finally {
       closeMessages(parts);
     }

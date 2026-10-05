@@ -23,7 +23,8 @@ import type {
 import { ZLinkNodeRawMeshBackend } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
 import {
   RequestResult,
-  SubmitResult
+  SubmitResult,
+  ZLinkBackendResultError
 } from '../../packages/framework/src/runtime/backend/runtime-values';
 import { ServiceDiscoveryRegistry } from '../../packages/framework/src/runtime/foundation/service-discovery-registry';
 import { ServiceLivenessRegistry } from '../../packages/framework/src/runtime/foundation/service-liveness-registry';
@@ -2135,36 +2136,39 @@ test('channel send and request report a known disconnected member as NotConnecte
   }
 });
 
-test('channel send reports a selected target submit failure as NotConnected', async () => {
-  const runtime = rawServiceRuntime({
-    descriptor: { ...descriptor('m6a-transport-source'), state: 'serving', channels: [] }
-  });
-
-  try {
-    const target = {
-      descriptor: { ...descriptor('m6a-transport-target'), state: 'serving' as const },
-      connectionId: 'transport-target-connection'
-    };
-    runtime.topology.selectChannel = () => target;
-    (
-      runtime as unknown as {
-        router: Pick<ZLinkRawRouterPort, 'send'>;
-      }
-    ).router = {
-      async send(): Promise<void> {
-        throw new Error('injected transport send failure');
-      }
-    };
-    assert.equal(
-      await runtime.sendToChannel('alpha', {
+test('channel send projects absent routes and propagates other admission failures', async () => {
+  for (const [index, cause] of [
+    new ZLinkBackendResultError('submit', SubmitResult.NotFound, undefined, {
+      phase: 'completion'
+    }),
+    new ZLinkBackendResultError('submit', SubmitResult.Terminated, undefined, {
+      phase: 'completion'
+    }),
+    new Error('injected unexpected transport failure')
+  ].entries()) {
+    const runtime = rawServiceRuntime({
+      descriptor: { ...descriptor('m6a-transport-source'), state: 'serving', channels: [] }
+    });
+    try {
+      runtime.topology.selectChannel = () => ({
+        descriptor: { ...descriptor('m6a-transport-target'), state: 'serving' as const },
+        connectionId: 'transport-target-connection'
+      });
+      (runtime as unknown as { router: Pick<ZLinkRawRouterPort, 'send'> }).router = {
+        async send(): Promise<void> {
+          throw cause;
+        }
+      };
+      const pending = runtime.sendToChannel('alpha', {
         packetName: 'ChannelNotice',
         contentType: 'application/json',
         payload: Buffer.from('notice')
-      }),
-      SubmitResult.NotConnected
-    );
-  } finally {
-    runtime.close();
+      });
+      if (index === 0) assert.equal(await pending, SubmitResult.NotConnected);
+      else await assert.rejects(pending, (error) => error === cause);
+    } finally {
+      runtime.close();
+    }
   }
 });
 

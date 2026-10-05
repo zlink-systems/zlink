@@ -10,7 +10,8 @@ import type {
   ZLinkRawReceivedRecord,
   ZLinkRawRouterPort
 } from '../backend/raw-binding-port';
-import { RequestResult, SubmitResult } from '../backend/runtime-values';
+import { submitToRequestResult } from '../messaging/submission-result';
+import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
 import { OperationRegistry, type PendingOperation } from './operation-registry';
 import { ServiceLivenessRegistry, type ServiceLivenessTick } from './service-liveness-registry';
@@ -830,17 +831,14 @@ export class RawServiceMeshRuntime {
             peer.connectionId,
             record.probeId
           );
-          const sent =
-            ack !== undefined &&
-            (await this.send(received.sourceRid, [
-              livenessCodec.encodeLivenessRecord({
-                command: M6aServiceWireCommand.livenessAck,
-                probeId: record.probeId
-              })
-            ]));
-          if (!sent) {
-            return 'protocolError';
-          }
+          if (ack === undefined) return 'protocolError';
+          const sent = await this.send(received.sourceRid, [
+            livenessCodec.encodeLivenessRecord({
+              command: M6aServiceWireCommand.livenessAck,
+              probeId: record.probeId
+            })
+          ]);
+          if (!sent) return 'dropped';
         } else {
           this.liveness.acknowledge(received.sourceRid, peer.connectionId, record.probeId, nowMs);
         }
@@ -1263,8 +1261,13 @@ export class RawServiceMeshRuntime {
     try {
       await this.requireStarted().send(targetNodeRoutingId, parts);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+        const terminal = submitToRequestResult(error.result, error.phase);
+        if (terminal === RequestResult.NotConnected || terminal === RequestResult.NotFound)
+          return false;
+      }
+      throw error;
     }
   }
 }

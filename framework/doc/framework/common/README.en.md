@@ -238,8 +238,8 @@ A per-language detail document must clearly write down the following items.
 - How are auto-connect and manual connection configured
 - How is the default packet key resolved on a request/send/event call
 - What `options` or equivalent structure holds variations like timeout, packet override
-- How is the internal submit policy for send/publish and `SendTimeout`-based backpressure
-  handling explained
+- How are send waits with no time limit and Classic fanout publisher timeouts
+  explained
 - What ingress is handler dispatch explained against
 - What path handles receiving an outbound reply
 - Is an outbound-only app possible

@@ -472,7 +472,7 @@ test('actor client submit maps native terminal outcomes to operation-specific er
     [SubmitResult.NotConnected, framework.ZLinkFrameworkErrorKind.Unavailable],
     [SubmitResult.NotFound, framework.ZLinkFrameworkErrorKind.NotFound],
     [SubmitResult.Terminated, framework.ZLinkFrameworkErrorKind.ShuttingDown],
-    [SubmitResult.Backpressured, framework.ZLinkFrameworkErrorKind.DeadlineExceeded],
+    [SubmitResult.Backpressured, framework.ZLinkFrameworkErrorKind.Unavailable],
     [SubmitResult.NotAdmitted, framework.ZLinkFrameworkErrorKind.Rejected]
   ];
   const accepted = createActorClient({
@@ -516,7 +516,7 @@ test('actor client submit maps native terminal outcomes to operation-specific er
   );
 });
 
-test('pre-aborted Actor call does not read authority or submit transport work', async () => {
+test('Actor send exposes no cancellation and keeps stale authority validation', async () => {
   const controller = new AbortController();
   controller.abort();
   let attempts = 0;
@@ -533,8 +533,8 @@ test('pre-aborted Actor call does not read authority or submit transport work', 
   });
 
   await assert.rejects(
-    () => client.sendToActor('actor-1', new ActorNotify('ping')).submit(controller.signal),
-    (error) => error?.name === 'AbortError'
+    () => client.sendToActor('actor-1', new ActorNotify('ping')).submit(),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
   assert.equal(attempts, 0);
 });

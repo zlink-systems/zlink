@@ -42,11 +42,10 @@ export interface ZLinkSessionClient {
 export interface ZLinkSessionSendCall {
   metadata(key: string, value: string): this;
   compress(enabled?: boolean): this;
-  timeout(timeoutMs: number): this;
-  submit(signal?: AbortSignal): Promise<void>;
+  submit(): Promise<void>;
 }
 
 export interface ZLinkSessionReplyCall {
   compress(enabled?: boolean): this;
-  submit(signal?: AbortSignal): Promise<void>;
+  submit(): Promise<void>;
 }

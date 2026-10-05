@@ -130,14 +130,9 @@ export class ZLinkManagedStream implements ZLinkStream {
     return this.socket.send(this.backendRoutingId(), payload, flags ?? 0);
   }
 
-  async submitRaw(
-    payload: Message,
-    signal?: AbortSignal,
-    timeoutMs?: number
-  ): Promise<ZLinkSubmitResult> {
+  async submitRaw(payload: Message): Promise<ZLinkSubmitResult> {
     try {
-      throwIfAborted(signal);
-      await this.socket.submit(this.backendRoutingId(), payload, timeoutMs);
+      await this.socket.submit(this.backendRoutingId(), payload);
       return { status: ZLinkSubmitStatus.Submitted };
     } catch (error) {
       if (isZLinkBackendResultError(error) && error.operation === 'submit') {
@@ -147,12 +142,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     }
   }
 
-  async submitBoundActor(
-    actorId: string,
-    parts: readonly Message[],
-    signal?: AbortSignal
-  ): Promise<ZLinkSubmitResult> {
-    throwIfAborted(signal);
+  async submitBoundActor(actorId: string, parts: readonly Message[]): Promise<ZLinkSubmitResult> {
     return (await this.sendBoundActor(actorId, parts, ZLINK_SEND_DONT_WAIT))
       ? { status: ZLinkSubmitStatus.Submitted }
       : { status: ZLinkSubmitStatus.Backpressured };

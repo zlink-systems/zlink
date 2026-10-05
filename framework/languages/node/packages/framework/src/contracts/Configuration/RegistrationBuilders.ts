@@ -1586,7 +1586,6 @@ interface MutableServerCapabilityOptions {
   weight?: number;
   sendHighWaterMark?: number;
   receiveHighWaterMark?: number;
-  sendTimeoutMs?: number;
   maxMessageSize?: number;
 }
 
@@ -1594,7 +1593,6 @@ interface MutableClientCapabilityOptions {
   manualConnections?: string[];
   sendHighWaterMark?: number;
   receiveHighWaterMark?: number;
-  sendTimeoutMs?: number;
   maxMessageSize?: number;
 }
 
@@ -1690,7 +1688,6 @@ interface MutableSpotRouterCapabilityOptions {
   sendHighWaterMark?: number;
   receiveHighWaterMark?: number;
   receiveTimeoutMs?: number;
-  sendTimeoutMs?: number;
 }
 
 interface MutableSpotPubSubCapabilityOptions {

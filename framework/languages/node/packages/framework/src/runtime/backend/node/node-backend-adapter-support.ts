@@ -1,5 +1,9 @@
 import { constants as osConstants } from 'node:os';
-import { requireOneWayCompletion, ZLinkSubmitStatus } from '../../messaging/submission-result';
+import { waitRequestReply } from '../../messaging/request-deadline';
+import {
+  requireClassicFanoutCompletion,
+  ZLinkSubmitStatus
+} from '../../messaging/submission-result';
 import { loadBinding } from '../node-backend-adapter';
 import { SubmitResult, ZLinkBackendResultError } from '../runtime-values';
 const nativeErrnoValues = osConstants.errno;
@@ -92,7 +96,7 @@ export function submitBindingPublish(
       (translated.result === SubmitResult.Backpressured ||
         translated.result === SubmitResult.NotAdmitted)
     ) {
-      requireOneWayCompletion(
+      requireClassicFanoutCompletion(
         { status: ZLinkSubmitStatus.Backpressured },
         'Classic fanout publish'
       );
@@ -119,6 +123,7 @@ export async function submitBindingAsyncSend(
   operation: ZLinkBindingAsyncSendOperation,
   payload: unknown
 ): Promise<void> {
+  let submission: import('@zlink-systems/zlink').SendSubmission;
   try {
     let current: ZLinkBindingAsyncSendSubmitOperation | undefined;
     const parts = Array.isArray(payload) ? payload : [payload];
@@ -127,9 +132,16 @@ export async function submitBindingAsyncSend(
       current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
     }
     current ??= operation.message(Buffer.alloc(0));
-    await current.submit().admitted;
+    submission = current.submit();
   } catch (error) {
-    throw translateBindingResultError(error);
+    throw translateBindingResultError(error, 'submit');
+  }
+  if (submission.result === SubmitResult.Backpressured) {
+    try {
+      await submission.admitted;
+    } catch (error) {
+      throw translateBindingResultError(error, 'completion');
+    }
   }
 }
 
@@ -156,6 +168,7 @@ export async function submitBindingRequest(
   payload: unknown,
   timeoutMs: number | undefined
 ): Promise<readonly unknown[]> {
+  const deadlineMs = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
   try {
     let current: ZLinkBindingRequestSubmitOperation | undefined;
     if (Array.isArray(payload)) {
@@ -171,10 +184,37 @@ export async function submitBindingRequest(
     if (timeoutMs !== undefined) {
       current = current.timeout(timeoutMs);
     }
-    return await current.submit().reply;
+    return await bindingRequestReply(current.submit(), deadlineMs);
   } catch (error) {
     throw translateBindingResultError(error);
   }
+}
+
+export async function bindingRequestReply(
+  submission: import('@zlink-systems/zlink').RequestSubmission,
+  deadlineMs: number | undefined
+): Promise<import('@zlink-systems/zlink').Message[]> {
+  const reply = submission.reply;
+  if (submission.result === SubmitResult.Backpressured) {
+    try {
+      const [, replies] = await waitRequestReply(
+        Promise.all([submission.admitted, reply]),
+        'Request',
+        deadlineMs
+      );
+      return replies;
+    } catch (error) {
+      void reply.then(closeBindingReply, () => undefined);
+      throw error;
+    }
+  }
+  return reply;
+}
+
+export function closeBindingReply(
+  replies: readonly import('@zlink-systems/zlink').Message[]
+): void {
+  for (const reply of replies) reply.close();
 }
 
 /**

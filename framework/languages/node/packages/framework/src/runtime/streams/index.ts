@@ -139,8 +139,7 @@ export interface ZLinkStreamBindingRuntimeOptions {
   readonly relay?: (
     actor: ZLinkSessionActor,
     header: ZLinkStreamFrameHeader,
-    payload: Message,
-    signal?: AbortSignal
+    payload: Message
   ) => Promise<boolean>;
   readonly notifyDisconnected?: (actor: ZLinkSessionActor, signal?: AbortSignal) => Promise<void>;
   readonly flowCreationEnabled?: () => boolean;
@@ -758,10 +757,9 @@ export class ZLinkStreamBindingRuntime {
   async relay(
     actor: DefaultZLinkSessionActor,
     payload: ZLinkMessage,
-    signal?: AbortSignal,
     dispatchHeader?: ZLinkStreamFrameHeader
   ): Promise<ZLinkSubmitResult> {
-    return await this.boundActorRelay.relay(actor, payload, signal, dispatchHeader);
+    return await this.boundActorRelay.relay(actor, payload, dispatchHeader);
   }
 
   async notifyDisconnected(actor: DefaultZLinkSessionActor, signal?: AbortSignal): Promise<void> {

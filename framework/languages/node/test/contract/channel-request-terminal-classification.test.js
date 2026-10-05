@@ -94,7 +94,7 @@ test('request failures retain the Core terminal and classify submit results by m
     failureCode: 0
   });
   assert.deepEqual(submitted(SubmitResult.NotFound), {
-    terminalResult: RequestResult.NotFound,
+    terminalResult: RequestResult.NotConnected,
     failureCode: 0
   });
   for (const [result, terminalResult] of [

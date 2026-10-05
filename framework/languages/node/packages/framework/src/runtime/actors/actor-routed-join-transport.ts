@@ -18,20 +18,18 @@ export interface ZLinkActorRoutedJoinTransport {
     routerChannelId: string,
     targetNodeRid: string,
     packetName: string | undefined,
-    message: unknown,
-    signal?: AbortSignal
+    message: unknown
   ): Promise<ZLinkSubmitResult>;
   submitInfrastructure?(
     routerChannelId: string,
     targetNodeRid: string,
     packetName: string | undefined,
-    message: unknown,
-    signal?: AbortSignal
+    message: unknown
   ): Promise<ZLinkSubmitResult>;
   sendToSpot(
     spotRouteTarget: ZLinkSpotRouteTarget,
     message: unknown,
-    options: { readonly packetName?: string; readonly signal?: AbortSignal }
+    options: { readonly packetName?: string }
   ): Promise<ZLinkSubmitResult>;
   requestRawToSpot?(
     spotRouteTarget: ZLinkSpotRouteTarget,

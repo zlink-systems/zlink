@@ -11,11 +11,7 @@ export interface ZLinkSessionActors {
 export interface ZLinkSessionActor {
   readonly actorId: string;
   readonly ref: ActorRef;
-  relay(payload: ZLinkMessage, signal?: AbortSignal): Promise<void>;
-  relay(
-    dispatch: ZLinkSessionDispatchContext,
-    payload: ZLinkMessage,
-    signal?: AbortSignal
-  ): Promise<void>;
+  relay(payload: ZLinkMessage): Promise<void>;
+  relay(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void>;
   notifyDisconnected(signal?: AbortSignal): Promise<void>;
 }

@@ -566,7 +566,7 @@ test('actor join and one-way calls expose only their target terminators', () => 
   assert.equal(interfaceExtends(actorJoinSpotCall, 'ZLinkActorJoinCall'), true);
   assert.equal(interfaceExtends(actorJoinEntrySpotCall, 'ZLinkActorJoinCall'), true);
   const boundSessionSendCall = declarationBody(boundSessionContracts, 'ZLinkBoundSessionSendCall');
-  assert.match(boundSessionSendCall, /submit\(signal\?: AbortSignal\): Promise<void>/);
+  assert.match(boundSessionSendCall, /submit\(\): Promise<void>/);
   assert.equal(boundSessionSendCall.includes('yield('), false);
 });
 
@@ -830,7 +830,7 @@ test('actor declarations resolve global ActorId calls and expose fluent manager 
   assert.equal(actorClient.includes('meshName:'), false);
   assert.equal(actorClient.includes('actor: ActorRef'), false);
   assert.match(actorSendCall, /metadata\(key: string, value: string\): this/);
-  assert.match(actorSendCall, /submit\(signal\?: AbortSignal\): Promise<void>/);
+  assert.match(actorSendCall, /submit\(\): Promise<void>/);
   assert.equal(actorSendCall.includes('packetName('), false);
   assert.match(actorRequestCall, /metadata\(key: string, value: string\): this/);
   assert.equal(actorRequestCall.includes('packetName('), false);
@@ -871,16 +871,16 @@ test('one-way call declarations complete without exposing transport admission re
   const sessionReplyCall = declarationBody(declarations, 'ZLinkSessionReplyCall');
   const sessionActor = declarationBody(declarations, 'ZLinkSessionActor');
 
-  assert.match(sendCall, /submit\(signal\?: AbortSignal\): Promise<void>/);
+  assert.match(sendCall, /submit\(\): Promise<void>/);
   assert.match(fanoutPublishCall, /submit\(signal\?: AbortSignal\): Promise<void>/);
   assert.match(publishCall, /submit\(signal\?: AbortSignal\): Promise<void>/);
-  assert.match(boundSessionSendCall, /submit\(signal\?: AbortSignal\): Promise<void>/);
-  assert.match(sessionSendCall, /submit\(signal\?: AbortSignal\): Promise<void>/);
-  assert.match(sessionReplyCall, /submit\(signal\?: AbortSignal\): Promise<void>/);
-  assert.match(sessionActor, /relay\(payload: ZLinkMessage, signal\?: AbortSignal\): Promise<void>/);
+  assert.match(boundSessionSendCall, /submit\(\): Promise<void>/);
+  assert.match(sessionSendCall, /submit\(\): Promise<void>/);
+  assert.match(sessionReplyCall, /submit\(\): Promise<void>/);
+  assert.match(sessionActor, /relay\(payload: ZLinkMessage\): Promise<void>/);
   assert.match(
     sessionActor,
-    /relay\(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage, signal\?: AbortSignal\): Promise<void>/
+    /relay\(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage\): Promise<void>/
   );
   assert.doesNotMatch(declarations, /ZLinkSubmitResult|ZLinkPublishResult|ZLinkSubmitStatus|ZLinkLogicalMulticastDetail/);
   for (const call of [sendCall, fanoutPublishCall, publishCall, actorSendCall,

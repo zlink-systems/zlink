@@ -194,7 +194,7 @@ export function wrapSocket<T extends { close(): void }>(
       }
       return submitBindingAsyncSend(operation, payload);
     },
-    submit(routingId: unknown, payload: unknown, _timeoutMs?: number): Promise<void> {
+    submit(routingId: unknown, payload: unknown): Promise<void> {
       if (!hasStream) throw new TypeError('Async stream send requires a STREAM socket.');
       return submitBindingAsyncSend(
         (nativeInstance as T & { send(routingId: unknown): ZLinkBindingAsyncSendOperation }).send(

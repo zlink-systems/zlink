@@ -45,8 +45,9 @@ packet이 순서대로 다시 흐른다. queue 자리는 host 전체가 함께 �
 
 서버가 session으로 보내는 응답과 push는 **연결마다** Core 송신 buffer에 쌓인다. 그 연결로 실제로
 내보내는 속도보다 보내는 속도가 빨라 buffer가 한도(HWM)에 이르면 그 연결로 보내는 send가 자리가 날
-때까지 기다린다. 다른 연결로 보내는 send는 영향을 받지 않는다. 기다리다 deadline이 지나면 send는
-`DeadlineExceeded`로 끝나며, Framework는 같은 내용을 다시 보내지 않는다.
+때까지 시간 상한과 caller cancellation 없이 기다린다. 다른 연결로 보내는 send는 영향을 받지 않는다.
+대기 중 연결이 종료되면 `Unavailable`, socket close나 runtime shutdown이면 `ShuttingDown`으로 끝난다.
+Framework는 같은 내용을 다시 보내지 않는다.
 
 client connector는 실행 환경의 socket을 그대로 쓰고 받은 것을 한도 없이 계속 읽으므로, client
 application의 처리가 느린 것은 서버의 송신을 막지 않는다. push(`Send`)는 client 쪽의 한도 없는 수신

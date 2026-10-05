@@ -13,7 +13,7 @@ import {
 
 import { ZLINK_MAX_ACTOR_ID_BYTES } from '../../contracts/Common/CoreTypes';
 import type { Message } from '../../contracts/Common/Message';
-import { awaitWithAbort, throwIfAborted } from '../abort';
+import { throwIfAborted } from '../abort';
 import {
   type ZLinkBackendActorRef,
   type ZLinkBackendMeshNode,
@@ -110,7 +110,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
   sendToActor(actorId: string, message: unknown): ZLinkActorSendCall {
     requireActorId(actorId);
     return new DefaultZLinkActorSendCall(
-      (packetName, metadata, signal) => this.send(actorId, packetName, message, metadata, signal),
+      (packetName, metadata) => this.send(actorId, packetName, message, metadata),
       message
     );
   }
@@ -132,11 +132,9 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     actorId: string,
     explicitPacketName: string | undefined,
     message: unknown,
-    metadata: ReadonlyMap<string, string>,
-    signal?: AbortSignal
+    metadata: ReadonlyMap<string, string>
   ): Promise<ZLinkSubmitResult> {
-    throwIfAborted(signal);
-    const route = await this.resolveActorRoute(actorId, signal);
+    const route = await this.resolveActorRoute(actorId);
     const { meshName, actorRef: actor } = route;
     this.throwIfKnownStale(meshName, actor);
     const parts = this.createPacketParts(
@@ -150,9 +148,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     const routedActor = attachActorMessageFollowContext(actor, messageFollow);
     try {
       const submissionCopies =
-        (await this.options
-          .transportDeliveryGate?.()
-          ?.waitBeforeSubmit(actorId, 'oneWay', signal)) ?? 1;
+        (await this.options.transportDeliveryGate?.()?.waitBeforeSubmit(actorId, 'oneWay')) ?? 1;
       const handoff = this.options.handoffCapture?.(
         meshName,
         actor.actorId,
@@ -172,7 +168,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
           );
           if (duplicate !== undefined) submissions.push(duplicate);
         }
-        await awaitWithAbort(Promise.all(submissions), signal);
+        await Promise.all(submissions);
         return { status: ZLinkSubmitStatus.Submitted };
       }
       const node = this.requireNode(meshName);
@@ -662,8 +658,7 @@ class DefaultZLinkActorSendCall implements ZLinkActorSendCall {
   constructor(
     private readonly submitter: (
       packetName: string | undefined,
-      metadata: ReadonlyMap<string, string>,
-      signal?: AbortSignal
+      metadata: ReadonlyMap<string, string>
     ) => Promise<ZLinkSubmitResult>,
     private readonly message: unknown
   ) {}
@@ -678,13 +673,12 @@ class DefaultZLinkActorSendCall implements ZLinkActorSendCall {
     return this;
   }
 
-  async submit(signal?: AbortSignal): Promise<void> {
+  async submit(): Promise<void> {
     ensureSingleSubmit(this.executed);
     this.executed = true;
     const result = await this.submitter(
       this.packet ?? resolveFrameworkPacketName(this.message, undefined, 'Actor'),
-      this.selectedMetadata,
-      signal
+      this.selectedMetadata
     );
     requireOneWayCompletion(
       result,

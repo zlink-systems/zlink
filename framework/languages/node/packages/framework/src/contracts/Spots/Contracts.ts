@@ -96,7 +96,7 @@ export interface ZLinkSpotSendCall {
   instanceSpot(): this;
   instanceSpot(instanceSpotType: string): this;
   inMesh(meshName: string): this;
-  submit(signal?: AbortSignal): Promise<void>;
+  submit(): Promise<void>;
 }
 
 export interface ZLinkSpotRequestCall {
