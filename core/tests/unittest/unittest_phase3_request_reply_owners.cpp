@@ -337,17 +337,6 @@ zlink_completion_t receive_completion_now (void *socket_)
     return completion;
 }
 
-void assert_no_completion (void *socket_)
-{
-    contract_socket_pair_t::pump_owner (as_socket (socket_));
-    zlink_completion_t completion;
-    init_empty_completion (&completion);
-    errno = 0;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA,
-      zlink_completion_recv (socket_, &completion, ZLINK_RECV_FLAGS_DONTWAIT));
-    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-    assert_empty_completion (completion);
-}
 
 struct router_part_t
 {

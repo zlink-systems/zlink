@@ -305,9 +305,8 @@ void zlink::socket_base_t::apply_physical_auto_hwm_plan (
         _auto_hwm_socket_plan.rcvhwm = planned_receive;
     _auto_hwm_last_recalc_ms = _clock.now_ms ();
     _auto_hwm_last_recalc_reason =
-      deferred
-        ? ZLINK_AUTO_HWM_RECALC_REASON_DEFERRED_SHRINK
-        : recalc_reason_;
+      deferred ? static_cast<uint32_t> (ZLINK_AUTO_HWM_RECALC_REASON_DEFERRED_SHRINK)
+               : recalc_reason_;
 }
 
 bool zlink::socket_base_t::auto_hwm_extend_plan_for_attached_pipe (

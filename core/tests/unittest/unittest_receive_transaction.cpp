@@ -220,13 +220,6 @@ bool wait_for_gate_flag (receive_record_gate_t *gate_, bool wait_for_contention_
       });
 }
 
-bool wait_for_command_sync_probe (command_sync_probe_t *probe_)
-{
-    std::unique_lock<std::mutex> lock (probe_->mutex);
-    return probe_->cv.wait_for (
-      lock, std::chrono::seconds (3),
-      [probe_] { return probe_->observed; });
-}
 
 void release_gate (receive_record_gate_t *gate_)
 {

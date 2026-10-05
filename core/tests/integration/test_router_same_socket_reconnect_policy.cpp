@@ -109,9 +109,11 @@ struct observation_t
     void assert_kept (uint64_t connection_)
     {
         drain ();
-        for (size_t i = 0; i < events.size (); ++i)
-            if (events[i].connection_id == connection_)
+        for (size_t i = 0; i < events.size (); ++i) {
+            if (events[i].connection_id == connection_) {
                 TEST_ASSERT_NOT_EQUAL (ZLINK_EVENT_DISCONNECTED, events[i].event);
+            }
+        }
     }
 
     void assert_no_new_ready (uint64_t old_connection_, int timeout_ms_)
@@ -335,12 +337,11 @@ void run_same_socket (bool tcp_, int policy_, bool retry_ = false)
     // Deliberately retain the admitted connection while the same socket
     // connects to the same listener again. No disconnect precedes it.
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, duplicate_endpoint));
-    uint64_t new_client = 0, new_server = 0;
+    uint64_t new_client = 0;
     if (handover) {
         new_client = client_events.wait (
           ZLINK_EVENT_CONNECTION_READY, old_client);
-        new_server = server_events.wait (
-          ZLINK_EVENT_CONNECTION_READY, old_server);
+        server_events.wait (ZLINK_EVENT_CONNECTION_READY, old_server);
         completion (client, client_pending, ZLINK_REQUEST_NOT_CONNECTED);
         completion (server, server_pending, ZLINK_REQUEST_NOT_CONNECTED);
     } else {
@@ -368,8 +369,7 @@ void run_same_socket (bool tcp_, int policy_, bool retry_ = false)
         server_events.wait (ZLINK_EVENT_DISCONNECTED, old_server, true);
         new_client = client_events.wait (
           ZLINK_EVENT_CONNECTION_READY, old_client);
-        new_server = server_events.wait (
-          ZLINK_EVENT_CONNECTION_READY, old_server);
+        server_events.wait (ZLINK_EVENT_CONNECTION_READY, old_server);
         await_reconnected_request (client, server);
         roundtrip (server, client, "client");
         // READY is transport readiness, not a promise that this first retry

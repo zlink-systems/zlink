@@ -25,13 +25,6 @@ void init_part (zlink_msg_t *part_, const char *text_)
     memcpy (zlink_msg_data (part_), text_, strlen (text_));
 }
 
-void init_tagged_part (zlink_msg_t *part_, unsigned char kind_, int round_)
-{
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (part_, 1 + sizeof (round_)));
-    unsigned char *data = static_cast<unsigned char *> (zlink_msg_data (part_));
-    data[0] = kind_;
-    memcpy (data + 1, &round_, sizeof (round_));
-}
 
 bool pair_has_no_record_for (void *receiver_, int timeout_ms_)
 {
@@ -119,43 +112,6 @@ bool recv_pair_record_eventually (void *receiver_,
     return false;
 }
 
-bool recv_published_record_eventually (
-  void *subscriber_, const char *expected_topic_,
-  const std::vector<std::string> &expected_parts_, int timeout_ms_ = 3000)
-{
-    const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now ()
-      + std::chrono::milliseconds (timeout_ms_);
-    while (std::chrono::steady_clock::now () < deadline) {
-        char topic[64];
-        size_t topic_len = sizeof (topic);
-        zlink_msg_t *parts = NULL;
-        size_t part_count = 0;
-        const zlink_recv_result_t rc = zlink_subscribe (
-          subscriber_, NULL, &parts, &part_count, topic, &topic_len,
-          ZLINK_RECV_FLAGS_DONTWAIT);
-        if (rc == ZLINK_RECV_NO_DATA) {
-            msleep (1);
-            continue;
-        }
-        if (rc != ZLINK_RECV_OK)
-            return false;
-
-        const size_t expected_topic_len = strlen (expected_topic_);
-        bool matches = topic_len == expected_topic_len
-                       && memcmp (topic, expected_topic_, topic_len) == 0
-                       && part_count == expected_parts_.size ();
-        for (size_t i = 0; matches && i < part_count; ++i) {
-            matches = zlink_msg_size (&parts[i]) == expected_parts_[i].size ()
-                      && memcmp (zlink_msg_data (&parts[i]),
-                                 expected_parts_[i].data (),
-                                 expected_parts_[i].size ()) == 0;
-        }
-        zlink_multipart_close (parts, part_count);
-        return matches;
-    }
-    return false;
-}
 
 struct close_between_parts_probe_t
 {

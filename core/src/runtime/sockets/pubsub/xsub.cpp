@@ -176,7 +176,7 @@ void zlink::xsub_t::xhiccuped (pipe_t *pipe_)
     pipe_->flush ();
 }
 
-int zlink::xsub_t::xsetsockopt (int option_, const void *optval_, size_t optvallen_)
+int zlink::xsub_t::xsetsockopt (int, const void *, size_t)
 {
     errno = EINVAL;
     return -1;

@@ -298,8 +298,9 @@ void run_case (const char *transport_, bool waiting_, bool completion_,
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, connect_result);
     TEST_ASSERT_TRUE_MESSAGE (terminal_ms >= 0,
                               "old connection terminal edge stalled");
-    if (operation_ != explicit_disconnect)
+    if (operation_ != explicit_disconnect) {
         TEST_ASSERT_TRUE_MESSAGE (ready_ms >= 0, "reconnect READY stalled");
+    }
     if (waiting_) {
         TEST_ASSERT_EQUAL_INT (1, wait_result);
         TEST_ASSERT_EQUAL_PTR (wait_timer, wait_event.timer);

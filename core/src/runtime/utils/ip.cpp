@@ -192,18 +192,6 @@ void zlink::set_ip_type_of_service (fd_t s_, int iptos_)
 #endif
 }
 
-void zlink::set_socket_priority (fd_t s_, int priority_)
-{
-#ifdef ZLINK_HAVE_SO_PRIORITY
-    int rc = setsockopt (s_, SOL_SOCKET, SO_PRIORITY, reinterpret_cast<char *> (&priority_),
-                         sizeof (priority_));
-    errno_assert (rc == 0);
-#else
-    LIBZLINK_UNUSED (s_);
-    LIBZLINK_UNUSED (priority_);
-#endif
-}
-
 int zlink::set_nosigpipe (fd_t s_)
 {
 #ifdef SO_NOSIGPIPE

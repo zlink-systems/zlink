@@ -451,7 +451,9 @@ class socket_receive_record_scope_t
     void adopt (socket_receive_runtime_t *runtime_, bool owns_turn_)
     {
         zlink_assert (runtime_);
+#ifdef ZLINK_BUILD_TESTS
         const bool acquired = !_runtime;
+#endif
         _runtime = runtime_;
         _owns_turn = owns_turn_;
 #ifdef ZLINK_BUILD_TESTS

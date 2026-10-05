@@ -60,12 +60,6 @@ long elapsed_ms_since (std::chrono::steady_clock::time_point start_)
                                 .count ());
 }
 
-void init_string_msg (zlink_msg_t *msg_, const char *value_)
-{
-    const size_t size = strlen (value_);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (msg_, size));
-    memcpy (zlink_msg_data (msg_), value_, size);
-}
 
 }
 

@@ -275,7 +275,6 @@ void test_router_recv_metadata_view_invalidates_on_next_recv_like_call ()
       send_dealer_request_single (dealer2, "second");
 
     const zlink_routing_id_t *second_source_rid = NULL;
-    const zlink_routing_id_t *second_spot_rid = NULL;
     uint64_t second_request_seq = 0;
     zlink_msg_init (&part);
     has_more = 1;

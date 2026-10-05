@@ -46,9 +46,14 @@
 
 #if ASIO_WS_CONNECTER_DEBUG
 #include <cstdio>
-#define WS_CONNECTER_DBG(fmt, ...) fprintf (stderr, "[ASIO_WS_CONNECTER] " fmt "\n", ##__VA_ARGS__)
+#define WS_CONNECTER_DBG(...)                                                                      \
+    do {                                                                                           \
+        fprintf (stderr, "[ASIO_WS_CONNECTER] ");                                                  \
+        fprintf (stderr, __VA_ARGS__);                                                             \
+        fputc ('\n', stderr);                                                                      \
+    } while (0)
 #else
-#define WS_CONNECTER_DBG(fmt, ...)
+#define WS_CONNECTER_DBG(...) ((void) 0)
 #endif
 
 namespace

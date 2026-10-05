@@ -522,28 +522,6 @@ recv_one_raw_message (void *socket_, bool wants_routing_id_, zlink_routing_id_t 
     return 0;
 }
 
-static void drain_raw_receiver (void *receiver_,
-                                raw_pattern_t pattern_,
-                                size_t expected_messages_,
-                                drain_gate_t *gate_)
-{
-    wait_drain_start (gate_);
-
-    size_t received = 0;
-    int error_code = 0;
-    const bool wants_routing_id =
-      pattern_ == raw_pattern_dealer_router || pattern_ == raw_pattern_router_router;
-
-    while (received < expected_messages_) {
-        if (recv_one_raw_message (receiver_, wants_routing_id, NULL) != 0) {
-            error_code = errno != 0 ? errno : EIO;
-            break;
-        }
-        ++received;
-    }
-
-    finish_drain (gate_, received, error_code);
-}
 
 static void drain_raw_receiver_with_ack (void *receiver_,
                                          raw_pattern_t pattern_,
@@ -632,23 +610,6 @@ static void drain_subscription_receiver (void *sub_, size_t expected_messages_, 
     finish_drain (gate_, received, error_code);
 }
 
-static void drain_available_subscription_messages (void *sub_, size_t attempt_limit_)
-{
-    for (size_t i = 0; i < attempt_limit_; ++i) {
-        zlink_msg_t *parts = NULL;
-        size_t part_count = 0;
-        char topic[256];
-        size_t topic_len = sizeof (topic);
-        memset (topic, 0, sizeof (topic));
-        if (zlink_subscribe (sub_, NULL, &parts, &part_count, topic, &topic_len, ZLINK_DONTWAIT)
-            != 0) {
-            if (errno == EAGAIN || errno == EINTR)
-                return;
-            return;
-        }
-        zlink_multipart_close (parts, part_count);
-    }
-}
 
 static void close_raw_case (raw_case_t *raw_)
 {

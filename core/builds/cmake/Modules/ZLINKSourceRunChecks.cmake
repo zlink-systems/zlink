@@ -31,23 +31,6 @@ int main(int argc, char *argv [])
     ZLINK_HAVE_EVENTFD_CLOEXEC)
 endmacro()
 
-macro(zlink_check_o_cloexec)
-  message(STATUS "Checking whether O_CLOEXEC is supported")
-  check_c_source_runs(
-    "
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-
-int main(int argc, char *argv [])
-{
-    int s = open (\"/dev/null\", O_CLOEXEC | O_RDONLY);
-    return s == -1;
-}
-"
-    ZLINK_HAVE_O_CLOEXEC)
-endmacro()
-
 macro(zlink_check_so_bindtodevice)
   message(STATUS "Checking whether SO_BINDTODEVICE is supported")
   check_c_source_runs(
@@ -180,38 +163,11 @@ int main(int argc, char *argv [])
 endmacro()
 
 
-macro(zlink_check_tcp_tipc)
-  message(STATUS "Checking whether TIPC is supported")
-  check_c_source_runs(
-    "
-#include <stdlib.h>
-#include <string.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <sys/socket.h>
-#include <linux/tipc.h>
-
-int main(int argc, char *argv [])
-{
-    struct sockaddr_tipc topsrv;
-    int sd = socket(PF_TIPC, SOCK_SEQPACKET, 0);
-    memset(&topsrv, 0, sizeof(topsrv));
-    topsrv.family = AF_TIPC;
-    topsrv.addrtype = TIPC_ADDR_NAME;
-    topsrv.addr.name.name.type = TIPC_TOP_SRV;
-    topsrv.addr.name.name.instance = TIPC_TOP_SRV;
-    fcntl(sd, F_SETFL, O_NONBLOCK);
-    tipc_addr(0, 0, 0);
-}
-"
-    ZLINK_HAVE_TIPC)
-endmacro()
-
 
 macro(zlink_check_pthread_setname)
   message(STATUS "Checking pthread_setname signature")
-  set(SAVE_CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
-  set(CMAKE_REQUIRED_FLAGS "-D_GNU_SOURCE -Werror -pthread")
+  set(SAVE_CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS}")
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -Werror -pthread")
   check_c_source_compiles(
     "
 #include <pthread.h>
@@ -256,13 +212,13 @@ int main(int argc, char *argv [])
 }
 "
     ZLINK_HAVE_PTHREAD_SET_NAME)
-  set(CMAKE_REQUIRED_FLAGS ${SAVE_CMAKE_REQUIRED_FLAGS})
+  set(CMAKE_REQUIRED_FLAGS "${SAVE_CMAKE_REQUIRED_FLAGS}")
 endmacro()
 
 macro(zlink_check_pthread_setaffinity)
   message(STATUS "Checking pthread_setaffinity signature")
-  set(SAVE_CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
-  set(CMAKE_REQUIRED_FLAGS "-D_GNU_SOURCE -Werror -pthread")
+  set(SAVE_CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS}")
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -Werror -pthread")
   check_c_source_compiles(
     "
 #include <pthread.h>
@@ -275,7 +231,7 @@ int main(int argc, char *argv [])
 }
 "
     ZLINK_HAVE_PTHREAD_SET_AFFINITY)
-  set(CMAKE_REQUIRED_FLAGS ${SAVE_CMAKE_REQUIRED_FLAGS})
+  set(CMAKE_REQUIRED_FLAGS "${SAVE_CMAKE_REQUIRED_FLAGS}")
 endmacro()
 
 
@@ -311,23 +267,4 @@ int main(int argc, char *argv [])
 }
 "
     ZLINK_HAVE_NOEXCEPT)
-endmacro()
-
-macro(zlink_check_so_priority)
-  message(STATUS "Checking whether SO_PRIORITY is supported")
-  check_c_source_runs(
-    "
-#include <sys/types.h>
-#include <sys/socket.h>
-
-int main (int argc, char *argv [])
-{
-    int s, rc, opt = 1;
-    return (
-        ((s = socket (PF_INET, SOCK_STREAM, 0)) == -1) ||
-        ((rc = setsockopt (s, SOL_SOCKET, SO_PRIORITY, (char*) &opt, sizeof (int))) == -1)
-    );
-}
-"
-    ZLINK_HAVE_SO_PRIORITY)
 endmacro()

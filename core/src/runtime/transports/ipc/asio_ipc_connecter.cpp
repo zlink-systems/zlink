@@ -35,10 +35,14 @@
 
 #if ASIO_IPC_CONNECTER_DEBUG
 #include <cstdio>
-#define IPC_CONNECTER_DBG(fmt, ...)                                                                \
-    fprintf (stderr, "[ASIO_IPC_CONNECTER] " fmt "\n", ##__VA_ARGS__)
+#define IPC_CONNECTER_DBG(...)                                                                     \
+    do {                                                                                           \
+        fprintf (stderr, "[ASIO_IPC_CONNECTER] ");                                                 \
+        fprintf (stderr, __VA_ARGS__);                                                             \
+        fputc ('\n', stderr);                                                                      \
+    } while (0)
 #else
-#define IPC_CONNECTER_DBG(fmt, ...)
+#define IPC_CONNECTER_DBG(...) ((void) 0)
 #endif
 
 namespace

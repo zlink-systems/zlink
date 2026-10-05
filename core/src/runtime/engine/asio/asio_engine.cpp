@@ -39,9 +39,14 @@
 
 #if ASIO_ENGINE_DEBUG
 #include <cstdio>
-#define ENGINE_DBG(fmt, ...) fprintf (stderr, "[ASIO_ENGINE] " fmt "\n", ##__VA_ARGS__)
+#define ENGINE_DBG(...)                                                                            \
+    do {                                                                                           \
+        fprintf (stderr, "[ASIO_ENGINE] ");                                                        \
+        fprintf (stderr, __VA_ARGS__);                                                             \
+        fputc ('\n', stderr);                                                                      \
+    } while (0)
 #else
-#define ENGINE_DBG(fmt, ...)
+#define ENGINE_DBG(...) ((void) 0)
 #endif
 
 //  Draft API message property names (kept for internal use)

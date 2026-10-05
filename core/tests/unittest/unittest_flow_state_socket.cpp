@@ -876,8 +876,9 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
         TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
         msleep (1);
     }
-    if (completion.kind != 0)
+    if (completion.kind != 0) {
         TEST_ASSERT_TRUE (completion.request_result != ZLINK_REQUEST_OK);
+    }
     zlink_completion_close (&completion);
 
     // A misplaced flow frame is not applied. The malformed count-1 pair is

@@ -100,8 +100,9 @@ void assert_no_disconnect (void *monitor_, uint64_t connection_ = 0)
         if (rc == ZLINK_RECV_NO_DATA)
             return;
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
-        if (!connection_ || event.connection_id == connection_)
+        if (!connection_ || event.connection_id == connection_) {
             TEST_ASSERT_NOT_EQUAL (ZLINK_EVENT_DISCONNECTED, event.event);
+        }
         TEST_ASSERT_NOT_EQUAL (ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL, event.event);
     }
 }

@@ -204,7 +204,7 @@ void test_recv_errno_contract_matrix ()
                            zlink::recv_result_internal::from_errno (ESHUTDOWN));
 }
 
-int main (int argc, char *argv[])
+int main (int, char *[])
 {
     UNITY_BEGIN ();
     RUN_TEST (test_recv_unknown_errno_maps_to_internal_error);

@@ -109,7 +109,7 @@ static const char *server_key_pem =
   "-----END PRIVATE KEY-----\n";
 
 //  Client certificate signed by CA (valid until 2046-09-10)
-static const char *client_cert_pem =
+[[maybe_unused]] static const char *client_cert_pem =
   "-----BEGIN CERTIFICATE-----\n"
   "MIIDODCCAiACFG+wOwDD601Lxwrz/SqyIFMxgbq1MA0GCSqGSIb3DQEBCwUAMFsx\n"
   "CzAJBgNVBAYTAlVTMQ0wCwYDVQQIDARUZXN0MQ0wCwYDVQQHDARUZXN0MRYwFAYD\n"
@@ -132,7 +132,7 @@ static const char *client_cert_pem =
   "-----END CERTIFICATE-----\n";
 
 //  Client private key
-static const char *client_key_pem =
+[[maybe_unused]] static const char *client_key_pem =
   "-----BEGIN PRIVATE KEY-----\n"
   "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDDCCkxeYeLz3/Q\n"
   "lWzcYUS9oqwQ+8DRG6F4YNcMc1AdgJmx1aDJczQ6wPtm/E5M4hpasTlmaMK+NgqW\n"

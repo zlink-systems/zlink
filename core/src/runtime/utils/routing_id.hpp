@@ -39,7 +39,7 @@ inline void generate_random_uuid_routing_id (zlink_routing_id_t *out_)
 
 inline bool valid_routing_id (const zlink_routing_id_t *rid_)
 {
-    return rid_ && rid_->size > 0 && rid_->size <= sizeof (rid_->data);
+    return rid_ && rid_->size > 0;
 }
 
 inline bool valid_routing_id (const zlink_routing_id_t &rid_)

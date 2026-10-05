@@ -47,9 +47,14 @@
 
 #if ASIO_IPC_LISTENER_DEBUG
 #include <cstdio>
-#define IPC_LISTENER_DBG(fmt, ...) fprintf (stderr, "[ASIO_IPC_LISTENER] " fmt "\n", ##__VA_ARGS__)
+#define IPC_LISTENER_DBG(...)                                                                      \
+    do {                                                                                           \
+        fprintf (stderr, "[ASIO_IPC_LISTENER] ");                                                  \
+        fprintf (stderr, __VA_ARGS__);                                                             \
+        fputc ('\n', stderr);                                                                      \
+    } while (0)
 #else
-#define IPC_LISTENER_DBG(fmt, ...)
+#define IPC_LISTENER_DBG(...) ((void) 0)
 #endif
 
 namespace
@@ -222,6 +227,8 @@ void zlink::asio_ipc_listener_t::start_accept ()
     start_asio_listener_accepts<boost::asio::local::stream_protocol::socket> (
       _io_context, _acceptor, &_accepting_count, options,
       [] (size_t accepting_count_, size_t target_accepts_) {
+          LIBZLINK_UNUSED (accepting_count_);
+          LIBZLINK_UNUSED (target_accepts_);
           IPC_LISTENER_DBG ("start_accept: starting async_accept (%zu/%zu)", accepting_count_,
                             target_accepts_);
       },

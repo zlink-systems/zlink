@@ -748,7 +748,7 @@ void zlink::socket_base_t::pump_monitor_events ()
     void *monitor_socket = monitor.socket;
     monitor_event_record_t record;
     if (debug_env_enabled ("ZLINK_MONITOR_TASK_DIAG"))
-        fprintf (stderr, "raw-monitor-task source-socket=%p\n", this);
+        fprintf (stderr, "raw-monitor-task source-socket=%p\n", static_cast<void *> (this));
     while (monitor.dequeue_worker_event_nowait (&record)) {
         bool delivered = true;
         if (monitor_socket)

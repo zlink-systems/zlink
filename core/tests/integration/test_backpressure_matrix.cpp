@@ -562,25 +562,6 @@ static void drain_subscription_receiver (void *sub_, size_t expected_messages_, 
     finish_drain (gate_, received, error_code);
 }
 
-static void drain_available_subscription_messages (void *sub_)
-{
-    if (!sub_)
-        return;
-
-    while (true) {
-        zlink_msg_t *parts = NULL;
-        size_t part_count = 0;
-        char topic[256];
-        size_t topic_len = sizeof (topic);
-        memset (topic, 0, sizeof (topic));
-
-        const int rc =
-          zlink_subscribe (sub_, NULL, &parts, &part_count, topic, &topic_len, ZLINK_DONTWAIT);
-        if (rc != ZLINK_RECV_OK)
-            break;
-        zlink_multipart_close (parts, part_count);
-    }
-}
 
 static void close_raw_case (raw_case_t *raw_)
 {

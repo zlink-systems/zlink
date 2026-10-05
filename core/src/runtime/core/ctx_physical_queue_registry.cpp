@@ -69,17 +69,6 @@ void subtract_exact (std::atomic<uint64_t> *value_, uint64_t amount_)
     }
 }
 
-bool try_subtract_exact (std::atomic<uint64_t> *value_, uint64_t amount_)
-{
-    uint64_t current = value_->load (std::memory_order_relaxed);
-    while (current >= amount_) {
-        if (value_->compare_exchange_weak (current, current - amount_,
-                                           std::memory_order_relaxed,
-                                           std::memory_order_relaxed))
-            return true;
-    }
-    return false;
-}
 
 void observe_peak (std::atomic<uint64_t> *peak_, uint64_t current_)
 {

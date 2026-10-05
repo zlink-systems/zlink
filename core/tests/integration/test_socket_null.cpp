@@ -15,9 +15,6 @@ void tearDown ()
 
 namespace
 {
-void discard_monitor_event (const zlink_monitor_event_t *, void *)
-{
-}
 }
 
 //  tests all socket-related functions with a NULL socket argument

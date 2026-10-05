@@ -3,114 +3,9 @@
 #include "testutil.hpp"
 #include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
-
-
-#include <algorithm>
-#include <chrono>
-#include <condition_variable>
-#include <mutex>
 #include <string.h>
 
 SETUP_TEARDOWN_TESTCONTEXT
-
-namespace
-{
-struct raw_delivery_probe_t
-{
-    raw_delivery_probe_t () : calls (0), part_count (0), close_failures (0), rid_size (0)
-    {
-        memset (rid, 0, sizeof (rid));
-        memset (parts, 0, sizeof (parts));
-    }
-
-    std::mutex mutex;
-    std::condition_variable cv;
-    int calls;
-    size_t part_count;
-    int close_failures;
-    size_t rid_size;
-    unsigned char rid[255];
-    char parts[4][64];
-};
-
-raw_delivery_probe_t *g_raw_delivery_probe_a = NULL;
-raw_delivery_probe_t *g_raw_delivery_probe_b = NULL;
-void close_raw_delivery_parts (raw_delivery_probe_t *probe_,
-                               zlink_msg_t *parts_,
-                               size_t part_count_)
-{
-    for (size_t i = 0; i < part_count_; ++i) {
-        const int rc = zlink_msg_close (&parts_[i]);
-        if (rc != 0 && probe_) {
-            std::unique_lock<std::mutex> lock (probe_->mutex);
-            ++probe_->close_failures;
-        }
-    }
-}
-
-void capture_raw_delivery_into (raw_delivery_probe_t *probe_,
-                                const zlink_routing_id_t *source_rid_,
-                                zlink_msg_t *parts_,
-                                size_t part_count_,
-                                void *)
-{
-    if (!probe_) {
-        close_raw_delivery_parts (NULL, parts_, part_count_);
-        return;
-    }
-
-    {
-        std::unique_lock<std::mutex> lock (probe_->mutex);
-        probe_->part_count = part_count_;
-        probe_->rid_size = source_rid_ ? source_rid_->size : 0;
-        if (source_rid_ && source_rid_->size > 0) {
-            memcpy (probe_->rid, source_rid_->data, source_rid_->size);
-        }
-
-        const size_t copy_count = std::min (part_count_, size_t (4));
-        for (size_t i = 0; i < copy_count; ++i) {
-            const size_t size = zlink_msg_size (&parts_[i]);
-            const size_t copy_size = std::min (size, sizeof (probe_->parts[i]) - 1);
-            if (copy_size > 0) {
-                memcpy (probe_->parts[i], zlink_msg_data (&parts_[i]), copy_size);
-            }
-            probe_->parts[i][copy_size] = '\0';
-        }
-
-        ++probe_->calls;
-    }
-
-    close_raw_delivery_parts (probe_, parts_, part_count_);
-    probe_->cv.notify_all ();
-}
-
-void capture_raw_delivery_a (const zlink_routing_id_t *source_rid_,
-                             zlink_msg_t *parts_,
-                             size_t part_count_,
-                             void *)
-{
-    capture_raw_delivery_into (g_raw_delivery_probe_a, source_rid_, parts_, part_count_, NULL);
-}
-
-void capture_raw_delivery_b (const zlink_routing_id_t *source_rid_,
-                             zlink_msg_t *parts_,
-                             size_t part_count_,
-                             void *)
-{
-    capture_raw_delivery_into (g_raw_delivery_probe_b, source_rid_, parts_, part_count_, NULL);
-}
-
-bool wait_for_probe_calls (raw_delivery_probe_t *probe_, int expected_calls_, int timeout_ms_)
-{
-    if (!probe_)
-        return false;
-
-    std::unique_lock<std::mutex> lock (probe_->mutex);
-    return probe_->cv.wait_for (
-      lock, std::chrono::milliseconds (timeout_ms_),
-      [probe_, expected_calls_] () { return probe_->calls >= expected_calls_; });
-}
-}
 
 static void assert_auto_routing_id (void *socket_)
 {
@@ -313,9 +208,10 @@ static void run_client_monitor_ready_disconnected_test (int client_type_, int se
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
 
     zlink_monitor_event_t connected;
-    if (single_lane_dealer_pair)
+    if (single_lane_dealer_pair) {
         TEST_ASSERT_TRUE (
           wait_for_event (mon, ZLINK_EVENT_CONNECTED, &connected));
+    }
 
     zlink_monitor_event_t ready;
     TEST_ASSERT_TRUE (wait_for_event (mon, ZLINK_EVENT_CONNECTION_READY, &ready));

@@ -665,12 +665,13 @@ void zlink::session_base_t::engine_error (bool handshaked_, zlink::i_engine::err
             options.transport_pair_state->disable_reconnect ();
         switch (reason_) {
         case i_engine::timeout_error:
-            /* FALLTHROUGH */
+            [[fallthrough]];
         case i_engine::connection_error:
             if (_active) {
                 reconnect ();
                 break;
             }
+            [[fallthrough]];
 
         case i_engine::protocol_error:
             if (_pending) {

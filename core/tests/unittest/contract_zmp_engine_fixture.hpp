@@ -10,6 +10,7 @@
 #include "runtime/engine/asio/asio_zmp_engine.hpp"
 #include "runtime/engine/asio/i_asio_transport.hpp"
 #include <boost/asio/post.hpp>
+#include <cstdlib>
 #include <deque>
 
 namespace zlink
@@ -36,7 +37,10 @@ class session_termination_test_access_t
     }
     static socket_monitor_runtime_t &monitor_for (socket_base_t *socket_)
     {
-        TEST_ASSERT_NOT_NULL (socket_);
+        if (!socket_) {
+            TEST_FAIL_MESSAGE ("Expected Non-NULL");
+            std::abort ();
+        }
         return socket_->monitor_runtime ();
     }
 };
@@ -252,8 +256,9 @@ class contract_zmp_session_t : public zlink::session_base_t
                             zlink::socket_base_t *socket_,
                             const zlink::options_t &options_,
                             bool *alive_) :
-        session_base_t (io_, false, socket_, options_, NULL), alive (alive_),
-        test_output_enabled (false)
+        session_base_t (io_, false, socket_, options_, NULL),
+        test_output_enabled (false),
+        alive (alive_)
     {
         *alive = true;
     }

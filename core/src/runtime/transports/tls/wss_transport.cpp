@@ -11,7 +11,7 @@
 #include <openssl/ssl.h>
 
 //  Debug logging for WSS transport
-#define ASIO_DBG_WSS(fmt, ...) ASIO_DBG_THIS ("WSS", fmt, ##__VA_ARGS__)
+#define ASIO_DBG_WSS(...) ASIO_DBG_THIS ("WSS", __VA_ARGS__)
 
 namespace zlink
 {

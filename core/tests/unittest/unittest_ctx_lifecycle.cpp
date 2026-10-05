@@ -343,8 +343,7 @@ class pipe_completion_order_sink_t : public zlink::i_pipe_events
 {
   public:
     explicit pipe_completion_order_sink_t (zlink::pipe_t *peer_) :
-        _peer (peer_),
-        peer_lifetime_refs_at_completion (-1)
+        peer_lifetime_refs_at_completion (-1), _peer (peer_)
     {
     }
 

@@ -47,11 +47,9 @@
 #cmakedefine ZLINK_HAVE_LOCAL_PEERCRED
 #cmakedefine ZLINK_HAVE_BUSY_POLL
 
-#cmakedefine ZLINK_HAVE_O_CLOEXEC
 
 #cmakedefine ZLINK_HAVE_SOCK_CLOEXEC
 #cmakedefine ZLINK_HAVE_SO_KEEPALIVE
-#cmakedefine ZLINK_HAVE_SO_PRIORITY
 #cmakedefine ZLINK_HAVE_TCP_KEEPCNT
 #cmakedefine ZLINK_HAVE_TCP_KEEPIDLE
 #cmakedefine ZLINK_HAVE_TCP_KEEPINTVL
@@ -74,7 +72,6 @@
 #cmakedefine ZLINK_HAVE_WS
 #cmakedefine ZLINK_HAVE_WSS
 #cmakedefine ZLINK_HAVE_TLS
-#cmakedefine ZLINK_HAVE_TIPC
 
 #cmakedefine ZLINK_HAVE_NORM
 #cmakedefine ZLINK_HAVE_VMCI

@@ -71,21 +71,6 @@ int zlink::do_setsockopt_int_as_bool_relaxed (const void *const optval_,
     return 0;
 }
 
-static int do_setsockopt_string_allow_empty_strict (const void *const optval_,
-                                                    const size_t optvallen_,
-                                                    std::string *const out_value_,
-                                                    const size_t max_len_)
-{
-    if (optval_ == NULL && optvallen_ == 0) {
-        out_value_->clear ();
-        return 0;
-    }
-    if (optval_ != NULL && optvallen_ > 0 && optvallen_ <= max_len_) {
-        out_value_->assign (static_cast<const char *> (optval_), optvallen_);
-        return 0;
-    }
-    return sockopt_invalid ();
-}
 
 const uint64_t default_hwm_bytes = ZLINK_HWM_BYTES_DFLT;
 const int default_batch_size = 8192;
@@ -102,7 +87,6 @@ zlink::options_t::options_t () :
     sndbuf (-1),
     rcvbuf (-1),
     tos (0),
-    priority (0),
     type (-1),
     linger (-1),
     connect_timeout (0),

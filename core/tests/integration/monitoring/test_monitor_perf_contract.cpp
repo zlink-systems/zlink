@@ -345,14 +345,6 @@ void recv_pubsub_perf_payload_expect_success (void *client_, const char *payload
     zlink_multipart_close (parts, part_count);
 }
 
-void discard_socket_message (const zlink_routing_id_t *,
-                             zlink_msg_t *parts_,
-                             size_t part_count_,
-                             void *)
-{
-    for (size_t i = 0; i < part_count_; ++i)
-        zlink_msg_close (&parts_[i]);
-}
 
 void configure_bounded_pair_socket (void *socket_, int timeout_ms_)
 {
@@ -371,22 +363,6 @@ void configure_send_backpressure_socket (void *socket_)
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (socket_, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
 }
 
-void fill_until_backpressured (void *send_socket_)
-{
-    char payload[65536];
-    memset (payload, 'p', sizeof (payload));
-    bool armed = false;
-    for (int i = 0; i < 8192; ++i) {
-        errno = 0;
-        const int rc = zlink_send (send_socket_, payload, sizeof (payload), ZLINK_DONTWAIT);
-        if (rc >= 0)
-            continue;
-        TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
-        armed = true;
-        break;
-    }
-    TEST_ASSERT_TRUE (armed);
-}
 
 void perf_like_connect_monitor_handler (const zlink_monitor_event_t *event_, void *userdata_)
 {
