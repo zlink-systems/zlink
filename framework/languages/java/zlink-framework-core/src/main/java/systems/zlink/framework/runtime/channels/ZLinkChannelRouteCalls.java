@@ -686,13 +686,14 @@ final class ChannelSendCall implements ZLinkSendCall {
             return duplicate;
         }
         try (var flowScope = runtime.enterApplicationFlow()) {
-            return sockets.submitToChannel(
-                    channelName,
-                    null,
-                    defaultTimeout,
-                    (client, remaining) -> submitClient(client),
-                    (node, timeout) -> submitMesh(node),
-                    failure -> payload.close());
+            return ZLinkOneWayCalls.adaptOneWay(
+                    sockets.submitToChannel(
+                            channelName,
+                            null,
+                            null,
+                            (client, remaining) -> submitClient(client),
+                            (node, timeout) -> submitMesh(node),
+                            failure -> payload.close()));
         }
     }
 
@@ -722,7 +723,7 @@ final class ChannelSendCall implements ZLinkSendCall {
                         contentType,
                         metadata == null ? Map.of() : metadata.values());
         try {
-            return ZLinkOneWayCalls.adaptOneWay(client.send(parts))
+            return client.send(parts)
                     .whenComplete((ignored, failure) -> parts.forEach(Message::close));
         } catch (RuntimeException | Error failure) {
             parts.forEach(Message::close);
@@ -742,8 +743,7 @@ final class ChannelSendCall implements ZLinkSendCall {
                         contentType,
                         metadata.values());
         try {
-            return ZLinkOneWayCalls.adaptOneWay(
-                            node.sendToChannel(channelName, metadata.encode(), parts))
+            return node.sendToChannel(channelName, metadata.encode(), parts)
                     .whenComplete((ignored, failure) -> parts.forEach(Message::close));
         } catch (RuntimeException | Error failure) {
             parts.forEach(Message::close);

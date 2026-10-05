@@ -457,7 +457,9 @@ public final class ZLinkChannelRuntime
             LongConsumer parkNanos,
             ScheduledExecutorService timeoutExecutor) {
         this.timeoutExecutor = timeoutExecutor;
-        this.sockets = new ZLinkChannelSocketRegistry(registration.applicationJobQueue());
+        this.sockets =
+                new ZLinkChannelSocketRegistry(
+                        registration.applicationJobQueue(), nanoTime, () -> !running);
         this.clientServerRuntime = new ZLinkClientServerRuntimeView(sockets, () -> hostState.get());
         this.fanoutRuntime =
                 new ZLinkFanoutRuntimeView(
@@ -826,8 +828,7 @@ public final class ZLinkChannelRuntime
 
                                 @Override
                                 public void connect(String endpoint) {
-                                    openManualClientServerConnection(
-                                            channelName, endpoint, registration.sendTimeout());
+                                    openManualClientServerConnection(channelName, endpoint);
                                 }
 
                                 @Override
@@ -853,16 +854,14 @@ public final class ZLinkChannelRuntime
                     sockets.clientServerServerDescriptor(registration.name());
             if (local != null) {
                 // Local selection still traverses DEALER -> ROUTER admission.
-                openManualClientServerConnection(
-                        registration.name(), local.endpoint(), registration.sendTimeout());
+                openManualClientServerConnection(registration.name(), local.endpoint());
             }
         }
     }
 
-    private void openManualClientServerConnection(
-            String channelName, String endpoint, Duration sendTimeout) {
+    private void openManualClientServerConnection(String channelName, String endpoint) {
         String connectionId = manualConnectionId(channelName, endpoint);
-        ZLinkBackendDealerSocket dealer = channelBackend.createDealerSocket(context, sendTimeout);
+        ZLinkBackendDealerSocket dealer = channelBackend.createDealerSocket(context);
         dealer.setChannelName(channelName);
         ZLinkClientServerServerDescriptor pending =
                 new ZLinkClientServerServerDescriptor(
@@ -1573,6 +1572,7 @@ public final class ZLinkChannelRuntime
     public void beginClose() {
         running = false;
         callRuntime.beginClose();
+        sockets.rejectPendingAdmission();
         dispatchRegistry.sealClosingAdmission();
     }
 

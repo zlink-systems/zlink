@@ -211,6 +211,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             Duration timeout,
             Function<List<Message>, T> decodeReply,
             Consumer<T> discardReply) {
+        long startedAt = System.nanoTime();
         List<Message> ownedMessages = claimMessages(messages);
         boolean completionOwns = false;
         try {
@@ -219,6 +220,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             Objects.requireNonNull(discardReply, "discardReply");
             Objects.requireNonNull(target, "target");
             Objects.requireNonNull(timeout, "timeout");
+            long deadlineNanos = startedAt + timeout.toNanos();
             if (ownedMessages.isEmpty()) {
                 throw new IllegalArgumentException("service request must not be empty");
             }
@@ -228,7 +230,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 submit.message(ownedMessages.get(index));
             }
             CompletionStage<List<Message>> bindingReply =
-                    ZLinkJavaSocketSupport.reply(submit.timeout(timeout).submit());
+                    ZLinkJavaSocketSupport.reply(submit.timeout(timeout).submit(), deadlineNanos);
             CompletableFuture<T> completion = new CompletableFuture<>();
             bindingReply.whenComplete(
                     (reply, failure) -> {

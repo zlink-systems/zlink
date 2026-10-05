@@ -348,7 +348,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
                 () -> {
                     if (routingIdPrefix != null) {
                         throw new ZLinkConfigurationException(
-                                "MeshNode cannot configure both a fixed routing ID and an automatic routing ID prefix.");
+                                "MeshNode cannot configure both a fixed routing ID and an automatic"
+                                        + " routing ID prefix.");
                     }
                     routingId = next;
                     hasExplicitRoutingId = true;
@@ -371,7 +372,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
                 () -> {
                     if (hasExplicitRoutingId) {
                         throw new ZLinkConfigurationException(
-                                "MeshNode cannot configure both a fixed routing ID and an automatic routing ID prefix.");
+                                "MeshNode cannot configure both a fixed routing ID and an automatic"
+                                        + " routing ID prefix.");
                     }
                     routingIdPrefix = next;
                     routingId = null;
@@ -1000,7 +1002,6 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         private long sendHighWaterMark = 4_096_000L;
         private long receiveHighWaterMark = 4_096_000L;
         private Duration receiveTimeout;
-        private Duration sendTimeout;
 
         @Override
         public long sendHighWaterMark() {
@@ -1030,16 +1031,6 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         @Override
         public void setReceiveTimeout(Duration value) {
             receiveTimeout = value;
-        }
-
-        @Override
-        public Optional<Duration> sendTimeout() {
-            return Optional.ofNullable(sendTimeout);
-        }
-
-        @Override
-        public void setSendTimeout(Duration value) {
-            sendTimeout = value == null ? null : ZLinkChannelAdmissionTimeout.requireValid(value);
         }
     }
 

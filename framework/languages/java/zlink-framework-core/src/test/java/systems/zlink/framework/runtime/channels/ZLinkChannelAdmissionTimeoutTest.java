@@ -10,8 +10,6 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
@@ -29,28 +27,13 @@ final class ZLinkChannelAdmissionTimeoutTest {
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(10);
 
     @Test
-    void configuredClientSendTimeoutBoundsAdmissionAndRoundsSubMillisecondValuesUp() {
-        assertConfiguredClientSendTimeout(Duration.ofMillis(250), Duration.ofMillis(250));
-        assertConfiguredClientSendTimeout(Duration.ofNanos(1), Duration.ofMillis(1));
-    }
-
-    @Test
-    void clientAndFanoutBuildersRejectInvalidSendTimeouts() {
+    void fanoutBuilderRejectsInvalidSendTimeouts() {
         for (Duration timeout :
                 new Duration[] {
                     Duration.ZERO,
                     Duration.ofNanos(-1),
                     Duration.ofMillis(Integer.MAX_VALUE).plusNanos(1)
                 }) {
-            DefaultZLinkFrameworkOptions clientOptions = new DefaultZLinkFrameworkOptions();
-            assertThrows(
-                    ZLinkConfigurationException.class,
-                    () ->
-                            clientOptions
-                                    .addClientServerChannel("client")
-                                    .client()
-                                    .setSendTimeout(timeout));
-
             DefaultZLinkFrameworkOptions fanoutOptions = new DefaultZLinkFrameworkOptions();
             assertThrows(
                     ZLinkConfigurationException.class,
@@ -59,42 +42,13 @@ final class ZLinkChannelAdmissionTimeoutTest {
 
         Duration maximum = Duration.ofMillis(Integer.MAX_VALUE);
         new DefaultZLinkFrameworkOptions()
-                .addClientServerChannel("maximum-client")
-                .client()
-                .setSendTimeout(maximum);
-        new DefaultZLinkFrameworkOptions()
                 .addFanoutChannel("maximum-fanout")
                 .setSendTimeout(maximum);
     }
 
-    private static void assertConfiguredClientSendTimeout(
-            Duration configuredTimeout, Duration expectedTimeout) {
-        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        options.addClientServerChannel("work").client().setSendTimeout(configuredTimeout);
-        ChannelRegistration registration = options.registration().channels().get(0);
-        assertEquals(expectedTimeout, registration.sendTimeout());
-        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
-        sockets.registerChannel(registration);
-        sockets.addClientServerConnection("server", descriptor(), dealer());
-        try {
-            var failed =
-                    assertThrows(
-                            java.util.concurrent.CompletionException.class,
-                            () ->
-                                    submit(sockets, new AtomicReference<>())
-                                            .toCompletableFuture()
-                                            .join());
-            assertEquals(
-                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                    ((ZLinkFrameworkException) failed.getCause()).kind());
-        } finally {
-            sockets.closeAll();
-        }
-    }
-
     @RepeatedTest(5)
-    void clientSendAndRequestAdmitWhenServerBecomesReadyWithinSendTimeout() throws Exception {
-        for (String operation : new String[] {"send", "request"}) {
+    void requestsAdmitWhenServerBecomesReadyWithinRequestTimeout() throws Exception {
+        for (String operation : new String[] {"request"}) {
             AtomicReference<Duration> submittedTimeout = new AtomicReference<>();
             ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
             setupClient(sockets);
@@ -104,32 +58,9 @@ final class ZLinkChannelAdmissionTimeoutTest {
                         accepted.toCompletableFuture().isDone());
                 assertTrue(sockets.admitClientServerConnection("server", descriptor()));
                 assertEquals(operation, accepted.toCompletableFuture().get(2, TimeUnit.SECONDS));
-                assertEquals(REQUEST_TIMEOUT, submittedTimeout.get());
+                assertTrue(submittedTimeout.get().compareTo(REQUEST_TIMEOUT) <= 0);
                 sockets.signalTopologyChanged();
                 assertEquals(operation, accepted.toCompletableFuture().join());
-            } finally {
-                sockets.closeAll();
-            }
-        }
-    }
-
-    @Test
-    void clientSendAndRequestExpiredBeforeServerStartDoNotRevive() {
-        for (String operation : new String[] {"send", "request"}) {
-            AtomicReference<Duration> submittedTimeout = new AtomicReference<>();
-            ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
-            setupClient(sockets);
-            try {
-                var accepted = submit(sockets, submittedTimeout);
-                var failed =
-                        assertThrows(
-                                java.util.concurrent.CompletionException.class,
-                                () -> accepted.toCompletableFuture().join());
-                assertEquals(
-                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                        ((ZLinkFrameworkException) failed.getCause()).kind());
-                assertTrue(sockets.admitClientServerConnection("server", descriptor()));
-                assertNull(submittedTimeout.get());
             } finally {
                 sockets.closeAll();
             }

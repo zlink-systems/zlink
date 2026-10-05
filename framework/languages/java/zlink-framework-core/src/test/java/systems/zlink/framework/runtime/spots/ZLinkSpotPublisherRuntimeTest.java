@@ -18,7 +18,6 @@ import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -36,7 +35,7 @@ final class ZLinkSpotPublisherRuntimeTest {
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         var calls = new AtomicInteger();
-        var runtime = runtime(calls::incrementAndGet, 1, Duration.ofSeconds(3));
+        var runtime = runtime(calls::incrementAndGet, 1);
         var worker =
                 new java.util.concurrent.ThreadPoolExecutor(
                         1,
@@ -89,8 +88,7 @@ final class ZLinkSpotPublisherRuntimeTest {
                                 await(releaseSecond);
                             }
                         },
-                        1,
-                        Duration.ofSeconds(3));
+                        1);
         try {
             submit(runtime, "first");
             assertTrue(firstStarted.await(3, TimeUnit.SECONDS));
@@ -208,8 +206,7 @@ final class ZLinkSpotPublisherRuntimeTest {
                                 await(release);
                             } else secondStarted.countDown();
                         },
-                        1,
-                        Duration.ofSeconds(3));
+                        1);
         try {
             submit(runtime, "first");
             assertTrue(started.await(3, TimeUnit.SECONDS));
@@ -248,8 +245,7 @@ final class ZLinkSpotPublisherRuntimeTest {
                                 await(releaseFirstCore);
                             }
                         },
-                        1,
-                        Duration.ofSeconds(3));
+                        1);
         ZLinkSerialExecutionQueue queue =
                 new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
         try (runtime) {
@@ -434,7 +430,7 @@ final class ZLinkSpotPublisherRuntimeTest {
     }
 
     @Test
-    void saturatedHandoffIsBoundedTimesOutAndRecovers() throws Exception {
+    void queuedPublishesWaitBeyondThreeSecondsAndRecover() throws Exception {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         ZLinkSpotPublisherRuntime runtime =
@@ -450,9 +446,10 @@ final class ZLinkSpotPublisherRuntimeTest {
             assertTrue(started.await(1, TimeUnit.SECONDS));
             pending.add(submit(runtime, "handoff-worker"));
 
-            ZLinkOneWayPublishAdmission overflow = submit(runtime, "bounded-overflow").join();
-            assertEquals(2, overflow.status());
-            assertEquals(2, pending.get(1).get(2, TimeUnit.SECONDS).status());
+            pending.add(submit(runtime, "another-pending"));
+            Thread.sleep(3100);
+            assertFalse(pending.get(1).isDone());
+            assertFalse(pending.get(2).isDone());
 
             release.countDown();
             for (CompletableFuture<ZLinkOneWayPublishAdmission> result : pending) {
@@ -497,18 +494,16 @@ final class ZLinkSpotPublisherRuntimeTest {
     }
 
     private static ZLinkSpotPublisherRuntime runtime(Runnable publish, int parallelism) {
-        return runtime(publish, parallelism, Duration.ofMillis(100));
-    }
 
-    private static ZLinkSpotPublisherRuntime runtime(
-            Runnable publish, int parallelism, Duration admissionTimeout) {
         ZLinkStringMessageSerializer serializer = new ZLinkStringMessageSerializer();
         ZLinkSpotPublisherRuntime runtime =
                 new ZLinkSpotPublisherRuntime(
                         serializer,
                         new ZLinkSpotRouteMessages(serializer),
                         parallelism,
-                        ignored -> admissionTimeout);
+                        ignored ->
+                                systems.zlink.framework.runtime.channels
+                                        .ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE);
         AtomicInteger proxyClose = new AtomicInteger();
         ZLinkInternalSpotNode node =
                 (ZLinkInternalSpotNode)

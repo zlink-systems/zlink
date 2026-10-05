@@ -59,7 +59,8 @@ class ZLinkMeshNodeRuntimeTest {
                         ZLinkConfigurationException.class,
                         () -> fixedFirst.setRoutingIdPrefix("automatic"));
         assertEquals(
-                "MeshNode cannot configure both a fixed routing ID and an automatic routing ID prefix.",
+                "MeshNode cannot configure both a fixed routing ID and an automatic routing ID"
+                        + " prefix.",
                 failure.getMessage());
         assertEquals(fixed, fixedFirst.routingId());
     }
@@ -74,7 +75,8 @@ class ZLinkMeshNodeRuntimeTest {
                 assertThrows(
                         ZLinkConfigurationException.class, () -> prefixFirst.setRoutingId(fixed));
         assertEquals(
-                "MeshNode cannot configure both a fixed routing ID and an automatic routing ID prefix.",
+                "MeshNode cannot configure both a fixed routing ID and an automatic routing ID"
+                        + " prefix.",
                 failure.getMessage());
         assertEquals("automatic", prefixFirst.routingIdPrefix());
     }
@@ -134,7 +136,6 @@ class ZLinkMeshNodeRuntimeTest {
         registration.configureRouterSocket().setSendHighWaterMark(7);
         registration.configureRouterSocket().setReceiveHighWaterMark(11);
         registration.configureRouterSocket().setReceiveTimeout(Duration.ofMillis(29));
-        registration.configureRouterSocket().setSendTimeout(Duration.ofMillis(23));
         registration.configureSpotPublisher().setSendHighWaterMark(91);
 
         RecordingMeshNode node = new RecordingMeshNode();
@@ -149,7 +150,6 @@ class ZLinkMeshNodeRuntimeTest {
             assertEquals(7L, node.routerHighWaterMark);
             assertEquals(11L, node.routerReceiveHighWaterMark);
             assertEquals(7, node.pendingAdmissionCapacity);
-            assertEquals(Duration.ofMillis(23), node.routerSendTimeout);
             assertEquals(Duration.ofMillis(29), node.routerReceiveTimeout);
         }
     }
@@ -217,7 +217,6 @@ class ZLinkMeshNodeRuntimeTest {
         private long routerHighWaterMark;
         private long routerReceiveHighWaterMark;
         private int pendingAdmissionCapacity;
-        private Duration routerSendTimeout;
         private Duration routerReceiveTimeout;
         private Consumer<ZLinkMeshDispatchRecord> dispatchReceiver;
 
@@ -259,11 +258,6 @@ class ZLinkMeshNodeRuntimeTest {
         @Override
         public void setRouterPendingAdmissionCapacity(int value) {
             pendingAdmissionCapacity = value;
-        }
-
-        @Override
-        public void setRouterSendTimeout(Duration value) {
-            routerSendTimeout = value;
         }
 
         @Override

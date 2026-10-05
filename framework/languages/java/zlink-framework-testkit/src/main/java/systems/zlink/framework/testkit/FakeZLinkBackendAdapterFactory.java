@@ -481,9 +481,7 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(
-                ZLinkBackendContext context, Duration sendTimeout) {
-            calls.add("create.dealer.sendTimeout." + sendTimeout);
+        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             return new FakeDealerSocket(calls, "dealer");
         }
 

@@ -49,11 +49,15 @@ public final class ZLinkOneWayCalls {
     public static RuntimeException failureForStatus(int status) {
         return switch (status) {
             case SUBMITTED -> null;
-            case TIMED_OUT, BACKPRESSURED ->
+            case TIMED_OUT ->
                     new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                             "one-way submission did not obtain queue capacity before the send"
                                     + " deadline");
+            case BACKPRESSURED ->
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "submission has no capacity waiter");
             case ROUTE_NOT_CONNECTED ->
                     new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.UNAVAILABLE, "one-way route is not connected");
@@ -89,21 +93,15 @@ public final class ZLinkOneWayCalls {
     }
 
     public static CompletionStage<Void> adaptOneWay(CompletionStage<Void> submission) {
+        return adaptOneWay(submission, false);
+    }
+
+    public static CompletionStage<Void> adaptOneWay(
+            CompletionStage<Void> submission, boolean initialSubmission) {
         if (isImmediateAdmission(submission)) {
             return submission;
         }
-        CompletableFuture<Void> source = submission.toCompletableFuture();
-        CompletableFuture<Void> result =
-                new CompletableFuture<>() {
-                    @Override
-                    public boolean cancel(boolean mayInterruptIfRunning) {
-                        boolean cancelled = super.cancel(mayInterruptIfRunning);
-                        if (cancelled) {
-                            source.cancel(mayInterruptIfRunning);
-                        }
-                        return cancelled;
-                    }
-                };
+        CompletableFuture<Void> result = new CompletableFuture<>();
         submission.whenComplete(
                 (ignored, error) -> {
                     if (error == null) {
@@ -112,7 +110,13 @@ public final class ZLinkOneWayCalls {
                     }
                     Throwable cause = unwrap(error);
                     if (cause instanceof ZlinkSubmitException submit) {
-                        RequestResult terminal = toRequestResult(submit.getResult(), false);
+                        RequestResult terminal =
+                                submit.getResult() == SubmitResult.BACKPRESSURED
+                                                || (!initialSubmission
+                                                        && submit.getResult()
+                                                                == SubmitResult.NOT_FOUND)
+                                        ? RequestResult.NOT_CONNECTED
+                                        : toRequestResult(submit.getResult(), initialSubmission);
                         result.completeExceptionally(
                                 ZLinkFrameworkErrorOrigin.framework(
                                         ZLinkBackendRequestResult.fromWireTerminal(terminal.value())

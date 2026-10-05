@@ -30,7 +30,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * Framework-owned local Spot mailbox. Raw bindings provide transport only; Spot identity, lifecycle
  * and turn dispatch stay in the Framework runtime.
  */
-final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBacked {
+final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
     private final ZLinkJavaRawSpotNode owner;
     private final long lifecycleGeneration;
     private final Queue<ZLinkBackendReceived> routes = new ConcurrentLinkedQueue<>();

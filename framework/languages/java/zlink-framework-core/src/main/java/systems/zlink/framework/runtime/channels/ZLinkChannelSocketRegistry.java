@@ -106,18 +106,40 @@ final class ZLinkChannelSocketRegistry {
     }
 
     ZLinkChannelSocketRegistry(ZLinkApplicationJobQueue applicationJobQueue) {
-        this.applicationJobQueue = applicationJobQueue;
+        this(applicationJobQueue, System::nanoTime, () -> false);
     }
 
-    private final java.util.List<Runnable> topologySignals =
+    ZLinkChannelSocketRegistry(
+            ZLinkApplicationJobQueue applicationJobQueue,
+            java.util.function.LongSupplier requestNanoTime,
+            java.util.function.BooleanSupplier closing) {
+        this.applicationJobQueue = applicationJobQueue;
+        this.requestNanoTime = requestNanoTime;
+        this.closing = closing;
+    }
+
+    private final java.util.function.LongSupplier requestNanoTime;
+    private final java.util.function.BooleanSupplier closing;
+
+    private record TopologySignal(Runnable changed, Runnable shutdown) {}
+
+    private final java.util.List<TopologySignal> topologySignals =
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
+    void rejectPendingAdmission() {
+        inStateLane(
+                () -> {
+                    topologySignals.forEach(signal -> signal.shutdown().run());
+                    return null;
+                });
+    }
+
     void onTopologyChanged(Runnable signal) {
-        topologySignals.add(signal);
+        topologySignals.add(new TopologySignal(signal, () -> {}));
     }
 
     void signalTopologyChanged() {
-        topologySignals.forEach(Runnable::run);
+        topologySignals.forEach(signal -> signal.changed().run());
     }
 
     private <T> T inTopologyTurn(Supplier<T> work) {
@@ -297,7 +319,7 @@ final class ZLinkChannelSocketRegistry {
             BiFunction<ZLinkBackendDealerSocket, Duration, CompletionStage<T>> clientSubmit,
             BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> meshSubmit,
             java.util.function.Consumer<Throwable> rejectedSubmission) {
-        long started = System.nanoTime();
+        long started = requestNanoTime.getAsLong();
         return submitInStateLane(
                 () -> {
                     ChannelRegistration registration = registrations.get(channelName);
@@ -307,17 +329,22 @@ final class ZLinkChannelSocketRegistry {
                             && registration.kind() == ChannelKind.CLIENT_SERVER
                             && registration.clientEnabled()) {
                         ZLinkBackendDealerSocket target = clientForOutboundCore(channelName);
-                        if (target != null) return clientSubmit.apply(target, timeout);
+                        if (target != null)
+                            return clientSubmit.apply(
+                                    target,
+                                    systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
+                                            .remainingTimeout(
+                                                    timeout, started, requestNanoTime.getAsLong()));
                         return waitForClientServerAdmissionCore(
-                                channelName,
-                                registration.sendTimeout(),
-                                started,
-                                timeout,
-                                clientSubmit,
-                                rejectedSubmission);
+                                channelName, started, timeout, clientSubmit, rejectedSubmission);
                     }
                     ZLinkInternalSpotNode node = spotRouterNodes.get(channelName);
-                    if (node != null) return meshSubmit.apply(node, timeout);
+                    if (node != null)
+                        return meshSubmit.apply(
+                                node,
+                                systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
+                                        .remainingTimeout(
+                                                timeout, started, requestNanoTime.getAsLong()));
                     if (registration != null
                             && registration.kind() == ChannelKind.CLIENT_SERVER
                             && registration.clientServerServerEnabled()) {
@@ -335,7 +362,6 @@ final class ZLinkChannelSocketRegistry {
 
     private <T> CompletionStage<T> waitForClientServerAdmissionCore(
             String channelName,
-            Duration sendTimeout,
             long started,
             Duration requestTimeout,
             BiFunction<ZLinkBackendDealerSocket, Duration, CompletionStage<T>> submit,
@@ -364,7 +390,16 @@ final class ZLinkChannelSocketRegistry {
                                                 CompletionStage<T> operation;
                                                 try {
                                                     operation =
-                                                            submit.apply(target, requestTimeout);
+                                                            submit.apply(
+                                                                    target,
+                                                                    systems.zlink.framework.runtime
+                                                                            .internal.calls
+                                                                            .ZLinkRequestCalls
+                                                                            .remainingTimeout(
+                                                                                    requestTimeout,
+                                                                                    started,
+                                                                                    requestNanoTime
+                                                                                            .getAsLong()));
                                                 } catch (RuntimeException | Error failure) {
                                                     rejectSubmission(
                                                             flow, rejectedSubmission, failure);
@@ -390,10 +425,18 @@ final class ZLinkChannelSocketRegistry {
                                                 admission.completeExceptionally(failure);
                                         });
         // The readiness check and registration share the Registry turn.
-        topologySignals.add(signal);
+        var listener =
+                new TopologySignal(
+                        signal,
+                        () ->
+                                admission.completeExceptionally(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                                                "channel runtime is shutting down")));
+        topologySignals.add(listener);
         admission.whenComplete(
                 (operation, failure) -> {
-                    topologySignals.remove(signal);
+                    topologySignals.remove(listener);
                     if (failure != null) {
                         Throwable terminal =
                                 failure instanceof java.util.concurrent.TimeoutException
@@ -407,8 +450,10 @@ final class ZLinkChannelSocketRegistry {
                         result.completeExceptionally(terminal);
                     }
                 });
-        long remaining = sendTimeout.toNanos() - (System.nanoTime() - started);
-        admission.orTimeout(Math.max(0, remaining), TimeUnit.NANOSECONDS);
+        if (requestTimeout != null) {
+            long remaining = requestTimeout.toNanos() - (requestNanoTime.getAsLong() - started);
+            admission.orTimeout(Math.max(0, remaining), TimeUnit.NANOSECONDS);
+        }
         ZLinkCompletionBridge.forwardCancellation(result, admission);
         return result;
     }
@@ -421,17 +466,26 @@ final class ZLinkChannelSocketRegistry {
             BiFunction<ZLinkBackendRouterSocket, Duration, CompletionStage<T>> routerSubmit,
             BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> nodeSubmit,
             java.util.function.Consumer<Throwable> rejectedSubmission) {
+        long started = defaultTimeout == null ? 0 : requestNanoTime.getAsLong();
         return submitInStateLane(
                 () -> {
                     Duration timeout =
                             requestTimeoutCore(channelName, timeoutOverride, defaultTimeout);
                     ZLinkBackendRouterSocket router = routeRouters.get(channelName);
                     if (router != null) {
-                        return routerSubmit.apply(router, timeout);
+                        return routerSubmit.apply(
+                                router,
+                                systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
+                                        .remainingTimeout(
+                                                timeout, started, requestNanoTime.getAsLong()));
                     }
                     ZLinkInternalSpotNode node = spotRouterNodes.get(channelName);
                     if (node != null) {
-                        return nodeSubmit.apply(node, timeout);
+                        return nodeSubmit.apply(
+                                node,
+                                systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
+                                        .remainingTimeout(
+                                                timeout, started, requestNanoTime.getAsLong()));
                     }
                     throw new ZLinkConfigurationException(
                             "route mesh channel is not configured: " + channelName);
@@ -448,6 +502,7 @@ final class ZLinkChannelSocketRegistry {
             Duration defaultTimeout,
             BiFunction<ZLinkBackendSpotRouteBridge, Duration, CompletionStage<T>> bridgeSubmit,
             BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> nodeSubmit) {
+        long started = defaultTimeout == null ? 0 : requestNanoTime.getAsLong();
         return submitInStateLane(
                 () -> {
                     Duration timeout =
@@ -455,17 +510,28 @@ final class ZLinkChannelSocketRegistry {
                     if (bridgeOwner != null) {
                         ZLinkInternalSpotNode localNode = bridgeOwner.get();
                         if (localNode != null && localNode.routingId().equals(targetNodeRid)) {
-                            return nodeSubmit.apply(localNode, timeout);
+                            return nodeSubmit.apply(
+                                    localNode,
+                                    systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
+                                            .remainingTimeout(
+                                                    timeout, started, requestNanoTime.getAsLong()));
                         }
                     }
                     ChannelRegistration registration = registrations.get(channelName);
                     if (registration != null && registration.kind() == ChannelKind.ROUTE_MESH) {
                         return bridgeSubmit.apply(
-                                requireSpotRouteBridgeCore(channelName, bridgeOwner), timeout);
+                                requireSpotRouteBridgeCore(channelName, bridgeOwner),
+                                systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
+                                        .remainingTimeout(
+                                                timeout, started, requestNanoTime.getAsLong()));
                     }
                     ZLinkInternalSpotNode node = spotRouterNodes.get(channelName);
                     if (node != null) {
-                        return nodeSubmit.apply(node, timeout);
+                        return nodeSubmit.apply(
+                                node,
+                                systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
+                                        .remainingTimeout(
+                                                timeout, started, requestNanoTime.getAsLong()));
                     }
                     throw new ZLinkConfigurationException(
                             "route mesh channel is not configured: " + channelName);
@@ -474,6 +540,7 @@ final class ZLinkChannelSocketRegistry {
 
     private Duration requestTimeoutCore(
             String channelName, Duration timeoutOverride, Duration defaultTimeout) {
+        if (defaultTimeout == null && timeoutOverride == null) return null;
         ChannelRegistration registration = registrations.get(channelName);
         return timeoutOverride != null
                 ? timeoutOverride
@@ -496,6 +563,10 @@ final class ZLinkChannelSocketRegistry {
                             flow == null
                                     ? ZLinkFlowContext.suppress()
                                     : ZLinkFlowContext.enter(flow)) {
+                        if (closing.getAsBoolean())
+                            throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                                    "channel runtime is shutting down");
                         return submission.get();
                     } catch (RuntimeException | Error failure) {
                         rejectSubmission(flow, rejectedSubmission, failure);
@@ -1757,6 +1828,7 @@ final class ZLinkChannelSocketRegistry {
     }
 
     void closeAll() {
+        rejectPendingAdmission();
         List<ChannelRegistration> registrationsToDetach =
                 inStateLane(() -> List.copyOf(registrations.values()));
         for (ChannelRegistration registration : registrationsToDetach) {

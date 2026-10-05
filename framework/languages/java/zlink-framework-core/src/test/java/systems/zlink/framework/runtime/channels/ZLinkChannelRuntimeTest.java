@@ -230,11 +230,10 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
-    void configuredClientAndFanoutSendTimeoutsReachSocketFactories() {
-        Duration clientTimeout = Duration.ofMillis(375);
+    void onlyClassicFanoutTimeoutReachesSocketFactory() {
         Duration publisherTimeout = Duration.ofMillis(625);
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        options.addClientServerChannel("client").client().setSendTimeout(clientTimeout);
+        options.addClientServerChannel("client").client();
         options.addFanoutChannel("fanout")
                 .setSendTimeout(publisherTimeout)
                 .enablePublisher("inproc://configured-timeout");
@@ -246,7 +245,7 @@ final class ZLinkChannelRuntimeTest {
                         options.registration(),
                         new ZLinkJsonMessageSerializer(),
                         handlers())) {
-            assertEquals(List.of(clientTimeout), backend.dealerSendTimeouts);
+            assertEquals(1, backend.dealerCreations);
             assertEquals(List.of(publisherTimeout), backend.publisherSendTimeouts);
         }
     }
@@ -788,6 +787,12 @@ final class ZLinkChannelRuntimeTest {
                         }
 
                         @Override
+                        public long activationDeadline(String meshName) {
+                            return System.currentTimeMillis()
+                                    + options.registration().defaultRequestTimeout().toMillis();
+                        }
+
+                        @Override
                         public CompletionStage<Void> send(
                                 String spotId,
                                 String stableType,
@@ -795,7 +800,8 @@ final class ZLinkChannelRuntimeTest {
                                 Message payload,
                                 Optional<String> packetName,
                                 String contentType,
-                                Map<String, String> metadata) {
+                                Map<String, String> metadata,
+                                long activationDeadline) {
                             throw new AssertionError("ready route must not activate");
                         }
 
@@ -990,7 +996,7 @@ final class ZLinkChannelRuntimeTest {
                             .toCompletableFuture();
 
             assertTrue(result.isDone());
-            assertEquals(2, OneWayTestStatus.status(result));
+            assertEquals(3, OneWayTestStatus.status(result));
             assertEquals(1, backend.spotNode.localNodeAttempts);
             backend.spotNode.signalLocalNodeReady();
             assertEquals(1, backend.spotNode.localNodeAttempts);
@@ -1263,6 +1269,12 @@ final class ZLinkChannelRuntimeTest {
                         }
 
                         @Override
+                        public long activationDeadline(String meshName) {
+                            return System.currentTimeMillis()
+                                    + options.registration().defaultRequestTimeout().toMillis();
+                        }
+
+                        @Override
                         public CompletionStage<Void> send(
                                 String spotId,
                                 String stableType,
@@ -1270,7 +1282,8 @@ final class ZLinkChannelRuntimeTest {
                                 Message payload,
                                 Optional<String> packetName,
                                 String contentType,
-                                Map<String, String> metadata) {
+                                Map<String, String> metadata,
+                                long activationDeadline) {
                             sendActivationAttempts.incrementAndGet();
                             return CompletableFuture.completedFuture(null);
                         }
@@ -1365,6 +1378,12 @@ final class ZLinkChannelRuntimeTest {
             runtime.registerInstanceSpotCallRuntime(
                     new ZLinkInstanceSpotCallRuntime() {
                         @Override
+                        public long activationDeadline(String meshName) {
+                            return System.currentTimeMillis()
+                                    + options.registration().defaultRequestTimeout().toMillis();
+                        }
+
+                        @Override
                         public CompletionStage<Void> send(
                                 String spotId,
                                 String stableType,
@@ -1372,7 +1391,8 @@ final class ZLinkChannelRuntimeTest {
                                 Message payload,
                                 Optional<String> packetName,
                                 String contentType,
-                                Map<String, String> metadata) {
+                                Map<String, String> metadata,
+                                long activationDeadline) {
                             return resolver.resolve(spotId)
                                     .thenCompose(
                                             address -> {
@@ -2237,8 +2257,7 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(
-                ZLinkBackendContext context, Duration sendTimeout) {
+        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             ManagedAdmissionDealer dealer = new ManagedAdmissionDealer(endpoint, router.peerWeight);
             dealers.add(dealer);
             return dealer;
@@ -2395,7 +2414,7 @@ final class ZLinkChannelRuntimeTest {
         final FakePublisherSocket publisher = new FakePublisherSocket();
         final FakeSpotRouteBridge bridge = new FakeSpotRouteBridge();
         final FakeSpotNode spotNode = new FakeSpotNode(bridge);
-        final List<Duration> dealerSendTimeouts = new ArrayList<>();
+        int dealerCreations;
         final List<Duration> publisherSendTimeouts = new ArrayList<>();
 
         @Override
@@ -2404,9 +2423,8 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(
-                ZLinkBackendContext context, Duration sendTimeout) {
-            dealerSendTimeouts.add(sendTimeout);
+        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
+            dealerCreations++;
             return dealer;
         }
 
@@ -2822,7 +2840,6 @@ final class ZLinkChannelRuntimeTest {
         private Optional<Integer> channelTargetClassification = Optional.empty();
         private final ArrayDeque<Integer> localNodeStatuses = new ArrayDeque<>();
         private Consumer<ZLinkBackendAdmissionKey> admissionReady = ignored -> {};
-        private Duration admissionTimeout = Duration.ofSeconds(1);
         private int localNodeAttempts;
 
         FakeSpotNode(FakeSpotRouteBridge bridge) {
@@ -2874,11 +2891,6 @@ final class ZLinkChannelRuntimeTest {
         @Override
         public ZLinkBackendSpot entrySpot() {
             return entrySpot;
-        }
-
-        @Override
-        public Duration admissionTimeout() {
-            return admissionTimeout;
         }
 
         @Override

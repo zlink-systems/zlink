@@ -440,10 +440,6 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                 return mesh;
             };
         }
-
-        public java.util.function.Function<ZLinkBackendObject, Duration> admissionTimeout() {
-            return delegate.admissionTimeout();
-        }
     }
 
     static void runBranch(JsonNode branch) throws Exception {
@@ -924,7 +920,8 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                         if (!host.equals("Serving"))
                             assertFalse(
                                     missingPlacementBeforeInspection,
-                                    "accepted intent must not enter Missing placement after release");
+                                    "accepted intent must not enter Missing placement after"
+                                            + " release");
                         if (!host.equals("Serving")) {
                             String dropped =
                                     flow.sendDropped.get(WAIT.toSeconds(), TimeUnit.SECONDS);

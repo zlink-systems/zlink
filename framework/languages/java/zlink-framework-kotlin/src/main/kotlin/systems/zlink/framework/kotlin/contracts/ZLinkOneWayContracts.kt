@@ -169,8 +169,6 @@ interface ZLinkKotlinSessionSendCall {
 
     fun compress(): ZLinkKotlinSessionSendCall
 
-    fun timeout(timeout: Duration): ZLinkKotlinSessionSendCall
-
     suspend fun await()
 }
 

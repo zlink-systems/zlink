@@ -277,8 +277,8 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                     payloadPart.close();
                     return CompletableFuture.failedFuture(failure);
                 }
-                return ZLinkOneWayCalls.adaptOneWay(submission)
-                        .whenComplete((ignored, failure) -> payloadPart.close());
+                return ZLinkOneWayCalls.adaptOneWay(
+                        submission.whenComplete((ignored, failure) -> payloadPart.close()));
             }
         }
     }

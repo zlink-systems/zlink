@@ -72,8 +72,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                 "absent",
                                                 null,
                                                 new byte[0],
-                                                List.of(packet, body),
-                                                Duration.ofSeconds(2));
+                                                List.of(packet, body));
                         if (request || local) {
                             var failure =
                                     assertThrows(

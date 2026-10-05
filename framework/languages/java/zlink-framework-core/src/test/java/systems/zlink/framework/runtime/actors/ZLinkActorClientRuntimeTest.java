@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -359,6 +360,34 @@ final class ZLinkActorClientRuntimeTest {
         runtimeReady.complete(null);
         result.toCompletableFuture().join();
         assertEquals(1, node.sendAttempts);
+    }
+
+    @Test
+    void actorSendStartupWaitHasNoTimeoutAndCallerCancellationDoesNotStopSubmission()
+            throws Exception {
+        for (boolean cancelCaller : List.of(false, true)) {
+            var runtimeReady = new CompletableFuture<Void>();
+            var node = new RecordingSpotNode();
+            var client =
+                    new ZLinkActorClientRuntime(
+                            () -> node,
+                            new ZLinkStoreLocationResolvers(
+                                    ZLinkRegisteredLocationStores.fromUnified(
+                                            storeWithActor("actor-1")),
+                                    new ZLinkLocationOptions()),
+                            new ZLinkJsonMessageSerializer(),
+                            Duration.ofMillis(250),
+                            ZLinkTestAdmissionFactory.create(),
+                            runtimeReady);
+            var pending =
+                    client.sendToActor("actor-1", new Ping("hello")).submit().toCompletableFuture();
+            Thread.sleep(3100);
+            assertFalse(pending.isDone());
+            if (cancelCaller) assertTrue(pending.cancel(false));
+            runtimeReady.complete(null);
+            if (!cancelCaller) pending.get(1, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(1, node.sendAttempts);
+        }
     }
 
     @Test
@@ -987,8 +1016,10 @@ final class ZLinkActorClientRuntimeTest {
                 ZLinkBackendActorRef actor, List<Message> parts) {
             return sendToActor(actor, parts, SendFlags.DONT_WAIT)
                     ? CompletableFuture.completedFuture(null)
-                    : CompletableFuture.failedFuture(
-                            new ZlinkSubmitException(SubmitResult.NOT_FOUND));
+                    : systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                            CompletableFuture.failedFuture(
+                                    new ZlinkSubmitException(SubmitResult.NOT_FOUND)),
+                            true);
         }
     }
 

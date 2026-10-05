@@ -111,7 +111,7 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
     }
 
     @Test
-    void storedBindingRelayCancellationCancelsTheBackendPhysicalTerminal() {
+    void storedBindingRelayCancellationLeavesBackendAdmissionPending() {
         CompletableFuture<Void> physicalTerminal = new CompletableFuture<>();
         ZLinkBackendStreamSocket stream =
                 streamProxy(
@@ -152,14 +152,15 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                     actor.relay(ZLinkMessage.of("payload")).toCompletableFuture();
 
             assertTrue(submission.cancel(false));
-            assertTrue(physicalTerminal.isCancelled());
+            assertFalse(physicalTerminal.isDone());
+            assertTrue(physicalTerminal.complete(null));
         } finally {
             relayHeaders.exit();
         }
     }
 
     @Test
-    void productionStoredBindingRelayCancellationCancelsThePhysicalTerminal() {
+    void productionStoredBindingRelayCancellationLeavesAdmissionPending() {
         CompletableFuture<Void> physicalTerminal = new CompletableFuture<>();
         AtomicInteger asyncSubmits = new AtomicInteger();
         AtomicInteger syncSubmits = new AtomicInteger();
@@ -199,7 +200,8 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
             assertEquals(1, asyncSubmits.get());
             assertEquals(0, syncSubmits.get());
             assertTrue(submission.cancel(false));
-            assertTrue(physicalTerminal.isCancelled());
+            assertFalse(physicalTerminal.isDone());
+            assertTrue(physicalTerminal.complete(null));
         } finally {
             runtime.exitRelayDispatch();
         }

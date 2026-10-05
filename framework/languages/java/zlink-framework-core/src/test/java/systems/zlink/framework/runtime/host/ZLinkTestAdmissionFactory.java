@@ -3,7 +3,6 @@ package systems.zlink.framework.runtime.host;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
-import java.time.Duration;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -13,10 +12,6 @@ public final class ZLinkTestAdmissionFactory {
     public interface Backend {
         default ZLinkBackendObject admissionSource() {
             return (ZLinkBackendObject) this;
-        }
-
-        default Duration admissionTimeout() {
-            return Duration.ofSeconds(1);
         }
 
         default int admissionPendingCapacity() {

@@ -15,8 +15,8 @@ public interface ZLinkSendCall {
     }
 
     /**
-     * For {@code sendToChannel}, channel validation (including metadata support) and any default
-     * readiness timeout are resolved when {@code submit} is called.
+     * For {@code sendToChannel}, channel validation (including metadata support) and logical
+     * readiness are resolved when {@code submit} is called. Admission has no time limit.
      */
     CompletionStage<Void> submit();
 

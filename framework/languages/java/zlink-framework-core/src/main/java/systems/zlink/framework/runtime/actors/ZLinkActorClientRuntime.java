@@ -157,8 +157,10 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             ZLinkRequestMetrics.Series metric,
             long started) {
         ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
+        long requestStarted = System.nanoTime();
+        Duration requestTimeout = timeout == null ? defaultTimeout : timeout;
         CompletionStage<TReply> logical =
-                resolveActorAddress(actorId, timeout)
+                resolveActorAddress(actorId, requestTimeout)
                         .thenCompose(
                                 row ->
                                         ZLinkFlowContext.call(
@@ -169,7 +171,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                                                 packetName,
                                                                 request,
                                                                 metadata,
-                                                                timeout,
+                                                                requestTimeout,
+                                                                requestStarted,
                                                                 replyType)));
         CompletionStage<TReply> result =
                 logical.whenComplete(
@@ -216,7 +219,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private CompletionStage<Void> submitSendResult(
             String actorId, String packetName, Object message, Map<String, String> metadata) {
         ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
-        return resolveActorAddress(actorId, defaultTimeout)
+        return resolveActorAddress(actorId, null)
                 .thenCompose(
                         row ->
                                 ZLinkFlowContext.call(
@@ -276,7 +279,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                         result.completeExceptionally(unwrap(failure));
                     }
                 });
-        Duration effectiveTimeout = timeout == null ? defaultTimeout : timeout;
+        Duration effectiveTimeout = timeout;
         if (effectiveTimeout != null
                 && !effectiveTimeout.isZero()
                 && !effectiveTimeout.isNegative()) {
@@ -300,6 +303,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             Object request,
             Map<String, String> metadata,
             Duration timeout,
+            long requestStarted,
             Class<TReply> replyType) {
         List<Message> parts =
                 createPacketParts(
@@ -316,7 +320,9 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                     actor,
                                     parts,
                                     SendFlags.NONE,
-                                    timeout == null ? defaultTimeout : timeout);
+                                    systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
+                                            .remainingTimeout(
+                                                    timeout, requestStarted, System.nanoTime()));
         } catch (RuntimeException error) {
             closeAll(parts);
             return failed(mapBackendException(error, "Actor request"));
@@ -510,7 +516,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                 return duplicate;
             }
             try (var flowScope = enterApplicationFlow()) {
-                return submitSendResult(actorId, packetName, message, metadata);
+                return ZLinkOneWayCalls.adaptOneWay(
+                        submitSendResult(actorId, packetName, message, metadata));
             }
         }
     }

@@ -72,7 +72,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
     }
 
     @Test
-    void cancellingSendCancelsBackendPhysicalTerminalAndCleansUp() {
+    void callerCancellationKeepsSendPendingAndCleansUpOnPhysicalTerminal() {
         CompletableFuture<Void> physicalTerminal = new CompletableFuture<>();
         ZLinkBackendStreamSocket stream =
                 stream(
@@ -100,7 +100,9 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
         CompletableFuture<Void> submission = call.submit().toCompletableFuture();
 
         assertTrue(submission.cancel(false));
-        assertTrue(physicalTerminal.isCancelled());
+        assertFalse(physicalTerminal.isDone());
+        assertEquals("payload".length(), payload.size());
+        physicalTerminal.complete(null);
         assertEquals(0, payload.size());
     }
 
