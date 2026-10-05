@@ -2,6 +2,7 @@
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink.hpp>
 
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/fanout/fanout_subscription.hpp"
@@ -354,6 +355,105 @@ TEST (CppFrameworkFanoutSubscription, DuplicateSubscriptionHasSameEffectiveTrans
     EXPECT_EQ (fanout::fanout_subscription_topics (once),
                fanout::fanout_subscription_topics (twice));
     EXPECT_EQ (fanout::fanout_subscription_topics (twice).size (), 2u);
+}
+
+class startup_stop_service_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    explicit startup_stop_service_t (zlink::framework::app_t &app) : _app (app) {}
+
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
+    {
+        started = true;
+        _app.request_stop ();
+        co_return;
+    }
+
+    void stop () noexcept override {}
+
+    bool started = false;
+
+  private:
+    zlink::framework::app_t &_app;
+};
+
+TEST (CppFrameworkFanoutSubscription, StartupBindsBeforeFirstPublish)
+{
+    auto app = zlink::framework::app_t::create ();
+    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_fanout_channel ("startup-events").enable_publisher ("tcp://127.0.0.1:0");
+    });
+    int exit_code = -1;
+    std::jthread host ([&] (std::stop_token stop) {
+        std::stop_callback request_stop (stop, [&] { app.request_stop (); });
+        exit_code = app.run (0, nullptr);
+    });
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while (!app.is_ready () && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (10ms);
+    ASSERT_TRUE (app.is_ready ());
+
+    auto provider = app.advanced ().services ().build_provider ();
+    const auto listener =
+      provider.get_required<zlink::framework::framework_runtime_t> ().listener_status (
+        zlink::framework::listener_kind_t::fanout, "startup-events");
+    zlink::context_t context;
+    zlink::sub_socket_t subscriber (context);
+    subscriber.options ().linger (0ms);
+    auto monitor = subscriber.monitor_open (zlink::monitor_event::connection_ready);
+    zlink::poller_t poller;
+    poller.add (monitor, zlink::poll_event_flag_t::pollin, 1);
+    subscriber.set_subscription ("startup");
+    subscriber.connect (listener.endpoint);
+    zlink::poll_event_t event;
+    EXPECT_EQ (poller.wait (&event, 1, 2s), 1);
+    const auto notification = monitor.recv (zlink::recv_flags_t::dontwait);
+    EXPECT_TRUE (notification && notification->event == zlink::monitor_event::connection_ready);
+    host.request_stop ();
+    host.join ();
+    EXPECT_EQ (exit_code, 0);
+    provider.close ();
+}
+
+TEST (CppFrameworkFanoutSubscription, BindFailureFailsStartupBeforeApplicationService)
+{
+    zlink::context_t context;
+    zlink::xpub_socket_t occupied (context);
+    occupied.options ().linger (0ms);
+    occupied.bind ("tcp://127.0.0.1:0");
+    const auto endpoint = occupied.options ().last_endpoint ();
+    auto app = zlink::framework::app_t::create ();
+    app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_fanout_channel ("startup-events").enable_publisher (endpoint);
+    });
+    auto service = std::make_unique<startup_stop_service_t> (app);
+    const auto *application_service = service.get ();
+    app.add_hosted_service (std::move (service));
+    EXPECT_NE (app.run (0, nullptr), 0);
+    EXPECT_FALSE (application_service->started);
+    EXPECT_EQ (app.runtime_state (), zlink::framework::framework_runtime_state_t::error);
+}
+
+TEST (CppFrameworkFanoutSubscription, PublishDoesNotBindOutsideStartup)
+{
+    auto app = zlink::framework::app_t::create ();
+    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.handlers ().group ("startup").add_publish<gate_handler_t> ();
+        options.add_fanout_channel ("startup-events").enable_publisher ("tcp://127.0.0.1:0");
+    });
+    const auto result = app.advanced ()
+                          .zlink ()
+                          .publisher ()
+                          .publish ("startup-events", "startup", gate_event_t{1})
+                          .async ()
+                          .result ();
+    ASSERT_FALSE (result.has_value ());
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::unavailable);
+    auto provider = app.advanced ().services ().build_provider ();
+    EXPECT_THROW (provider.get_required<zlink::framework::framework_runtime_t> ().listener_status (
+                    zlink::framework::listener_kind_t::fanout, "startup-events"),
+                  zlink::framework::framework_exception_t);
+    provider.close ();
 }
 
 TEST (CppFrameworkFanoutSubscription, AsyncHandlerKeepsChannelGateUntilTerminal)

@@ -11,9 +11,9 @@ from conan.tools.files import copy, get
 required_conan_version = ">=2.1"
 
 # This is the authoritative third-party name/version list for the framework.
-# bootstrap.cmake reads it from the released archive, so its CMakeDeps graph is
-# identical to the package graph without downloading zlink-cpp (the bootstrap
-# builds that first-party archive itself). vcpkg.json remains the explicit
+# package-prebuilt.sh imports it with the options below, so its CMakeDeps graph
+# matches the package graph without downloading zlink-cpp (the prebuilt build
+# stages that first-party archive). vcpkg.json remains the explicit
 # vcpkg fallback manifest: its port feature names are vcpkg-specific.
 ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
     # CMakeLists.txt:22 unconditionally needs the api component.
@@ -23,10 +23,11 @@ ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
     "openssl/[>=3.0 <4]",
     "lz4/1.9.4",
     "protobuf/5.27.0",
-    # The async option below owns its compatible libuv transitively. 1.3.15 is the
-    # first ConanCenter recipe whose async build finds libuv without a system
-    # libuv-dev (1.3.13 fails with "uv.h: No such file" on a clean machine).
+    # 1.3.15 builds its async client with Conan's libuv, but its requirement does
+    # not propagate libuv headers to consumers of async_redis.h. Require the same
+    # compatible range directly so CMakeDeps exposes those headers to Framework.
     "redis-plus-plus/1.3.15",
+    "libuv/[>=1 <2]",
 )
 
 

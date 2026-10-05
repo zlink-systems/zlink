@@ -3328,6 +3328,113 @@ async function waitForCondition(predicate, timeoutMs = 200) {
   }
 }
 
+test('creation Store calculations follow authority and owner qualification', async (t) => {
+  const now = new Date();
+  const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  let armed = false;
+  let unblock;
+  let reached;
+  let blockedPrefix;
+  let conflictPending;
+  let operationIndex = 0n;
+  const reads = [];
+  const provider = {
+    async read(key, signal) {
+      if (armed) {
+        reads.push(key.value);
+        if (!conflictPending && key.value.startsWith(blockedPrefix)) {
+          reached();
+          await new Promise((resolve) => {
+            unblock = resolve;
+          });
+        }
+      }
+      return inner.read(key, signal);
+    },
+    write: (request, signal) => {
+      if (armed && conflictPending) {
+        conflictPending = false;
+        reads.length = 0;
+        return Promise.resolve({ kind: 'conflict', storeNow: now });
+      }
+      return inner.write(request, signal);
+    }
+  };
+  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const descriptor = await ownedPlacementDescriptor(
+    repository,
+    'read-boundary',
+    'read-boundary',
+    30_000
+  );
+  descriptor.populationCapacity.actors.limit = 0;
+  assert.equal(
+    (await repository.updateMeshNode(descriptor)).status,
+    internal.ZLinkLocationWriteStatus.Stored
+  );
+  for (const kind of ['reserve', 'completion']) {
+    for (const prefix of ['authority\0', 'owner-lease\0']) {
+      for (const rebuild of [false, true]) {
+        await t.test(`${kind} waits for ${prefix.slice(0, -1)}, rebuild=${rebuild}`, async () => {
+          const request = authorityReserveRequest(
+            `read-boundary-${kind}-${prefix.slice(0, -1)}-${rebuild}`,
+            descriptor,
+            { ownerId: descriptor.ownerId, leaseGeneration: descriptor.leaseGeneration }
+          );
+          let completion;
+          if (kind === 'completion') {
+            const reserved = await repository.reserve(request);
+            assert.equal(reserved.kind, 'reserved');
+            completion = {
+              key: request.key,
+              reservationId: reserved.reservationId,
+              expectedStoreVersion: reserved.creating.storeVersion.value,
+              target: request.target,
+              completion: {
+                kind: 'created',
+                readyPayload: Buffer.from('ready'),
+                terminal: {
+                  operation: {
+                    sourceNodeRid: descriptor.rid,
+                    sourceNodeGeneration: descriptor.lifecycleGeneration,
+                    operationId: { high: ++operationIndex, low: 1n }
+                  },
+                  terminalEnvelope: Buffer.from('terminal'),
+                  operationDeadline: new Date(now.getTime() + 60_000)
+                }
+              }
+            };
+          }
+          const arrived = new Promise((resolve) => {
+            reached = resolve;
+          });
+          blockedPrefix = prefix;
+          conflictPending = rebuild;
+          reads.length = 0;
+          armed = true;
+          const operation =
+            completion === undefined
+              ? repository.reserve(request)
+              : repository.completeCreation(completion);
+          try {
+            await arrived;
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.equal(
+              reads.some((key) => key.includes('capacity:') || key.includes('counter')),
+              false,
+              'Unqualified creation must not read shared calculation records.'
+            );
+          } finally {
+            armed = false;
+            unblock();
+            assert.equal((await operation).kind, kind === 'reserve' ? 'reserved' : 'created');
+          }
+        });
+      }
+    }
+  }
+});
+
 function authorityReserveRequest(globalId, descriptor, owner) {
   return {
     key: { kind: 'actor', globalId },

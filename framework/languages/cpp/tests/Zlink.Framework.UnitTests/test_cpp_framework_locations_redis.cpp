@@ -263,4 +263,74 @@ TEST (ZLinkFrameworkLocationsRedis, OpaqueRelocationStoreKeepsPayloadImmutable)
       std::holds_alternative<blob_missing_t> (provider.read (reference).result ().value ()));
 }
 
+TEST (ZLinkFrameworkLocationsRedis, PrefixScanIncludesExactAndUtf8SuffixesOnly)
+{
+    const auto options = find_redis_options ();
+    if (!options)
+        GTEST_SKIP () << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+
+    redis_location_store_t store (*options);
+    location_store_t &provider = store;
+    const std::vector<std::string> keys{
+      "a", "mesh:", "mesh:a", "mesh:\xc3\xa9", "mesh:\xf4\x8f\xbf\xbf", "mesh;", "z"};
+    store_write_request_t write;
+    for (const auto &key : keys)
+        write.mutations.emplace_back (store_put_t{{key}, bytes (key), std::nullopt});
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      provider.write (std::move (write)).result ().value ()));
+
+    const auto scan = [&] (std::string prefix) {
+        std::vector<std::string> found;
+        store_scan_request_t request{.prefix = std::move (prefix), .limit = 1};
+        do {
+            const auto result = provider.scan (request).result ().value ();
+            const auto &page = std::get<store_scan_page_t> (result);
+            for (const auto &item : page.items)
+                found.push_back (item.key.value);
+            request.cursor = page.next_cursor;
+        } while (request.cursor);
+        return found;
+    };
+    EXPECT_EQ (scan ("mesh:"), (std::vector<std::string>{keys[1], keys[2], keys[3], keys[4]}));
+    EXPECT_EQ (scan ("mesh:\xc3\xa9"), (std::vector<std::string>{keys[3]}));
+    EXPECT_TRUE (scan ("missing:").empty ());
+    EXPECT_EQ (scan (""), keys);
+}
+
+TEST (ZLinkFrameworkLocationsRedis, SnapshotRetainsValuesAcrossImmediateVersionPruning)
+{
+    const auto options = find_redis_options ();
+    if (!options)
+        GTEST_SKIP () << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+
+    redis_location_store_t store (*options);
+    location_store_t &provider = store;
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      provider
+        .write ({{},
+                 {store_put_t{{"mesh:a"}, bytes ("old-a"), std::nullopt},
+                  store_put_t{{"mesh:b"}, bytes ("old-b"), std::nullopt}}})
+        .result ()
+        .value ()));
+    const auto first = std::get<store_scan_page_t> (
+      provider.scan ({.prefix = "mesh:", .limit = 1}).result ().value ());
+    ASSERT_TRUE (first.next_cursor);
+    for (int version = 0; version < 128; ++version) {
+        ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+          provider
+            .write ({{}, {store_put_t{{"mesh:b"}, bytes (std::to_string (version)), std::nullopt}}})
+            .result ()
+            .value ()));
+    }
+    const auto next = std::get<store_scan_page_t> (
+      provider.scan ({.prefix = "mesh:", .cursor = first.next_cursor, .limit = 1})
+        .result ()
+        .value ());
+    ASSERT_EQ (next.items.size (), 1u);
+    EXPECT_EQ (next.items[0].value.bytes, bytes ("old-b"));
+    EXPECT_FALSE (next.next_cursor);
+    const auto current = std::get<store_found_t> (provider.read ({"mesh:b"}).result ().value ());
+    EXPECT_EQ (current.value.bytes, bytes ("127"));
+}
+
 } // namespace

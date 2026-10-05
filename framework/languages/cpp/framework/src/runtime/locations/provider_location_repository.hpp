@@ -651,8 +651,10 @@ class provider_location_repository_t final : public location_repository_t
         if (!adjust_capacity (capacity.record, request.capacity_bundle, 1, 0))
             co_return object_reserve_result_t{object_placement_capacity_exhausted_t{}};
 
-        auto object_generations = co_await _store->read (object_counter_key);
-        auto owner_generations = co_await _store->read (authority_owner_counter_key);
+        auto object_generations_pending = _store->read (object_counter_key);
+        auto owner_generations_pending = _store->read (authority_owner_counter_key);
+        auto object_generations = co_await object_generations_pending;
+        auto owner_generations = co_await owner_generations_pending;
         const auto object_generation = counter_next_value (object_generations);
         const auto owner_generation_value = counter_next_value (owner_generations);
         if (object_generation >= max_generation || owner_generation_value >= max_generation)

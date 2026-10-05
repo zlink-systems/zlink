@@ -87,7 +87,10 @@ JAVA_HOST="$(resolve_executable \
 # owner of that decision for the toolchain JDK first, so a machine without it
 # stops with one message instead of an UnsupportedClassVersionError buried in a
 # role log (#517).
+# shellcheck source=framework/languages/java/samples/gradle/zlink-jvm-runtime.sh
 source "${REPO_ROOT}/framework/languages/java/samples/gradle/zlink-jvm-runtime.sh"
+# shellcheck source=framework/languages/cpp/samples/redis-common.sh
+source "${REPO_ROOT}/framework/languages/cpp/samples/redis-common.sh"
 
 if [[ "${IS_WINDOWS_NATIVE}" -eq 1 ]]; then
   CORE_VERSION="$(sed -n 's/^LIBZLINK_VERSION=//p' "${REPO_ROOT}/VERSION")"
@@ -165,21 +168,9 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
 fi
 
 free_port() {
-  "${PYTHON_BIN[@]}" - "${1:-1}" <<'PY'
-import socket
-import sys
-
-sockets = []
-try:
-    for _ in range(int(sys.argv[1])):
-        sock = socket.socket()
-        sockets.append(sock)
-        sock.bind(("127.0.0.1", 0))
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  # The cross-language gate holds the sample and language locks, so reuse the
+  # C++ sample allocator's reserved application-port range.
+  zlink_sample_allocate_ports "${1:-1}"
 }
 
 start_redis() {
