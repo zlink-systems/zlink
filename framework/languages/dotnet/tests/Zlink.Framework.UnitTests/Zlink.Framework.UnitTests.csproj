@@ -139,6 +139,7 @@
         <Compile Include="Runtime/LocationResolverTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeQueryTests.cs"/>
         <Compile Include="Runtime/InstanceSpotActivationJournalTests.cs"/>
+        <Compile Include="Runtime/InstanceSpotSendDeadlineTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeTests.cs"/>
         <Compile Include="Runtime/MaintenanceRuntimeTests.cs"/>
         <Compile Include="Runtime/LogicalMulticastSubmitTests.cs"/>

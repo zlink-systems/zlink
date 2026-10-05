@@ -83,7 +83,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         TimeSpan timeout,
         ReadOnlyMemory<byte> metadata,
         CancellationToken cancellationToken,
-        InstanceSpotActivationOperation? originalOperation = null
+        InstanceSpotActivationOperation? originalOperation = null,
+        ulong? activationDeadlineUnixMs = null
     )
     {
         if (
@@ -127,10 +128,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                 $"No Ready Instance Spot target is available for '{address.InstanceSpotType}'.",
                 ZLinkRetryAdvice.RetryAfterBackoff
             );
-        var deadlineAt = DateTimeOffset.UtcNow.Add(timeout);
         var deadlineUnixMs =
             originalOperation?.DeadlineUnixMs
-            ?? checked((ulong)deadlineAt.ToUnixTimeMilliseconds());
+            ?? activationDeadlineUnixMs
+            ?? checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds());
         var target = new InstanceSpotActivationTarget(
             address.MeshName,
             selected.Rid,

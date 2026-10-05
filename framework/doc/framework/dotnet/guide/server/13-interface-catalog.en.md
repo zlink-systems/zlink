@@ -20,7 +20,7 @@ title: "13. Key Type Usage Index · C#/.NET"
 ```csharp
 await routeClient
     .SendToChannel("game.api", new PlayerOnline("player-1"))
-    .Async(ct); // Waits only for source-local outbound admission.
+    .Async(); // Waits only for source-local outbound admission.
 
 var reply = await routeClient
     .RequestToChannel("game.api", new GetPlayer("player-1"))
@@ -120,7 +120,7 @@ Ordinary Spot messaging uses only the global SpotId.
 ```csharp
 await spotClient
     .SendToSpot("room-42", new RoundStarted())
-    .Async(ct);
+    .Async();
 
 var state = await spotClient
     .RequestToSpot("room-42", new GetRoomState())
@@ -172,7 +172,7 @@ ZLinkActorCreateResult result = await actorManager
 
 await actorClient
     .SendToActor("player-1", new GrantReward("daily"))
-    .Async(ct);
+    .Async();
 ```
 
 To schedule a User Spot join from inside an Actor handler, use the deferred call, which

@@ -9822,7 +9822,9 @@ public sealed partial class EntrySpotActorDispatchTests
         bool includeImmediateIngressHandlers = false,
         bool includeEntrySpotActivation = true,
         ManualTimeProvider? locationTimeProvider = null,
-        Action<ZLinkLocationRuntime>? locationRuntimeCapture = null
+        Action<ZLinkLocationRuntime>? locationRuntimeCapture = null,
+        Func<IZLinkMeshNodeLocationResolver, IZLinkMeshNodeLocationResolver>? meshResolverWrapper =
+            null
     )
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
@@ -9869,7 +9871,9 @@ public sealed partial class EntrySpotActorDispatchTests
             .AddSingleton(locationLifecycle)
             .AddSingleton(leaseTracker)
             .AddSingleton(locationResolvers)
-            .AddSingleton<IZLinkMeshNodeLocationResolver>(locationResolvers)
+            .AddSingleton<IZLinkMeshNodeLocationResolver>(
+                meshResolverWrapper?.Invoke(locationResolvers) ?? locationResolvers
+            )
             .AddSingleton(
                 new ZLinkLocationAddressResolvers(locationResolvers, new ZLinkSpotHandleRegistry())
             )

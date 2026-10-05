@@ -109,11 +109,24 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
     {
         var cancellationToken = runtime.ShutdownToken;
         _submission.Claim();
+        var submittedAt = DateTimeOffset.UtcNow;
         if (_meshSelected && !_instanceIntent)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "InMesh is valid only for an Instance Spot intent."
             );
+        var activationTimeout = _instanceIntent
+            ? runtime.Registration.ResolveMeshRequestTimeout(
+                runtime
+                    .ResolveActorCreationSource(
+                        string.IsNullOrEmpty(target.MeshName) ? null : target.MeshName
+                    )
+                    .Registration.SpotNodeName
+            )
+            : TimeSpan.Zero;
+        var activationDeadlineUnixMs = _instanceIntent
+            ? checked((ulong)submittedAt.Add(activationTimeout).ToUnixTimeMilliseconds())
+            : 0;
         var handle = _exactSpotIdCall
             ? await runtime
                 .ResolveSpotHandleAsync(target.SpotId, cancellationToken)
@@ -144,9 +157,10 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
                     target,
                     parts,
                     request: false,
-                    runtime.Registration.DefaultRequestTimeout,
+                    activationTimeout,
                     _metadata.Encode(),
-                    cancellationToken
+                    cancellationToken,
+                    activationDeadlineUnixMs: activationDeadlineUnixMs
                 )
                 .ConfigureAwait(false);
             return;
