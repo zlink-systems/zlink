@@ -18,6 +18,7 @@ Framework 0.28.0 uses .NET binding 1.15.0 and Core 1.15.0. (#1460)
 
 ## Defect Fixes
 
+- Fixed a race where cleanup of the previous session invalidated a new binding replacement for the same Actor and ended it with `Unavailable` (SupportChat reconnect). (#1035)
 - Examples mirror: the Java/Kotlin ZoneWorld Windows runner now finds the shared process script in the mirror. (#1035)
 
 ## Install

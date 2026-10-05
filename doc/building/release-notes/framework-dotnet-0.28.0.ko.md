@@ -18,6 +18,7 @@ Framework 0.28.0은 .NET binding 1.15.0과 Core 1.15.0을 사용합니다. (#146
 
 ## 결함 수정
 
+- 같은 Actor에 session을 다시 bind하는 중 이전 session의 정리가 새 binding 교체를 무효화해 `Unavailable`로 끝나던 경쟁을 고쳤습니다(SupportChat 재접속). (#1035)
 - examples 미러: Java·Kotlin ZoneWorld Windows runner가 미러에서 공용 프로세스 스크립트를 찾도록 고쳤습니다. (#1035)
 
 ## 설치

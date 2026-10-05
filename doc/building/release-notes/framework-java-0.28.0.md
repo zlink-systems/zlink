@@ -18,6 +18,7 @@ Framework 0.28.0 uses Java·Kotlin binding 1.15.0 and Core 1.15.0. (#1460)
 
 ## Defect Fixes
 
+- The Kotlin quickstart Windows start script uses a `lib` wildcard CLASSPATH so it doesn't exceed the command-line limit in a mirror clone. (#1035)
 - A Ready commit that meets a shared capacity conflict re-verifies eligibility and rebuilds the request (GameQuest owner race). (#1464)
 - Examples mirror: the Java/Kotlin ZoneWorld Windows runner now finds the shared process script in the mirror. (#1035)
 

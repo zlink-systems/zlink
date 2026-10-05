@@ -18,6 +18,7 @@ Framework 0.28.0은 Java·Kotlin binding 1.15.0과 Core 1.15.0을 사용합니�
 
 ## 결함 수정
 
+- Kotlin quickstart의 Windows 시작 스크립트가 미러 경로에서 명령줄 길이 한도를 넘지 않도록 CLASSPATH를 `lib` wildcard로 씁니다. (#1035)
 - Ready commit이 공유 capacity conflict를 만나면 자격을 다시 확인해 요청을 재구성합니다(GameQuest owner 경합). (#1464)
 - examples 미러: Java·Kotlin ZoneWorld Windows runner가 미러에서 공용 프로세스 스크립트를 찾도록 고쳤습니다. (#1035)
 
