@@ -74,8 +74,6 @@ submit_error_t send_completion_error (zlink_send_complete_result_t result_,
             return submit_error_t (submit_result_t::not_found, terminal_errno_);
         case ZLINK_SEND_NOT_CONNECTED:
             return submit_error_t (submit_result_t::not_connected, terminal_errno_);
-        case ZLINK_SEND_TIMED_OUT:
-            return submit_error_t (submit_result_t::backpressured, EAGAIN);
         default:
             return submit_error_t (submit_result_t::internal_error, EPROTO);
     }

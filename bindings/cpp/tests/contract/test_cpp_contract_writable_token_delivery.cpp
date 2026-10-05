@@ -43,7 +43,8 @@ void admitted_writable_retries ()
 
 void terminal_writable_uses_core_result (zlink_send_complete_result_t result_,
                                          int terminal_errno_,
-                                         zlink::submit_result_t expected_)
+                                         zlink::submit_result_t expected_,
+                                         int expected_errno_)
 {
     completion_test::fixture_t fixture;
     completion_test::active = &fixture;
@@ -67,7 +68,7 @@ void terminal_writable_uses_core_result (zlink_send_complete_result_t result_,
     }
     catch (const zlink::submit_error_t &error) {
         assert (error.result () == expected_);
-        assert (error.internal_errno () == terminal_errno_);
+        assert (error.internal_errno () == expected_errno_);
     }
     try {
         request_wait.await_resume ();
@@ -75,7 +76,7 @@ void terminal_writable_uses_core_result (zlink_send_complete_result_t result_,
     }
     catch (const zlink::submit_error_t &error) {
         assert (error.result () == expected_);
-        assert (error.internal_errno () == terminal_errno_);
+        assert (error.internal_errno () == expected_errno_);
     }
     assert (fixture.attempts.size () == 2);
 }
@@ -195,11 +196,11 @@ int main ()
 {
     admitted_writable_retries ();
     terminal_writable_uses_core_result (ZLINK_SEND_NOT_FOUND, ENOENT,
-                                        zlink::submit_result_t::not_found);
+                                        zlink::submit_result_t::not_found, ENOENT);
     terminal_writable_uses_core_result (ZLINK_SEND_NOT_CONNECTED, ENOTCONN,
-                                        zlink::submit_result_t::not_connected);
+                                        zlink::submit_result_t::not_connected, ENOTCONN);
     terminal_writable_uses_core_result (ZLINK_SEND_TIMED_OUT, EAGAIN,
-                                        zlink::submit_result_t::backpressured);
+                                        zlink::submit_result_t::internal_error, EPROTO);
     unknown_writable_uses_protocol_error ();
     request_completion_projects_core_first_errno (ZLINK_REQUEST_TIMED_OUT,
                                                   zlink::request_result_t::timed_out, ETIMEDOUT);

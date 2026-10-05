@@ -52,7 +52,7 @@ func TestWritableProjectionForSendAndRequest(t *testing.T) {
 	}{
 		{"not found", int(SendNotFound), int(syscall.ENOENT), SubmitNotFound, int(syscall.ENOENT)},
 		{"not connected", int(SendNotConnected), int(syscall.ENOTCONN), SubmitNotConnected, int(syscall.ENOTCONN)},
-		{"timed out", int(SendTimedOut), int(syscall.EAGAIN), SubmitBackpressured, int(syscall.EAGAIN)},
+		{"timed out", int(SendTimedOut), int(syscall.EAGAIN), SubmitInternalError, int(syscall.EPROTO)},
 		{"unknown", 999, int(syscall.ENOENT), SubmitInternalError, int(syscall.EPROTO)},
 	}
 	for _, kind := range []completionOperationKind{completionSendRetry, completionRequest} {

@@ -43,7 +43,6 @@ final class CompletionOwner implements AutoCloseable {
     private static final int SEND_ADMITTED = 0;
     private static final int SEND_NOT_FOUND = 801;
     private static final int SEND_NOT_CONNECTED = 802;
-    private static final int SEND_TIMED_OUT = 803;
     private static final int RECV_DONT_WAIT = 1;
     private static final CompletionStage<Void> COMPLETED_ADMISSION =
         CompletableFuture.completedStage(null);
@@ -875,10 +874,6 @@ final class CompletionOwner implements AutoCloseable {
     }
 
     private static ZlinkSubmitException writableFailure(int result, int errno) {
-        if (result == SEND_TIMED_OUT) {
-            return new ZlinkSubmitException(SubmitResult.BACKPRESSURED,
-                                            NativeErrno.EAGAIN);
-        }
         return new ZlinkSubmitException(
             result == SEND_NOT_FOUND ? SubmitResult.NOT_FOUND
                 : SubmitResult.NOT_CONNECTED, errno);
@@ -1119,8 +1114,7 @@ final class CompletionOwner implements AutoCloseable {
                     failure = new ZlinkSubmitException(
                         SubmitResult.INTERNAL_ERROR);
                 } else if (completion.sendResult() == SEND_NOT_FOUND
-                           || completion.sendResult() == SEND_NOT_CONNECTED
-                           || completion.sendResult() == SEND_TIMED_OUT) {
+                           || completion.sendResult() == SEND_NOT_CONNECTED) {
                     failure = writableFailure(completion.sendResult(),
                                               completion.terminalErrno());
                 } else if (completion.sendResult() != SEND_ADMITTED) {

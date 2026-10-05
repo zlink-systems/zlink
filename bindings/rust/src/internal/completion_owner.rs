@@ -701,8 +701,6 @@ fn writable_outcome(
             SubmitResult::NotConnected,
             send_terminal_errno,
         ))
-    } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_TIMED_OUT as i32 {
-        Err(SubmitError::new(SubmitResult::Backpressured, libc::EAGAIN))
     } else {
         Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
     };
@@ -1074,7 +1072,7 @@ mod tests {
             (
                 ffi::zlink_send_complete_result_t::ZLINK_SEND_TIMED_OUT as i32,
                 libc::EAGAIN,
-                SubmitResult::Backpressured,
+                SubmitResult::InternalError,
             ),
             (999, libc::ENOENT, SubmitResult::InternalError),
         ] {
