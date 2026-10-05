@@ -45,8 +45,7 @@ bool try_extract_router_target_rid (const zlink_msg_t *part_, zlink_routing_id_t
 
 bool parse_stream_routing_id (const zlink_routing_id_t *rid_, uint32_t *routing_id_out_)
 {
-    if (!rid_ || !routing_id_out_ || rid_->size == 0 || rid_->size > sizeof (rid_->data)
-        || rid_->size != 4) {
+    if (!rid_ || !routing_id_out_ || rid_->size != 4) {
         errno = EINVAL;
         return false;
     }

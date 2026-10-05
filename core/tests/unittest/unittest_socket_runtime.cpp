@@ -362,8 +362,9 @@ void test_socket_lifecycle_coordinator_atomically_seals_or_acquires_mailbox_ref 
         seal_thread.join ();
 
         TEST_ASSERT_TRUE (acquired != sealed);
-        if (acquired)
+        if (acquired) {
             TEST_ASSERT_TRUE (coordinator.release_mailbox_ref ());
+        }
         TEST_ASSERT_TRUE (coordinator.mailbox_refs_sealed ());
         TEST_ASSERT_FALSE (coordinator.try_inc_mailbox_ref ());
     }
@@ -650,7 +651,7 @@ void test_socket_public_send_scope_without_sync_keeps_inflight_admission ()
 }
 }
 
-int main (int argc, char **argv)
+int main (int, char **)
 {
     UNITY_BEGIN ();
     RUN_TEST (test_transport_pair_expected_lane_masks);

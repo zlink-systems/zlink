@@ -63,20 +63,6 @@ struct publisher_probe_t
     std::atomic<int> publish_errno;
 };
 
-struct pubsub_callback_probe_t
-{
-    pubsub_callback_probe_t () : warmup_count (0), drain_count (0), active_count (0), fatal (false)
-    {
-    }
-
-    std::mutex sync;
-    std::condition_variable cv;
-    size_t warmup_count;
-    size_t drain_count;
-    size_t active_count;
-    bool fatal;
-};
-
 static const char k_pubsub_topic[] = "bench";
 
 void set_timeout_opts (void *socket_)
@@ -260,70 +246,7 @@ void close_delivery_ready_monitor (delivery_ready_monitor_t *monitor_)
     delete state;
 }
 
-void pubsub_handler (const zlink_routing_id_t *,
-                     const char *topic_,
-                     size_t topic_len_,
-                     zlink_msg_t *parts_,
-                     size_t part_count_,
-                     void *userdata_)
-{
-    pubsub_callback_probe_t *probe = static_cast<pubsub_callback_probe_t *> (userdata_);
-    if (!probe) {
-        if (parts_)
-            zlink_multipart_close (parts_, part_count_);
-        return;
-    }
 
-    bool fatal = false;
-    char phase = '\0';
-    if (!topic_ || topic_len_ != std::strlen (k_pubsub_topic)
-        || std::memcmp (topic_, k_pubsub_topic, topic_len_) != 0 || !parts_ || part_count_ != 1
-        || zlink_msg_size (&parts_[0]) < 1) {
-        fatal = true;
-    } else {
-        phase = *static_cast<const char *> (zlink_msg_data (&parts_[0]));
-    }
-
-    if (parts_)
-        zlink_multipart_close (parts_, part_count_);
-
-    {
-        std::lock_guard<std::mutex> lock (probe->sync);
-        if (fatal) {
-            probe->fatal = true;
-        } else if (phase == 'W') {
-            ++probe->warmup_count;
-        } else if (phase == 'D') {
-            ++probe->drain_count;
-        } else if (phase == 'A') {
-            ++probe->active_count;
-        } else {
-            probe->fatal = true;
-        }
-    }
-    probe->cv.notify_all ();
-}
-
-bool wait_probe_phase_count (pubsub_callback_probe_t *probe_,
-                             char phase_,
-                             size_t expected_count_,
-                             int timeout_ms_)
-{
-    if (!probe_)
-        return false;
-
-    std::unique_lock<std::mutex> lock (probe_->sync);
-    return probe_->cv.wait_for (lock, std::chrono::milliseconds (timeout_ms_ > 0 ? timeout_ms_ : 1),
-                                [probe_, phase_, expected_count_] () {
-                                    if (probe_->fatal)
-                                        return true;
-                                    if (phase_ == 'W')
-                                        return probe_->warmup_count >= expected_count_;
-                                    if (phase_ == 'D')
-                                        return probe_->drain_count >= expected_count_;
-                                    return probe_->active_count >= expected_count_;
-                                });
-}
 
 void publish_phase_message (void *pub_, char phase_, size_t seq_)
 {

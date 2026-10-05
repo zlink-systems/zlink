@@ -75,8 +75,9 @@ zlink_monitor_event_t await_event (void *monitor_, uint64_t expected_event_,
             continue;
         }
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
-        if (forbid_closed_)
+        if (forbid_closed_) {
             TEST_ASSERT_NOT_EQUAL (ZLINK_EVENT_CLOSED, event.event);
+        }
         if (event.event == expected_event_
             && (!require_ready_edge_
                 || (event.flags & ready_edge_flag) != 0))

@@ -89,30 +89,6 @@ void set_recv_timeout (fd_t fd_, int timeout_ms_)
 #endif
 }
 
-bool fd_readable (fd_t fd_, int timeout_ms_)
-{
-    fd_set read_set;
-    FD_ZERO (&read_set);
-    FD_SET (fd_, &read_set);
-    struct timeval timeout;
-    timeout.tv_sec = timeout_ms_ / 1000;
-    timeout.tv_usec = (timeout_ms_ % 1000) * 1000;
-#if defined ZLINK_HAVE_WINDOWS
-    const int rc = select (0, &read_set, NULL, NULL, &timeout);
-#else
-    const int rc = select (static_cast<int> (fd_) + 1, &read_set, NULL, NULL,
-                           &timeout);
-#endif
-    return rc > 0 && FD_ISSET (fd_, &read_set);
-}
-
-fd_t accept_eventually (fd_t listener_, int timeout_ms_)
-{
-    if (!fd_readable (listener_, timeout_ms_))
-        return retired_fd;
-    return accept (listener_, NULL, NULL);
-}
-
 enum recv_status_t
 {
     recv_ok = 0,
@@ -216,39 +192,7 @@ bool send_zmp_control (fd_t fd_, const unsigned char *body_, size_t body_len_)
     return send_zmp_frame (fd_, test_zmp_wire::zmp_flag_control, body_, body_len_);
 }
 
-bool send_paired_hello_only (fd_t fd_, int socket_type_,
-                             const char *routing_id_)
-{
-    const size_t routing_id_size = strlen (routing_id_);
-    if (routing_id_size > 255)
-        return false;
-    unsigned char hello[3 + 255];
-    hello[0] = test_zmp_wire::zmp_control_hello;
-    hello[1] = static_cast<unsigned char> (socket_type_);
-    hello[2] = static_cast<unsigned char> (routing_id_size);
-    if (routing_id_size != 0)
-        memcpy (hello + 3, routing_id_, routing_id_size);
-    return send_zmp_control (fd_, hello, 3 + routing_id_size);
-}
 
-bool send_paired_ready_only (fd_t fd_, int socket_type_,
-                             const char *routing_id_, unsigned char lane_count_,
-                             unsigned char lane_)
-{
-    std::vector<unsigned char> ready;
-    ready.push_back (test_zmp_wire::zmp_control_ready);
-    const char *const socket_type_name =
-      socket_type_ == test_zmp_wire::socket_router ? "ROUTER" : "DEALER";
-    test_zmp_wire::zmp_metadata::append_property (
-      ready, "Socket-Type", socket_type_name, strlen (socket_type_name));
-    test_zmp_wire::zmp_metadata::append_property (
-      ready, "Routing-Id", routing_id_, strlen (routing_id_));
-    test_zmp_wire::zmp_metadata::append_property (
-      ready, "Zlink-Lane-Count", &lane_count_, sizeof (lane_count_));
-    test_zmp_wire::zmp_metadata::append_property (
-      ready, "Zlink-Lane", &lane_, sizeof (lane_));
-    return send_zmp_control (fd_, &ready[0], ready.size ());
-}
 
 bool send_basic_handshake (fd_t fd_, int socket_type_)
 {
@@ -424,55 +368,7 @@ bool read_zmp_frame (fd_t fd_,
     return true;
 }
 
-fd_t accept_core_hello (fd_t listener_, int timeout_ms_)
-{
-    const fd_t connection = accept_eventually (listener_, timeout_ms_);
-    if (connection == retired_fd)
-        return retired_fd;
-    set_recv_timeout (connection, timeout_ms_);
-    unsigned char flags = 0;
-    std::vector<unsigned char> body;
-    bool closed = false;
-    if (!read_zmp_frame (connection, flags, body, closed)
-        || closed || (flags & test_zmp_wire::zmp_flag_control) == 0
-        || body.empty () || body[0] != test_zmp_wire::zmp_control_hello) {
-        close (connection);
-        return retired_fd;
-    }
-    return connection;
-}
 
-bool read_paired_ready_lane (fd_t fd_, unsigned char *count_out_,
-                             unsigned char *lane_out_)
-{
-    for (size_t attempt = 0; attempt != 8; ++attempt) {
-        unsigned char flags = 0;
-        std::vector<unsigned char> body;
-        bool closed = false;
-        if (!read_zmp_frame (fd_, flags, body, closed) || closed)
-            return false;
-        if ((flags & test_zmp_wire::zmp_flag_control) == 0 || body.empty ()
-            || body[0] != test_zmp_wire::zmp_control_ready)
-            continue;
-        test_zmp_wire::zmp_metadata::properties_t properties;
-        if (test_zmp_wire::zmp_metadata::parse (
-              body.size () == 1 ? NULL : &body[1], body.size () - 1,
-              properties)
-            != 0)
-            return false;
-        const test_zmp_wire::zmp_metadata::properties_t::const_iterator count =
-          properties.find ("Zlink-Lane-Count");
-        const test_zmp_wire::zmp_metadata::properties_t::const_iterator lane =
-          properties.find ("Zlink-Lane");
-        if (count == properties.end () || lane == properties.end ()
-            || count->second.size () != 1 || lane->second.size () != 1)
-            return false;
-        *count_out_ = static_cast<unsigned char> (count->second[0]);
-        *lane_out_ = static_cast<unsigned char> (lane->second[0]);
-        return true;
-    }
-    return false;
-}
 
 bool wait_for_raw_ready (fd_t fd_)
 {
@@ -692,11 +588,6 @@ uint64_t read_raw_request_sequence (fd_t fd_)
     return 0;
 }
 
-bool send_raw_reply (fd_t fd_, uint64_t request_seq_)
-{
-    return send_zmp_request_reply_frame (
-      fd_, test_zmp_wire::zmp_kind_reply, request_seq_, NULL, 0);
-}
 
 void init_empty_completion (zlink_completion_t *completion_)
 {
@@ -850,8 +741,9 @@ void run_raw_error_reply_case (uint64_t pair_id_,
                            request_completion.request_result);
     TEST_ASSERT_EQUAL_UINT64 (expected_payload_count_,
                               request_completion.reply_part_count);
-    if (expected_payload_count_ == 0)
+    if (expected_payload_count_ == 0) {
         TEST_ASSERT_NULL (request_completion.reply_parts);
+    }
     if (expected_payload_count_ == 2) {
         TEST_ASSERT_EQUAL_UINT64 (
           6, zlink_msg_size (&request_completion.reply_parts[0]));

@@ -67,47 +67,6 @@ void expect_final (void *socket_, const std::string &payload_)
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
 }
 
-zlink_submit_result_t try_send_sized (void *socket_, size_t size_, char fill_)
-{
-    zlink_msg_t part;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&part, size_));
-    if (size_ != 0)
-        memset (zlink_msg_data (&part), fill_, size_);
-    return zlink_send (socket_, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL);
-}
-
-size_t fill_pair_until_backpressured (void *sender_, size_t payload_size_)
-{
-    for (size_t admitted = 0; admitted != 256; ++admitted) {
-        const zlink_submit_result_t result =
-          try_send_sized (sender_, payload_size_, 'f');
-        if (result == ZLINK_SUBMIT_BACKPRESSURED) {
-            TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-            return admitted;
-        }
-        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
-    }
-    TEST_FAIL_MESSAGE ("PAIR did not reach configured byte HWM");
-    return 0;
-}
-
-bool drain_one_pair_part (void *receiver_)
-{
-    zlink_msg_t part;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
-    size_t has_more = 1;
-    const zlink_recv_result_t result = zlink_recv (receiver_, NULL, &part, 1, &has_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
-    if (result == ZLINK_RECV_NO_DATA) {
-        TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
-        return false;
-    }
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, result);
-    TEST_ASSERT_EQUAL_INT (1, has_more);
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
-    return true;
-}
-
 } // namespace
 
 void test_pair_bidirectional_parts_have_null_source_and_exclusive_peer ()

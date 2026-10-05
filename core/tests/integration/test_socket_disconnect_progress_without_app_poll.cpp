@@ -492,8 +492,9 @@ void run_immediate_reconnect_request_case (transport_t transport_,
     TEST_ASSERT_NOT_EQUAL (0, request_id);
     const bool request_delivered = receive_request_and_reply (
       server, "request-new-connection", handover_ ? event_timeout_ms : 250);
-    if (handover_)
+    if (handover_) {
         TEST_ASSERT_TRUE (request_delivered);
+    }
 
     zlink_completion_t reply;
     TEST_ASSERT_TRUE (wait_completion (client, &reply, event_timeout_ms));

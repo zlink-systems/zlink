@@ -34,9 +34,7 @@ struct selected_receive_candidate_t
     }
 };
 
-int probe_router_reply_token_admission (zlink::pipe_t *pipe_,
-                                        const zlink::msg_t &msg_,
-                                        void *userdata_)
+int probe_router_reply_token_admission (zlink::pipe_t *, const zlink::msg_t &msg_, void *userdata_)
 {
     zlink::socket_base_t *const socket =
       static_cast<zlink::socket_base_t *> (userdata_);

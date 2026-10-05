@@ -11,47 +11,6 @@
 
 namespace
 {
-bool allocate_loopback_tcp_endpoint (char *endpoint_out_, size_t endpoint_size_)
-{
-    if (!endpoint_out_ || endpoint_size_ == 0) {
-        errno = EINVAL;
-        return false;
-    }
-
-    for (int attempt = 0; attempt < 256; ++attempt) {
-        fd_t fd = socket (AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (fd == retired_fd)
-            continue;
-
-        int reuse = 1;
-        setsockopt (fd, SOL_SOCKET, SO_REUSEADDR, as_setsockopt_opt_t (&reuse), sizeof (reuse));
-
-        struct sockaddr_in addr;
-        memset (&addr, 0, sizeof (addr));
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-        addr.sin_port = 0;
-
-        if (bind (fd, reinterpret_cast<struct sockaddr *> (&addr), sizeof (addr)) == 0) {
-#if defined ZLINK_HAVE_WINDOWS
-            int addr_len = sizeof (addr);
-#else
-            socklen_t addr_len = sizeof (addr);
-#endif
-            if (getsockname (fd, reinterpret_cast<struct sockaddr *> (&addr), &addr_len) == 0) {
-                close (fd);
-                snprintf (endpoint_out_, endpoint_size_, "tcp://127.0.0.1:%u",
-                          static_cast<unsigned> (ntohs (addr.sin_port)));
-                return true;
-            }
-        }
-
-        close (fd);
-    }
-
-    errno = EADDRINUSE;
-    return false;
-}
 
 } // namespace
 
@@ -75,11 +34,6 @@ static void close_ctx (void *ctx_)
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx_));
 }
 
-static void close_monitor_if_open (void **monitor_p_)
-{
-    if (monitor_p_ && *monitor_p_)
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (monitor_p_));
-}
 
 void test_typed_raw_socket_options ()
 {

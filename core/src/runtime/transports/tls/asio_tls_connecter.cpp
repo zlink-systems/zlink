@@ -40,10 +40,14 @@
 
 #if ASIO_TLS_CONNECTER_DEBUG
 #include <cstdio>
-#define TLS_CONNECTER_DBG(fmt, ...)                                                                \
-    fprintf (stderr, "[ASIO_TLS_CONNECTER] " fmt "\n", ##__VA_ARGS__)
+#define TLS_CONNECTER_DBG(...)                                                                     \
+    do {                                                                                           \
+        fprintf (stderr, "[ASIO_TLS_CONNECTER] ");                                                 \
+        fprintf (stderr, __VA_ARGS__);                                                             \
+        fputc ('\n', stderr);                                                                      \
+    } while (0)
 #else
-#define TLS_CONNECTER_DBG(fmt, ...)
+#define TLS_CONNECTER_DBG(...) ((void) 0)
 #endif
 
 namespace

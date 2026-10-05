@@ -33,12 +33,11 @@ template <typename T> class ypipe_base_t
   public:
     virtual ~ypipe_base_t () ZLINK_DEFAULT;
     virtual void write (const T &value_, bool incomplete_) = 0;
-    virtual void write_with_replacement_accounting (
-      const T &value_,
-      bool incomplete_,
-      uint64_t (*accounted_bytes_) (const T &),
-      bool (*counted_message_) (const T &),
-      ypipe_replacement_accounting_t *replaced_)
+    virtual void write_with_replacement_accounting (const T &value_,
+                                                    bool incomplete_,
+                                                    uint64_t (*) (const T &),
+                                                    bool (*) (const T &),
+                                                    ypipe_replacement_accounting_t *replaced_)
     {
         if (replaced_) {
             replaced_->bytes = 0;
@@ -46,10 +45,9 @@ template <typename T> class ypipe_base_t
         }
         write (value_, incomplete_);
     }
-    virtual void discard_accounting (
-      uint64_t (*accounted_bytes_) (const T &),
-      bool (*counted_message_) (const T &),
-      ypipe_replacement_accounting_t *discarded_)
+    virtual void discard_accounting (uint64_t (*) (const T &),
+                                     bool (*) (const T &),
+                                     ypipe_replacement_accounting_t *discarded_)
     {
         if (discarded_) {
             discarded_->bytes = 0;

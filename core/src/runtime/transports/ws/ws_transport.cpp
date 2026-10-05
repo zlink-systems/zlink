@@ -8,7 +8,7 @@
 #include "engine/asio/asio_debug.hpp"
 
 //  Debug logging for WebSocket transport
-#define ASIO_DBG_WS(fmt, ...) ASIO_DBG_THIS ("WS", fmt, ##__VA_ARGS__)
+#define ASIO_DBG_WS(...) ASIO_DBG_THIS ("WS", __VA_ARGS__)
 
 namespace zlink
 {

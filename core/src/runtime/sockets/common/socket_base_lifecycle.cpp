@@ -946,7 +946,6 @@ int zlink::socket_base_t::start_async_mailbox_processing (io_thread_t *io_thread
 bool zlink::socket_base_t::stop_async_mailbox_processing (
   bool require_unowned_)
 {
-    receive_runtime_t &receive = receive_runtime ();
     socket_public_api_lock_scope_t api_owner (
       lifecycle_coordinator (),
       !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());

@@ -430,9 +430,8 @@ bool zlink::mailbox_t::acquire_poller_notification ()
         zlink_assert (count != poller_notification_count);
         const bool primary = count == 0;
         const uint32_t desired =
-          count + 1
-          | (primary ? poller_notification_primary
-                     : observed & poller_notification_primary);
+          (count + 1)
+          | (primary ? poller_notification_primary : observed & poller_notification_primary);
         if (_poller_notifications.compare_exchange_weak (
               observed, desired, std::memory_order_acq_rel,
               std::memory_order_acquire))

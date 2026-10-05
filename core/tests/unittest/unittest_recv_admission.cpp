@@ -264,7 +264,7 @@ static void case_xpub_and_sub_retry_other_thread (void *ctx_, zlink_socket_type_
 
     // SUB record: small parts buffer on thread A, sufficient on thread B.
     zlink_msg_t pub[retry_record_capacity];
-    for (int i = 0; i < retry_record_capacity; ++i)
+    for (size_t i = 0; i < retry_record_capacity; ++i)
         make_part (&pub[i], "r3-" + std::to_string (i));
     CHECK (zlink_publish (xpub, topic.c_str (), pub, retry_record_capacity, ZLINK_SEND_FLAGS_NONE)
            == 0);

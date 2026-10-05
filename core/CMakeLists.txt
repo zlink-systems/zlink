@@ -42,6 +42,42 @@ include(GNUInstallDirs)
 include(CheckTypeSize)
 include(CMakePackageConfigHelpers)
 
+macro(zlink_check_cxx_flag_prepend flag)
+  string(MAKE_C_IDENTIFIER "${flag}" flag_identifier)
+  set(flag_result "HAVE_FLAG_${flag_identifier}")
+  check_cxx_compiler_flag("${flag}" ${flag_result})
+
+  if(${flag_result})
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${flag}")
+  endif()
+endmacro()
+
+# Use the same platform feature-test definition for product sources and CMake probes.
+set(ZLINK_PLATFORM_FEATURE_DEFINITION "")
+if(CMAKE_SYSTEM_NAME MATCHES "Linux"
+   OR CMAKE_SYSTEM_NAME MATCHES "GNU/kFreeBSD"
+   OR CMAKE_SYSTEM_NAME MATCHES "GNU/Hurd"
+   OR CYGWIN)
+  set(ZLINK_PLATFORM_FEATURE_DEFINITION -D_GNU_SOURCE)
+elseif(CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
+  set(ZLINK_PLATFORM_FEATURE_DEFINITION -D__BSD_VISIBLE)
+elseif(CMAKE_SYSTEM_NAME MATCHES "NetBSD")
+  set(ZLINK_PLATFORM_FEATURE_DEFINITION -D_NETBSD_SOURCE)
+elseif(CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
+  set(ZLINK_PLATFORM_FEATURE_DEFINITION -D_OPENBSD_SOURCE)
+elseif(CMAKE_SYSTEM_NAME MATCHES "SunOS")
+  set(ZLINK_PLATFORM_FEATURE_DEFINITION -D_PTHREADS)
+elseif(CMAKE_SYSTEM_NAME MATCHES "HP-UX")
+  set(ZLINK_PLATFORM_FEATURE_DEFINITION -D_POSIX_C_SOURCE=200112L)
+  zlink_check_cxx_flag_prepend(-Ae)
+elseif(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+  set(ZLINK_PLATFORM_FEATURE_DEFINITION -D_DARWIN_C_SOURCE)
+endif()
+if(ZLINK_PLATFORM_FEATURE_DEFINITION)
+  add_definitions(${ZLINK_PLATFORM_FEATURE_DEFINITION})
+  list(APPEND CMAKE_REQUIRED_DEFINITIONS ${ZLINK_PLATFORM_FEATURE_DEFINITION})
+endif()
+
 list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}")
 set(ZLINK_CMAKE_MODULES_DIR ${PROJECT_SOURCE_DIR}/builds/cmake/Modules)
 list(APPEND CMAKE_MODULE_PATH ${ZLINK_CMAKE_MODULES_DIR})
@@ -533,14 +569,6 @@ add_definitions(-DZLINK_CUSTOM_PLATFORM_HPP)
 
 option(ENABLE_EVENTFD "Enable/disable eventfd" ZLINK_HAVE_EVENTFD)
 
-macro(zlink_check_cxx_flag_prepend flag)
-  check_cxx_compiler_flag("${flag}" HAVE_FLAG_${flag})
-
-  if(HAVE_FLAG_${flag})
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${flag}")
-  endif()
-endmacro()
-
 option(ENABLE_ANALYSIS "Build with static analysis(make take very long)" OFF)
 
 if(MSVC)
@@ -659,36 +687,14 @@ if (NOT MSVC)
   # Execution checks
   if(NOT CMAKE_CROSSCOMPILING)
     zlink_check_sock_cloexec()
-    zlink_check_o_cloexec()
     zlink_check_so_bindtodevice()
     zlink_check_so_keepalive()
-    zlink_check_so_priority()
     zlink_check_tcp_keepcnt()
     zlink_check_tcp_keepidle()
     zlink_check_tcp_keepintvl()
     zlink_check_tcp_keepalive()
     zlink_check_getrandom()
   endif()
-endif()
-
-if(CMAKE_SYSTEM_NAME MATCHES "Linux"
-   OR CMAKE_SYSTEM_NAME MATCHES "GNU/kFreeBSD"
-   OR CMAKE_SYSTEM_NAME MATCHES "GNU/Hurd"
-   OR CYGWIN)
-  add_definitions(-D_GNU_SOURCE)
-elseif(CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
-  add_definitions(-D__BSD_VISIBLE)
-elseif(CMAKE_SYSTEM_NAME MATCHES "NetBSD")
-  add_definitions(-D_NETBSD_SOURCE)
-elseif(CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
-  add_definitions(-D_OPENBSD_SOURCE)
-elseif(CMAKE_SYSTEM_NAME MATCHES "SunOS")
-  add_definitions(-D_PTHREADS)
-elseif(CMAKE_SYSTEM_NAME MATCHES "HP-UX")
-  add_definitions(-D_POSIX_C_SOURCE=200112L)
-  zlink_check_cxx_flag_prepend(-Ae)
-elseif(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-  add_definitions(-D_DARWIN_C_SOURCE)
 endif()
 
 find_package(AsciiDoc QUIET)

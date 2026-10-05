@@ -39,9 +39,14 @@
 
 #if ASIO_TLS_LISTENER_DEBUG
 #include <cstdio>
-#define TLS_LISTENER_DBG(fmt, ...) fprintf (stderr, "[ASIO_TLS_LISTENER] " fmt "\n", ##__VA_ARGS__)
+#define TLS_LISTENER_DBG(...)                                                                      \
+    do {                                                                                           \
+        fprintf (stderr, "[ASIO_TLS_LISTENER] ");                                                  \
+        fprintf (stderr, __VA_ARGS__);                                                             \
+        fputc ('\n', stderr);                                                                      \
+    } while (0)
 #else
-#define TLS_LISTENER_DBG(fmt, ...)
+#define TLS_LISTENER_DBG(...) ((void) 0)
 #endif
 
 zlink::asio_tls_listener_t::asio_tls_listener_t (io_thread_t *io_thread_,
@@ -91,6 +96,8 @@ int zlink::asio_tls_listener_t::set_local_address (const char *addr_)
     if (configure_asio_tcp_acceptor (
           _acceptor, protocol, _address.family (), bind_endpoint, options,
           [] (const char *stage, const boost::system::error_code &ec, bool) {
+              LIBZLINK_UNUSED (stage);
+              LIBZLINK_UNUSED (ec);
               TLS_LISTENER_DBG ("Failed to %s: %s", stage, ec.message ().c_str ());
           })
         != 0)
@@ -142,6 +149,8 @@ void zlink::asio_tls_listener_t::start_accept ()
     start_asio_listener_accepts<boost::asio::ip::tcp::socket> (
       _io_context, _acceptor, &_accepting_count, options,
       [] (size_t accepting_count_, size_t target_accepts_) {
+          LIBZLINK_UNUSED (accepting_count_);
+          LIBZLINK_UNUSED (target_accepts_);
           TLS_LISTENER_DBG ("start_accept: starting async_accept (%zu/%zu)", accepting_count_,
                             target_accepts_);
       },
@@ -349,10 +358,6 @@ bool zlink::asio_tls_listener_t::apply_accept_filters (fd_t fd_,
     //  Set IP Type-Of-Service
     if (options.tos != 0)
         set_ip_type_of_service (fd_, options.tos);
-
-    //  Set socket priority
-    if (options.priority != 0)
-        set_socket_priority (fd_, options.priority);
 
     return true;
 }

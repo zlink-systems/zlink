@@ -305,8 +305,9 @@ harness_result_t run_two_poller_wake_case (void *receiver_,
     void *watchdog = zlink_timer_new ();
     void *completion_stop_timer = zlink_timer_new ();
 
-    if (remove_primary_before_wait_)
+    if (remove_primary_before_wait_) {
         TEST_ASSERT_NOT_NULL (departing_primary_poller);
+    }
     TEST_ASSERT_NOT_NULL (receive_poller);
     TEST_ASSERT_NOT_NULL (completion_poller);
     TEST_ASSERT_NOT_NULL (watchdog);

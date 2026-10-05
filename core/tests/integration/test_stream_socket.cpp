@@ -144,17 +144,6 @@ static bool wait_monitor_event_direct_for_rid (
     return false;
 }
 
-static void send_stream_msg (void *socket_,
-                             const unsigned char routing_id_[stream_routing_id_size],
-                             const void *data_,
-                             size_t size_)
-{
-    zlink_routing_id_t rid = {};
-    rid.size = static_cast<uint8_t> (stream_routing_id_size);
-    memcpy (rid.data, routing_id_, stream_routing_id_size);
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (size_),
-      test_stream_send_bytes (socket_, &rid, data_, size_, 0));
-}
 
 static bool recv_stream_routing_id_and_payload (void *socket_,
                                                 zlink_routing_id_t *rid_out_,
@@ -375,16 +364,6 @@ static int recv_stream_packet (fd_t fd_, void *buf_, size_t cap_)
     return static_cast<int> (n);
 }
 
-static bool wait_raw_fd_closed (fd_t fd_)
-{
-    unsigned char probe[1];
-    const ssize_t n = recv (fd_, probe, sizeof (probe), 0);
-    if (n == 0)
-        return true;
-    if (n < 0 && (errno == ECONNRESET || errno == EPIPE))
-        return true;
-    return false;
-}
 
 static void close_raw_fd (fd_t fd_)
 {
@@ -430,18 +409,6 @@ static void test_sleep_ms (int delay_ms_)
 #else
     usleep (delay_ms_ * 1000);
 #endif
-}
-
-static bool wait_counter_at_least (std::atomic<int> *counter_, int expected_, int timeout_ms_)
-{
-    const int slice_ms = 10;
-    const int loops = timeout_ms_ > 0 ? timeout_ms_ / slice_ms + 1 : 1;
-    for (int i = 0; i < loops; ++i) {
-        if (counter_->load (std::memory_order_acquire) >= expected_)
-            return true;
-        test_sleep_ms (slice_ms);
-    }
-    return false;
 }
 
 static std::vector<unsigned char> build_stream_packet_frame (const unsigned char *header_,
@@ -561,104 +528,6 @@ static std::string make_routing_id_key (const unsigned char *data_, size_t size_
     return std::string (reinterpret_cast<const char *> (data_), size_);
 }
 
-struct stream_monitor_probe_t
-{
-    stream_monitor_probe_t () :
-        accepted (0),
-        connection_ready (0),
-        disconnected (0),
-        bad_ready_routing_id (0),
-        bad_disconnected_routing_id (0),
-        ready_routing_ids (),
-        disconnected_routing_ids ()
-    {
-    }
-
-    int accepted;
-    int connection_ready;
-    int disconnected;
-    int bad_ready_routing_id;
-    int bad_disconnected_routing_id;
-    std::set<std::string> ready_routing_ids;
-    std::set<std::string> disconnected_routing_ids;
-};
-
-static void record_stream_monitor_event (stream_monitor_probe_t *probe_,
-                                         const zlink_monitor_event_t *event_)
-{
-    if (!probe_ || !event_)
-        return;
-
-    switch (event_->event) {
-        case ZLINK_EVENT_ACCEPTED:
-            ++probe_->accepted;
-            break;
-        case ZLINK_EVENT_CONNECTION_READY:
-            ++probe_->connection_ready;
-            if (event_->routing_id.size != stream_routing_id_size) {
-                ++probe_->bad_ready_routing_id;
-                break;
-            }
-            probe_->ready_routing_ids.insert (
-              make_routing_id_key (event_->routing_id.data, event_->routing_id.size));
-            break;
-        case ZLINK_EVENT_DISCONNECTED:
-            ++probe_->disconnected;
-            if (event_->routing_id.size != stream_routing_id_size) {
-                ++probe_->bad_disconnected_routing_id;
-                break;
-            }
-            probe_->disconnected_routing_ids.insert (
-              make_routing_id_key (event_->routing_id.data, event_->routing_id.size));
-            break;
-        default:
-            break;
-    }
-}
-
-static void
-collect_stream_monitor_events (void *monitor_, stream_monitor_probe_t *probe_, int poll_timeout_ms_)
-{
-    if (!monitor_ || !probe_)
-        return;
-
-    zlink_pollitem_t items[] = {{monitor_, 0, ZLINK_POLLIN, 0}};
-    const int rc = zlink_poll (items, 1, poll_timeout_ms_, NULL);
-    if (rc <= 0 || (items[0].revents & ZLINK_POLLIN) == 0)
-        return;
-
-    for (;;) {
-        zlink_monitor_event_t event;
-        if (recv_monitor_event_from_socket (monitor_, &event, ZLINK_DONTWAIT) != 0)
-            break;
-        record_stream_monitor_event (probe_, &event);
-    }
-}
-
-static bool wait_stream_monitor_progress (void *monitor_,
-                                          stream_monitor_probe_t *probe_,
-                                          int expected_accepted_,
-                                          size_t expected_ready_,
-                                          size_t expected_disconnected_,
-                                          int timeout_ms_)
-{
-    const int slice_ms = 20;
-    const int loops = timeout_ms_ > 0 ? timeout_ms_ / slice_ms + 1 : 1;
-    for (int i = 0; i < loops; ++i) {
-        collect_stream_monitor_events (monitor_, probe_, slice_ms);
-        if (probe_->accepted >= expected_accepted_
-            && probe_->ready_routing_ids.size () >= expected_ready_
-            && probe_->disconnected_routing_ids.size () >= expected_disconnected_) {
-            return true;
-        }
-    }
-
-    collect_stream_monitor_events (monitor_, probe_, 0);
-    return probe_->accepted >= expected_accepted_
-           && probe_->ready_routing_ids.size () >= expected_ready_
-           && probe_->disconnected_routing_ids.size () >= expected_disconnected_;
-}
-
 struct stream_ordering_probe_t
 {
     stream_ordering_probe_t () :
@@ -761,35 +630,6 @@ static void mark_stream_payload_end (stream_ordering_probe_t *probe_,
     const std::string key = make_routing_id_key (rid_->data, rid_->size);
     std::lock_guard<std::mutex> lk (probe_->mu);
     probe_->active_payload_routing_ids.erase (key);
-}
-
-static bool
-wait_stream_ordering_counter (std::atomic<int> *counter_, int expected_, int timeout_ms_)
-{
-    return wait_counter_at_least (counter_, expected_, timeout_ms_);
-}
-
-static bool wait_stream_ordering_sets (stream_ordering_probe_t *probe_,
-                                       size_t expected_ready_,
-                                       size_t expected_disconnected_,
-                                       int timeout_ms_)
-{
-    const int slice_ms = 20;
-    const int loops = timeout_ms_ > 0 ? timeout_ms_ / slice_ms + 1 : 1;
-    for (int i = 0; i < loops; ++i) {
-        {
-            std::lock_guard<std::mutex> lk (probe_->mu);
-            if (probe_->ready_routing_ids.size () >= expected_ready_
-                && probe_->disconnected_routing_ids.size () >= expected_disconnected_) {
-                return true;
-            }
-        }
-        test_sleep_ms (slice_ms);
-    }
-
-    std::lock_guard<std::mutex> lk (probe_->mu);
-    return probe_->ready_routing_ids.size () >= expected_ready_
-           && probe_->disconnected_routing_ids.size () >= expected_disconnected_;
 }
 
 static bool wait_stream_ordering_sets_with_monitor (void *monitor_,

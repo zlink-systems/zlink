@@ -147,9 +147,8 @@ class i_asio_transport
     //  returns; the referenced bytes remain owned by the engine until the
     //  completion handler runs.
     //  Default: not supported; handler receives operation_not_supported.
-    virtual void async_writev (const boost::asio::const_buffer *buffers,
-                               std::size_t buffer_count,
-                               completion_handler_t handler)
+    virtual void
+    async_writev (const boost::asio::const_buffer *, std::size_t, completion_handler_t handler)
     {
         if (handler) {
             handler (boost::asio::error::operation_not_supported, 0);
@@ -163,7 +162,7 @@ class i_asio_transport
     //  Start async handshake for transports that require it (SSL, WebSocket).
     //  For TCP, this is a no-op that immediately calls handler with success.
     //  handshake_type: 0 = client, 1 = server
-    virtual void async_handshake (int handshake_type, completion_handler_t handler)
+    virtual void async_handshake (int, completion_handler_t handler)
     {
         //  Default: no handshake needed, succeed immediately
         if (handler) {

@@ -40,7 +40,7 @@
 
 #if !defined ZLINK_DEFAULT
 #if defined ZLINK_HAVE_NOEXCEPT
-#define ZLINK_DEFAULT = default;
+#define ZLINK_DEFAULT = default
 #else
 #define ZLINK_DEFAULT                                                                              \
     {                                                                                              \

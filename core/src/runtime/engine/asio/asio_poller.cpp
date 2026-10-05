@@ -20,9 +20,14 @@
 
 #if ASIO_POLLER_DEBUG
 #include <cstdio>
-#define ASIO_DBG(fmt, ...) fprintf (stderr, "[ASIO_POLLER] " fmt "\n", ##__VA_ARGS__)
+#define ASIO_DBG(...)                                                                              \
+    do {                                                                                           \
+        fprintf (stderr, "[ASIO_POLLER] ");                                                        \
+        fprintf (stderr, __VA_ARGS__);                                                             \
+        fputc ('\n', stderr);                                                                      \
+    } while (0)
 #else
-#define ASIO_DBG(fmt, ...)
+#define ASIO_DBG(...) ((void) 0)
 #endif
 
 #include "utils/macros.hpp"
