@@ -115,22 +115,31 @@ fi
 
 RUN_DIR="$(mktemp -d)"
 PIDS=()
+REDIS_PIDS=()
 REDIS_CONTAINERS=()
 RESULTS=()
 
 stop_all() {
   local container pid
-  for container in "${REDIS_CONTAINERS[@]:-}"; do
-    docker rm -f "${container}" >/dev/null 2>&1 || true
-  done
-  REDIS_CONTAINERS=()
-  for pid in "${PIDS[@]:-}"; do
+  # Location Store must remain available until every role has finished teardown.
+  for pid in "${PIDS[@]}"; do
     kill "$pid" >/dev/null 2>&1 || true
   done
-  for pid in "${PIDS[@]:-}"; do
+  for pid in "${PIDS[@]}"; do
     wait "$pid" >/dev/null 2>&1 || true
   done
   PIDS=()
+  for container in "${REDIS_CONTAINERS[@]}"; do
+    docker rm -f "${container}" >/dev/null 2>&1 || true
+  done
+  REDIS_CONTAINERS=()
+  for pid in "${REDIS_PIDS[@]}"; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done
+  for pid in "${REDIS_PIDS[@]}"; do
+    wait "$pid" >/dev/null 2>&1 || true
+  done
+  REDIS_PIDS=()
 }
 
 cleanup() {
@@ -181,12 +190,12 @@ start_redis() {
     && command -v redis-cli >/dev/null 2>&1; then
     redis-server --port "${port}" --bind 127.0.0.1 --save '' --appendonly no \
       --daemonize no >"${RUN_DIR}/${name}.log" 2>&1 &
-    PIDS+=("$!")
+    REDIS_PIDS+=("$!")
   else
     container="zlink-cross-${name}-${BASHPID}-${RANDOM}"
     docker run --rm --name "${container}" -p "127.0.0.1:${port}:6379" \
       redis:7-alpine >"${RUN_DIR}/${name}.log" 2>&1 &
-    PIDS+=("$!")
+    REDIS_PIDS+=("$!")
     REDIS_CONTAINERS+=("${container}")
   fi
   local deadline=$((SECONDS + 20))
