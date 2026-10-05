@@ -821,8 +821,8 @@ deadline can apply across Spot lookup, cold activation, handler execution, and r
 | Shape | Absolute end-to-end time boundary |
 | .NET notation | The caller specifies a `TimeSpan` timeout, while the framework and lifecycle context use a fixed `DateTimeOffset Deadline`. |
 | Public composition | A single final time point computed once when the terminal submit starts. Not the sum of per-stage timeouts. |
-| Creation/management | Fixed by the source framework from the caller's timeout and the current time. |
-| Lifetime | Shared by resolve, reservation, factory, Ready barrier, handler, and reply; discarded after terminal completion. |
+| Creation/management | For a request, fixed by the source framework from the caller's timeout and the current time. A one-way Instance activation deadline is defined by [Spot address messaging §5](../03-spot-actor/06-spot-address-messaging.en.md#5-direct-call-to-an-existing-owner-and-the-completion-boundary). |
+| Lifetime | A request deadline is shared by resolve, reservation, factory, Ready barrier, handler, and reply; discarded after terminal completion. |
 
 <a id="factory"></a>
 ### Factory

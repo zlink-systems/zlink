@@ -527,7 +527,12 @@ A one-way call only waits up to local outbound admission. Even if cold
 activation is needed, it doesn't wait for application handler execution.
 Here, outbound admission is the moment the activation envelope is accepted
 by the selected target transport — it doesn't mean reservation or Ready
-commit completion. A request completes terminal-once, within one deadline,
+commit completion. A one-way call's activation deadline (the deadline of route kind `2` and ZLIA)
+is computed once as the terminal send submission start time plus the source MeshNode's default
+request timeout, and isn't recomputed after resolve. This deadline applies only
+to the target's activation work (reservation and recovery) and doesn't end the caller's send
+wait — the send wait follows
+[Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). A request completes terminal-once, within one deadline,
 across resolve, cold activation, first-message dispatch, and reply. A
 failure after target queue admission isn't hidden-retried by re-finding
 the current owner.
