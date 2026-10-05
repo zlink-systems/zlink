@@ -770,35 +770,53 @@ internal sealed partial class ZLinkProviderLocationRepository
     )
     {
         ArgumentNullException.ThrowIfNull(reservation);
-        var current = await ReadAuthorityRecordAsync(reservation.Key, cancellationToken)
-            .ConfigureAwait(false);
-        if (!MatchesReservation(current, reservation))
-            return new ZLinkObjectAbortResult.Stale();
-        var capacity = await ReadCapacityAsync(reservation.TargetDescriptor, cancellationToken)
-            .ConfigureAwait(false);
-        var nextCapacity = capacity.Record.Clone();
-        ApplyCapacity(nextCapacity, current!.Snapshot.Allocation, pendingDelta: -1);
-        var result = await provider
-            .WriteAsync(
-                new ZLinkStoreWriteRequest(
-                    [
-                        new ZLinkStoreCondition.Version(
-                            AuthorityMetaKey(reservation.Key),
-                            current.Version
-                        ),
-                        capacity.Condition,
-                    ],
-                    [
-                        new ZLinkStoreMutation.Delete(AuthorityMetaKey(reservation.Key)),
-                        new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null),
-                    ]
-                ),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        return result is ZLinkStoreWriteResult.Applied
-            ? new ZLinkObjectAbortResult.Aborted()
-            : new ZLinkObjectAbortResult.Stale();
+        for (; ; )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var current = await ReadAuthorityRecordAsync(reservation.Key, cancellationToken)
+                .ConfigureAwait(false);
+            if (!MatchesReservation(current, reservation))
+                return new ZLinkObjectAbortResult.Stale();
+            var target = await ReadEligibleTargetAsync(
+                    reservation.TargetDescriptor,
+                    reservation.TargetNodeLifecycleGeneration,
+                    reservation.TargetOwner,
+                    current!.Snapshot.Allocation.ObjectKind,
+                    current.Snapshot.Allocation.StableType,
+                    cancellationToken,
+                    requireNewPlacementEligibility: false
+                )
+                .ConfigureAwait(false);
+            if (target is null)
+                return new ZLinkObjectAbortResult.Stale();
+            var capacity = await ReadCapacityAsync(reservation.TargetDescriptor, cancellationToken)
+                .ConfigureAwait(false);
+            var nextCapacity = capacity.Record.Clone();
+            ApplyCapacity(nextCapacity, current!.Snapshot.Allocation, pendingDelta: -1);
+            var result = await provider
+                .WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [
+                            new ZLinkStoreCondition.Version(
+                                AuthorityMetaKey(reservation.Key),
+                                current.Version
+                            ),
+                            target.DescriptorCondition,
+                            target.OwnerCondition,
+                            capacity.Condition,
+                        ],
+                        [
+                            new ZLinkStoreMutation.Delete(AuthorityMetaKey(reservation.Key)),
+                            new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null),
+                        ]
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (result is ZLinkStoreWriteResult.Conflict)
+                continue;
+            return new ZLinkObjectAbortResult.Aborted();
+        }
     }
 
     public async ValueTask<ZLinkAggregatePrepareResult> PrepareAggregateAsync(

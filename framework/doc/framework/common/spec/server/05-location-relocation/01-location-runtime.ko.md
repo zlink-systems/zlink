@@ -743,7 +743,10 @@ Reserved record에 `Preserve`, `NewOwner`, `Reincarnate` 또는 `Delete`를 적�
 
 Framework는 예상 version, counter, record와 조회용 index 변경을 한 Store 요청에 넣는다.
 `Preserve`, `Reincarnate`와 `Delete`는 현재 owner lease를 검증한다. `NewOwner`는 target lease와 해당
-relocation이 미리 확보한 수용 공간을 검증한다. Record가 없거나 lease가 오래됐으면
+relocation이 미리 확보한 수용 공간을 검증한다. 생성 전이(`Reserve`, `Commit`, `Abort`)는 target owner
+lease(owner ID와 lease generation)와 처음 읽은 target MeshNode descriptor record의 `StoreVersion`을 함께
+검증한다. `descriptorLifecycleGeneration`의 CAS는 descriptor 조건이 맡는다 — owner lease는 같은 process의
+MeshNode lifecycle 재시작에서 바뀌지 않을 수 있기 때문이다. Record가 없거나 lease가 오래됐으면
 `Conflict`이며 아무것도 변경하지 않는다. Target 정보 조합 자체가 잘못됐으면 Store를
 호출하기 전에 Framework 내부 오류로 끝낸다.
 

@@ -15,6 +15,186 @@ namespace Zlink.Framework.UnitTests;
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
     [Theory]
+    [InlineData("Reserve", false, false)]
+    [InlineData("Commit", false, false)]
+    [InlineData("Abort", false, false)]
+    [InlineData("Reserve", true, false)]
+    [InlineData("Commit", true, false)]
+    [InlineData("Abort", true, false)]
+    [InlineData("Reserve", false, true)]
+    [InlineData("Commit", false, true)]
+    [InlineData("Abort", false, true)]
+    [InlineData("Reserve", true, true)]
+    [InlineData("Commit", true, true)]
+    [InlineData("Abort", true, true)]
+    public async Task CreationTransitionsFenceOwnerLeaseAndDescriptorVersion(
+        string transition,
+        bool republish,
+        bool userSpot
+    )
+    {
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var provider = new InspectAuthorityBatchLocationStore(inner);
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "creation-owner");
+        var descriptor = Descriptor("creation-node", owner);
+        await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation(
+            "creation-actor",
+            descriptor,
+            owner,
+            userSpot ? ZLinkPlacementObjectKind.UserSpot : ZLinkPlacementObjectKind.Actor
+        );
+        var reservation = Assert
+            .IsType<ZLinkObjectReserveResult.Reserved>(await repository.ReserveAsync(request))
+            .Reservation;
+        if (transition == "Reserve")
+            await repository.AbortAsync(reservation);
+        var descriptorKey = ZLinkProviderLocationRepository.MeshKey(
+            descriptor.MeshName,
+            descriptor.Rid
+        );
+        var read = Assert.IsType<ZLinkStoreReadResult.Found>(await inner.ReadAsync(descriptorKey));
+        var writes = new List<ZLinkStoreWriteRequest>();
+        provider.Inspect = async write =>
+        {
+            writes.Add(write);
+            if (republish && writes.Count == 1)
+                Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                    await inner.WriteAsync(
+                        new ZLinkStoreWriteRequest(
+                            [],
+                            [new ZLinkStoreMutation.Put(descriptorKey, read.Value.Bytes, null)]
+                        )
+                    )
+                );
+        };
+        switch (transition)
+        {
+            case "Reserve":
+                Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+                    await repository.ReserveAsync(request)
+                );
+                break;
+            case "Commit":
+                Assert.IsType<ZLinkObjectCommitResult.Committed>(
+                    await repository.CommitAsync(reservation, new byte[] { 9 })
+                );
+                break;
+            case "Abort":
+                Assert.IsType<ZLinkObjectAbortResult.Aborted>(
+                    await repository.AbortAsync(reservation)
+                );
+                break;
+        }
+        Assert.Equal(republish ? 2 : 1, writes.Count);
+        Assert.Equal(transition == "Reserve" ? 6 : 4, writes[0].Conditions.Count);
+        Assert.Contains(
+            writes[0].Conditions,
+            c =>
+                c is ZLinkStoreCondition.Value v
+                && v.Key == ZLinkProviderLocationRepository.OwnerKey(owner.OwnerId)
+        );
+        Assert.Contains(
+            writes[0].Conditions,
+            c =>
+                c is ZLinkStoreCondition.Version v
+                && v.Key == descriptorKey
+                && v.Expected == read.Value.Version
+        );
+        if (republish)
+        {
+            var refreshed = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await inner.ReadAsync(descriptorKey)
+            );
+            Assert.Contains(
+                writes[1].Conditions,
+                c =>
+                    c is ZLinkStoreCondition.Version v
+                    && v.Key == descriptorKey
+                    && v.Expected == refreshed.Value.Version
+            );
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task PreviousLifecycleCommitIsRejectedOrAcceptedCreationCompletesWhileTargetDraining(
+        bool changeLifecycle
+    )
+    {
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var provider = new InspectAuthorityBatchLocationStore(inner);
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "creation-owner");
+        var descriptor = Descriptor("creation-node", owner);
+        await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var reservation = Assert
+            .IsType<ZLinkObjectReserveResult.Reserved>(
+                await repository.ReserveAsync(Reservation("creation-actor", descriptor, owner))
+            )
+            .Reservation;
+        var descriptorKey = ZLinkProviderLocationRepository.MeshKey(
+            descriptor.MeshName,
+            descriptor.Rid
+        );
+        async Task Republish()
+        {
+            var read = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await inner.ReadAsync(descriptorKey)
+            );
+            var record = JsonNode.Parse(read.Value.Bytes.Span)!.AsObject();
+            if (changeLifecycle)
+                record["descriptor"]!["lifecycleGeneration"] = "2";
+            else
+                record["descriptor"]!["state"] = "draining";
+            await inner.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [],
+                    [
+                        new ZLinkStoreMutation.Put(
+                            descriptorKey,
+                            Encoding.UTF8.GetBytes(record.ToJsonString()),
+                            null
+                        ),
+                    ]
+                )
+            );
+        }
+        var attempts = 0;
+        provider.Inspect = async _ =>
+        {
+            if (++attempts == 1 && changeLifecycle)
+                await Republish();
+        };
+        if (changeLifecycle)
+        {
+            Assert.IsType<ZLinkObjectCommitResult.Stale>(
+                await repository.CommitAsync(reservation, new byte[] { 9 })
+            );
+            Assert.Equal(1, attempts);
+        }
+        else
+        {
+            await Republish();
+            Assert.IsType<ZLinkObjectCreationCompleteResult.Created>(
+                await repository.CompleteCreationAsync(
+                    reservation,
+                    new ZLinkObjectCreationCompletion.Created(
+                        new byte[] { 9 },
+                        new ZLinkCreationTerminalPublication(
+                            new ZLinkCreationOperationId(RoutingId.From("source"), 1, 1, 1),
+                            new byte[] { 1 },
+                            DateTimeOffset.UtcNow.AddMinutes(5)
+                        )
+                    )
+                )
+            );
+        }
+    }
+
+    [Theory]
     [InlineData(1)]
     [InlineData(10)]
     public async Task DeleteRebuildsCapacityConditionsAfterProviderConflict(int conflicts)

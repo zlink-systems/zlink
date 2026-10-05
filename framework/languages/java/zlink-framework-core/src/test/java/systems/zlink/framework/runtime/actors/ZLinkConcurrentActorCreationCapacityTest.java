@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -69,12 +70,51 @@ final class ZLinkConcurrentActorCreationCapacityTest {
         }
     }
 
+    @Test
+    void sameLifecycleDescriptorRepublishRebuildsQualifiedConflictWithoutRepeatingFactory()
+            throws Exception {
+        FACTORY_CALLS.set(0);
+        CALLBACK_CALLS.set(0);
+        var store = new SharedCapacityStore(true);
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        var node = options.addRouteMesh("1304-java");
+        node.listen("inproc://1304-java-" + System.nanoTime())
+                .setRoutingId(RoutingId.from("1304-java"));
+        var objects = node.objects().server();
+        objects.addEntrySpot(Entry.class);
+        objects.addActorFactory(
+                "1304-player", Player.class, Factory.class, factory -> factory.disableRelocation());
+        try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            assertInstanceOf(
+                    ZLinkActorCreateResult.Created.class,
+                    runtime.actorManager()
+                            .create("1432-player", "1304-player")
+                            .submit()
+                            .toCompletableFuture()
+                            .get(10, TimeUnit.SECONDS));
+            assertEquals(1, FACTORY_CALLS.get());
+            assertEquals(1, CALLBACK_CALLS.get());
+            assertEquals(1, store.conflicts.get());
+        }
+    }
+
     private static final class SharedCapacityStore implements ZLinkLocationStore {
         private static final String CREATION_TERMINAL_PREFIX = "creation-terminal\0";
         private final ZLinkLocationStore inner = new ZLinkInMemoryLocationStore();
         private final AtomicInteger initialCommits = new AtomicInteger();
         private final AtomicInteger conflicts = new AtomicInteger();
         private final CompletableFuture<Void> release = new CompletableFuture<>();
+
+        private final boolean republishDescriptor;
+
+        SharedCapacityStore() {
+            this(false);
+        }
+
+        SharedCapacityStore(boolean republishDescriptor) {
+            this.republishDescriptor = republishDescriptor;
+        }
 
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
@@ -96,7 +136,34 @@ final class ZLinkConcurrentActorCreationCapacityTest {
                                                                             CREATION_TERMINAL_PREFIX))
                             && request.mutations().stream()
                                     .noneMatch(ZLinkStoreDelete.class::isInstance);
-            if (ready && !release.isDone()) {
+            if (ready && republishDescriptor && initialCommits.getAndIncrement() == 0) {
+                var descriptorCondition =
+                        request.conditions().stream()
+                                .filter(ZLinkStoreVersionCondition.class::isInstance)
+                                .map(ZLinkStoreVersionCondition.class::cast)
+                                .filter(
+                                        condition ->
+                                                condition.key().value().startsWith("mesh-node\0"))
+                                .findFirst()
+                                .orElseThrow();
+                return inner.read(descriptorCondition.key(), cancellation)
+                        .thenCompose(
+                                read -> {
+                                    var found = (ZLinkStoreReadFound) read;
+                                    return inner.write(
+                                                    new ZLinkStoreWriteRequest(
+                                                            List.of(),
+                                                            List.of(
+                                                                    new ZLinkStorePut(
+                                                                            descriptorCondition
+                                                                                    .key(),
+                                                                            found.value().bytes(),
+                                                                            null))),
+                                                    cancellation)
+                                            .thenCompose(ignored -> apply(request, cancellation));
+                                });
+            }
+            if (ready && !republishDescriptor && !release.isDone()) {
                 if (initialCommits.incrementAndGet() == SESSION_COUNT) {
                     release.complete(null);
                 }

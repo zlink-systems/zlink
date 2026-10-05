@@ -357,6 +357,7 @@ class ZLinkProviderDescriptorRepositoryTest {
                 descriptors
                         .readMeshNode(
                                 new ZLinkMeshNodeDescriptorKey("game", published.rid()),
+                                new java.util.ArrayList<>(),
                                 () -> false)
                         .toCompletableFuture()
                         .get()
