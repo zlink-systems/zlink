@@ -123,7 +123,8 @@ fn main() {
     // STOP is runner teardown, not part of the measured data path. Let already
     // submitted replies finish, but never let a dead route hold teardown past
     // the configured send timeout; dropping a remaining Future cancels it.
-    let drain_deadline = Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1) as u64);
+    let drain_deadline =
+        Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1) as u64);
     while replies.any_pending() && Instant::now() < drain_deadline {
         replies.advance();
         if !replies.any_pending() {
