@@ -16,7 +16,7 @@ public interface IZLinkMetadataCall<TSelf>
 
 public interface IZLinkSendCall : IZLinkMetadataCall<IZLinkSendCall>
 {
-    ValueTask Async(CancellationToken cancellationToken = default);
+    ValueTask Async();
 
     /// <summary>
     /// Blocks the application thread until source-local admission completes.

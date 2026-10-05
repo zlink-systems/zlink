@@ -424,11 +424,7 @@ public sealed partial class RegressionTests
             sessionHandlers,
             StringComparison.Ordinal
         );
-        Assert.Contains(
-            "await actor.RelayAsync(payload, cancellationToken)",
-            session,
-            StringComparison.Ordinal
-        );
+        Assert.Contains("await actor.RelayAsync(payload)", session, StringComparison.Ordinal);
         Assert.Contains(
             "BindOrGetAsync(actor, cancellationToken)",
             sessionHandlers,

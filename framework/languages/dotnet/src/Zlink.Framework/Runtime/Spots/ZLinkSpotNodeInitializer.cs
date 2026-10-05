@@ -52,9 +52,6 @@ internal sealed class ZLinkSpotNodeInitializer(
                 node.SetRouterHighWaterMark(router.SocketConfig.SendHighWaterMark);
                 node.SetRouterReceiveHighWaterMark(router.SocketConfig.ReceiveHighWaterMark);
                 node.SetRouterReceiveTimeout(router.SocketConfig.ReceiveTimeout);
-                node.SetRouterSendTimeout(
-                    router.SocketConfig.SendTimeout ?? registration.DefaultSocketSendTimeout
-                );
             }
             foreach (var membership in spotNodeRegistration.ChannelMemberships)
             {

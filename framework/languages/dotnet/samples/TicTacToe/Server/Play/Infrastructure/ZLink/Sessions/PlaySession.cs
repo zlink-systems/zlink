@@ -69,7 +69,7 @@ internal sealed class PlaySession(IZLinkSessionContext context, ILogger<PlaySess
             return;
 
         var actor = RequireSingleBoundActor($"relaying packet '{dispatch.PacketName}'");
-        await actor.RelayAsync(payload, cancellationToken);
+        await actor.RelayAsync(payload);
     }
 
     private IZLinkSessionActor RequireSingleBoundActor(string action)

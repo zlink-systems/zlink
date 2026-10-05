@@ -48,7 +48,7 @@ internal sealed class CourierDecisionActorHandler(
                     message.Reason
                 )
             )
-            .Async(cancellationToken);
+            .Async();
         // --8<-- [end:doc-dd-decision-send]
 
         logger.LogInformation(

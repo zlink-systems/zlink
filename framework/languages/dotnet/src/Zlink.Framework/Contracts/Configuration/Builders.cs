@@ -116,7 +116,7 @@ public interface IZLinkFrameworkOptions
     TimeSpan SessionReplacementCallbackTimeout { get; set; }
 
     /// <summary>
-    ///     Gets or sets the default timeout used while submitting a socket send.
+    ///     Gets or sets the default send timeout for Classic fanout publishers.
     /// </summary>
     TimeSpan DefaultSocketSendTimeout { get; set; }
 

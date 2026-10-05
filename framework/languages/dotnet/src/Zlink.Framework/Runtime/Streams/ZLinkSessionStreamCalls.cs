@@ -37,28 +37,14 @@ internal abstract class ZLinkSessionStreamCallBase<TMessage>(
 
     protected void ClaimSubmission() => _submission.Claim();
 
-    protected async ValueTask<ZLinkOneWaySubmitResult> ExecuteAsync(
-        CancellationToken cancellationToken,
-        TimeSpan? admissionTimeout = null,
-        bool validateBeforeCancellation = false,
-        bool isReply = false
-    )
+    protected async ValueTask<ZLinkOneWaySubmitResult> ExecuteAsync()
     {
-        if (!validateBeforeCancellation)
-            cancellationToken.ThrowIfCancellationRequested();
         var frame = _builder.Build(
             (codec, flags, messageName, metadata) =>
                 CreateHeader(codec, flags, messageName, metadata, context.CurrentDispatchContext),
             out var header
         );
-        if (validateBeforeCancellation && cancellationToken.IsCancellationRequested)
-        {
-            frame.Dispose();
-            cancellationToken.ThrowIfCancellationRequested();
-        }
-        var result = await context
-            .SubmitAsync(frame, cancellationToken, isReply, admissionTimeout)
-            .ConfigureAwait(false);
+        var result = await context.SubmitAsync(frame).ConfigureAwait(false);
         if (result.Status == ZLinkOneWaySubmitStatus.Submitted)
             context.TraceWritten(header);
         return result;
@@ -77,8 +63,6 @@ internal sealed class ZLinkSessionSendCall<TMessage>(ZLinkSessionContext context
     : ZLinkSessionStreamCallBase<TMessage>(context, message),
         IZLinkSessionSendCall
 {
-    private TimeSpan? _admissionTimeout;
-
     IZLinkSessionSendCall IZLinkMetadataCall<IZLinkSessionSendCall>.Metadata(
         string key,
         string value
@@ -99,23 +83,10 @@ internal sealed class ZLinkSessionSendCall<TMessage>(ZLinkSessionContext context
         return (IZLinkSessionSendCall)Compress();
     }
 
-    public IZLinkSessionSendCall Timeout(TimeSpan timeout)
-    {
-        _admissionTimeout = NormalizeAdmissionTimeout(timeout);
-        return this;
-    }
-
-    internal static TimeSpan NormalizeAdmissionTimeout(TimeSpan timeout)
-    {
-        return ZLinkSocketConfig.NormalizeSendTimeout(timeout)
-            ?? throw new ZLinkConfigurationException("timeout is required.");
-    }
-
-    public ValueTask Async(CancellationToken cancellationToken = default)
+    public ValueTask Async()
     {
         ClaimSubmission();
-        return ExecuteAsync(cancellationToken, _admissionTimeout)
-            .EnsureAcceptedAsync("Session send");
+        return ExecuteAsync().EnsureAcceptedAsync("Session send");
     }
 
     protected override ZlinkStreamHeader CreateHeader(
@@ -148,16 +119,10 @@ internal sealed class ZLinkSessionReplyCall<TMessage>(ZLinkSessionContext contex
         return (IZLinkSessionReplyCall)Compress();
     }
 
-    public ValueTask Async(CancellationToken cancellationToken = default)
+    public ValueTask Async()
     {
         ClaimSubmission();
-        return ExecuteAsync(
-                cancellationToken,
-                admissionTimeout: null,
-                validateBeforeCancellation: true,
-                isReply: true
-            )
-            .EnsureAcceptedAsync("Session reply");
+        return ExecuteAsync().EnsureAcceptedAsync("Session reply");
     }
 
     protected override ZlinkStreamHeader CreateHeader(

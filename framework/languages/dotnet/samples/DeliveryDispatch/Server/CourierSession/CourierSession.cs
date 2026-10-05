@@ -62,6 +62,6 @@ internal sealed class CourierSession(IZLinkSessionContext context, ILogger<Couri
             );
         }
 
-        await actor.RelayAsync(payload, cancellationToken);
+        await actor.RelayAsync(payload);
     }
 }

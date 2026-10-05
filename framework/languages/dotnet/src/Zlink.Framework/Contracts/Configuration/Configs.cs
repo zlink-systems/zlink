@@ -16,8 +16,6 @@ public interface IZLinkSocketConfig
 
     TimeSpan? ReceiveTimeout { get; set; }
 
-    TimeSpan? SendTimeout { get; set; }
-
     TimeSpan? ConnectTimeout { get; set; }
 
     TimeSpan? HandshakeInterval { get; set; }
@@ -52,8 +50,6 @@ public interface IZLinkStreamSocketConfig
     TimeSpan? Linger { get; set; }
 
     TimeSpan? ReceiveTimeout { get; set; }
-
-    TimeSpan? SendTimeout { get; set; }
 
     TimeSpan? ConnectTimeout { get; set; }
 

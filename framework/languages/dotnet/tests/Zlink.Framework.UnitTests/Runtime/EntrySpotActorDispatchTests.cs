@@ -440,7 +440,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task SpotNode_Initializer_Applies_Router_Send_Config()
+    public async Task SpotNode_Initializer_Applies_Router_HighWaterMark_Without_SendTimeout()
     {
         var services = new ServiceCollection().BuildServiceProvider();
         var node = new CapturingSpotNode();
@@ -452,11 +452,7 @@ public sealed partial class EntrySpotActorDispatchTests
             Router = new ZLinkSpotRouterCapabilityRegistration
             {
                 BindEndpoint = "inproc://publisher",
-                SocketConfig =
-                {
-                    SendHighWaterMark = 17,
-                    SendTimeout = TimeSpan.FromMilliseconds(21),
-                },
+                SocketConfig = { SendHighWaterMark = 17 },
             },
             ChannelMemberships = { new ZLinkMeshChannelMembership { ChannelName = "events" } },
         };
@@ -475,7 +471,10 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             Assert.Equal(17UL, node.RouterHighWaterMark);
-            Assert.Equal(TimeSpan.FromMilliseconds(21), node.RouterSendTimeout);
+            Assert.DoesNotContain(
+                typeof(IZLinkBackendSpotNode).GetMethods(),
+                method => method.Name == "SetRouterSendTimeout"
+            );
         }
         finally
         {
@@ -3110,11 +3109,25 @@ public sealed partial class EntrySpotActorDispatchTests
                 static (_, _, _) => ValueTask.CompletedTask,
                 CancellationToken.None
             );
-            node.BlockNextNodeSendAsync = true;
+            var admissionStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var admissionReleased = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            node.NodeSendAsyncHandler = async cancellationToken =>
+            {
+                admissionStarted.TrySetResult();
+                await admissionReleased.Task.WaitAsync(cancellationToken);
+            };
             var afterTimeoutSend = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
-            node.OnNodeSend = () => afterTimeoutSend.TrySetResult();
+            node.OnNodeSend = () =>
+            {
+                if (node.NodeSendAttempts.Count == 2)
+                    afterTimeoutSend.TrySetResult();
+            };
             var fifthTarget = RoutingId.From("target-actor-five");
             Assert.True(
                 runtime.RouteCanonicalSessionActor(
@@ -3122,15 +3135,19 @@ public sealed partial class EntrySpotActorDispatchTests
                     new ZLinkSessionRelocationAuthenticatedRoute(fifthTarget, 7, "entry", 16, 505)
                 )
             );
-            await afterTimeoutSend.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            var timedOutDrop = Assert.Single(
+            await admissionStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await Task.Delay(TimeSpan.FromMilliseconds(3100));
+            Assert.False(afterTimeoutSend.Task.IsCompleted);
+            Assert.Empty(node.NodeSendAttempts);
+            Assert.Empty(
                 observer.Events.Where(flow =>
                     flow.Outcome == "dropped" && flow.FlowId == timedOutFlowId
                 )
             );
-            Assert.Equal("stream", timedOutDrop.Surface);
-            Assert.Equal("backpressure", timedOutDrop.Reason);
-            Assert.Single(node.NodeSendAttempts);
+            admissionReleased.TrySetResult();
+            await afterTimeoutSend.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(2, node.NodeSendAttempts.Count);
+            node.NodeSendAsyncHandler = null;
         }
         finally
         {
@@ -3925,7 +3942,6 @@ public sealed partial class EntrySpotActorDispatchTests
                 },
                 CancellationToken.None,
                 CancellationToken.None,
-                TimeSpan.FromSeconds(1),
                 workerOperation.Dispose,
                 new ThrowingRuntimeErrorSink()
             )
@@ -4857,7 +4873,6 @@ public sealed partial class EntrySpotActorDispatchTests
             "node",
             "channel",
             TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.SpotWide,
             ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
         );
@@ -4908,7 +4923,6 @@ public sealed partial class EntrySpotActorDispatchTests
             "node",
             "channel",
             TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.SpotWide,
             ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
         );
@@ -4958,7 +4972,6 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId.From("node"),
             "node",
             "channel",
-            TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.SpotWide,
             ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
@@ -5020,7 +5033,6 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId.From("node"),
             "node",
             "channel",
-            TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(1)
         );
         activation.AttachSpot(new EmptyUserSpot(activation));
@@ -5059,7 +5071,6 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId.From("node"),
             "node",
             "channel",
-            TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(1)
         );
         activation.AttachSpot(new EmptyUserSpot(activation));
@@ -5096,7 +5107,6 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId.From("source-node"),
             "source-node",
             "channel",
-            TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.PerActor
         );
@@ -5179,7 +5189,6 @@ public sealed partial class EntrySpotActorDispatchTests
             "source-node",
             "channel",
             TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.PerActor
         );
         var spot = new PerActorClosingProbeSpot(activation);
@@ -5256,7 +5265,6 @@ public sealed partial class EntrySpotActorDispatchTests
             "source-node",
             "channel",
             TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.PerActor
         );
         activation.AttachSpot(new EmptyUserSpot(activation));
@@ -5330,7 +5338,6 @@ public sealed partial class EntrySpotActorDispatchTests
             "source-node",
             "channel",
             TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.PerActor
         );
         activation.AttachSpot(new ClosingTeardownProbeSpot(activation, order));
@@ -5396,7 +5403,6 @@ public sealed partial class EntrySpotActorDispatchTests
             "source-node",
             "channel",
             TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(30),
             ZLinkUserSpotExecutionMode.PerActor
         );
         activation.AttachSpot(new ClosingTeardownProbeSpot(activation, order));
@@ -6429,7 +6435,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task Actor_Send_Submit_Times_Out_When_Transport_Remains_Backpressured()
+    public async Task Actor_Send_TokenlessBackpressure_IsUnavailableWithoutRetry()
     {
         var node = new CapturingSpotNode();
         var (runtime, actor) = await CreateStartedRuntimeAsync(node);
@@ -6442,7 +6448,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 await client.SendToActor(publicActor.ActorId, new ProbeRouteMessage("send")).Async()
             );
 
-            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+            Assert.Single(node.ActorSends);
             Assert.Equal(SendFlags.None, node.LastActorSendFlags);
         }
         finally
@@ -7022,7 +7029,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task BoundSession_BindingOwnedAdmissionTimeout_CompletesOnce()
+    public async Task BoundSession_WaitsBeyondThreeDefaultTimeoutsAndCompletesOnce()
     {
         var node = new CapturingSpotNode { BoundSessionSendAccepted = false };
         var (runtime, actor) = await CreateStartedRuntimeAsync(node);
@@ -7031,13 +7038,17 @@ public sealed partial class EntrySpotActorDispatchTests
             runtime.Registration.DefaultSocketSendTimeout = TimeSpan.FromMilliseconds(20);
             var retained = CreateNativeBoundSession(runtime, actor);
 
-            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-                await retained.Send(new ProbeRouteMessage("timeout")).Async()
-            );
-
-            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+            var pending = retained.Send(new ProbeRouteMessage("pending")).Async().AsTask();
+            await Task.Delay(TimeSpan.FromMilliseconds(3100));
+            Assert.False(pending.IsCompleted);
             Assert.Equal(1, node.BoundSessionSendAttempts);
             Assert.Empty(node.BoundSessionReplies);
+            node.BoundSessionSendAccepted = true;
+            node.CompleteBoundSessionAdmission();
+            await pending.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Equal(1, node.BoundSessionSendAttempts);
+            Assert.Single(node.BoundSessionReplies);
         }
         finally
         {
@@ -7046,18 +7057,15 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task BoundSession_CallerCancellation_PropagatesOnce()
+    public async Task BoundSession_PendingCallRejectsDuplicateSubmission()
     {
         var node = new CapturingSpotNode { BoundSessionSendAccepted = false };
         var (runtime, actor) = await CreateStartedRuntimeAsync(node);
-        using var cancellation = new CancellationTokenSource();
         try
         {
             var retained = CreateNativeBoundSession(runtime, actor);
-            var pending = retained
-                .Send(new ProbeRouteMessage("cancel"))
-                .Async(cancellation.Token)
-                .AsTask();
+            var call = retained.Send(new ProbeRouteMessage("pending"));
+            var pending = call.Async().AsTask();
             Assert.True(
                 SpinWait.SpinUntil(
                     () => node.BoundSessionSendAttempts == 1,
@@ -7065,11 +7073,14 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
             );
 
-            cancellation.Cancel();
-
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await pending);
+            var error = Assert.Throws<ZLinkFrameworkException>(() => call.Async());
+            Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
             Assert.Equal(1, node.BoundSessionSendAttempts);
             Assert.Empty(node.BoundSessionReplies);
+            node.BoundSessionSendAccepted = true;
+            node.CompleteBoundSessionAdmission();
+            await pending.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Single(node.BoundSessionReplies);
         }
         finally
         {
@@ -9803,6 +9814,8 @@ public sealed partial class EntrySpotActorDispatchTests
         TimeSpan? defaultRequestTimeout = null,
         ZLinkUserSpotExecutionMode userSpotExecutionMode = ZLinkUserSpotExecutionMode.SpotWide,
         bool includeInstanceSpotRoute = false,
+        Type? instanceSpotType = null,
+        ColdSendProbe? instanceDispatchProbe = null,
         Func<IZLinkLocationStore, IZLinkLocationStore>? locationStoreWrapper = null,
         IZLinkSpotRetireTarget? retireTarget = null,
         IZLinkRelocationStore? relocationStore = null,
@@ -9811,7 +9824,9 @@ public sealed partial class EntrySpotActorDispatchTests
         bool includeImmediateIngressHandlers = false,
         bool includeEntrySpotActivation = true,
         ManualTimeProvider? locationTimeProvider = null,
-        Action<ZLinkLocationRuntime>? locationRuntimeCapture = null
+        Action<ZLinkLocationRuntime>? locationRuntimeCapture = null,
+        Func<IZLinkMeshNodeLocationResolver, IZLinkMeshNodeLocationResolver>? meshResolverWrapper =
+            null
     )
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
@@ -9858,7 +9873,9 @@ public sealed partial class EntrySpotActorDispatchTests
             .AddSingleton(locationLifecycle)
             .AddSingleton(leaseTracker)
             .AddSingleton(locationResolvers)
-            .AddSingleton<IZLinkMeshNodeLocationResolver>(locationResolvers)
+            .AddSingleton<IZLinkMeshNodeLocationResolver>(
+                meshResolverWrapper?.Invoke(locationResolvers) ?? locationResolvers
+            )
             .AddSingleton(
                 new ZLinkLocationAddressResolvers(locationResolvers, new ZLinkSpotHandleRegistry())
             )
@@ -9873,6 +9890,10 @@ public sealed partial class EntrySpotActorDispatchTests
             .AddTransient<ProbeActorThrowingRequestHandler>()
             .AddTransient<MeshChannelRequestHandler>()
             .AddTransient<MeshRouteRequestHandler>();
+        if (instanceDispatchProbe is not null)
+            serviceCollection
+                .AddSingleton(instanceDispatchProbe)
+                .AddTransient<ColdSendInstanceHandler>();
         if (dispatchProbe is not null)
         {
             serviceCollection.AddSingleton(dispatchProbe);
@@ -9982,12 +10003,12 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             registration.SpotNodes["entry"].InstanceSpotFactories["Tests.InstanceSpot"] =
                 new ZLinkInstanceSpotFactoryRegistration(
-                    typeof(ProbeInstanceSpot),
+                    instanceSpotType ?? typeof(ProbeInstanceSpot),
                     new ZLinkInstanceSpotFactoryConfiguration()
                 );
             registration.SpotNodes["entry"].InstanceSpotRelocations["Tests.InstanceSpot"] =
                 new ZLinkObjectRelocationRegistration(
-                    typeof(ProbeInstanceSpot),
+                    instanceSpotType ?? typeof(ProbeInstanceSpot),
                     new ZLinkObjectPlacementOptions(),
                     PolicyKind: 0,
                     AdapterType: null,
@@ -10316,7 +10337,7 @@ public sealed partial class EntrySpotActorDispatchTests
             "entry",
             "entry-channel",
             TimeSpan.FromSeconds(5),
-            new ZLinkSpotOutboundTransport(spot, TimeSpan.FromSeconds(1), CancellationToken.None)
+            new ZLinkSpotOutboundTransport(spot, CancellationToken.None)
         );
         activation.InitializeRuntimeResources();
         return (activation, runtime);
@@ -12225,8 +12246,6 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ulong RouterHighWaterMark { get; private set; }
 
-        public TimeSpan? RouterSendTimeout { get; private set; }
-
         public TimeSpan? LastActorRequestTimeout { get; private set; }
 
         public CapturingSpot EntrySpotBackend => _entrySpot;
@@ -12358,8 +12377,6 @@ public sealed partial class EntrySpotActorDispatchTests
         public Exception? NodeSendAsyncFailure { get; set; }
 
         public ConcurrentQueue<Exception> NodeSendAsyncFailures { get; } = new();
-
-        public bool BlockNextNodeSendAsync { get; set; }
 
         public List<IReadOnlyList<byte[]>> NodeSendAttempts { get; } = [];
 
@@ -12541,11 +12558,6 @@ public sealed partial class EntrySpotActorDispatchTests
         public void SetRouterHighWaterMark(ulong value)
         {
             RouterHighWaterMark = value;
-        }
-
-        public void SetRouterSendTimeout(TimeSpan? value)
-        {
-            RouterSendTimeout = value;
         }
 
         public void ApplyRoleConfig(
@@ -12931,11 +12943,6 @@ public sealed partial class EntrySpotActorDispatchTests
                 throw failure;
             if (NodeSendAsyncFailures.TryDequeue(out var nextFailure))
                 throw nextFailure;
-            if (BlockNextNodeSendAsync)
-            {
-                BlockNextNodeSendAsync = false;
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            }
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();

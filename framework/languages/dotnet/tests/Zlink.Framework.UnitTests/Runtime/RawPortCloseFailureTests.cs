@@ -117,7 +117,6 @@ public sealed class RawPortCloseFailureTests
             null!,
             null!,
             null!,
-            TimeSpan.FromSeconds(1),
             CancellationToken.None,
             null!,
             errors

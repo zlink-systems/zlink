@@ -153,6 +153,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
             var reply = await ZLinkRequestSubmissionOutcome
                 .SubmitAndAwaitReplyAsync(
                     _socket.Request(target).Messages(messages).Timeout(timeout),
+                    timeout,
                     cancellationToken
                 )
                 .ConfigureAwait(false);

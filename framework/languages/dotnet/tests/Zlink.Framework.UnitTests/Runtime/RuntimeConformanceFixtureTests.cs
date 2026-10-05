@@ -784,13 +784,17 @@ public sealed class RuntimeConformanceFixtureTests
                         await WithinAsync(operation, $"{name}: {kind}");
                         continue;
                     }
-                    // The held operation stays in flight while the expectations are checked.
+                    held.Add((hold, operation));
+                    // A cold send completes at admission while target initialization stays held.
+                    if (kind == "instanceSpot")
+                        await WithinAsync(operation, $"{name}: admitted {kind}");
                     await WithinAsync(
-                        Task.WhenAny(hold.Entered.Task, operation),
+                        kind == "instanceSpot"
+                            ? hold.Entered.Task
+                            : Task.WhenAny(hold.Entered.Task, operation),
                         $"{name}: held {kind}"
                     );
                     Assert.True(hold.Entered.Task.IsCompleted, $"{name}: {kind} did not start");
-                    held.Add((hold, operation));
                 }
             }
             var runtimeOptions = provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>();

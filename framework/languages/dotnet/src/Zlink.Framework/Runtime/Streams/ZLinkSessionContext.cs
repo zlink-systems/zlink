@@ -91,10 +91,6 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
                 .ConfigureAwait(false);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
         }
-        catch (TimeoutException)
-        {
-            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TimedOut);
-        }
         catch (ZLinkFrameworkException failure)
             when (ZLinkMeshCallSupport.TryMapSubmitFailure(failure, out var failed))
         {
@@ -164,58 +160,24 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     internal ValueTask SendActorUnboundAsync(ushort slot) =>
         ZLinkStreamControlFrames.SendActorUnboundAsync(_stream, slot, CancellationToken.None);
 
-    internal async ValueTask<ZLinkOneWaySubmitResult> SubmitAsync(
-        Message payload,
-        CancellationToken cancellationToken,
-        bool isReply = false,
-        TimeSpan? admissionTimeout = null
-    )
+    internal async ValueTask<ZLinkOneWaySubmitResult> SubmitAsync(Message payload)
     {
         try
         {
-            using var deadline = admissionTimeout.HasValue
-                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
-                : null;
-            if (deadline is not null)
-                deadline.CancelAfter(admissionTimeout!.Value);
-            await Transport
-                .SubmitAsync(payload, deadline?.Token ?? cancellationToken)
-                .ConfigureAwait(false);
+            await Transport.SubmitAsync(payload, CancellationToken.None).ConfigureAwait(false);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
         }
-        catch (OperationCanceledException)
-            when (admissionTimeout is not null && !cancellationToken.IsCancellationRequested)
+        catch (ZlinkSubmitException error)
         {
-            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TimedOut);
+            throw ZLinkSubmitFailureMapper.CreateException(error, "Session send");
         }
-        catch (ZlinkSubmitException failure)
-            when (failure.Result
-                    is ZlinkSubmitException.ErrorCode.Backpressured
-                        or ZlinkSubmitException.ErrorCode.NotFound
-                        or ZlinkSubmitException.ErrorCode.NotConnected
-                        or ZlinkSubmitException.ErrorCode.Terminated
-            )
+        catch (ObjectDisposedException error)
         {
-            return failure.Result switch
-            {
-                ZlinkSubmitException.ErrorCode.Backpressured => new ZLinkOneWaySubmitResult(
-                    ZLinkOneWaySubmitStatus.TimedOut
-                ),
-                ZlinkSubmitException.ErrorCode.NotFound => new ZLinkOneWaySubmitResult(
-                    ZLinkOneWaySubmitStatus.TargetNotFound
-                ),
-                ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkOneWaySubmitResult(
-                    ZLinkOneWaySubmitStatus.RouteNotConnected
-                ),
-                ZlinkSubmitException.ErrorCode.Terminated => new ZLinkOneWaySubmitResult(
-                    ZLinkOneWaySubmitStatus.Shutdown
-                ),
-                _ => throw new System.Diagnostics.UnreachableException(),
-            };
-        }
-        catch
-        {
-            throw;
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "Session socket was closed.",
+                innerException: error
+            );
         }
     }
 

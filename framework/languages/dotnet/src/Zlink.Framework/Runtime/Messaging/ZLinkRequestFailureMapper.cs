@@ -439,7 +439,7 @@ internal static class ZLinkRequestFailureMapper
     public static Exception CreateSubmitException(
         ZlinkSubmitException error,
         string operationName,
-        bool completionFailure = true
+        bool completionFailure = false
     ) => ZLinkSubmitFailureMapper.CreateException(error, operationName, completionFailure);
 
     public static Exception CreateSubmitTimeoutException(

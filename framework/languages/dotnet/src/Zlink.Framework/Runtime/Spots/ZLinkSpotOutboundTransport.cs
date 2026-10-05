@@ -2,12 +2,9 @@ namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotOutboundTransport(
     IZLinkBackendSpot nativeSpot,
-    TimeSpan? sendTimeout,
     CancellationToken stopToken
 ) : IAsyncDisposable
 {
-    private readonly TimeSpan _sendTimeout = ValidateTimeout(sendTimeout);
-
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     internal void PublishCurrent(
@@ -132,7 +129,6 @@ internal sealed class ZLinkSpotOutboundTransport(
                 cancellationToken,
                 stopToken
             );
-            terminal.CancelAfter(_sendTimeout);
             await relay
                 .MessageFollowSendToSpotAsync(
                     targetNodeRid,
@@ -153,10 +149,6 @@ internal sealed class ZLinkSpotOutboundTransport(
         catch (OperationCanceledException) when (stopToken.IsCancellationRequested)
         {
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TimedOut);
         }
         catch (ZlinkSubmitException failure)
         {
@@ -380,16 +372,4 @@ internal sealed class ZLinkSpotOutboundTransport(
             ),
             _ => throw ZLinkRequestFailureMapper.CreateSubmitException(failure, "Direct Spot send"),
         };
-
-    private static TimeSpan ValidateTimeout(TimeSpan? timeout)
-    {
-        try
-        {
-            return ZLinkSocketConfig.NormalizeSendTimeout(timeout) ?? TimeSpan.FromSeconds(1);
-        }
-        catch (ZLinkConfigurationException error)
-        {
-            throw new ArgumentOutOfRangeException(nameof(timeout), timeout, error.Message);
-        }
-    }
 }

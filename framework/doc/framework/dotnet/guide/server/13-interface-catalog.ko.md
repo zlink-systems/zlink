@@ -20,7 +20,7 @@ title: "13. 주요 타입 사용 색인 · C#/.NET"
 ```csharp
 await routeClient
     .SendToChannel("game.api", new PlayerOnline("player-1"))
-    .Async(ct); // source-local outbound admission까지만 기다린다.
+    .Async(); // source-local outbound admission까지만 기다린다.
 
 var reply = await routeClient
     .RequestToChannel("game.api", new GetPlayer("player-1"))
@@ -121,7 +121,7 @@ ZLinkSpotCreateResult existingOrCreated = await spotManager
 ```csharp
 await spotClient
     .SendToSpot("room-42", new RoundStarted())
-    .Async(ct);
+    .Async();
 
 var state = await spotClient
     .RequestToSpot("room-42", new GetRoomState())
@@ -172,7 +172,7 @@ ZLinkActorCreateResult result = await actorManager
 
 await actorClient
     .SendToActor("player-1", new GrantReward("daily"))
-    .Async(ct);
+    .Async();
 ```
 
 Actor handler 안에서 User Spot join을 예약할 때는 현재 turn을 막지 않는 deferred call을 사용한다.

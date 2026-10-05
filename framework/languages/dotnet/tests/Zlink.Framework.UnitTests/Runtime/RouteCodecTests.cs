@@ -58,17 +58,17 @@ public sealed class RouteCodecTests
     }
 
     [Fact]
-    public void SocketConfig_SendTimeout_Ceils_Positive_SubMillisecond_Value()
+    public void SpotPublisherConfig_SendTimeout_Ceils_Positive_SubMillisecond_Value()
     {
-        var config = new ZLinkSocketConfig { SendTimeout = TimeSpan.FromTicks(1) };
+        var config = new ZLinkSpotPublisherConfig { SendTimeout = TimeSpan.FromTicks(1) };
 
         Assert.Equal(TimeSpan.FromMilliseconds(1), config.SendTimeout);
     }
 
     [Fact]
-    public void SocketConfig_SendTimeout_Preserves_IntMax_Milliseconds()
+    public void SpotPublisherConfig_SendTimeout_Preserves_IntMax_Milliseconds()
     {
-        var config = new ZLinkSocketConfig
+        var config = new ZLinkSpotPublisherConfig
         {
             SendTimeout = TimeSpan.FromMilliseconds(int.MaxValue),
         };
@@ -79,9 +79,9 @@ public sealed class RouteCodecTests
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    public void SocketConfig_SendTimeout_Rejects_NonPositive_Value(long ticks)
+    public void SpotPublisherConfig_SendTimeout_Rejects_NonPositive_Value(long ticks)
     {
-        var config = new ZLinkSocketConfig();
+        var config = new ZLinkSpotPublisherConfig();
 
         Assert.Throws<ZLinkConfigurationException>(() =>
             config.SendTimeout = TimeSpan.FromTicks(ticks)
@@ -89,9 +89,9 @@ public sealed class RouteCodecTests
     }
 
     [Fact]
-    public void SocketConfig_SendTimeout_Rejects_Value_Above_IntMax_Milliseconds()
+    public void SpotPublisherConfig_SendTimeout_Rejects_Value_Above_IntMax_Milliseconds()
     {
-        var config = new ZLinkSocketConfig();
+        var config = new ZLinkSpotPublisherConfig();
         var timeout = TimeSpan.FromMilliseconds((long)int.MaxValue + 1);
 
         Assert.Throws<ZLinkConfigurationException>(() => config.SendTimeout = timeout);

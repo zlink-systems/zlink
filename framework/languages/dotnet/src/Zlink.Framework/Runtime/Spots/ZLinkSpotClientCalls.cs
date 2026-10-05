@@ -105,14 +105,28 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
         return this;
     }
 
-    public async ValueTask Async(CancellationToken cancellationToken = default)
+    public async ValueTask Async()
     {
+        var cancellationToken = runtime.ShutdownToken;
         _submission.Claim();
+        var submittedAt = DateTimeOffset.UtcNow;
         if (_meshSelected && !_instanceIntent)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "InMesh is valid only for an Instance Spot intent."
             );
+        var activationTimeout = _instanceIntent
+            ? runtime.Registration.ResolveMeshRequestTimeout(
+                runtime
+                    .ResolveActorCreationSource(
+                        string.IsNullOrEmpty(target.MeshName) ? null : target.MeshName
+                    )
+                    .Registration.SpotNodeName
+            )
+            : TimeSpan.Zero;
+        var activationDeadlineUnixMs = _instanceIntent
+            ? checked((ulong)submittedAt.Add(activationTimeout).ToUnixTimeMilliseconds())
+            : 0;
         var handle = _exactSpotIdCall
             ? await runtime
                 .ResolveSpotHandleAsync(target.SpotId, cancellationToken)
@@ -143,9 +157,10 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
                     target,
                     parts,
                     request: false,
-                    runtime.Registration.DefaultRequestTimeout,
+                    activationTimeout,
                     _metadata.Encode(),
-                    cancellationToken
+                    cancellationToken,
+                    activationDeadlineUnixMs: activationDeadlineUnixMs
                 )
                 .ConfigureAwait(false);
             return;
@@ -153,7 +168,7 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
 
         var call = new ZLinkRouteSpotSendCall<TMessage>(runtime, handle, message, _instanceIntent);
         call.Metadata(_metadata.Snapshot());
-        await call.Async(cancellationToken).ConfigureAwait(false);
+        await call.Async().ConfigureAwait(false);
     }
 }
 
@@ -409,8 +424,9 @@ internal sealed class ZLinkCurrentSpotSendCall<TMessage>(
         return this;
     }
 
-    public async ValueTask Async(CancellationToken cancellationToken = default)
+    public async ValueTask Async()
     {
+        var cancellationToken = CancellationToken.None;
         _submission.Claim();
         cancellationToken.ThrowIfCancellationRequested();
         var header = ZLinkClientCallCodec.CreateEnvelope(

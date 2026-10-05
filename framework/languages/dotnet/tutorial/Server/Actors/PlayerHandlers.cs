@@ -31,9 +31,7 @@ public sealed class ChangeNicknameHandler
         // Rename is already complete, so only that failure is discarded.
         try
         {
-            await player
-                .Context.BoundSession.Send(new NicknameChanged(player.Nickname))
-                .Async(cancellationToken);
+            await player.Context.BoundSession.Send(new NicknameChanged(player.Nickname)).Async();
         }
         catch (ZLinkFrameworkException error)
             when (error.Kind == ZLinkFrameworkErrorKind.InvalidOperation) { }

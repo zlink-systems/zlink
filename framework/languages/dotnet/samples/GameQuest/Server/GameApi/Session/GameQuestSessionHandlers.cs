@@ -61,7 +61,7 @@ internal sealed class JoinSessionHandler(
         // --8<-- [end:doc-gq-join-bind]
         await context
             .Client.Reply(await joinSessions.ExecuteAsync(request.PlayerId, cancellationToken))
-            .Async(cancellationToken);
+            .Async();
     }
 }
 

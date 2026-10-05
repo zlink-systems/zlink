@@ -33,7 +33,7 @@ public sealed class AuthenticateHandler(IZLinkActorManager players)
 
         var bound = await context.Actors.BindOrGetAsync(player, cancellationToken);
 
-        await context.Client.Reply(new Authenticated(bound.ActorId)).Async(cancellationToken);
+        await context.Client.Reply(new Authenticated(bound.ActorId)).Async();
     }
 }
 // --8<-- [end:session-actor-bind]

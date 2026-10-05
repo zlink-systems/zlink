@@ -136,7 +136,7 @@ internal sealed class PlayEntrySpot(IZLinkEntrySpotContext context, ILogger<Play
 
             var observers = _observers.Values.ToArray();
             foreach (var observer in observers)
-                await observer.Context.BoundSession.Send(notify).Async(cancellationToken);
+                await observer.Context.BoundSession.Send(notify).Async();
         }
         // --8<-- [end:doc-ttt-milestone-notify]
     }

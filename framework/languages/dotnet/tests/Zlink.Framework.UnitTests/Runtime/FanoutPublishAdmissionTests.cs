@@ -49,7 +49,7 @@ public sealed class FanoutPublishAdmissionTests
         );
         started.Stop();
         var mapped = Assert.IsType<ZLinkFrameworkException>(
-            ZLinkRequestFailureMapper.CreateSubmitException(bindingFailure, "Fanout publish")
+            ZLinkSubmitFailureMapper.CreateFanoutException(bindingFailure)
         );
 
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, mapped.Kind);
@@ -70,10 +70,7 @@ public sealed class FanoutPublishAdmissionTests
             Subscriber = _context.CreateSubSocket();
             Publisher.Options.NoDrop = true;
             Publisher.Options.SendHighWaterMark = RecordHwm;
-            ZLinkBackendSocketOptionsMapper.Apply(
-                Publisher.Options,
-                new ZLinkSocketConfig { SendTimeout = sendTimeout }
-            );
+            Publisher.Options.SendTimeout = sendTimeout;
             Publisher.Options.ReceiveTimeout = TimeSpan.FromSeconds(5);
             Subscriber.Options.ReceiveHighWaterMark = RecordHwm;
             Subscriber.Options.ReceiveTimeout = TimeSpan.FromSeconds(5);

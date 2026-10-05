@@ -81,7 +81,7 @@ assembly Zlink.Framework
     method abstract System.Threading.Tasks.ValueTask<TReply?> Yield<TReply>(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
       generic TReply variance=invariant nullable=unspecified
   type interface Zlink.Framework.Contracts.Actors.IZLinkActorSendCall : Zlink.Framework.Contracts.Channels.IZLinkMetadataCall<Zlink.Framework.Contracts.Actors.IZLinkActorSendCall>
-    method abstract System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask Async() [return=read:not-null,write:not-null]
   type abstract-class Zlink.Framework.Contracts.Actors.ZLinkActorCreateResult : System.IEquatable<Zlink.Framework.Contracts.Actors.ZLinkActorCreateResult>
     method abstract Zlink.Framework.Contracts.Actors.ZLinkActorCreateResult <Clone>$() [return=read:not-null,write:not-null]
     method override System.Boolean Equals(System.Object? obj [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
@@ -224,7 +224,7 @@ assembly Zlink.Framework
     generic TMessage variance=in nullable=nullable
     method abstract System.Threading.Tasks.ValueTask HandleAsync(TMessage? message [nullability=read:nullable,write:nullable], Zlink.Framework.Contracts.Channels.ZLinkRouteMessageContext context [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Channels.IZLinkSendCall : Zlink.Framework.Contracts.Channels.IZLinkMetadataCall<Zlink.Framework.Contracts.Channels.IZLinkSendCall>
-    method abstract System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask Async() [return=read:not-null,write:not-null]
     method virtual System.Void Submit() [return=read:not-null,write:not-null]
   type sealed-class Zlink.Framework.Contracts.Channels.ZLinkPublishMessageContext : Zlink.Framework.Contracts.Handlers.IZLinkMessageContext
     property System.String? ChannelName { get; } [nullability=read:nullable,write:unknown]
@@ -410,7 +410,6 @@ assembly Zlink.Framework
     property System.UInt64 ReceiveHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
     property System.Nullable<System.TimeSpan> ReceiveTimeout { get; set; } [nullability=read:nullable,write:nullable]
     property System.UInt64 SendHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
-    property System.Nullable<System.TimeSpan> SendTimeout { get; set; } [nullability=read:nullable,write:nullable]
   type interface Zlink.Framework.Contracts.Configuration.IZLinkMeshObjectClientBuilder
   type interface Zlink.Framework.Contracts.Configuration.IZLinkMeshObjectRoleBuilder
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkMeshObjectClientBuilder Client() [return=read:not-null,write:not-null]
@@ -468,7 +467,6 @@ assembly Zlink.Framework
     property System.Nullable<System.TimeSpan> ReceiveTimeout { get; set; } [nullability=read:nullable,write:nullable]
     property System.Int32 SendBufferSize { get; set; } [nullability=read:not-null,write:not-null]
     property System.UInt64 SendHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
-    property System.Nullable<System.TimeSpan> SendTimeout { get; set; } [nullability=read:nullable,write:nullable]
     property System.Nullable<System.Boolean> TcpNoDelay { get; set; } [nullability=read:nullable,write:nullable]
     property System.Int32 Weight { get; set; } [nullability=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Configuration.IZLinkSpotPublisherConfig
@@ -507,7 +505,6 @@ assembly Zlink.Framework
     property System.Nullable<System.TimeSpan> ReceiveTimeout { get; set; } [nullability=read:nullable,write:nullable]
     property System.Int32 SendBufferSize { get; set; } [nullability=read:not-null,write:not-null]
     property System.UInt64 SendHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
-    property System.Nullable<System.TimeSpan> SendTimeout { get; set; } [nullability=read:nullable,write:nullable]
     property System.Nullable<System.Boolean> TcpNoDelay { get; set; } [nullability=read:nullable,write:nullable]
   type interface Zlink.Framework.Contracts.Configuration.IZLinkUserSpotFactoryBuilder<TSpot>
     generic TSpot variance=invariant nullable=unspecified
@@ -1366,7 +1363,7 @@ assembly Zlink.Framework
     generic TReply variance=invariant nullable=nullable
     method abstract System.Threading.Tasks.ValueTask<TReply?> HandleAsync(TSpot spot [nullability=read:not-null,write:not-null], TRequest? request [nullability=read:nullable,write:nullable], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Spots.IZLinkSpotSendCall : Zlink.Framework.Contracts.Channels.IZLinkMetadataCall<Zlink.Framework.Contracts.Spots.IZLinkSpotSendCall>
-    method abstract System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask Async() [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Spots.IZLinkSpotSendCall InMesh(System.String meshName [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Spots.IZLinkSpotSendCall InstanceSpot() [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Spots.IZLinkSpotSendCall InstanceSpot(System.String instanceSpotType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
@@ -1505,7 +1502,7 @@ assembly Zlink.Framework
     method abstract Zlink.Framework.Contracts.Streams.IZLinkBoundSessionSendCall Send<TMessage>(TMessage? message [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
       generic TMessage variance=invariant nullable=nullable
   type interface Zlink.Framework.Contracts.Streams.IZLinkBoundSessionSendCall : Zlink.Framework.Contracts.Channels.IZLinkMetadataCall<Zlink.Framework.Contracts.Streams.IZLinkBoundSessionSendCall>
-    method abstract System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask Async() [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Streams.IZLinkMessageMetadataPolicy
     method abstract System.Boolean CanForward(System.String key [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Streams.IZLinkSession
@@ -1520,7 +1517,7 @@ assembly Zlink.Framework
     property System.String ActorId { get; } [nullability=read:not-null,write:unknown]
     property Systems.Zlink.ActorRef Ref { get; } [nullability=read:not-null,write:unknown]
     method abstract System.Threading.Tasks.ValueTask NotifyDisconnectedAsync(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
-    method abstract System.Threading.Tasks.ValueTask RelayAsync(Zlink.Framework.Contracts.Messaging.ZLinkMessage payload [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask RelayAsync(Zlink.Framework.Contracts.Messaging.ZLinkMessage payload [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Streams.IZLinkSessionActors
     property System.Collections.Generic.IReadOnlyCollection<Zlink.Framework.Contracts.Streams.IZLinkSessionActor> Bound { get; } [nullability=read:not-null,write:unknown]
     method abstract System.Threading.Tasks.ValueTask<Zlink.Framework.Contracts.Streams.IZLinkSessionActor> BindAsync(Systems.Zlink.ActorRef actor [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
@@ -1553,12 +1550,11 @@ assembly Zlink.Framework
     generic TMessage variance=invariant nullable=unspecified
     method abstract System.Threading.Tasks.ValueTask HandleAsync(TSessionContext? context [nullability=read:nullable,write:nullable], Zlink.Framework.Contracts.Streams.ZLinkSessionDispatchContext dispatch [nullability=read:not-null,write:not-null], TMessage? message [nullability=read:nullable,write:nullable], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Streams.IZLinkSessionReplyCall
-    method abstract System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask Async() [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Streams.IZLinkSessionReplyCall Compress() [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Streams.IZLinkSessionSendCall : Zlink.Framework.Contracts.Channels.IZLinkMetadataCall<Zlink.Framework.Contracts.Streams.IZLinkSessionSendCall>
-    method abstract System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask Async() [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Streams.IZLinkSessionSendCall Compress() [return=read:not-null,write:not-null]
-    method abstract Zlink.Framework.Contracts.Streams.IZLinkSessionSendCall Timeout(System.TimeSpan timeout [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Streams.IZLinkStream
     property System.String? LocalAddr { get; } [nullability=read:nullable,write:unknown]
     property System.String? RemoteAddr { get; } [nullability=read:nullable,write:unknown]

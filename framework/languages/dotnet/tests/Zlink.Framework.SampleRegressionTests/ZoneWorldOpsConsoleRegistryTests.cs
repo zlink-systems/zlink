@@ -236,9 +236,8 @@ public sealed class ZoneWorldOpsConsoleRegistryTests
 
         public IZLinkSessionSendCall Timeout(TimeSpan timeout) => this;
 
-        public ValueTask Async(CancellationToken cancellationToken = default)
+        public ValueTask Async()
         {
-            cancellationToken.ThrowIfCancellationRequested();
             submit();
             return ValueTask.CompletedTask;
         }

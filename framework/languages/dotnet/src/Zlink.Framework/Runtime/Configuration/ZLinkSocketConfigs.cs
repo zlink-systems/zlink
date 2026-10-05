@@ -13,7 +13,6 @@ internal sealed class ZLinkSocketConfig
     internal const int DefaultPeerWeight = 100;
     internal const int MaximumPeerWeight = 10_000;
 
-    private TimeSpan? _sendTimeout;
     private int _weight = DefaultPeerWeight;
 
     public ZLinkSocketConfig(long defaultMaxMessageSize = DefaultMaxMessageSize)
@@ -35,12 +34,6 @@ internal sealed class ZLinkSocketConfig
 
     public TimeSpan? ReceiveTimeout { get; set; }
 
-    public TimeSpan? SendTimeout
-    {
-        get => _sendTimeout;
-        set { _sendTimeout = NormalizeSendTimeout(value); }
-    }
-
     public TimeSpan? ConnectTimeout { get; set; }
 
     public TimeSpan? HandshakeInterval { get; set; }
@@ -59,24 +52,6 @@ internal sealed class ZLinkSocketConfig
             ValidatePeerWeight(value);
             _weight = value;
         }
-    }
-
-    internal static TimeSpan? NormalizeSendTimeout(TimeSpan? value)
-    {
-        if (value is not { } timeout)
-            return null;
-        if (timeout <= TimeSpan.Zero)
-            throw new ZLinkConfigurationException("SendTimeout must be greater than zero.");
-
-        var wholeMilliseconds = timeout.Ticks / TimeSpan.TicksPerMillisecond;
-        if (timeout.Ticks % TimeSpan.TicksPerMillisecond != 0)
-            wholeMilliseconds++;
-        if (wholeMilliseconds > int.MaxValue)
-            throw new ZLinkConfigurationException(
-                $"SendTimeout must not exceed {int.MaxValue} milliseconds."
-            );
-
-        return TimeSpan.FromMilliseconds(wholeMilliseconds);
     }
 
     internal static void ValidatePeerWeight(int value)
@@ -110,6 +85,24 @@ internal sealed class ZLinkOutboundRouteConfig : IZLinkOutboundRouteConfig
 
 internal sealed class ZLinkSpotPublisherConfig : IZLinkSpotPublisherConfig
 {
+    internal static TimeSpan? NormalizeSendTimeout(TimeSpan? value)
+    {
+        if (value is not { } timeout)
+            return null;
+        if (timeout <= TimeSpan.Zero)
+            throw new ZLinkConfigurationException("SendTimeout must be greater than zero.");
+
+        var wholeMilliseconds = timeout.Ticks / TimeSpan.TicksPerMillisecond;
+        if (timeout.Ticks % TimeSpan.TicksPerMillisecond != 0)
+            wholeMilliseconds++;
+        if (wholeMilliseconds > int.MaxValue)
+            throw new ZLinkConfigurationException(
+                $"SendTimeout must not exceed {int.MaxValue} milliseconds."
+            );
+
+        return TimeSpan.FromMilliseconds(wholeMilliseconds);
+    }
+
     private TimeSpan? _sendTimeout;
 
     public ulong SendHighWaterMark { get; set; }
@@ -117,7 +110,7 @@ internal sealed class ZLinkSpotPublisherConfig : IZLinkSpotPublisherConfig
     public TimeSpan? SendTimeout
     {
         get => _sendTimeout;
-        set { _sendTimeout = ZLinkSocketConfig.NormalizeSendTimeout(value); }
+        set { _sendTimeout = NormalizeSendTimeout(value); }
     }
 
     public TimeSpan? Linger { get; set; }

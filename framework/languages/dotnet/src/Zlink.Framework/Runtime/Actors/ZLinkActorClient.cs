@@ -44,7 +44,6 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         string packetName,
         TMessage message,
         ZLinkCallMetadata metadata,
-        CancellationToken cancellationToken,
         ResolvedActorRoute? fixedRoute = null
     )
     {
@@ -53,7 +52,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled
         );
-        cancellationToken.ThrowIfCancellationRequested();
+        var cancellationToken = runtime.ShutdownToken;
         var route =
             fixedRoute
             ?? await ResolveActorRouteAsync(actorId, cancellationToken).ConfigureAwait(false);
@@ -556,7 +555,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             return this;
         }
 
-        public ValueTask Async(CancellationToken cancellationToken = default)
+        public ValueTask Async()
         {
             _submission.Claim();
             return client
@@ -564,8 +563,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
                     actorId,
                     ZLinkMessageNameResolver.ResolveFromMessage(message),
                     message,
-                    _metadata,
-                    cancellationToken
+                    _metadata
                 )
                 .EnsureAcceptedAsync("Actor send", ZLinkFrameworkErrorKind.NotFound);
         }

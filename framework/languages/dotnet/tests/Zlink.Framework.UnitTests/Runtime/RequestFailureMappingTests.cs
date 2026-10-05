@@ -321,7 +321,7 @@ public sealed class RequestFailureMappingTests
                     "WRITABLE completion"
                 )
             );
-            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, completed.Kind);
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, completed.Kind);
         }
     }
 

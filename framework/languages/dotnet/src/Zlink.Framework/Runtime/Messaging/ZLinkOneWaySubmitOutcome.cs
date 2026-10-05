@@ -4,7 +4,6 @@ internal enum ZLinkOneWaySubmitStatus
 {
     Submitted = 0,
     Backpressured = 1,
-    TimedOut = 2,
     TargetNotFound = 3,
     RouteNotConnected = 4,
     Shutdown = 5,
@@ -28,8 +27,32 @@ internal static class ZLinkOneWaySubmitOutcome
     // only Backpressured needs the binding's retained-payload admission task.
     public static Task EnsureAcceptedAsync(this SendSubmission submission) =>
         ZLinkBindingSubmissionOutcome.RequiresAdmission(submission.Result)
-            ? submission.Admitted
+            ? AwaitAdmissionAsync(submission.Admitted)
             : Task.CompletedTask;
+
+    private static async Task AwaitAdmissionAsync(Task admitted)
+    {
+        try
+        {
+            await admitted.ConfigureAwait(false);
+        }
+        catch (ZlinkSubmitException error)
+        {
+            throw ZLinkSubmitFailureMapper.CreateException(
+                error,
+                "One-way send",
+                completionFailure: true
+            );
+        }
+        catch (ObjectDisposedException error)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "One-way send socket was closed.",
+                innerException: error
+            );
+        }
+    }
 
     public static async ValueTask EnsureAcceptedAsync(
         this ValueTask<ZLinkOneWaySubmitResult> pending,
@@ -58,10 +81,9 @@ internal static class ZLinkOneWaySubmitOutcome
             case ZLinkOneWaySubmitStatus.SkippedNotBound:
                 return;
             case ZLinkOneWaySubmitStatus.Backpressured:
-            case ZLinkOneWaySubmitStatus.TimedOut:
                 throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DeadlineExceeded,
-                    $"{operationName} timed out before local admission completed.",
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    $"{operationName} has no admission capacity.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
             case ZLinkOneWaySubmitStatus.TargetNotFound:

@@ -14,19 +14,14 @@ public sealed class LogicalMulticastSubmitTests
         var spot = DispatchProxy.Create<IZLinkBackendSpot, PublishSpotProxy>();
         var proxy = (PublishSpotProxy)(object)spot;
 
-        await using var transport = new ZLinkSpotOutboundTransport(
-            spot,
-            TimeSpan.FromMilliseconds(250),
-            CancellationToken.None
-        );
+        await using var transport = new ZLinkSpotOutboundTransport(spot, CancellationToken.None);
         await using var pool = CreatePool();
         using var message = Message.From("publish");
         var result = await SubmitAsync(
             pool,
             () => transport.PublishCurrent("events-channel", "events", [message]),
             CancellationToken.None,
-            CancellationToken.None,
-            TimeSpan.FromSeconds(1)
+            CancellationToken.None
         );
 
         Assert.Equal(SubmitResult.Ok, result);
@@ -36,7 +31,7 @@ public sealed class LogicalMulticastSubmitTests
     }
 
     [Fact]
-    public async Task Publish_WaitsForWorkerReservationWithinAdmissionTimeout()
+    public async Task Publish_WaitsForWorkerReservationWithoutTimeout()
     {
         await using var pool = CreatePool();
         using var release = new ManualResetEventSlim(false);
@@ -59,8 +54,7 @@ public sealed class LogicalMulticastSubmitTests
                     publishCount++;
                 },
                 CancellationToken.None,
-                CancellationToken.None,
-                TimeSpan.FromSeconds(1)
+                CancellationToken.None
             )
             .AsTask();
 
@@ -110,7 +104,7 @@ public sealed class LogicalMulticastSubmitTests
     }
 
     [Fact]
-    public async Task Publish_ReturnsBackpressuredAfterWorkerAdmissionTimeout()
+    public async Task Publish_WaitsBeyondThreeDefaultTimeoutsBeforeWorkerAdmission()
     {
         await using var pool = CreatePool();
         using var release = new ManualResetEventSlim(false);
@@ -126,20 +120,25 @@ public sealed class LogicalMulticastSubmitTests
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var publishCount = 0;
 
-        var result = await SubmitAsync(
-            pool,
-            () =>
-            {
-                publishCount++;
-            },
-            CancellationToken.None,
-            CancellationToken.None,
-            TimeSpan.FromMilliseconds(50)
-        );
+        var pending = SubmitAsync(
+                pool,
+                () =>
+                {
+                    publishCount++;
+                },
+                CancellationToken.None,
+                CancellationToken.None
+            )
+            .AsTask();
 
-        Assert.Equal(SubmitResult.Backpressured, result);
+        await Task.Delay(TimeSpan.FromMilliseconds(3100));
+        Assert.False(pending.IsCompleted);
         Assert.Equal(0, publishCount);
         release.Set();
+        Assert.Equal(SubmitResult.Ok, await pending.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(
+            SpinWait.SpinUntil(() => Volatile.Read(ref publishCount) == 1, TimeSpan.FromSeconds(5))
+        );
     }
 
     [Fact]
@@ -168,14 +167,7 @@ public sealed class LogicalMulticastSubmitTests
         var submissions = Enumerable
             .Range(0, 33)
             .Select(_ =>
-                SubmitAsync(
-                        pool,
-                        Publish,
-                        CancellationToken.None,
-                        CancellationToken.None,
-                        TimeSpan.FromSeconds(10)
-                    )
-                    .AsTask()
+                SubmitAsync(pool, Publish, CancellationToken.None, CancellationToken.None).AsTask()
             )
             .ToArray();
 
@@ -207,8 +199,7 @@ public sealed class LogicalMulticastSubmitTests
                     release.Wait();
                 },
                 cancellation.Token,
-                CancellationToken.None,
-                TimeSpan.FromSeconds(1)
+                CancellationToken.None
             )
             .AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -230,7 +221,6 @@ public sealed class LogicalMulticastSubmitTests
             () => throw new InvalidOperationException("target failed"),
             CancellationToken.None,
             CancellationToken.None,
-            TimeSpan.FromSeconds(1),
             () => released.TrySetResult(),
             errorSink
         );
@@ -244,8 +234,7 @@ public sealed class LogicalMulticastSubmitTests
         ZLinkWorkerPool pool,
         Action publish,
         CancellationToken cancellationToken,
-        CancellationToken shutdownToken,
-        TimeSpan timeout
+        CancellationToken shutdownToken
     )
     {
         return ZLinkLogicalMulticastSubmitter.SubmitAsync(
@@ -253,7 +242,6 @@ public sealed class LogicalMulticastSubmitTests
             publish,
             cancellationToken,
             shutdownToken,
-            timeout,
             static () => { },
             new RecordingErrorSink()
         );

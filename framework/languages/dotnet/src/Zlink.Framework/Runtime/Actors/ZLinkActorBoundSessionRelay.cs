@@ -365,7 +365,6 @@ internal static class ZLinkActorBoundSessionRelay
             cancellationToken,
             runtime.ShutdownToken
         );
-        terminal.CancelAfter(runtime.Registration.DefaultRequestTimeout);
         using var frameMessage = Message.From(frame);
         try
         {
@@ -384,14 +383,6 @@ internal static class ZLinkActorBoundSessionRelay
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ShuttingDown,
                 "Actor request reply relay was interrupted by runtime shutdown."
-            );
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.DeadlineExceeded,
-                "Actor request reply relay timed out before local admission completed.",
-                ZLinkRetryAdvice.RetryAfterBackoff
             );
         }
     }

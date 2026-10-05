@@ -66,7 +66,7 @@ public sealed class GameSession(IZLinkSessionContext context, ILogger<GameSessio
                 }
             );
 
-        await actor.RelayAsync(payload, cancellationToken);
+        await actor.RelayAsync(payload);
         // --8<-- [end:session-actor-relay]
     }
 }

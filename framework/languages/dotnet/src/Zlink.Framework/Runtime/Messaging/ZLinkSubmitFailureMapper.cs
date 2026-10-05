@@ -23,6 +23,15 @@ internal static class ZLinkSubmitFailureMapper
         return CreateException(result, targetDescription);
     }
 
+    public static ZLinkFrameworkException CreateFanoutException(ZlinkSubmitException error) =>
+        error.Result == ZlinkSubmitException.ErrorCode.Backpressured
+            ? ZLinkRequestFailureMapper.CreateCompletionException(
+                RequestResult.TimedOut,
+                "Fanout publish",
+                error
+            )
+            : CreateException(error, "Fanout publish");
+
     public static bool AcceptOrThrow(SubmitResult result, string targetDescription)
     {
         return result switch
@@ -47,10 +56,10 @@ internal static class ZLinkSubmitFailureMapper
         result switch
         {
             SubmitResult.Ok => RequestResult.Ok,
-            SubmitResult.Backpressured => completionFailure
-                ? RequestResult.TimedOut
-                : RequestResult.NotConnected,
-            SubmitResult.NotFound => RequestResult.NotFound,
+            SubmitResult.Backpressured => RequestResult.NotConnected,
+            SubmitResult.NotFound => completionFailure
+                ? RequestResult.NotConnected
+                : RequestResult.NotFound,
             SubmitResult.NotConnected => RequestResult.NotConnected,
             SubmitResult.NotAdmitted => RequestResult.Rejected,
             SubmitResult.Terminated => RequestResult.Terminated,
@@ -65,7 +74,7 @@ internal static class ZLinkSubmitFailureMapper
     public static ZLinkFrameworkException CreateException(
         ZlinkSubmitException error,
         string operationName,
-        bool completionFailure = true
+        bool completionFailure = false
     ) =>
         ZLinkRequestFailureMapper.CreateCompletionException(
             ToRequestResult((SubmitResult)(int)error.Result, completionFailure),
