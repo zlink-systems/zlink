@@ -166,13 +166,13 @@ final class PerfTransport {
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Thread waiter = new Thread(() -> {
             try {
-                int seen = 0;
+                long seen = 0;
                 while (seen < expectedCount) {
                     var event = monitor.recv();
                     if (event.event() != expectedEvent) {
                         continue;
                     }
-                    seen++;
+                    seen = event.value();
                 }
             } catch (Throwable ex) {
                 failure.compareAndSet(null, ex);
