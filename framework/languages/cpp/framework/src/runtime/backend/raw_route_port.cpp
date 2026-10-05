@@ -98,7 +98,8 @@ observe_send_completion (zlink::async_result_t<void> pending,
                 co_return;
             }
         }
-        source->complete (result_t<zlink::submit_result_t>::success (error.result ()));
+        source->complete (result_t<zlink::submit_result_t>::success (
+          runtime::messaging::map_submit_completion_result (error.result ())));
     }
     catch (const std::exception &error) {
         source->complete (result_t<zlink::submit_result_t>::failure (

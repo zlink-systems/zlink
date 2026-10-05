@@ -31,7 +31,6 @@ class channel_outbound_exchange_t
                               std::string packet_name,
                               std::type_index message_type,
                               message_bus_t::payload_encoder_t encode_payload,
-                              std::chrono::milliseconds timeout,
                               const send_call_t::metadata_map_t &metadata);
 
     task_t<void> submit_publish (std::string channel_name,

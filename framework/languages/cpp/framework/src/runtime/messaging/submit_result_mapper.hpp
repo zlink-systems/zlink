@@ -13,16 +13,23 @@
 namespace zlink::framework::runtime::messaging
 {
 
-/* Owns the typed submit projection. Capacity refusal is source-local before
- * a token is issued and a deadline terminal after WRITABLE admission. */
+// Projects the typed binding result at its initial or completion boundary.
+inline zlink::submit_result_t map_submit_completion_result (zlink::submit_result_t result) noexcept
+{
+    return result == zlink::submit_result_t::not_found ? zlink::submit_result_t::not_connected
+                                                       : result;
+}
+
 inline zlink::request_result_t map_submit_request_result (zlink::submit_result_t result,
                                                           bool completion_failure) noexcept
 {
+    if (completion_failure)
+        result = map_submit_completion_result (result);
     switch (result) {
         case zlink::submit_result_t::ok:
             return zlink::request_result_t::ok;
         case zlink::submit_result_t::backpressured:
-            return completion_failure ? zlink::request_result_t::timed_out
+            return completion_failure ? zlink::request_result_t::internal_error
                                       : zlink::request_result_t::not_connected;
         case zlink::submit_result_t::not_connected:
             return zlink::request_result_t::not_connected;
@@ -48,7 +55,7 @@ inline zlink::request_result_t map_submit_request_result (zlink::submit_result_t
 inline framework_exception_t map_submit_result_exception (zlink::submit_result_t result,
                                                           std::string message)
 {
-    const auto terminal = static_cast<std::uint32_t> (map_submit_request_result (result, true));
+    const auto terminal = static_cast<std::uint32_t> (map_submit_request_result (result, false));
     const request_failure_mapper_t mapper;
     return mapper.reply_header_exception (terminal, mapper.reply_failure_code (terminal), message);
 }

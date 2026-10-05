@@ -146,7 +146,6 @@ class spot_node_builder_state_t
         return drain_flag && drain_flag->load (std::memory_order_acquire);
     }
     std::shared_ptr<monitoring_runtime_state_t> monitoring;
-    std::chrono::milliseconds one_way_send_timeout{std::chrono::seconds (1)};
     std::chrono::milliseconds instance_spot_idle_timeout{0};
     std::unique_ptr<core_timer_drain_loop_t> instance_spot_idle_timer;
     std::atomic_bool stopping{false};

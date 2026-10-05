@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/channels/channel_outbound_exchange.hpp"
+#include "runtime/messaging/request_deadline.hpp"
 
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/channels/channel_socket_options.hpp"
@@ -181,7 +182,7 @@ encode_channel_payload_parts (runtime::messaging::envelope_header_t header,
 
 // The binding typed result owns the classification; errno only details the
 // same failure (Core errors §Result와 errno 대응), so it is never consulted here.
-std::exception_ptr map_native_exception (const std::exception &error)
+std::exception_ptr map_native_exception (const std::exception &error, bool classic_publish = false)
 {
     if (detail::is_cancellation_exception (error))
         return std::current_exception ();
@@ -204,6 +205,9 @@ std::exception_ptr map_native_exception (const std::exception &error)
     }
     if (const auto *submit_error = dynamic_cast<const zlink::submit_error_t *> (&error);
         submit_error != nullptr) {
+        if (classic_publish && submit_error->result () == zlink::submit_result_t::backpressured)
+            return std::make_exception_ptr (detail::make_boundary_exception (
+              detail::boundary_error_t::timed_out, submit_error->what ()));
         return std::make_exception_ptr (runtime::messaging::map_channel_submit_result_exception (
           submit_error->result (), submit_error->what ()));
     }
@@ -295,6 +299,16 @@ class channel_native_client_t
     request (const runtime::messaging::message_parts_t &parts,
              const endpoint_provider_t &endpoints,
              std::chrono::milliseconds timeout)
+    {
+        const auto deadline = std::chrono::steady_clock::now () + timeout;
+        return runtime::messaging::with_request_deadline (
+          request_native (parts, endpoints, timeout), deadline);
+    }
+
+    task_t<runtime::messaging::message_parts_t>
+    request_native (const runtime::messaging::message_parts_t &parts,
+                    const endpoint_provider_t &endpoints,
+                    std::chrono::milliseconds timeout)
     {
         if (_closed.load (std::memory_order_acquire)) {
             co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
@@ -444,7 +458,6 @@ class channel_native_client_t
             socket (std::make_unique<zlink::dealer_socket_t> (*this->context))
         {
             apply_weighted_channel_socket_options (*socket, client);
-            apply_channel_send_timeout (*socket, client.send_timeout);
             if (client.routing_id) {
                 socket->set_routing_id (*client.routing_id);
             }
@@ -942,6 +955,8 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
     /* Coroutine on a caller-owned object: copy the shared state into the
      * frame so resumes after the owner unwinds never touch `this`. */
     const auto state = _state;
+    const auto deadline = std::chrono::steady_clock::now ()
+                          + resolve_channel_wait_timeout (state, channel_name, timeout);
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application, detail::message_flow_tracer_t (state->dispatch).mode ());
     channel_runtime_t runtime (state);
@@ -983,8 +998,8 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                       framework_error_kind_t::internal_failure,
                       "channel message exceeds configured max message size");
                 }
-                const auto effective_timeout =
-                  resolve_channel_wait_timeout (state, channel_name, timeout);
+                const auto effective_timeout = std::chrono::ceil<std::chrono::milliseconds> (
+                  deadline - std::chrono::steady_clock::now ());
                 auto reply =
                   co_await (*requester) (call_packet_name, std::move (serialized.content_type),
                                          std::move (payload), effective_timeout, metadata);
@@ -1022,8 +1037,8 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
         }
         try {
             runtime::messaging::client_call_codec_t codec;
-            const auto effective_timeout =
-              resolve_channel_wait_timeout (state, channel_name, timeout);
+            const auto effective_timeout = std::chrono::ceil<std::chrono::milliseconds> (
+              deadline - std::chrono::steady_clock::now ());
             auto header = codec.create_envelope (runtime::messaging::message_kind_t::request,
                                                  channel_name, call_packet_name, effective_timeout);
             header.metadata = metadata;
@@ -1079,7 +1094,9 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
             auto native_client = native_selection.value ();
             auto endpoints = make_client_endpoint_provider (state, channel_name);
             auto native_reply =
-              co_await native_client->request (parts, endpoints, effective_timeout);
+              co_await native_client->request (parts, endpoints,
+                                               std::chrono::ceil<std::chrono::milliseconds> (
+                                                 deadline - std::chrono::steady_clock::now ()));
             auto validation = validate_channel_native_reply (native_reply);
             if (!validation) {
                 co_return validation.error () != nullptr
@@ -1152,7 +1169,6 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                                           std::string packet_name,
                                           std::type_index message_type,
                                           message_bus_t::payload_encoder_t encode_payload,
-                                          std::chrono::milliseconds timeout,
                                           const send_call_t::metadata_map_t &metadata)
 {
     /* Coroutine on a caller-owned object: copy the shared state into the
@@ -1192,8 +1208,7 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                       "channel message exceeds configured max message size");
                 }
                 co_await (*sender) (call_packet_name, std::move (serialized.content_type),
-                                    std::move (payload),
-                                    channel_send_timeout (client->send_timeout), metadata);
+                                    std::move (payload), metadata);
                 detail::message_flow_tracer_t (state->dispatch)
                   .trace (message_flow_outcome_t::sent, [&] {
                       return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
@@ -1220,8 +1235,9 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
         }
         try {
             runtime::messaging::client_call_codec_t codec;
-            auto header = codec.create_envelope (runtime::messaging::message_kind_t::command,
-                                                 channel_name, call_packet_name, timeout);
+            auto header =
+              codec.create_envelope (runtime::messaging::message_kind_t::command, channel_name,
+                                     call_packet_name, std::chrono::milliseconds::zero ());
             header.metadata = metadata;
             auto parts = encode_channel_payload_parts (header, message_type, encode_payload,
                                                        *state->serializers);
@@ -1323,7 +1339,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
                 throw;
             }
             catch (const std::exception &error) {
-                std::rethrow_exception (map_native_exception (error));
+                std::rethrow_exception (map_native_exception (error, true));
             }
         }
         try {
@@ -1359,7 +1375,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
             throw;
         }
         catch (const std::exception &error) {
-            std::rethrow_exception (map_native_exception (error));
+            std::rethrow_exception (map_native_exception (error, true));
         }
     }
     co_return;

@@ -3,6 +3,7 @@
 #include "runtime/backend/raw_dealer_port.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/backend/raw_route_port.hpp"
+#include "runtime/messaging/request_deadline.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/host/bound_session_send_stage_trace.hpp"
@@ -116,7 +117,7 @@ class reply_probe_t final
     {
         ++consumed;
         if (_error != 0)
-            throw zlink::submit_error_t (zlink::submit_result_t::backpressured, _error);
+            throw zlink::request_error_t (zlink::request_result_t::timed_out, _error);
         return {};
     }
     void detach () noexcept override {}
@@ -154,7 +155,11 @@ void verify_request_submission_stages ()
             assert (observed.terminal == zlink::request_result_t::ok);
             assert (!observed.failure);
         } else {
-            assert (observed.terminal == zlink::request_result_t::timed_out);
+            // A reply timeout is valid; BACKPRESSURED in an admission
+            // terminal is an invalid binding completion, not a deadline.
+            assert (observed.terminal
+                    == (admission_error ? zlink::request_result_t::internal_error
+                                        : zlink::request_result_t::timed_out));
             assert (observed.failure);
             assert (observed.failure->internal_errno == expected_error);
         }
@@ -236,16 +241,18 @@ void verify_capacity_refusal_phase_controls_public_terminal ()
     }
     const auto completion = zlink::framework::runtime::messaging::map_submit_request_result (
       zlink::submit_result_t::backpressured, true);
-    assert (completion == zlink::request_result_t::timed_out);
+    assert (completion == zlink::request_result_t::internal_error);
     const auto expired = client_server::client_server_operation_exception (
-      foundation::operation_terminal_t::timed_out, "expired WRITABLE token");
+      foundation::operation_terminal_t::timed_out, "caller request budget");
     try {
         std::rethrow_exception (expired);
     }
     catch (const zlink::framework::framework_exception_t &error) {
         assert (error.kind () == framework_error_kind_t::deadline_exceeded);
     }
-    std::cout << "f20 tokenless=Unavailable writable_timeout=DeadlineExceeded" << std::endl;
+    std::cout << "f20 tokenless=Unavailable invalid_completion=InternalFailure "
+                 "request_budget=DeadlineExceeded"
+              << std::endl;
 }
 
 void verify_writable_request_timeout_remains_deadline_exceeded ()
@@ -259,7 +266,6 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
     target.set_routing_id (target_rid);
     source.options ().linger (0ms);
     target.options ().linger (0ms);
-    source.options ().send_timeout (raw_request_capacity_timeout);
     source.options ().send_hwm (zlink::byte_count_t::bytes (raw_route_backpressure_hwm_bytes));
     target.options ().recv_hwm (zlink::byte_count_t::bytes (raw_route_backpressure_hwm_bytes));
     target.set_receive_flow_state (zlink::receive_flow_state_t::paused);
@@ -287,11 +293,15 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
             assert (sent.result () && sent.result ().value () == zlink::submit_result_t::ok);
     }
     assert (blocked_send);
-    auto pending =
-      port.request (target_rid.to_bytes (), request_parts (), raw_route_fixture_timeout);
+    const auto caller_deadline = std::chrono::steady_clock::now () + raw_request_capacity_timeout;
+    auto pending = zlink::framework::runtime::messaging::with_request_deadline (
+      port.request (target_rid.to_bytes (), request_parts (), raw_route_fixture_timeout),
+      caller_deadline);
     std::atomic_int terminal_count{0};
     zlink::framework::detail::observe_task_completion (pending, [&] (const auto &settled) {
-        assert (settled && settled.value ().terminal == zlink::request_result_t::timed_out);
+        assert (!settled
+                && settled.error_kind ()
+                     == zlink::framework::framework_error_kind_t::deadline_exceeded);
         terminal_count.fetch_add (1, std::memory_order_release);
     });
     assert (!pending.await_ready ());
@@ -300,17 +310,9 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
            && std::chrono::steady_clock::now () < deadline)
         (void) port.poll (raw_route_fixture_poll_interval);
     assert (pending.await_ready ());
-    assert (pending.result ());
-    const auto &completion = pending.result ().value ();
-    assert (completion.failure);
-    std::cout << "f20 phase=" << static_cast<int> (completion.failure->phase) << " submit="
-              << (completion.failure->submit_result
-                    ? static_cast<int> (*completion.failure->submit_result)
-                    : -1)
-              << " terminal=" << static_cast<int> (completion.terminal) << std::endl;
-    assert (completion.failure->phase == backend::raw_request_failure_phase_t::completion_terminal);
-    assert (completion.failure->submit_result == zlink::submit_result_t::backpressured);
-    assert (completion.terminal == zlink::request_result_t::timed_out);
+    assert (!pending.result ());
+    assert (pending.result ().error_kind ()
+            == zlink::framework::framework_error_kind_t::deadline_exceeded);
     assert (terminal_count.load (std::memory_order_acquire) == 1);
     port.close ();
     target_port.close ();
@@ -752,7 +754,7 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
     assert (request.await_ready ());
     const auto &settled = request.result ();
     assert (settled);
-    assert (settled.value ().terminal == zlink::request_result_t::not_found);
+    assert (settled.value ().terminal == zlink::request_result_t::not_connected);
     assert (settled.value ().failure);
     assert (settled.value ().failure->phase
             == backend::raw_request_failure_phase_t::completion_terminal);
@@ -762,10 +764,76 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
     client_monitor.close ();
     server_monitor.close ();
 }
+void verify_pending_send_route_removal_and_shutdown ()
+{
+    using zlink::framework::framework_error_kind_t;
+    namespace messaging = zlink::framework::runtime::messaging;
+    for (const bool shutdown : {false, true}) {
+        zlink::context_t context;
+        zlink::router_socket_t server (context), client (context);
+        const auto rid = zlink::routing_id_t::from ("pending-send-terminal-target");
+        server.set_routing_id (rid);
+        client.options ().send_hwm (zlink::byte_count_t::bytes (raw_route_backpressure_hwm_bytes));
+        server.options ().recv_hwm (zlink::byte_count_t::bytes (raw_route_backpressure_hwm_bytes));
+        server.set_receive_flow_state (zlink::receive_flow_state_t::paused);
+        server.options ().linger (0ms);
+        client.options ().linger (0ms);
+        client.options ().mandatory (true);
+        const std::string endpoint =
+          shutdown ? "inproc://send-pending-shutdown" : "inproc://send-pending-remove";
+        server.bind (endpoint);
+        auto monitor = client.monitor_open (zlink::monitor_event::connection_ready);
+        client.connect (endpoint);
+        assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
+        backend::raw_route_port_t port (client);
+        backend::raw_route_port_t target_port (server);
+        const auto paused_by = std::chrono::steady_clock::now () + 2s;
+        while (monitor.status ().flow_paused_connections == 0
+               && std::chrono::steady_clock::now () < paused_by) {
+            (void) target_port.poll (10ms);
+            (void) port.poll (10ms);
+        }
+        assert (monitor.status ().flow_paused_connections == 1);
+        std::optional<zlink::framework::task_t<zlink::submit_result_t>> pending;
+        for (std::size_t attempt = 0; attempt < raw_route_backpressure_attempt_limit && !pending;
+             ++attempt) {
+            auto sent = port.send_result (rid.to_bytes (), request_parts ());
+            if (!sent.await_ready ())
+                pending.emplace (std::move (sent));
+            else
+                assert (sent.result ().value () == zlink::submit_result_t::ok);
+        }
+        assert (pending);
+        const auto hold_until = std::chrono::steady_clock::now () + 3100ms;
+        while (std::chrono::steady_clock::now () < hold_until) {
+            (void) port.poll (10ms);
+            assert (!pending->await_ready ());
+        }
+        if (shutdown) {
+            port.close ();
+            client.close ();
+        } else
+            client.disconnect_rid (rid);
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (!pending->await_ready () && std::chrono::steady_clock::now () < deadline)
+            (void) port.poll (10ms);
+        assert (pending->await_ready ());
+        const auto &result = pending->result ();
+        assert (result);
+        assert (messaging::map_submit_result_exception (result.value (), "pending send").kind ()
+                == (shutdown ? framework_error_kind_t::shutting_down
+                             : framework_error_kind_t::unavailable));
+        port.close ();
+        target_port.close ();
+        monitor.close ();
+    }
+}
+
 }
 
 int main ()
 {
+    verify_pending_send_route_removal_and_shutdown ();
     verify_request_submission_stages ();
     verify_submission_admission_consumes_only_backpressure ();
     verify_capacity_refusal_phase_controls_public_terminal ();

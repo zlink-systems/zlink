@@ -19,6 +19,7 @@
 #include <zlink/framework/contracts/configuration/route_mesh_runtime_options.hpp>
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/framework/detail/runtime/dispatch/application_job_context.hpp>
+#include <zlink/framework/detail/deadline_scheduler.hpp>
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include <zlink/framework/contracts/errors/error.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
@@ -307,9 +308,7 @@ static_assert (
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::stream_send_call_t &> ().async ()),
                  zlink::framework::task_t<void>>);
-static_assert (std::is_same_v<decltype (std::declval<zlink::framework::stream_send_call_t &> ()
-                                          .timeout (std::chrono::milliseconds (1))),
-                              zlink::framework::stream_send_call_t &>);
+
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::stream_write_call_t &> ().async ()),
                  zlink::framework::task_t<void>>);
@@ -967,7 +966,34 @@ static_assert (std::is_same_v<decltype (std::declval<zlink::framework::stream_wr
 static_assert (!has_packet_name<zlink::framework::stream_write_call_t>);
 static_assert (has_packet_name<zlink::framework::stream_send_call_t>);
 static_assert (!has_timeout<zlink::framework::stream_write_call_t>);
-static_assert (has_timeout<zlink::framework::stream_send_call_t>);
+static_assert (!has_timeout<zlink::framework::stream_send_call_t>);
+static_assert (!has_timeout<zlink::framework::actor_send_call_t>);
+static_assert (!has_timeout<zlink::framework::spot_send_call_t>);
+static_assert (!has_timeout<zlink::framework::bound_session_send_call_t>);
+static_assert (has_timeout<zlink::framework::channel_request_call_t>);
+static_assert (!has_timeout<zlink::framework::send_call_t>);
+static_assert (!has_timeout<zlink::framework::route_send_call_t>);
+template <typename T>
+concept has_send_cancellation_input = requires (T &call) { call.async (std::stop_token{}); };
+static_assert (!has_send_cancellation_input<zlink::framework::send_call_t>);
+static_assert (!has_send_cancellation_input<zlink::framework::route_send_call_t>);
+static_assert (!has_send_cancellation_input<zlink::framework::spot_send_call_t>);
+static_assert (!has_send_cancellation_input<zlink::framework::actor_send_call_t>);
+static_assert (!has_send_cancellation_input<zlink::framework::bound_session_send_call_t>);
+static_assert (!has_send_cancellation_input<zlink::framework::stream_send_call_t>);
+static_assert (!has_send_cancellation_input<zlink::framework::stream_write_call_t>);
+template <typename T>
+concept has_send_timeout_option =
+  requires (T &value) { value.send_timeout (std::chrono::milliseconds (1)); };
+template <typename T>
+concept has_set_send_timeout_option =
+  requires (T &value) { value.set_send_timeout (std::chrono::milliseconds (1)); };
+static_assert (!has_send_timeout_option<zlink::framework::capability_builder_t>);
+static_assert (!has_set_send_timeout_option<zlink::framework::capability_builder_t>);
+static_assert (
+  !has_set_send_timeout_option<zlink::framework::client_server_channel_client_builder_t>);
+static_assert (has_set_send_timeout_option<zlink::framework::fanout_channel_builder_t>);
+
 
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::stream_write_call_t &> ().compress ()),

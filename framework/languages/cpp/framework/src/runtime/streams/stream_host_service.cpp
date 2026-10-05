@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/streams/session_liveness.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/configuration/service_scope.hpp"
@@ -1413,10 +1414,8 @@ class stream_host_service_t::listener_t
      * temporaries (send_core_error_frame's error_header/payload) that die
      * while this coroutine may still be suspended at the tail await; the
      * message copy is a cheap handle copy, not a buffer copy. */
-    task_t<void> send_core_frame (zlink::routing_id_t rid,
-                                  stream_header_t header,
-                                  zlink::message_t payload,
-                                  std::optional<std::chrono::milliseconds> timeout = std::nullopt)
+    task_t<void>
+    send_core_frame (zlink::routing_id_t rid, stream_header_t header, zlink::message_t payload)
     {
         if (header.kind () == stream_message_kind_t::error
             && stream_host_core_test_faults ().fail_core_error_frame_send.load (
@@ -1437,28 +1436,24 @@ class stream_host_service_t::listener_t
         const auto frame_bytes = frame.size ();
 
         std::optional<zlink::async_result_t<void>> pending;
-        {
-            std::lock_guard socket_lock (_core_socket_mutex);
-            if (!_core_socket) {
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Core STREAM socket is stopped");
-            }
-            const auto configured_timeout = _core_socket->options ().send_timeout ();
-            if (timeout)
-                _core_socket->options ().send_timeout (*timeout);
-            try {
+        try {
+            {
+                std::lock_guard socket_lock (_core_socket_mutex);
+                if (!_core_socket) {
+                    throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                                 "Core STREAM socket is stopped");
+                }
                 pending.emplace (
                   _core_socket->send (rid).message (std::move (frame)).async ().admitted);
             }
-            catch (...) {
-                if (timeout)
-                    _core_socket->options ().send_timeout (configured_timeout);
-                throw;
-            }
-            if (timeout)
-                _core_socket->options ().send_timeout (configured_timeout);
+            co_await std::move (*pending);
         }
-        co_await std::move (*pending);
+        catch (const zlink::submit_error_t &error) {
+            throw runtime::messaging::map_submit_result_exception (
+              pending ? runtime::messaging::map_submit_completion_result (error.result ())
+                      : error.result (),
+              error.what ());
+        }
         trace_stream_host ("core-write", _stream, header,
                            "rid=" + rid.to_hex () + " bytes=" + std::to_string (frame_bytes)
                              + " result=admitted");
@@ -2237,10 +2232,8 @@ class stream_host_service_t::listener_t
           });
         _runtime.attach_transport_writer (
           created->stream,
-          [this, rid] (const stream_header_t &header, const zlink::message_t &payload,
-                       std::optional<std::chrono::milliseconds> timeout) -> task_t<void> {
-              co_await send_core_frame (rid, header, payload, timeout);
-          });
+          [this, rid] (const stream_header_t &header, const zlink::message_t &payload)
+            -> task_t<void> { co_await send_core_frame (rid, header, payload); });
         auto connected = _runtime.dispatch_connected_async (
           *created->session, created->stream, [this, created, rid] (const result_t<void> &result) {
               if (!result) {
@@ -3315,10 +3308,8 @@ class stream_host_service_t::listener_t
         }
         _runtime.attach_transport_writer (
           stream,
-          [this, owner, connection] (const stream_header_t &header, const zlink::message_t &payload,
-                                     std::optional<std::chrono::milliseconds>) -> task_t<void> {
-              return submit_frame (owner, connection, header, payload);
-          });
+          [this, owner, connection] (const stream_header_t &header, const zlink::message_t &payload)
+            -> task_t<void> { return submit_frame (owner, connection, header, payload); });
         bool connected_session = false;
         std::optional<stream_error_t> session_transport_error;
         auto liveness =

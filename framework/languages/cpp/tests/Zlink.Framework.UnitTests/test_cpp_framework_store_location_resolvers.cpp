@@ -3325,7 +3325,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
           zlink::framework::runtime::messaging::message_parts_t>::success (std::move (parts));
     };
     const auto client_server_send =
-      [] (std::string, std::string, zlink::message_t, std::chrono::milliseconds,
+      [] (std::string, std::string, zlink::message_t,
           std::map<std::string, std::string>) -> zlink::framework::task_t<void> { co_return; };
     const auto client_server_request =
       [] (std::string, std::string, zlink::message_t message, std::chrono::milliseconds,

@@ -1881,7 +1881,7 @@ void app_t::_apply_zlink_framework ()
         auto make_activation = [operation_sequence] (
                                  const selected_instance_target_t &selected,
                                  const spot_id_t &spot_id, bool request, bool has_metadata,
-                                 std::chrono::milliseconds timeout,
+                                 std::chrono::system_clock::time_point activation_deadline,
                                  const detail::spot_activation_intent_t &intent,
                                  const std::optional<runtime::spot_address_t> &cached_route) {
             const auto source_status = selected.source->status ();
@@ -1897,10 +1897,9 @@ void app_t::_apply_zlink_framework ()
               {selected.target.rid.to_bytes (), selected.target.lifecycle_generation,
                std::string (spot_id), selected.target.mesh_name, selected.stable_type,
                std::to_string (selected.target.descriptor_revision),
-               static_cast<std::uint64_t> (
-                 std::chrono::duration_cast<std::chrono::milliseconds> (
-                   std::chrono::system_clock::now ().time_since_epoch () + timeout)
-                   .count ())},
+               static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                             activation_deadline.time_since_epoch ())
+                                             .count ())},
               source_status.lifecycle_generation (),
               source_status.routing_id ().to_bytes (),
               std::nullopt,
@@ -1926,7 +1925,8 @@ void app_t::_apply_zlink_framework ()
             const std::optional<runtime::spot_address_t> &cached_route,
             const std::string &packet_name, std::type_index,
             std::function<serialized_payload_t (serializer_registry_t &)> encode_payload,
-            const std::map<std::string, std::string> &metadata) -> task_t<result_t<void>> {
+            const std::map<std::string, std::string> &metadata,
+            std::chrono::system_clock::time_point started_at) -> task_t<result_t<void>> {
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application, detail::message_flow_tracer_t (dispatch).mode ());
               const auto flow = runtime::flow_context_t::current ();
@@ -1937,7 +1937,8 @@ void app_t::_apply_zlink_framework ()
               auto metadata_frame = detail::mesh_metadata_codec_t::encode (metadata);
               auto header =
                 make_activation (selected.value (), spot_id, false, !metadata_frame.empty (),
-                                 std::chrono::seconds (30), intent, cached_route);
+                                 started_at + selected.value ().source->default_request_timeout (),
+                                 intent, cached_route);
               const auto serialized = encode_payload (*serializers);
               runtime::protocol::application_payload_t application_payload{
                 packet_name, serialized.content_type, serialized.payload.to_bytes ()};
@@ -1982,7 +1983,7 @@ void app_t::_apply_zlink_framework ()
               auto metadata_frame = detail::mesh_metadata_codec_t::encode (metadata);
               auto header =
                 make_activation (selected.value (), spot_id, true, !metadata_frame.empty (),
-                                 timeout, intent, cached_route);
+                                 std::chrono::system_clock::now () + timeout, intent, cached_route);
               const auto serialized = encode_payload (*serializers);
               runtime::protocol::application_payload_t application_payload{
                 packet_name, serialized.content_type, serialized.payload.to_bytes ()};

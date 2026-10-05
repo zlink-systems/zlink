@@ -145,29 +145,28 @@ TEST (CppFrameworkChannelNoEligibleMember, PublicRouteMeshWeightZeroEndsUnavaila
       << (request.error () ? request.error ()->what () : "no error");
 }
 
-TEST (CppFrameworkChannelNoEligibleMember,
-      PublicClientServerMissingTargetExpiresAtConfiguredTimeout)
+TEST (CppFrameworkChannelNoEligibleMember, PublicClientServerReadyWaitHasNoSendDeadline)
 {
     auto app = fw::app_t::create ();
     app.add_zlink_framework ([] (fw::zlink_framework_options_t &options) {
-        options.add_client_server_channel ("selection-client-missing")
-          .client ()
-          .set_send_timeout (100ms);
+        options.add_client_server_channel ("selection-client-missing").client ();
     });
     auto provider = app.advanced ().services ().build_provider ();
     running_app_t running (app);
     ASSERT_TRUE (running.wait_ready ());
     auto &channels = provider.get_required<fw::channel_client_t> ();
-    const auto send =
-      channels.send ("selection-client-missing", std::string ("request")).async ().result ();
-    const auto request = channels.request ("selection-client-missing", std::string ("request"))
-                           .timeout (50ms)
-                           .async<std::string> ()
-                           .result ();
-    EXPECT_EQ (framework_error_kind_t::deadline_exceeded, send.error_kind ())
-      << (send.error () ? send.error ()->what () : "no error");
-    EXPECT_EQ (framework_error_kind_t::deadline_exceeded, request.error_kind ())
-      << (request.error () ? request.error ()->what () : "no error");
+    auto send = channels.send ("selection-client-missing", std::string ("request")).async ();
+    const auto before_shutdown = send.result_for (3100ms);
+    auto request = channels.request ("selection-client-missing", std::string ("request"))
+                     .timeout (50ms)
+                     .async<std::string> ();
+    const auto request_result = request.result_for (500ms);
+    app.stop ();
+    const auto send_result = send.result ();
+    EXPECT_FALSE (before_shutdown.has_value ());
+    EXPECT_EQ (framework_error_kind_t::shutting_down, send_result.error_kind ());
+    ASSERT_TRUE (request_result.has_value ());
+    EXPECT_EQ (framework_error_kind_t::deadline_exceeded, request_result->error_kind ());
 }
 
 TEST (CppFrameworkChannelNoEligibleMember, PublicClientServerWeightZeroEndsUnavailable)
@@ -193,10 +192,7 @@ TEST (CppFrameworkChannelNoEligibleMember, PublicClientServerWeightZeroEndsUnava
     auto client = fw::app_t::create ();
     client.add_zlink_framework ([store, &endpoint] (fw::zlink_framework_options_t &options) {
         options.add_location_store (store);
-        options.add_client_server_channel ("selection-client-zero")
-          .client ()
-          .set_send_timeout (1s)
-          .connect (endpoint);
+        options.add_client_server_channel ("selection-client-zero").client ().connect (endpoint);
     });
     auto provider = client.advanced ().services ().build_provider ();
     running_app_t running_client (client);
@@ -251,7 +247,7 @@ TEST (CppFrameworkChannelNoEligibleMember, ChannelKeepsEveryOtherSubmitResult)
       map_channel_submit_result_exception (zlink::submit_result_t::terminated, "terminated")
         .kind ());
     EXPECT_EQ (
-      framework_error_kind_t::deadline_exceeded,
+      framework_error_kind_t::unavailable,
       map_channel_submit_result_exception (zlink::submit_result_t::backpressured, "backpressured")
         .kind ());
     EXPECT_EQ (

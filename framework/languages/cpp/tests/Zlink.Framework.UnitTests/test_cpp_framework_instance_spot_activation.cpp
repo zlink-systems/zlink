@@ -8,6 +8,7 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
@@ -20,6 +21,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <future>
 #include <map>
 #include <mutex>
 #include <vector>
@@ -86,6 +88,8 @@ class resolver_t final : public zlink::framework::runtime::spot_address_resolver
     resolve_spot_address (std::string, std::string spot_id) override
     {
         ++reads;
+        if (lookup_gate)
+            co_await lookup_gate->task ();
         const auto found = addresses.find (spot_id);
         co_return found == addresses.end ()
           ? std::nullopt
@@ -100,6 +104,7 @@ class resolver_t final : public zlink::framework::runtime::spot_address_resolver
     void invalidate_all_routes_after_store_recovery () override { addresses.clear (); }
 
     std::atomic_int reads{0};
+    std::shared_ptr<zlink::framework::task_completion_source_t<void>> lookup_gate;
     std::map<std::string, zlink::framework::runtime::spot_address_t> addresses;
 };
 
@@ -243,7 +248,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
            const std::string &, std::type_index,
            std::function<zlink::framework::serialized_payload_t (
              zlink::framework::serializer_registry_t &)>,
-           const std::map<std::string, std::string> &)
+           const std::map<std::string, std::string> &, std::chrono::system_clock::time_point)
         -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           EXPECT_EQ ("cart-17", std::string (spot_id));
           EXPECT_FALSE (cached_route);
@@ -325,8 +330,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingWithoutIntentDoesNotActivate)
     runtime.bind_spot_address_resolver (resolver);
     std::atomic_int activations{0};
     runtime.bind_instance_spot_activator (
-      [&] (const auto &, const auto &, const auto &, const auto &, auto, auto,
-           const auto &) -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+      [&] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
+           std::chrono::system_clock::time_point)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           ++activations;
           co_return zlink::framework::result_t<void>::failure (
             zlink::framework::framework_error_kind_t::internal_failure, "must not activate");
@@ -345,6 +351,135 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingWithoutIntentDoesNotActivate)
     EXPECT_EQ (0, activations.load ());
 }
 
+TEST (ZLinkFrameworkInstanceSpotActivation, ActivationKeepsSubmissionStartAcrossRouteLookup)
+{
+    namespace fw = zlink::framework;
+    fw::serializer_registry_t serializers;
+    auto builder = fw::test::runtime_failure_builder ();
+    auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    resolver_t resolver;
+    resolver.lookup_gate = std::make_shared<fw::task_completion_source_t<void>> ();
+    runtime.bind_spot_address_resolver (resolver);
+    std::optional<std::chrono::system_clock::time_point> observed_start;
+    runtime.bind_instance_spot_activator (
+      [&] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
+           std::chrono::system_clock::time_point started_at) -> fw::task_t<fw::result_t<void>> {
+          observed_start = started_at;
+          co_return fw::result_t<void>::success ();
+      },
+      [] (const auto &, const auto &, const auto &, auto, auto, auto, auto, auto) {
+          return fw::task_t<zlink::message_t> (fw::result_t<zlink::message_t>::failure (
+            fw::framework_error_kind_t::internal_failure, "unused request activation"));
+      });
+    const auto before = std::chrono::system_clock::now ();
+    auto send = builder.route_client (serializers)
+                  .send_to_spot ("cold", event_t{1})
+                  .instance_spot ("traced-player")
+                  .async ();
+    const auto lookup_started = std::chrono::system_clock::now ();
+    EXPECT_EQ (1, resolver.reads.load ());
+    EXPECT_FALSE (send.await_ready ());
+    EXPECT_FALSE (observed_start);
+    resolver.lookup_gate->complete (fw::result_t<void>::success ());
+    ASSERT_TRUE (send.result ());
+    ASSERT_TRUE (observed_start);
+    EXPECT_GE (*observed_start, before);
+    EXPECT_LE (*observed_start, lookup_started);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation,
+      OneWayColdActivationUsesSourceRequestBudgetWithoutEndingSend)
+{
+    using namespace std::chrono_literals;
+    namespace fw = zlink::framework;
+    auto app = fw::app_t::create ();
+    auto &options = app.add_zlink_framework ();
+    class lookup_gate_store_t final : public fw::location_store_t
+    {
+      public:
+        fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+        {
+            if (key.value.find ("budget-player-1") != std::string::npos && !held.exchange (true)) {
+                entered.set_value ();
+                co_await release.task ();
+            }
+            co_return co_await inner.read (std::move (key));
+        }
+        fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+        {
+            return inner.scan (std::move (request));
+        }
+        fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+        {
+            return inner.write (std::move (request));
+        }
+        fw::runtime::in_memory_location_store_t inner;
+        std::atomic_bool held{false};
+        std::promise<void> entered;
+        fw::task_completion_source_t<void> release;
+    };
+    auto store = std::make_shared<lookup_gate_store_t> ();
+    auto lookup_entered = store->entered.get_future ();
+    options.add_location_store (store);
+    options.add_relocation_store (std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    options.configure_locations ().polling_interval = 10ms;
+    std::shared_ptr<traced_instance_spot_t> instance;
+    options.add_route_mesh ("activation-budget")
+      .set_object_role (fw::object_role_t::server)
+      .set_routing_id (zlink::routing_id_t::from ("activation-budget-node"))
+      .listen ("tcp://127.0.0.1:0")
+      .set_default_request_timeout (80ms)
+      .add_instance_spot_factory<traced_instance_spot_t> (
+        "traced-player",
+        [&] (fw::instance_spot_context_t context) {
+            instance = std::make_shared<traced_instance_spot_t> (std::move (context));
+            return instance;
+        },
+        [] (auto &factory) { factory.disable_relocation (); });
+    char command[] = "instance-activation-budget";
+    char *argv[] = {command};
+    int exit_code = -1;
+    std::thread host ([&] { exit_code = app.run (1, argv); });
+    auto cleanup =
+      std::unique_ptr<fw::app_t, std::function<void (fw::app_t *)>> (&app, [&] (auto *) {
+          store->release.complete (fw::result_t<void>::success ());
+          app.stop ();
+          host.join ();
+      });
+    const auto ready_deadline = std::chrono::steady_clock::now () + 5s;
+    while (!app.is_ready () && std::chrono::steady_clock::now () < ready_deadline)
+        std::this_thread::yield ();
+    ASSERT_TRUE (app.is_ready ());
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &client = provider.get_required<fw::route_client_t> ();
+    auto send = client.send_to_spot ("budget-player-1", traced_event_t{11})
+                  .instance_spot ("traced-player")
+                  .in_mesh ("activation-budget")
+                  .async ();
+    ASSERT_EQ (std::future_status::ready, lookup_entered.wait_for (3s));
+    std::this_thread::sleep_for (240ms);
+    EXPECT_FALSE (send.await_ready ());
+    store->release.complete (fw::result_t<void>::success ());
+    // The expired activation deadline reaches the target in ZLIA; send admission succeeds.
+    const auto admitted = send.result_for (1s);
+    ASSERT_TRUE (admitted.has_value ());
+    ASSERT_TRUE (*admitted);
+    const auto reply = client.request_to_spot ("budget-player-1", traced_request_t{7})
+                         .instance_spot ("traced-player")
+                         .in_mesh ("activation-budget")
+                         .timeout (3s)
+                         .async<traced_reply_t> ()
+                         .result_for (4s);
+    ASSERT_TRUE (reply.has_value ());
+    ASSERT_TRUE (*reply);
+    ASSERT_TRUE (instance);
+    EXPECT_EQ (0, instance->last_event);
+    EXPECT_TRUE (send.result ());
+    cleanup.reset ();
+    EXPECT_EQ (0, exit_code);
+}
+
 TEST (ZLinkFrameworkInstanceSpotActivation, MissingRequestUsesDefaultTimeoutForColdActivation)
 {
     zlink::framework::serializer_registry_t serializers;
@@ -357,8 +492,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingRequestUsesDefaultTimeoutForC
 
     std::chrono::milliseconds observed_timeout{0};
     runtime.bind_instance_spot_activator (
-      [] (const auto &, const auto &, const auto &, const auto &, auto, auto,
-          const auto &) -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+      [] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
+          std::chrono::system_clock::time_point)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           co_return zlink::framework::result_t<void>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
             "unused one-way activation");
@@ -394,8 +530,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     runtime.bind_spot_address_resolver (resolver);
     std::atomic_int activations{0};
     runtime.bind_instance_spot_activator (
-      [&] (const auto &, const auto &, const auto &, const auto &, auto, auto,
-           const auto &) -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+      [&] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
+           std::chrono::system_clock::time_point)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           ++activations;
           co_return zlink::framework::result_t<void>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
@@ -435,8 +572,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     std::atomic_int cold_activations{0};
     std::atomic_int ready_failures{0};
     runtime.bind_instance_spot_activator (
-      [] (const auto &, const auto &, const auto &, const auto &, auto, auto,
-          const auto &) -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+      [] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
+          std::chrono::system_clock::time_point)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           co_return zlink::framework::result_t<void>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
             "unused one-way activation");
@@ -584,8 +722,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CachedRouteFenceRefusalReadsAuthorit
         runtime.bind_spot_address_resolver (resolver);
         std::vector<bool> cached_routes;
         runtime.bind_instance_spot_activator (
-          [] (const auto &, const auto &, const auto &, const auto &, auto, auto,
-              const auto &) -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+          [] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
+              std::chrono::system_clock::time_point)
+            -> zlink::framework::task_t<zlink::framework::result_t<void>> {
               co_return zlink::framework::result_t<void>::failure (
                 framework_error_kind_t::internal_failure, "unused one-way activation");
           },

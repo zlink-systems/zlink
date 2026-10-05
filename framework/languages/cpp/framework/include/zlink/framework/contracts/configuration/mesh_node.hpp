@@ -150,7 +150,6 @@ class mesh_channel_server_builder_t
 struct mesh_node_socket_config_t
 {
     std::optional<std::chrono::milliseconds> receive_timeout;
-    std::optional<std::chrono::milliseconds> send_timeout;
 };
 
 class mesh_node_builder_t

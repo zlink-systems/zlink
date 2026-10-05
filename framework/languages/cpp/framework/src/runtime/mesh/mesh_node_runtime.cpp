@@ -235,11 +235,6 @@ std::vector<std::uint8_t> unwrap_canonical_actor_join_application_reply_impl (
     return first;
 }
 
-std::chrono::milliseconds one_way_send_timeout (const mesh_node_builder_state_t &state)
-{
-    return state.socket.send_timeout.value_or (std::chrono::seconds (1));
-}
-
 std::uint64_t make_lifecycle_generation ()
 {
     static std::atomic_uint64_t counter{1};
@@ -731,8 +726,6 @@ void mesh_node_runtime_t::start ()
             }
             const auto spot_snapshot = _state->spot_state->lane
                                          .run ([&] {
-                                             _state->spot_state->one_way_send_timeout =
-                                               one_way_send_timeout (*_state);
                                              _state->spot_state->instance_spot_idle_timeout =
                                                _state->instance_spot_idle_timeout;
                                              return _state->spot_state->snapshot;
@@ -758,12 +751,6 @@ void mesh_node_runtime_t::start ()
             if (_state->object_role == object_role_t::client && _state->has_node_direct_handler) {
                 throw configuration_error (
                   "Object Client cannot register application Node direct handlers");
-            }
-            if (_state->socket.send_timeout
-                && (_state->socket.send_timeout->count () <= 0
-                    || _state->socket.send_timeout->count () > std::numeric_limits<int>::max ())) {
-                throw configuration_error (
-                  "MeshNode send timeout must be between 1 and INT_MAX milliseconds");
             }
             if (_state->socket.receive_timeout
                 && (_state->socket.receive_timeout->count () <= 0
@@ -4410,6 +4397,11 @@ bool mesh_node_runtime_t::relocation_source_stopped () const
 std::string mesh_node_runtime_t::mesh_name () const
 {
     return _state->lane.run ([&] { return _state->mesh_name; }).get ();
+}
+
+std::chrono::milliseconds mesh_node_runtime_t::default_request_timeout () const
+{
+    return _state->lane.run ([&] { return _state->default_request_timeout; }).get ();
 }
 
 std::optional<zlink::routing_id_t> mesh_node_runtime_t::routing_id () const

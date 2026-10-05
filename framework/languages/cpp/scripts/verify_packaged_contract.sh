@@ -141,9 +141,10 @@ static_assert (static_cast<int> (message_flow_log_mode_t::off) == 0);
 static_assert (static_cast<int> (message_flow_log_mode_t::errors) == 1);
 static_assert (static_cast<int> (message_flow_log_mode_t::normal) == 2);
 static_assert (static_cast<int> (message_flow_log_mode_t::detailed) == 3);
-static_assert (requires (zlink::framework::stream_send_call_t &call) {
+template <typename T> concept has_send_timeout = requires (T &call) {
     call.timeout (std::chrono::milliseconds{1});
-});
+};
+static_assert (!has_send_timeout<zlink::framework::stream_send_call_t>);
 static_assert (
   static_cast<int> (zlink::framework::location_object_kind_t::actor) == 0);
 static_assert (

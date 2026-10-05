@@ -1258,12 +1258,11 @@ task_t<void> message_bus_t::submit_send (std::string channel_name,
                                          std::string packet_name,
                                          std::type_index message_type,
                                          payload_encoder_t encode_payload,
-                                         std::chrono::milliseconds timeout,
                                          const send_call_t::metadata_map_t &metadata)
 {
     return detail::channel_outbound_exchange_t (_state).submit_send (
       std::move (channel_name), std::move (packet_name), message_type, std::move (encode_payload),
-      timeout, metadata);
+      metadata);
 }
 
 task_t<void> message_bus_t::submit_publish (std::string channel_name,
@@ -1554,7 +1553,7 @@ task_t<result_t<void>> route_client_t::submit_channel_send_erased (
             auto serialized = encode_payload (*state->serializers);
             co_await (*client_server) (packet_name, std::move (serialized.content_type),
                                        detail::encoded_payload_to_raw (serialized.payload),
-                                       std::chrono::milliseconds::zero (), metadata);
+                                       metadata);
             detail::message_flow_tracer_t (state->runtime->dispatch)
               .trace (message_flow_outcome_t::sent, [&] {
                   return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
@@ -2248,6 +2247,7 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
   payload_encoder_t encode_payload,
   route_send_call_t::metadata_map_t metadata)
 {
+    const auto started_at = std::chrono::system_clock::now ();
     /* The state reference belongs to the call object's closure, which can
      * unwind while this coroutine is suspended: keep a frame-owned copy
      * (session-reconnect-and-coroutine-lifetime doc). */
@@ -2277,7 +2277,7 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
               "Instance Spot activation runtime is not configured");
         }
         submitted = co_await activate (target, intent, address, packet_name, message_type,
-                                       std::move (encode_payload), metadata);
+                                       std::move (encode_payload), metadata, started_at);
     } else if (!address) {
         co_return result_t<void>::failure (framework_error_kind_t::not_found,
                                            "Spot route was not found");

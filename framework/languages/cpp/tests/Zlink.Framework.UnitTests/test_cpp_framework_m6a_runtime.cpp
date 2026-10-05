@@ -3167,8 +3167,11 @@ int main (int argc, char **argv)
             == zlink::request_result_t::not_connected);
     assert (map_submit_request_result (zlink::submit_result_t::not_admitted, false)
             == zlink::request_result_t::rejected);
-    assert (map_submit_request_result (zlink::submit_result_t::not_found, true)
+    // Submit §7 distinguishes an absent initial target from a removed pending route.
+    assert (map_submit_request_result (zlink::submit_result_t::not_found, false)
             == zlink::request_result_t::not_found);
+    assert (map_submit_request_result (zlink::submit_result_t::not_found, true)
+            == zlink::request_result_t::not_connected);
     assert (map_submit_request_result (zlink::submit_result_t::not_connected, true)
             == zlink::request_result_t::not_connected);
     verify_actor_create_command_49_roundtrip ();

@@ -413,19 +413,17 @@ TEST (ZLinkFrameworkSyncSubmit, StreamSendWaitsForAdmission)
     stream_t stream;
     task_completion_source_t<void> admitted;
     std::promise<void> submitted;
-    runtime.attach_transport_writer (stream,
-                                     [&] (const auto &header, const auto &payload, auto timeout) {
-                                         EXPECT_EQ ("sync-packet", header.packet_name ());
-                                         EXPECT_EQ ("payload", payload.to_string ());
-                                         EXPECT_EQ (250ms, timeout);
-                                         submitted.set_value ();
-                                         return admitted.task ();
-                                     });
+    runtime.attach_transport_writer (stream, [&] (const auto &header, const auto &payload) {
+        EXPECT_EQ ("sync-packet", header.packet_name ());
+        EXPECT_EQ ("payload", payload.to_string ());
+        submitted.set_value ();
+        return admitted.task ();
+    });
     auto call = stream.write_packet (zlink::message_t::from (std::string ("payload")));
-    call.packet_name ("sync-packet").timeout (250ms);
+    call.packet_name ("sync-packet");
     auto result = std::async (std::launch::async, [&] { call.submit (); });
     submitted.get_future ().wait ();
-    EXPECT_EQ (std::future_status::timeout, result.wait_for (0ms));
+    EXPECT_EQ (std::future_status::timeout, result.wait_for (3100ms));
     admitted.complete (result_t<void>::success ());
     EXPECT_NO_THROW (result.get ());
 }
@@ -436,7 +434,7 @@ TEST (ZLinkFrameworkSyncSubmit, StreamSendPropagatesDeferredAdmissionFailure)
     stream_t stream;
     task_completion_source_t<void> admitted;
     std::promise<void> submitted;
-    runtime.attach_transport_writer (stream, [&] (const auto &, const auto &, auto) {
+    runtime.attach_transport_writer (stream, [&] (const auto &, const auto &) {
         submitted.set_value ();
         return admitted.task ();
     });
@@ -487,7 +485,7 @@ TEST (ZLinkFrameworkSyncSubmit, SessionHandlerRejectionPreservesReplyAdmission)
     task_completion_source_t<void> admitted;
     std::promise<void> submitted;
     std::atomic_int writes{0};
-    runtime.attach_transport_writer (stream, [&] (const auto &header, const auto &payload, auto) {
+    runtime.attach_transport_writer (stream, [&] (const auto &header, const auto &payload) {
         ++writes;
         EXPECT_EQ (detail::stream_message_kind_t::response, header.kind ());
         EXPECT_EQ (12, header.request_seq ());

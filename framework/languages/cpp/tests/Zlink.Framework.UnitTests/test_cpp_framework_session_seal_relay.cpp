@@ -509,8 +509,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     ASSERT_NE (first_stream.session_id (), second_stream.session_id ());
     for (auto *stream : {&first_stream, &second_stream})
         streams.attach_transport_writer (*stream,
-                                         [] (const stream_header_t &, const zlink::message_t &,
-                                             std::optional<std::chrono::milliseconds>) {
+                                         [] (const stream_header_t &, const zlink::message_t &) {
                                              return task_t<void> (result_t<void>::success ());
                                          });
     auto first_manager = gateway.manager ();

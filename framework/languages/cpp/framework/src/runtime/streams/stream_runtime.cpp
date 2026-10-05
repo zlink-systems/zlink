@@ -100,9 +100,7 @@ class stream_write_call_state_t
       stream_header_t header,
       zlink::message_t payload,
       std::shared_ptr<const stream_compression_codec_t> compression_codec,
-      std::function<task_t<void> (const stream_header_t &,
-                                  const zlink::message_t &,
-                                  std::optional<std::chrono::milliseconds>)> submit) :
+      std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> submit) :
         _header (std::move (header)),
         _payload (std::move (payload)),
         _submit (std::move (submit)),
@@ -119,7 +117,6 @@ class stream_write_call_state_t
 
     void compress () { _compressed = true; }
 
-    void timeout (std::chrono::milliseconds timeout) { _timeout = timeout; }
 
     void reply_submission (std::shared_ptr<submit_once_t> submission)
     {
@@ -185,7 +182,7 @@ class stream_write_call_state_t
         if (auto actor_slot = _header->actor_slot ()) {
             header.with_actor_slot (*actor_slot);
         }
-        co_await _submit (header, payload, _timeout);
+        co_await _submit (header, payload);
         co_return;
     }
 
@@ -193,13 +190,10 @@ class stream_write_call_state_t
     std::optional<result_t<void>> _immediate;
     std::optional<stream_header_t> _header;
     std::optional<zlink::message_t> _payload;
-    std::function<task_t<void> (
-      const stream_header_t &, const zlink::message_t &, std::optional<std::chrono::milliseconds>)>
-      _submit;
+    std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> _submit;
     std::shared_ptr<const stream_compression_codec_t> _compression_codec;
     std::map<std::string, std::string> _metadata;
     std::string _packet_name;
-    std::optional<std::chrono::milliseconds> _timeout;
     bool _compressed = false;
     submit_once_t _submission;
     std::shared_ptr<submit_once_t> _reply_submission;
@@ -576,17 +570,6 @@ stream_send_call_t &stream_send_call_t::compress ()
     return *this;
 }
 
-stream_send_call_t &stream_send_call_t::timeout (std::chrono::milliseconds timeout)
-{
-    if (timeout.count () < 1 || timeout.count () > std::numeric_limits<int>::max ()) {
-        throw framework_exception_t (
-          framework_error_kind_t::not_configured,
-          "STREAM send timeout must be from 1 through INT_MAX milliseconds");
-    }
-    _state->timeout (timeout);
-    return *this;
-}
-
 task_t<void> stream_send_call_t::async ()
 {
     auto state = _state;
@@ -801,20 +784,16 @@ task_t<void> stream_t::close ()
 namespace
 {
 
-std::function<task_t<void> (
-  const stream_header_t &, const zlink::message_t &, std::optional<std::chrono::milliseconds>)>
+std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>
 stream_submitter (std::shared_ptr<detail::stream_state_t> state)
 {
-    return [state = std::move (state)] (
-             const stream_header_t &submitted_header, const zlink::message_t &submitted_payload,
-             std::optional<std::chrono::milliseconds> timeout) -> task_t<void> {
+    return [state = std::move (state)] (const stream_header_t &submitted_header,
+                                        const zlink::message_t &submitted_payload) -> task_t<void> {
         if (state->closed.load (std::memory_order_acquire)) {
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "STREAM session is disconnected");
         }
-        std::function<task_t<void> (const stream_header_t &, const zlink::message_t &,
-                                    std::optional<std::chrono::milliseconds>)>
-          writer;
+        std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> writer;
         {
             const std::lock_guard<std::mutex> lock (state->transport_writer_mutex);
             if (state->closed.load (std::memory_order_acquire)) {
@@ -824,7 +803,7 @@ stream_submitter (std::shared_ptr<detail::stream_state_t> state)
             writer = state->transport_writer;
         }
         if (writer)
-            co_return co_await writer (submitted_header, submitted_payload, timeout);
+            co_return co_await writer (submitted_header, submitted_payload);
         if (state->closed.load (std::memory_order_acquire)) {
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "STREAM session is disconnected");
@@ -1995,9 +1974,7 @@ result_t<void> stream_runtime_t::dispatch_error (packet_stream_session_t &sessio
 
 void stream_runtime_t::attach_transport_writer (
   stream_t &stream,
-  std::function<task_t<void> (const stream_header_t &,
-                              const zlink::message_t &,
-                              std::optional<std::chrono::milliseconds>)> writer) const
+  std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> writer) const
 {
     stream._state->transport_writer = std::move (writer);
 }

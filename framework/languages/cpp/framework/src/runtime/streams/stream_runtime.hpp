@@ -54,8 +54,7 @@ class stream_state_t
     mutable std::mutex dispatch_mutex;
     std::shared_ptr<zlink::framework::runtime::session_serial_executor_t> session_serial_executor;
     std::mutex transport_writer_mutex;
-    std::function<task_t<void> (
-      const stream_header_t &, const zlink::message_t &, std::optional<std::chrono::milliseconds>)>
+    std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>
       transport_writer;
     serializer_registry_t *serializers = nullptr;
     std::atomic<session_actor_manager_t *> actors{nullptr};
@@ -145,9 +144,7 @@ class stream_runtime_t
     void drain_async_dispatch (stream_t &stream) const;
     void attach_transport_writer (
       stream_t &stream,
-      std::function<task_t<void> (const stream_header_t &,
-                                  const zlink::message_t &,
-                                  std::optional<std::chrono::milliseconds>)> writer) const;
+      std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> writer) const;
 
     std::vector<std::string> serial_log (const stream_t &stream) const;
     std::vector<stream_header_t> written_headers (const stream_t &stream) const;
