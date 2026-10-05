@@ -613,7 +613,14 @@ final class ZLinkProviderCreationTerminalTest {
         final ZLinkMeshNodeDescriptor descriptor;
         ZLinkObjectReservation reservation;
 
+        final ZLinkPlacementObjectKind objectKind;
+
         Fixture() {
+            this(ZLinkPlacementObjectKind.ACTOR);
+        }
+
+        Fixture(ZLinkPlacementObjectKind objectKind) {
+            this.objectKind = objectKind;
             owner =
                     assertInstanceOf(
                                     ZLinkOwnerLeaseClaimed.class,
@@ -630,7 +637,7 @@ final class ZLinkProviderCreationTerminalTest {
                             1,
                             List.of(
                                     new ZLinkObjectCapability(
-                                            ZLinkPlacementObjectKind.ACTOR,
+                                            objectKind,
                                             "actor",
                                             ZLinkObjectMaintenancePolicyKind.DISABLED,
                                             false,
@@ -641,7 +648,14 @@ final class ZLinkProviderCreationTerminalTest {
                             new ZLinkPlacementCapacity(
                                     new ZLinkCapacityUsage(0, 0, 1),
                                     new ZLinkCapacityUsage(0, 0, 1),
-                                    List.of()),
+                                    objectKind == ZLinkPlacementObjectKind.ACTOR
+                                            ? List.of()
+                                            : List.of(
+                                                    new systems.zlink.framework.locations
+                                                            .ZLinkSpotTypeCapacity(
+                                                            objectKind,
+                                                            "actor",
+                                                            new ZLinkCapacityUsage(0, 0, 1)))),
                             new ZLinkActivationConcurrency(0, 64),
                             Optional.empty(),
                             ZLinkFrameworkRuntimeState.SERVING,
@@ -663,8 +677,10 @@ final class ZLinkProviderCreationTerminalTest {
 
         ZLinkObjectReservationRequest request(String id) {
             return new ZLinkObjectReservationRequest(
-                    ZLinkPlacementObjectKind.ACTOR,
-                    ZLinkAuthorityKeyCodec.actor(id),
+                    objectKind,
+                    objectKind == ZLinkPlacementObjectKind.ACTOR
+                            ? ZLinkAuthorityKeyCodec.actor(id)
+                            : ZLinkAuthorityKeyCodec.spot(id),
                     "actor",
                     "inline-v1:test",
                     new byte[32],
@@ -673,7 +689,9 @@ final class ZLinkProviderCreationTerminalTest {
                     descriptor.lifecycleGeneration(),
                     owner,
                     new byte[] {1},
-                    ZLinkPlacementCapacityBundle.actor(1));
+                    objectKind == ZLinkPlacementObjectKind.ACTOR
+                            ? ZLinkPlacementCapacityBundle.actor(1)
+                            : ZLinkPlacementCapacityBundle.spot(objectKind, "actor", 1));
         }
 
         ZLinkCreationOperationTerminal terminal(ZLinkCreationTerminalState state) {
@@ -703,6 +721,7 @@ final class ZLinkProviderCreationTerminalTest {
         final ZLinkInMemoryProviderLocationStore delegate;
         final List<ZLinkStoreWriteRequest> writes = new ArrayList<>();
         Consumer<ZLinkStoreWriteRequest> conflictNextWrite;
+        Consumer<ZLinkStoreWriteRequest> beforeNextWrite;
 
         RecordingProvider(StoreClock clock) {
             this.clock = clock;
@@ -734,6 +753,11 @@ final class ZLinkProviderCreationTerminalTest {
                 }
             }
             writes.add(request);
+            if (beforeNextWrite != null) {
+                var action = beforeNextWrite;
+                beforeNextWrite = null;
+                action.accept(request);
+            }
             if (conflictNextWrite != null) {
                 var conflict = conflictNextWrite;
                 conflictNextWrite = null;

@@ -3520,3 +3520,138 @@ class FlakyOwnerLeaseStore {
     return this.inner.releaseOwnerLease(token, signal);
   }
 }
+
+async function creationDescriptorFixture(objectKind = 'actor') {
+  const inner = new internal.ZLinkInMemoryProviderLocationStore();
+  const writes = [];
+  let beforeWrite;
+  const provider = {
+    read: inner.read.bind(inner), scan: inner.scan.bind(inner),
+    async write(request, signal) {
+      writes.push(request);
+      const action = beforeWrite;
+      beforeWrite = undefined;
+      if (action !== undefined) await action();
+      return inner.write(request, signal);
+    }
+  };
+  const repository = new internal.ZLinkLocationStoreRepository(provider);
+  const owner = (await repository.claimOwnerLease('creation-owner', 30_000)).token;
+  const descriptor = { ...placementDescriptor('creation-node', 'Player', 1, 0, 0),
+    ownerId: owner.ownerId, leaseGeneration: owner.leaseGeneration };
+  if (objectKind === 'user_spot') {
+    descriptor.objectCapabilities[0].objectKind = objectKind;
+    descriptor.objectCapabilities[0].limit = 1;
+    descriptor.populationCapacity.spotTypes = [{ objectKind, stableType: 'Player', active: 0, reserved: 0, limit: 1 }];
+  }
+  await repository.updateMeshNode(descriptor, internal.ZLinkLocationWriteIntent.NewClaim);
+  const descriptorKey = writes.at(-1).mutations.find(m => m.kind === 'put' &&
+    JSON.parse(Buffer.from(m.bytes).toString()).descriptor !== undefined).key;
+  const request = authorityReserveRequest('creation-actor', descriptor, owner);
+  const payload = Buffer.from('{}');
+  request.intent = { ...request.intent,
+    requestContentReference: require('../../packages/framework/dist/runtime/host/user-spot-creation-coordinator')
+      .encodeLocationCreationContent(payload),
+    requestSha256: crypto.createHash('sha256').update(payload).digest(), requestEncodedSize: 2n };
+
+  request.key.kind = objectKind;
+  if (objectKind === 'user_spot') request.capacity = { actors: 0, spots: 1,
+    spotType: { objectKind, stableType: 'Player', count: 1 } };
+  const reserved = await repository.reserve(request);
+  assert.equal(reserved.kind, 'reserved');
+  const transition = { key: request.key, target: request.target,
+    reservationId: reserved.reservationId, expectedStoreVersion: reserved.creating.storeVersion.value };
+  writes.length = 0;
+  return { inner, repository, writes, request, transition, descriptorKey, reserved,
+    beforeWrite(action) { beforeWrite = action; },
+    async republish(change = {}) {
+      const read = await inner.read(descriptorKey);
+      const record = JSON.parse(Buffer.from(read.value.bytes).toString());
+      Object.assign(record.descriptor, change);
+      assert.equal((await inner.write({ conditions: [], mutations: [{ kind: 'put',
+        key: descriptorKey, bytes: Buffer.from(JSON.stringify(record)) }] })).kind, 'applied');
+    }
+  };
+}
+
+async function applyCreationTransition(fixture, transition) {
+  const result = transition === 'Reserve' ? await fixture.repository.reserve(fixture.request)
+    : transition === 'Commit' ? await fixture.repository.commit({ ...fixture.transition,
+      readyPayload: Buffer.from('ready') }) : await fixture.repository.abort(fixture.transition);
+  assert.equal(result.kind, { Reserve: 'reserved', Commit: 'committed', Abort: 'aborted' }[transition]);
+}
+
+for (const objectKind of ['actor', 'user_spot']) {
+for (const transition of ['Reserve', 'Commit', 'Abort']) {
+  test(`creationTransitionsFenceOwnerLeaseAndDescriptorVersion:${transition}:${objectKind}`, async () => {
+    const fixture = await creationDescriptorFixture(objectKind);
+    if (transition === 'Reserve') await fixture.repository.abort(fixture.transition);
+    fixture.writes.length = 0;
+    const descriptor = await fixture.inner.read(fixture.descriptorKey);
+    await applyCreationTransition(fixture, transition);
+    const conditions = fixture.writes[0].conditions;
+    assert.equal(conditions.length, transition === 'Reserve' ? 6 : 4);
+    assert.ok(conditions.some(c => c.kind === 'value' && c.key.value === 'owner-lease\0creation-owner'));
+    assert.ok(conditions.some(c => c.kind === 'version' && c.key.value === fixture.descriptorKey.value &&
+      c.expected.value === descriptor.value.version.value));
+  });
+  test(`sameLifecycleDescriptorRepublishRebuildsQualifiedConflict:${transition}:${objectKind}`, async () => {
+    const fixture = await creationDescriptorFixture(objectKind);
+    if (transition === 'Reserve') await fixture.repository.abort(fixture.transition);
+    fixture.writes.length = 0;
+    fixture.beforeWrite(() => fixture.republish());
+    await applyCreationTransition(fixture, transition);
+    assert.equal(fixture.writes.length, 2);
+  });
+}
+
+}
+
+test('previousLifecycleCommitIsRejected', async () => {
+  const fixture = await creationDescriptorFixture();
+  fixture.beforeWrite(() => fixture.republish({ lifecycleGeneration: '2' }));
+  assert.equal((await fixture.repository.commit({ ...fixture.transition,
+    readyPayload: Buffer.from('ready') })).kind, 'stale');
+  assert.equal(fixture.writes.length, 1);
+});
+
+test('acceptedCreationCompletesWhileTargetDraining', async () => {
+  const fixture = await creationDescriptorFixture();
+  await fixture.republish({ state: 'draining' });
+  await applyCreationTransition(fixture, 'Commit');
+});
+
+test('sameLifecycleDescriptorRepublishRebuildsQualifiedConflictWithoutRepeatingFactory', async () => {
+  const fixture = await creationDescriptorFixture();
+  const { ZLinkActorPlacementCoordinator } = require(
+    '../../packages/framework/dist/runtime/host/actor-placement-coordinator');
+  const coordinator = new ZLinkActorPlacementCoordinator({ store: fixture.repository });
+  const current = fixture.reserved.creating;
+  const target = fixture.request.target;
+  const record = { actorId: fixture.request.key.globalId, stableType: 'Player', correlation: 1n,
+    operation: { high: 1n, low: 2n }, sourceNodeRid: 'source', sourceNodeGeneration: 1n,
+    deadlineUnixMs: BigInt(Date.now() + 1000),
+    reservation: { reservationId: fixture.reserved.reservationId,
+      expectedStoreVersion: current.storeVersion.value,
+      objectGeneration: current.objectGeneration, authorityOwnerGeneration: current.authorityOwnerGeneration,
+      targetNodeRid: String(target.nodeRid), targetNodeGeneration: target.nodeLifecycleGeneration,
+      targetOwnerId: target.owner.ownerId, targetOwnerLeaseGeneration: target.owner.leaseGeneration,
+      pendingCapacityDelta: 1 } };
+  let factoryCalls = 0;
+  let callbackCalls = 0;
+  const factory = {
+    async create() {
+      factoryCalls++;
+      return { result: 'created', actor: { actorId: record.actorId, nodeRid: target.nodeRid,
+        objectGeneration: current.objectGeneration, meshName: target.meshName },
+        entrySpotId: 'play-entry-00000000-0000-4000-8000-000000000001', entrySpotGeneration: 1n,
+        onPublished() { callbackCalls++; } };
+    }
+  };
+  fixture.beforeWrite(() => fixture.republish());
+  assert.equal((await coordinator.handleRemoteCreate(record, factory.create,
+    new AbortController().signal)).tail.createResult, 'created');
+  assert.equal(fixture.writes.length, 2);
+  assert.equal(factoryCalls, 1);
+  assert.equal(callbackCalls, 1);
+});

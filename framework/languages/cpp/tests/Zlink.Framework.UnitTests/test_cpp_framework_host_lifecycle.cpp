@@ -234,8 +234,10 @@ class configuration_actor_factory_t final
     zlink::framework::task_t<std::shared_ptr<configuration_actor_t>>
     create (zlink::framework::actor_context_t context, std::stop_token) override
     {
+        create_count.fetch_add (1, std::memory_order_relaxed);
         co_return std::make_shared<configuration_actor_t> (std::move (context));
     }
+    static inline std::atomic_int create_count{0};
 };
 
 class remote_create_entry_spot_t final
@@ -468,6 +470,25 @@ class observing_actor_creation_store_t final : public zlink::framework::location
                 published_terminal = put->bytes;
             }
         }
+        if (writes_terminal && republish_descriptor.exchange (false, std::memory_order_acq_rel)) {
+            const auto descriptor_condition = std::find_if (
+              request.conditions.begin (), request.conditions.end (), [] (const auto &condition) {
+                  const auto *version =
+                    std::get_if<zlink::framework::store_version_condition_t> (&condition);
+                  return version
+                         && version->key.value.starts_with (std::string ("mesh-node") + '\0');
+              });
+            if (descriptor_condition == request.conditions.end ())
+                throw std::logic_error ("creation write is missing descriptor StoreVersion");
+            const auto key =
+              std::get<zlink::framework::store_version_condition_t> (*descriptor_condition).key;
+            const auto read = co_await inner->read (key);
+            zlink::framework::store_write_request_t republish;
+            republish.mutations.emplace_back (zlink::framework::store_put_t{
+              key, std::get<zlink::framework::store_found_t> (read).value.bytes, std::nullopt});
+            co_await inner->write (std::move (republish));
+            descriptor_conflicts.fetch_add (1, std::memory_order_relaxed);
+        }
         auto written = inner->write (std::move (request));
         if (!writes_terminal || !force_terminal_write_conflict.load (std::memory_order_acquire))
             co_return co_await written;
@@ -483,6 +504,8 @@ class observing_actor_creation_store_t final : public zlink::framework::location
     }
 
     std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> inner;
+    std::atomic_bool republish_descriptor{false};
+    std::atomic_int descriptor_conflicts{0};
     std::atomic_size_t terminal_reads{0};
     std::optional<std::vector<std::byte>> terminal_override;
     std::atomic_bool hide_terminal_reads{false};
@@ -520,6 +543,7 @@ void configure_remote_actor_create_app (
 
 bool verify_remote_actor_create_target_owns_completion ()
 {
+    configuration_actor_factory_t::create_count.store (0, std::memory_order_relaxed);
     remote_create_entry_spot_t::created_count.store (0, std::memory_order_release);
     remote_create_entry_spot_t::joined_count.store (0, std::memory_order_release);
     auto location_store =
@@ -528,6 +552,8 @@ bool verify_remote_actor_create_target_owns_completion ()
       std::make_shared<observing_actor_creation_store_t> (location_store);
     auto source_location_store =
       std::make_shared<observing_actor_creation_store_t> (location_store);
+
+    target_location_store->republish_descriptor.store (true, std::memory_order_release);
 
     auto target = zlink::framework::app_t::create ();
     configure_remote_actor_create_app (target, target_location_store, "host-remote-create-target",
@@ -571,6 +597,10 @@ bool verify_remote_actor_create_target_owns_completion ()
         .timeout (std::chrono::seconds (5))
         .async ()
         .result ();
+    const bool descriptor_rebuilt_once =
+      target_location_store->descriptor_conflicts.load (std::memory_order_relaxed) == 1
+      && configuration_actor_factory_t::create_count.load (std::memory_order_relaxed) == 1
+      && remote_create_entry_spot_t::created_count.load (std::memory_order_acquire) == 1;
     auto &location_repository =
       source_services.get_required<zlink::framework::location_repository_t> ();
     const auto authority =
@@ -640,8 +670,8 @@ bool verify_remote_actor_create_target_owns_completion ()
     target_thread.join ();
 
     const bool passed =
-      route_ready && created && authority_active && cpp_schema_encoded && node_schema_decoded
-      && exceptional_reply_replayed && source_terminal_reads == 1
+      descriptor_rebuilt_once && route_ready && created && authority_active && cpp_schema_encoded
+      && node_schema_decoded && exceptional_reply_replayed && source_terminal_reads == 1
       && std::holds_alternative<zlink::framework::actor_create_created_t> (created.value ())
       && remote_create_entry_spot_t::created_count.load (std::memory_order_acquire) == 2
       && remote_create_entry_spot_t::joined_count.load (std::memory_order_acquire) == 0

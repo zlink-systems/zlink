@@ -453,6 +453,11 @@ class creation_terminal_failure_store_t final : public location_store_t
     }
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
+        creation_writes.push_back (request);
+        if (before_next_write) {
+            auto action = std::exchange (before_next_write, {});
+            co_await action ();
+        }
         for (const auto &mutation : request.mutations) {
             const auto *put = std::get_if<store_put_t> (&mutation);
             if (!put || !put->key.value.starts_with (std::string ("authority") + '\0'))
@@ -535,6 +540,8 @@ class creation_terminal_failure_store_t final : public location_store_t
         co_return applied;
     }
 
+    std::vector<store_write_request_t> creation_writes;
+    std::function<task_t<void> ()> before_next_write;
     in_memory_location_store_t inner;
     fault_t fault = fault_t::none;
     unsigned writes = 0;
@@ -565,6 +572,12 @@ class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
         descriptor.object_capabilities.push_back ({placement_object_kind_t::actor, "player",
                                                    maintenance_policy_kind_t::recreate, false, 0});
         descriptor.capacity.actors.limit = 1;
+        descriptor.object_capabilities.push_back ({placement_object_kind_t::user_spot, "player",
+                                                   maintenance_policy_kind_t::disabled, false, 1});
+        descriptor.capacity.spots.limit = 1;
+        descriptor.capacity.spot_types.push_back (
+          {placement_object_kind_t::user_spot, "player", {0, 0, 1}});
+
         provider.conflicting_capacity_key = capacity_key (descriptor);
         ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
                      .result ()
@@ -700,6 +713,10 @@ class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
         }
     }
 
+    void prepare_user_spot ();
+    void verify_creation_conditions (bool user_spot);
+    void verify_creation_descriptor_conflict (bool user_spot);
+
     creation_terminal_failure_store_t provider;
     provider_location_repository_t repository{provider};
     mesh_node_descriptor_t descriptor;
@@ -707,6 +724,176 @@ class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
     object_reservation_fence_t fence;
     creation_terminal_publication_t publication;
 };
+
+void CreationTerminalTest::prepare_user_spot ()
+{
+    ASSERT_TRUE (std::holds_alternative<object_aborted_t> (
+      repository.abort ({reserve_request.key, fence}).result ().value ()));
+    const auto kind = placement_object_kind_t::user_spot;
+    reserve_request.key.kind = kind;
+    reserve_request.capacity_bundle = {0, 1, spot_type_capacity_delta_t{kind, "player", 1}};
+    const auto reserved = repository.reserve (reserve_request).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<object_reserved_t> (reserved));
+    fence = std::get<object_reserved_t> (reserved).fence;
+}
+
+void CreationTerminalTest::verify_creation_conditions (bool user_spot)
+{
+    if (user_spot)
+        prepare_user_spot ();
+
+    const store_key_t descriptor_key{std::string ("mesh-node") + '\0' + descriptor.mesh_name + '\0'
+                                     + descriptor.rid.to_hex ()};
+    const auto descriptor_read =
+      std::get<store_found_t> (provider.inner.read (descriptor_key).result ().value ());
+    for (int transition = 0; transition < 3; ++transition) {
+        if (transition == 0) {
+            ASSERT_TRUE (std::holds_alternative<object_aborted_t> (
+              repository.abort ({reserve_request.key, fence}, {}, publication.operation_deadline)
+                .result ()
+                .value ()));
+            provider.creation_writes.clear ();
+            const auto reserved = repository.reserve (reserve_request).result ().value ();
+            ASSERT_TRUE (std::holds_alternative<object_reserved_t> (reserved));
+            fence = std::get<object_reserved_t> (reserved).fence;
+        } else if (transition == 1) {
+            provider.creation_writes.clear ();
+            ASSERT_TRUE (std::holds_alternative<object_aborted_t> (
+              repository.abort ({reserve_request.key, fence}, {}, publication.operation_deadline)
+                .result ()
+                .value ()));
+        } else {
+            reserve_request.key.global_id = "abort-actor";
+            fence =
+              std::get<object_reserved_t> (repository.reserve (reserve_request).result ().value ())
+                .fence;
+            provider.creation_writes.clear ();
+            ASSERT_TRUE (std::holds_alternative<object_committed_t> (
+              repository
+                .commit ({reserve_request.key, fence, bytes ("ready")}, {},
+                         publication.operation_deadline)
+                .result ()
+                .value ()));
+        }
+        ASSERT_EQ (provider.creation_writes.size (), 1u);
+        const auto &conditions = provider.creation_writes.front ().conditions;
+        EXPECT_EQ (conditions.size (), transition == 0 ? 6u : 4u);
+        EXPECT_TRUE (std::any_of (conditions.begin (), conditions.end (), [&] (const auto &c) {
+            const auto *v = std::get_if<store_value_condition_t> (&c);
+            return v && v->key.value == std::string ("owner-lease") + '\0' + descriptor.owner_id;
+        }));
+        EXPECT_TRUE (std::any_of (conditions.begin (), conditions.end (), [&] (const auto &c) {
+            const auto *v = std::get_if<store_version_condition_t> (&c);
+            return v && v->key.value == descriptor_key.value
+                   && v->expected.value == descriptor_read.value.version.value;
+        }));
+    }
+}
+
+void CreationTerminalTest::verify_creation_descriptor_conflict (bool user_spot)
+{
+    if (user_spot)
+        prepare_user_spot ();
+
+    reserve_request.operation_deadline = publication.operation_deadline;
+    const store_key_t descriptor_key{std::string ("mesh-node") + '\0' + descriptor.mesh_name + '\0'
+                                     + descriptor.rid.to_hex ()};
+    for (int transition = 0; transition < 3; ++transition) {
+        if (transition == 0)
+            ASSERT_TRUE (std::holds_alternative<object_aborted_t> (
+              repository.abort ({reserve_request.key, fence}, {}, publication.operation_deadline)
+                .result ()
+                .value ()));
+        if (transition == 2) {
+            reserve_request.key.global_id = "abort-actor";
+            fence =
+              std::get<object_reserved_t> (repository.reserve (reserve_request).result ().value ())
+                .fence;
+        }
+        provider.creation_writes.clear ();
+        provider.before_next_write = [&] () -> task_t<void> {
+            const auto read = co_await provider.inner.read (descriptor_key);
+            store_write_request_t republish;
+            republish.mutations.emplace_back (store_put_t{
+              descriptor_key, std::get<store_found_t> (read).value.bytes, std::nullopt});
+            co_await provider.inner.write (std::move (republish));
+        };
+        if (transition == 0)
+            fence =
+              std::get<object_reserved_t> (repository.reserve (reserve_request).result ().value ())
+                .fence;
+        else if (transition == 1)
+            ASSERT_TRUE (std::holds_alternative<object_aborted_t> (
+              repository.abort ({reserve_request.key, fence}, {}, publication.operation_deadline)
+                .result ()
+                .value ()));
+        else
+            ASSERT_TRUE (std::holds_alternative<object_committed_t> (
+              repository
+                .commit ({reserve_request.key, fence, bytes ("ready")}, {},
+                         publication.operation_deadline)
+                .result ()
+                .value ()));
+        EXPECT_EQ (provider.creation_writes.size (), 2u);
+    }
+}
+
+TEST_P (CreationTerminalTest, CreationTransitionsFenceOwnerLeaseAndDescriptorVersion)
+{
+    verify_creation_conditions (false);
+}
+
+TEST_P (CreationTerminalTest, UserSpotCreationTransitionsFenceOwnerLeaseAndDescriptorVersion)
+{
+    verify_creation_conditions (true);
+}
+
+TEST_P (CreationTerminalTest, SameLifecycleDescriptorRepublishRebuildsQualifiedConflict)
+{
+    verify_creation_descriptor_conflict (false);
+}
+
+TEST_P (CreationTerminalTest, UserSpotSameLifecycleDescriptorRepublishRebuildsQualifiedConflict)
+{
+    verify_creation_descriptor_conflict (true);
+}
+
+TEST_P (CreationTerminalTest, PreviousLifecycleCommitIsRejected)
+{
+    provider.creation_writes.clear ();
+    provider.before_next_write = [&] () -> task_t<void> {
+        const store_key_t key{std::string ("mesh-node") + '\0' + descriptor.mesh_name + '\0'
+                              + descriptor.rid.to_hex ()};
+        const auto read = co_await provider.inner.read (key);
+        const auto &data = std::get<store_found_t> (read).value.bytes;
+        auto record = nlohmann::json::parse (
+          std::string (reinterpret_cast<const char *> (data.data ()), data.size ()));
+        record["descriptor"]["lifecycleGeneration"] = "2";
+        store_write_request_t republish;
+        republish.mutations.emplace_back (store_put_t{key, bytes (record.dump ()), std::nullopt});
+        co_await provider.inner.write (std::move (republish));
+    };
+    const auto result =
+      repository
+        .commit ({reserve_request.key, fence, bytes ("ready")}, {}, publication.operation_deadline)
+        .result ()
+        .value ();
+    EXPECT_TRUE (std::holds_alternative<object_commit_conflict_t> (result));
+    EXPECT_EQ (provider.creation_writes.size (), 1u);
+}
+
+TEST_P (CreationTerminalTest, AcceptedCreationCompletesWhileTargetDraining)
+{
+    descriptor.state = framework_runtime_state_t::draining;
+    ++descriptor.descriptor_revision;
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::renew)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    const auto result = repository.complete_creation (request ()).result ().value ();
+    EXPECT_TRUE (std::holds_alternative<object_creation_completed_result_t> (result));
+}
 
 TEST_P (CreationTerminalTest, FailureBetweenFormerWritesCannotSplitPublication)
 {

@@ -276,6 +276,58 @@ public sealed class ActorManagerProductionTests
     }
 
     [Fact]
+    public async Task SameLifecycleDescriptorRepublishRebuildsQualifiedConflictWithoutRepeatingFactory()
+    {
+        TestActorFactory.Reset();
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(inner);
+        var (store, reservationRace) = ReservationConflictLocationStore.Create(
+            inner,
+            conflictsBeforeSuccess: 1,
+            completion: true,
+            republishDescriptor: true
+        );
+        var suffix = Guid.NewGuid().ToString("N");
+        await using var provider = BuildServer(store, "tcp://127.0.0.1:0");
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var host = FrameworkHost(provider);
+        await host.StartAsync(CancellationToken.None);
+        var endpoint = Assert.IsType<string>(
+            runtime.GetSpotNodeRuntime("objects").Node.MeshStatus().LocalEndpoint
+        );
+        try
+        {
+            var rid = runtime.GetSpotNodeRuntime("objects").Node.RoutingId;
+            await PublishServerDescriptorAsync(repository, runtime, rid, endpoint);
+            var actors = provider.GetRequiredService<IZLinkActorManager>();
+            var actorId = $"reservation-race-{suffix}";
+
+            var created = Assert.IsType<ZLinkActorCreateResult.Created>(
+                await actors.GetOrCreate(actorId, "player").Timeout(TimeSpan.FromSeconds(5)).Async()
+            );
+            var existing = Assert.IsType<ZLinkActorCreateResult.Existing>(
+                await actors.GetOrCreate(actorId, "player").Timeout(TimeSpan.FromSeconds(5)).Async()
+            );
+
+            Assert.Equal(created.Actor, existing.Actor);
+            Assert.Equal(2, reservationRace.CompletionAttempts);
+            Assert.Equal(1, TestActorFactory.CreateCount);
+            Assert.Equal(1, TestEntrySpot.CreateCount);
+            Assert.Equal(
+                (0L, 1L),
+                await ReadActorCapacityUsageAsync(
+                    inner,
+                    new ZLinkMeshNodeDescriptorKey("objects", rid)
+                )
+            );
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task SameProcessServerExecutesLocalProductionActorTarget()
     {
         TestActorFactory.Reset();
@@ -662,6 +714,8 @@ public sealed class ActorManagerProductionTests
         private int _actorReserveAttempts;
         private int _conflictsBeforeSuccess;
         private bool _completion;
+        private bool _republishDescriptor;
+        public int CompletionAttempts => Volatile.Read(ref _completionAttempts);
         private string? _completionKey;
         private int _completionAttempts;
 
@@ -670,12 +724,14 @@ public sealed class ActorManagerProductionTests
         public static (IZLinkLocationStore Store, ReservationConflictLocationStore Control) Create(
             IZLinkLocationStore inner,
             int conflictsBeforeSuccess,
-            bool completion = false
+            bool completion = false,
+            bool republishDescriptor = false
         )
         {
             var proxy = new ReservationConflictLocationStore(inner);
             proxy._conflictsBeforeSuccess = conflictsBeforeSuccess;
             proxy._completion = completion;
+            proxy._republishDescriptor = republishDescriptor;
             return (proxy, proxy);
         }
 
@@ -706,9 +762,11 @@ public sealed class ActorManagerProductionTests
                     && terminal.Key.Value == _completionKey
                     && Interlocked.Increment(ref _completionAttempts) <= _conflictsBeforeSuccess
                 )
-                    return ValueTask.FromResult<ZLinkStoreWriteResult>(
-                        new ZLinkStoreWriteResult.Conflict(DateTimeOffset.UtcNow)
-                    );
+                    return _republishDescriptor
+                        ? RepublishDescriptorAsync(request, cancellationToken)
+                        : ValueTask.FromResult<ZLinkStoreWriteResult>(
+                            new ZLinkStoreWriteResult.Conflict(DateTimeOffset.UtcNow)
+                        );
                 return inner.WriteAsync(request, cancellationToken);
             }
             if (
@@ -720,6 +778,35 @@ public sealed class ActorManagerProductionTests
                 );
 
             return inner.WriteAsync(request, cancellationToken);
+        }
+
+        private async ValueTask<ZLinkStoreWriteResult> RepublishDescriptorAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken
+        )
+        {
+            var descriptorCondition = request
+                .Conditions.OfType<ZLinkStoreCondition.Version>()
+                .Single(c => c.Key.Value.StartsWith("mesh-node\0", StringComparison.Ordinal));
+            var read = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await inner.ReadAsync(descriptorCondition.Key, cancellationToken)
+            );
+            Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                await inner.WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [],
+                        [
+                            new ZLinkStoreMutation.Put(
+                                descriptorCondition.Key,
+                                read.Value.Bytes,
+                                null
+                            ),
+                        ]
+                    ),
+                    cancellationToken
+                )
+            );
+            return await inner.WriteAsync(request, cancellationToken);
         }
 
         public ValueTask<ZLinkStoreScanResult> ScanAsync(

@@ -267,7 +267,7 @@ final class ZLinkProviderAuthorityRepository {
             List<ZLinkStoreCondition> conditions,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         return descriptors
-                .readMeshNode(request.targetDescriptor(), cancellation)
+                .readMeshNode(request.targetDescriptor(), conditions, cancellation)
                 .thenCompose(
                         descriptor -> {
                             if (descriptor.isEmpty()
@@ -341,13 +341,25 @@ final class ZLinkProviderAuthorityRepository {
                                         : Optional.empty());
     }
 
+    private static boolean descriptorMatchesTarget(
+            ZLinkMeshNodeDescriptor descriptor,
+            ZLinkMeshNodeDescriptorKey key,
+            long lifecycleGeneration,
+            ZLinkLocationOwnerToken owner) {
+        return descriptor.meshName().equals(key.meshName())
+                && descriptor.rid().equals(key.rid())
+                && descriptor.lifecycleGeneration() == lifecycleGeneration
+                && descriptor.ownerId().equals(owner.ownerId())
+                && descriptor.leaseGeneration() == owner.leaseGeneration();
+    }
+
     private static boolean descriptorAdmits(
             ZLinkMeshNodeDescriptor descriptor, ZLinkObjectReservationRequest request) {
-        return descriptor.meshName().equals(request.targetDescriptor().meshName())
-                && descriptor.rid().equals(request.targetDescriptor().rid())
-                && descriptor.lifecycleGeneration() == request.targetDescriptorLifecycleGeneration()
-                && descriptor.ownerId().equals(request.targetOwner().ownerId())
-                && descriptor.leaseGeneration() == request.targetOwner().leaseGeneration()
+        return descriptorMatchesTarget(
+                        descriptor,
+                        request.targetDescriptor(),
+                        request.targetDescriptorLifecycleGeneration(),
+                        request.targetOwner())
                 && descriptor.state() == ZLinkFrameworkRuntimeState.SERVING
                 && descriptor.objectRole() == ZLinkMeshNodeObjectRole.SERVER
                 && descriptor.placementWeight() > 0
@@ -970,7 +982,24 @@ final class ZLinkProviderAuthorityRepository {
         if (cancellation.isCancellationRequested()) {
             return completed(false);
         }
-        return readCapacity(current.allocation(), cancellation)
+        List<ZLinkStoreCondition> conditions =
+                new ArrayList<>(List.of(new ZLinkStoreVersionCondition(key, authority.version())));
+        ZLinkLocationOwnerToken owner =
+                new ZLinkLocationOwnerToken(current.ownerId(), current.ownerLeaseGeneration());
+        return descriptors
+                .readMeshNode(current.allocation().descriptor(), conditions, cancellation)
+                .thenCompose(
+                        descriptor -> {
+                            if (descriptor.isEmpty()
+                                    || !descriptorMatchesTarget(
+                                            descriptor.orElseThrow(),
+                                            current.allocation().descriptor(),
+                                            current.allocation().descriptorLifecycleGeneration(),
+                                            owner)) {
+                                return completed(Optional.<CapacitySnapshot>empty());
+                            }
+                            return readCapacity(current.allocation(), cancellation);
+                        })
                 .thenCompose(
                         capacity -> {
                             if (capacity.isEmpty()) {
@@ -989,14 +1018,9 @@ final class ZLinkProviderAuthorityRepository {
                             if (nextCapacity == null) {
                                 return completed(false);
                             }
-                            List<ZLinkStoreCondition> conditions =
-                                    new ArrayList<>(
-                                            List.of(
-                                                    new ZLinkStoreVersionCondition(
-                                                            key, authority.version()),
-                                                    new ZLinkStoreVersionCondition(
-                                                            stored.key(),
-                                                            stored.value().version())));
+                            conditions.add(
+                                    new ZLinkStoreVersionCondition(
+                                            stored.key(), stored.value().version()));
                             List<ZLinkStoreMutation> mutations = new ArrayList<>();
                             if (readyPayload == null) {
                                 mutations.add(new ZLinkStoreDelete(key));
@@ -1036,7 +1060,7 @@ final class ZLinkProviderAuthorityRepository {
                                                 terminal.terminalEnvelope(),
                                                 retention));
                             }
-                            return requireLiveOwner(current, conditions, cancellation)
+                            return requireLiveOwner(owner, conditions, cancellation)
                                     .thenCompose(
                                             live -> {
                                                 if (!live) {
@@ -1064,11 +1088,7 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                             ::reservationId)
                                                                                             .orElse(
                                                                                                     null),
-                                                                                    new ZLinkLocationOwnerToken(
-                                                                                            current
-                                                                                                    .ownerId(),
-                                                                                            current
-                                                                                                    .ownerLeaseGeneration()),
+                                                                                    owner,
                                                                                     cancellation)
                                                                             .thenCompose(
                                                                                     eligible -> {
