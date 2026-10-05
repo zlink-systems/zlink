@@ -9,7 +9,7 @@
     "probe": "npm run typecheck && node Validation/probe.mjs"
   },
   "dependencies": {
-    "@zlink-systems/stream-connector": "0.26.0"
+    "@zlink-systems/stream-connector": "0.27.0"
   },
   "devDependencies": {
     "typescript": "5.8.3"
