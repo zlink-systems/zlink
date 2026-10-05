@@ -474,7 +474,7 @@
       "failureDeleteAmbiguity": "exact-read-reconcile-registry-remains-failed-until-missing-confirmed",
       "nextActivation": "only-next-caller-after-missing-may-newObject-claim-new-object-and-owner-generations",
       "failureCrashRecovery": "owned-coldActivating-scan-may-retry-retry-safe-factory-before-delete-is-confirmed",
-      "deadline": "resolve-select-claim-and-outbound-admission-share-one-source-send-deadline",
+      "deadline": "activation-deadline-is-source-send-start-plus-source-default-request-timeout-and-caller-wait-follows-submit-7-9",
       "oneWay": "after-outbound-admission-does-not-wait-for-factory-or-ready",
       "leaseDeadline": "store-time-to-local-monotonic-from-read-start",
       "publicExposure": "forbidden"
