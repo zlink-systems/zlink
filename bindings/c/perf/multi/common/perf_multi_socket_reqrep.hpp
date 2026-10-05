@@ -12,9 +12,11 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <iostream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace perf_multi_socket_reqrep
@@ -158,22 +160,6 @@ inline void clear_retained_request (client_slot_t *slot)
     slot->retry_ready = false;
     slot->routed_request = false;
     std::memset (&slot->target_rid, 0, sizeof (slot->target_rid));
-}
-
-inline short client_slot_events (const client_slot_t &slot)
-{
-    short events = ZLINK_POLLCOMPLETION;
-    if (perf_multi_client::retained_waits_for_pollout (slot.retained_request, slot.wait_token,
-                                                       slot.retry_ready))
-        events = static_cast<short> (events | ZLINK_POLLOUT);
-    return events;
-}
-
-inline bool update_client_slot_events (client_slot_t *slot)
-{
-    return slot && slot->owner && slot->owner->poller && slot->socket
-           && zlink_poller_modify (slot->owner->poller, slot->socket, client_slot_events (*slot))
-                == ZLINK_CONFIG_OK;
 }
 
 inline void record_request_completion (client_slot_t *slot,
@@ -401,11 +387,9 @@ inline bool drain_socket_completions (client_state_t *state,
               valid ? perf_multi_client::classify_writable_outcome (completion.send_result,
                                                                     completion.send_terminal_errno)
                     : perf_multi_client::writable_failed;
-            if (outcome == perf_multi_client::writable_ready) {
+            if (outcome == perf_multi_client::writable_retry) {
                 socket_slot->wait_token = 0;
                 socket_slot->retry_ready = true;
-            } else if (outcome == perf_multi_client::writable_timed_out) {
-                socket_slot->wait_token = 0;
             } else {
                 const int terminal_errno = completion.send_terminal_errno;
                 clear_retained_request (socket_slot);
@@ -414,8 +398,6 @@ inline bool drain_socket_completions (client_state_t *state,
             zlink_completion_close (&completion);
             if (!valid || outcome == perf_multi_client::writable_failed
                 || outcome == perf_multi_client::writable_not_found)
-                return false;
-            if (!update_client_slot_events (socket_slot))
                 return false;
             continue;
         }
@@ -449,13 +431,6 @@ inline bool drain_ready_completions (client_state_t *state, int event_count)
         if ((event.events & ZLINK_POLLCOMPLETION) != 0
             && !drain_socket_completions (state, event.socket, slot))
             return false;
-        if (slot && (event.events & ZLINK_POLLOUT) != 0) {
-            const bool was_retry_ready = slot->retry_ready;
-            perf_multi_client::record_retained_pollout (true, slot->retained_request,
-                                                        slot->wait_token, &slot->retry_ready);
-            if (slot->retry_ready != was_retry_ready && !update_client_slot_events (slot))
-                return false;
-        }
     }
     return true;
 #endif
@@ -725,7 +700,7 @@ inline bool setup_client_state (const endpoint_config_t &config,
         return false;
     for (size_t i = 0; i < state->slots.size (); ++i) {
         if (zlink_poller_add (state->poller, state->slots[i].socket, &state->slots[i],
-                              client_slot_events (state->slots[i]))
+                              ZLINK_POLLCOMPLETION)
             != 0) {
             return false;
         }
@@ -829,73 +804,124 @@ inline int run_client_benchmark (const endpoint_config_t &config,
     return 0;
 }
 
-inline bool submit_router_reply_with_retry (void *server,
-                                            const zlink_routing_id_t *source_rid,
-                                            uint64_t reply_token,
-                                            zlink_msg_t *parts,
-                                            size_t part_count)
+struct pending_server_reply_t
 {
-    if (!server || !source_rid || reply_token == 0 || !parts || part_count == 0)
-        return false;
+    pending_server_reply_t () : rid (), token (0), parts () {}
+    pending_server_reply_t (pending_server_reply_t &&other) noexcept :
+        rid (other.rid), token (other.token), parts (std::move (other.parts))
+    {
+        other.token = 0;
+    }
+    pending_server_reply_t &operator= (pending_server_reply_t &&other) noexcept
+    {
+        if (this != &other) {
+            release ();
+            rid = other.rid;
+            token = other.token;
+            parts = std::move (other.parts);
+            other.token = 0;
+        }
+        return *this;
+    }
+    pending_server_reply_t (const pending_server_reply_t &) = delete;
+    pending_server_reply_t &operator= (const pending_server_reply_t &) = delete;
+    ~pending_server_reply_t () { release (); }
+    void release ()
+    {
+        if (!parts.empty ())
+            zlink_multipart_close (parts.data (), parts.size ());
+        parts.clear ();
+    }
+    zlink_routing_id_t rid;
+    uint64_t token;
+    std::vector<zlink_msg_t> parts;
+};
 
-    // Reply submission consumes the complete record on backpressure. Keep a
-    // shared-storage template and rebuild the same record for every retry.
-    std::vector<zlink_msg_t> retry_template (part_count);
+typedef std::unordered_map<std::string, size_t> pending_reply_rid_counts_t;
+
+enum server_reply_submit_outcome_t
+{
+    server_reply_submit_admitted,
+    server_reply_submit_wait,
+    server_reply_submit_teardown,
+    server_reply_submit_error
+};
+
+inline server_reply_submit_outcome_t
+classify_server_reply_submit (zlink_submit_result_t result, int submit_errno, bool stopping)
+{
+    if (result == ZLINK_SUBMIT_OK)
+        return server_reply_submit_admitted;
+    if (result == ZLINK_SUBMIT_BACKPRESSURED
+        && (submit_errno == EAGAIN || submit_errno == EWOULDBLOCK))
+        return server_reply_submit_wait;
+    if (stopping && (submit_errno == ENOTCONN || submit_errno == 0))
+        return server_reply_submit_teardown;
+    return server_reply_submit_error;
+}
+
+inline std::string reply_rid_key (const zlink_routing_id_t &rid)
+{
+    return std::string (reinterpret_cast<const char *> (rid.data), rid.size);
+}
+
+inline zlink_submit_result_t submit_pending_server_reply (void *server,
+                                                          pending_server_reply_t &reply)
+{
+    std::vector<zlink_msg_t> attempt (reply.parts.size ());
     size_t initialized = 0;
-    for (; initialized < part_count; ++initialized) {
-        if (zlink_msg_init (&retry_template[initialized]) != 0) {
-            zlink_multipart_close (retry_template.data (), initialized);
-            zlink_multipart_close (parts, part_count);
-            return false;
-        }
-        if (zlink_msg_copy (&retry_template[initialized], &parts[initialized])
-            != ZLINK_CONFIG_OK) {
-            zlink_multipart_close (retry_template.data (), initialized + 1u);
-            zlink_multipart_close (parts, part_count);
-            return false;
-        }
-    }
-
-    zlink_submit_result_t reply_rc =
-      zlink_reply (server, source_rid, reply_token, parts, part_count);
-    zlink_multipart_close (parts, part_count);
-    while (reply_rc == ZLINK_SUBMIT_BACKPRESSURED
-           && !perf_stop_requested ().load (std::memory_order_acquire)) {
-        zlink_pollitem_t item = {server, 0, ZLINK_POLLOUT, 0};
-        const int poll_rc = perf_socket_poll (&item, 1, perf_aux_poll_wait_ms ());
-        if (poll_rc < 0) {
-            if (zlink_errno () == EINTR || zlink_errno () == EAGAIN)
-                continue;
+    for (; initialized < attempt.size (); ++initialized) {
+        if (zlink_msg_init (&attempt[initialized]) != 0)
+            break;
+        if (zlink_msg_copy (&attempt[initialized], &reply.parts[initialized]) != ZLINK_CONFIG_OK) {
+            ++initialized;
             break;
         }
-        if (poll_rc == 0 || (item.revents & ZLINK_POLLOUT) == 0)
-            continue;
-
-        std::vector<zlink_msg_t> retry (part_count);
-        size_t retry_initialized = 0;
-        for (; retry_initialized < part_count; ++retry_initialized) {
-            if (zlink_msg_init (&retry[retry_initialized]) != 0) {
-                zlink_multipart_close (retry.data (), retry_initialized);
-                reply_rc = ZLINK_SUBMIT_TERMINATED;
-                break;
-            }
-            if (zlink_msg_copy (&retry[retry_initialized],
-                                &retry_template[retry_initialized])
-                != ZLINK_CONFIG_OK) {
-                zlink_multipart_close (retry.data (), retry_initialized + 1u);
-                reply_rc = ZLINK_SUBMIT_TERMINATED;
-                break;
-            }
-        }
-        if (retry_initialized != part_count)
-            break;
-        reply_rc = zlink_reply (
-          server, source_rid, reply_token, retry.data (), retry.size ());
-        zlink_multipart_close (retry.data (), retry.size ());
     }
+    if (initialized != attempt.size ()) {
+        zlink_multipart_close (attempt.data (), initialized);
+        return ZLINK_SUBMIT_OUT_OF_MEMORY;
+    }
+    const zlink_submit_result_t result =
+      zlink_reply (server, &reply.rid, reply.token, attempt.data (), attempt.size ());
+    const int submit_errno = zlink_errno ();
+    zlink_multipart_close (attempt.data (), attempt.size ());
+    errno = submit_errno;
+    return result;
+}
 
-    zlink_multipart_close (retry_template.data (), retry_template.size ());
-    return reply_rc == ZLINK_SUBMIT_OK;
+inline bool release_front_pending_server_reply (std::deque<pending_server_reply_t> *pending,
+                                                pending_reply_rid_counts_t *pending_by_rid)
+{
+    const std::string key = reply_rid_key (pending->front ().rid);
+    pending_reply_rid_counts_t::iterator count = pending_by_rid->find (key);
+    if (count == pending_by_rid->end () || count->second == 0) {
+        errno = EPROTO;
+        return false;
+    }
+    if (--count->second == 0)
+        pending_by_rid->erase (count);
+    pending->pop_front ();
+    return true;
+}
+
+inline bool flush_pending_server_replies (void *server,
+                                          std::deque<pending_server_reply_t> *pending,
+                                          pending_reply_rid_counts_t *pending_by_rid)
+{
+    if (pending->empty ())
+        return true;
+    const zlink_submit_result_t result = submit_pending_server_reply (server, pending->front ());
+    const server_reply_submit_outcome_t outcome = classify_server_reply_submit (
+      result, errno, perf_stop_requested ().load (std::memory_order_acquire));
+    if (outcome == server_reply_submit_admitted || outcome == server_reply_submit_teardown)
+        return release_front_pending_server_reply (pending, pending_by_rid);
+    if (outcome == server_reply_submit_wait) {
+        pending->push_back (std::move (pending->front ()));
+        pending->pop_front ();
+        return true;
+    }
+    return false;
 }
 
 enum server_recv_step_t
@@ -910,7 +936,9 @@ inline server_recv_step_t reply_one_request (void *server,
                                              uint64_t hwm_value,
                                              const std::string &transport,
                                              zlink_socket_type_t socket_type,
-                                             size_t *active_msg_size)
+                                             size_t *active_msg_size,
+                                             std::deque<pending_server_reply_t> *pending,
+                                             pending_reply_rid_counts_t *pending_by_rid)
 {
     const zlink_routing_id_t *source_rid = NULL;
     uint64_t reply_token = 0;
@@ -942,20 +970,48 @@ inline server_recv_step_t reply_one_request (void *server,
                                       socket_type);
     }
 
-    if (submit_router_reply_with_retry (server, source_rid, reply_token, parts, part_count))
-        return server_recv_step_replied;
-
-    const int reply_err = zlink_errno ();
-    // Once the runner has requested teardown, an in-flight reply may stop on
-    // ENOTCONN or leave no errno when a backpressure retry observes STOP.
-    // Neither outcome is a measurement failure after CLIENT_DONE.
-    if (perf_stop_requested ().load (std::memory_order_acquire)) {
-        return server_recv_step_drained;
+    pending->emplace_back ();
+    pending_server_reply_t &reply = pending->back ();
+    reply.rid = *source_rid;
+    reply.token = reply_token;
+    reply.parts.resize (part_count);
+    size_t moved = 0;
+    for (; moved < part_count; ++moved) {
+        if (zlink_msg_init (&reply.parts[moved]) != 0)
+            break;
+        if (zlink_msg_move (&reply.parts[moved], &parts[moved]) != ZLINK_CONFIG_OK) {
+            ++moved;
+            break;
+        }
     }
-    if (bench_debug_enabled ()) {
-        std::cerr << "[perf-multi-socket-reqrep] reply failed err=" << reply_err << std::endl;
+    zlink_multipart_close (parts, part_count);
+    if (moved != part_count) {
+        reply.parts.resize (moved);
+        return server_recv_step_error;
     }
-    return server_recv_step_error;
+    if (!pending_by_rid->empty ()) {
+        const std::string key = reply_rid_key (reply.rid);
+        pending_reply_rid_counts_t::iterator same_rid = pending_by_rid->find (key);
+        if (same_rid != pending_by_rid->end ()) {
+            ++same_rid->second;
+            return server_recv_step_replied;
+        }
+    }
+    const zlink_submit_result_t result = submit_pending_server_reply (server, reply);
+    const server_reply_submit_outcome_t outcome = classify_server_reply_submit (
+      result, errno, perf_stop_requested ().load (std::memory_order_acquire));
+    if (outcome == server_reply_submit_admitted || outcome == server_reply_submit_teardown) {
+        pending->pop_back ();
+        return outcome == server_reply_submit_admitted ? server_recv_step_replied
+                                                       : server_recv_step_drained;
+    }
+    if (outcome == server_reply_submit_error) {
+        if (bench_debug_enabled ())
+            std::cerr << "[perf-multi-socket-reqrep] reply failed err=" << errno << std::endl;
+        return server_recv_step_error;
+    }
+    pending_by_rid->emplace (reply_rid_key (reply.rid), 1);
+    return server_recv_step_replied;
 }
 
 inline bool run_server_loop (void *server,
@@ -965,8 +1021,12 @@ inline bool run_server_loop (void *server,
                              zlink_socket_type_t socket_type)
 {
     size_t active_msg_size = 0;
+    std::deque<pending_server_reply_t> pending;
+    pending_reply_rid_counts_t pending_by_rid;
     while (!perf_stop_requested ().load (std::memory_order_acquire)) {
-        zlink_pollitem_t item = {server, 0, ZLINK_POLLIN, 0};
+        const short events =
+          static_cast<short> (ZLINK_POLLIN | (!pending.empty () ? ZLINK_POLLOUT : 0));
+        zlink_pollitem_t item = {server, 0, events, 0};
         // The stdin watcher sets perf_stop_requested(), but a forever poll
         // would not observe that flag after the last request is complete.
         // Use the common auxiliary wait so STOP can finish the server cleanly.
@@ -978,16 +1038,20 @@ inline bool run_server_loop (void *server,
         }
         if (perf_stop_requested ().load (std::memory_order_acquire))
             break;
-        if ((item.revents & ZLINK_POLLIN) == 0)
-            continue;
-        for (;;) {
-            const server_recv_step_t step =
-              reply_one_request (server, ctx, hwm_value, transport, socket_type, &active_msg_size);
-            if (step == server_recv_step_error)
-                return false;
-            if (step == server_recv_step_drained)
-                break;
+        if ((item.revents & ZLINK_POLLIN) != 0) {
+            for (;;) {
+                const server_recv_step_t step =
+                  reply_one_request (server, ctx, hwm_value, transport, socket_type,
+                                     &active_msg_size, &pending, &pending_by_rid);
+                if (step == server_recv_step_error)
+                    return false;
+                if (step == server_recv_step_drained)
+                    break;
+            }
         }
+        if ((item.revents & ZLINK_POLLOUT) != 0
+            && !flush_pending_server_replies (server, &pending, &pending_by_rid))
+            return false;
     }
     return true;
 }

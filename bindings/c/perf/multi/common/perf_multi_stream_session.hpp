@@ -180,13 +180,10 @@ inline bool record_writable_completion (session_t *session,
     const perf_multi_client::writable_outcome_t outcome =
       perf_multi_client::classify_writable_outcome (completion->send_result,
                                                     completion->send_terminal_errno);
-    if (outcome == perf_multi_client::writable_ready) {
+    if (outcome == perf_multi_client::writable_retry) {
         session->retry_ready = true;
         return true;
     }
-    if (outcome == perf_multi_client::writable_timed_out)
-        return true;
-
     const int terminal_errno = completion->send_terminal_errno;
     release_retained_packet (session);
     finish_pending_submission (session);
@@ -381,8 +378,7 @@ inline bool handle_packet_message (session_t *session,
     return submitted;
 }
 
-inline bool
-drain_writable_completions (session_t *session, bool suppress_pollout_if_empty, bool pollout)
+inline bool drain_writable_completions (session_t *session, bool suppress_pollout_if_empty)
 {
     if (!session || !session->send_socket)
         return false;
@@ -410,8 +406,6 @@ drain_writable_completions (session_t *session, bool suppress_pollout_if_empty, 
 
     // The completion queue must reach NO_DATA before the exact retained packet
     // is submitted again.
-    perf_multi_client::record_retained_pollout (pollout, !session->retained_packet.empty (),
-                                                session->wait_token, &session->retry_ready);
     return !session->retry_ready || retry_retained_packet (session);
 }
 
@@ -458,10 +452,7 @@ inline bool drain_packets (session_t *session, const char *stop_token)
 inline short session_poll_events (const session_t *session, bool accept_input)
 {
     short events = ZLINK_POLLCOMPLETION;
-    if (session
-        && ((session->wait_token != 0 && !session->pollout_suppressed)
-            || perf_multi_client::retained_waits_for_pollout (
-              !session->retained_packet.empty (), session->wait_token, session->retry_ready)))
+    if (session && session->wait_token != 0 && !session->pollout_suppressed)
         events = static_cast<short> (events | ZLINK_POLLOUT);
     if (accept_input && session && outstanding_size (session) == 0)
         events = static_cast<short> (events | ZLINK_POLLIN);
@@ -522,7 +513,7 @@ inline int run_server_event_loop (session_t *session, const char *stop_token)
             break;
         }
         if (poll_rc > 0 && (event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
-            && !drain_writable_completions (session, true, (event.events & ZLINK_POLLOUT) != 0)) {
+            && !drain_writable_completions (session, true)) {
             record_failure (session, zlink_errno ());
             break;
         }

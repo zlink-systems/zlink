@@ -2,6 +2,7 @@
 
 #include "../multi/common/perf_multi_relay_server.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -79,9 +80,9 @@ bool send_request (void *client, uint64_t sequence)
     return true;
 }
 
-bool drain_echoes (void *client, size_t *next_sequence)
+bool drain_echoes (void *client, std::array<bool, request_count> *seen, size_t *echo_count)
 {
-    REQUIRE_TRUE (next_sequence != NULL);
+    REQUIRE_TRUE (seen != NULL && echo_count != NULL);
     for (;;) {
         zlink_msg_t part;
         const zlink_routing_id_t *source_rid = NULL;
@@ -96,12 +97,12 @@ bool drain_echoes (void *client, size_t *next_sequence)
         REQUIRE_TRUE (result == ZLINK_RECV_OK);
         REQUIRE_TRUE (part_count == 1);
         REQUIRE_TRUE (zlink_msg_size (&part) == payload_size);
-        REQUIRE_TRUE (*next_sequence < request_count);
-
         uint64_t sequence = UINT64_MAX;
         std::memcpy (&sequence, zlink_msg_data (&part), sizeof (sequence));
-        REQUIRE_TRUE (sequence == *next_sequence);
-        ++*next_sequence;
+        REQUIRE_TRUE (sequence < request_count);
+        REQUIRE_TRUE (!(*seen)[static_cast<size_t> (sequence)]);
+        (*seen)[static_cast<size_t> (sequence)] = true;
+        ++*echo_count;
         zlink_multipart_close (&part, part_count);
     }
 }
@@ -110,6 +111,16 @@ bool run_test ()
 {
     using namespace perf_multi_relay_server;
 
+    pending_replies_t duplicate_pending;
+    std::unique_ptr<pending_reply_t> occupied_reservation (new pending_reply_t ());
+    pending_reply_t duplicate_reply;
+    errno = 0;
+    REQUIRE_TRUE (!retain_or_send_reply (&duplicate_pending, &occupied_reservation,
+                                         std::move (duplicate_reply), reply_send_reservation_full));
+    REQUIRE_TRUE (errno == EPROTO);
+    REQUIRE_TRUE (occupied_reservation.get () != NULL);
+    REQUIRE_TRUE (duplicate_pending.empty ());
+
     ctx_guard_t context;
     REQUIRE_TRUE (context.valid ());
     REQUIRE_TRUE (zlink_ctx_set (context.get (), ZLINK_CTX_OPT_AUTO_HWM_ENABLE, 0)
@@ -117,8 +128,10 @@ bool run_test ()
 
     socket_guard_t server (context.get (), ZLINK_SOCKET_ROUTER);
     socket_guard_t client (context.get (), ZLINK_SOCKET_DEALER);
+    socket_guard_t second_client (context.get (), ZLINK_SOCKET_DEALER);
     REQUIRE_TRUE (server.valid ());
     REQUIRE_TRUE (client.valid ());
+    REQUIRE_TRUE (second_client.valid ());
 
     const int zero_linger = 0;
     const int mandatory = 1;
@@ -137,78 +150,80 @@ bool run_test ()
     REQUIRE_TRUE (set_hwm (server.get (), ZLINK_OPT_RCVHWM, request_hwm));
     REQUIRE_TRUE (zlink_set_routing_id (client.get (), "relay-client", 12)
                   == ZLINK_CONFIG_OK);
+    REQUIRE_TRUE (zlink_set_routing_id (second_client.get (), "relay-second", 12)
+                  == ZLINK_CONFIG_OK);
 
     const char *endpoint = "inproc://perf-relay-completion-progress";
     REQUIRE_TRUE (zlink_bind (server.get (), endpoint) == ZLINK_BIND_OK);
     REQUIRE_TRUE (zlink_connect (client.get (), endpoint) == ZLINK_CONNECT_OK);
+    REQUIRE_TRUE (zlink_connect (second_client.get (), endpoint) == ZLINK_CONNECT_OK);
 
     for (size_t i = 0; i < request_count; ++i)
         REQUIRE_TRUE (send_request (client.get (), static_cast<uint64_t> (i)));
+    REQUIRE_TRUE (send_request (second_client.get (), 100));
 
-    std::deque<pending_reply_t> pending;
-    reply_wait_state_t wait_state;
-    wait_state.socket = server.get ();
+    pending_replies_t pending;
+    std::unique_ptr<pending_reply_t> reservation_full;
+    std::vector<pending_reply_t> ready;
     poller_guard_t completion_poller;
     REQUIRE_TRUE (completion_poller.get () != NULL);
-    REQUIRE_TRUE (zlink_poller_add (completion_poller.get (), server.get (),
-                                    &wait_state, ZLINK_POLLIN)
+    REQUIRE_TRUE (zlink_poller_add (completion_poller.get (), server.get (), &pending,
+                                    ZLINK_POLLIN | ZLINK_POLLCOMPLETION)
                   == ZLINK_CONFIG_OK);
     REQUIRE_TRUE (wait_for_event (completion_poller.get (), ZLINK_POLLIN));
 
     bool recv_drained = false;
     perf_stop_requested ().store (false, std::memory_order_release);
-    REQUIRE_TRUE (drain_recv_and_relay (server.get (), &pending, &wait_state,
-                                        &recv_drained));
-
-    // Once the first refused echo owns a wait token, receive must yield to the
-    // completion owner instead of moving the rest of the 64 KiB input queue
-    // into this application-owned deque.
-    REQUIRE_TRUE (wait_state.wait_token != 0);
-    REQUIRE_TRUE (!recv_drained);
-    REQUIRE_TRUE (pending.size () == 1);
+    REQUIRE_TRUE (drain_recv_and_relay (server.get (), &pending, &reservation_full, &recv_drained));
+    REQUIRE_TRUE (recv_drained);
+    REQUIRE_TRUE (!reservation_full);
+    bool retained_with_token = false;
+    for (pending_replies_t::const_iterator it = pending.begin (); it != pending.end (); ++it)
+        retained_with_token |= it->second.wait_token != 0;
+    REQUIRE_TRUE (retained_with_token);
+    bool received_second = false;
+    for (pending_replies_t::const_iterator it = pending.begin (); it != pending.end (); ++it)
+        received_second |=
+          it->second.rid.size == 12 && std::memcmp (it->second.rid.data, "relay-second", 12) == 0;
 
     poller_guard_t echo_poller;
     REQUIRE_TRUE (echo_poller.get () != NULL);
-    REQUIRE_TRUE (zlink_poller_modify (completion_poller.get (), server.get (),
-                                       ZLINK_POLLCOMPLETION)
+    REQUIRE_TRUE (zlink_poller_add (echo_poller.get (), second_client.get (), second_client.get (),
+                                    ZLINK_POLLIN)
                   == ZLINK_CONFIG_OK);
-    REQUIRE_TRUE (zlink_poller_add (echo_poller.get (), client.get (), client.get (),
-                                    ZLINK_POLLIN) == ZLINK_CONFIG_OK);
 
-    size_t next_echo = 0;
-    bool all_input_received = false;
-    for (size_t turn = 0; turn < request_count + 1 && next_echo < request_count;
-         ++turn) {
-        REQUIRE_TRUE (wait_for_event (echo_poller.get (), ZLINK_POLLIN));
-        REQUIRE_TRUE (drain_echoes (client.get (), &next_echo));
+    zlink_poller_event_t second_event;
+    std::memset (&second_event, 0, sizeof (second_event));
+    REQUIRE_TRUE (zlink_poller_wait (echo_poller.get (), &second_event, 1, event_wait_ms, NULL)
+                  == 1);
+    REQUIRE_TRUE (second_event.socket == second_client.get ());
+    zlink_msg_t second_echo;
+    const zlink_routing_id_t *source_rid = NULL;
+    size_t second_part_count = 0;
+    REQUIRE_TRUE (zlink_recv (second_client.get (), &source_rid, &second_echo, 1,
+                              &second_part_count, ZLINK_RECV_FLAGS_DONTWAIT)
+                  == ZLINK_RECV_OK);
+    uint64_t second_sequence = 0;
+    std::memcpy (&second_sequence, zlink_msg_data (&second_echo), sizeof (second_sequence));
+    REQUIRE_TRUE (second_sequence == 100);
+    zlink_multipart_close (&second_echo, second_part_count);
+    REQUIRE_TRUE (!received_second);
 
-        if (wait_state.wait_token != 0) {
-            REQUIRE_TRUE (wait_for_event (completion_poller.get (),
-                                          ZLINK_POLLCOMPLETION));
-            REQUIRE_TRUE (drain_reply_writable (server.get (), &wait_state, true));
-            REQUIRE_TRUE (wait_state.wait_token == 0);
-            REQUIRE_TRUE (flush_pending_replies (server.get (), &pending,
-                                                 &wait_state));
-            REQUIRE_TRUE (pending.empty ());
-        }
-
-        if (!all_input_received) {
-            recv_drained = false;
-            REQUIRE_TRUE (drain_recv_and_relay (server.get (), &pending,
-                                                &wait_state, &recv_drained));
-            all_input_received = recv_drained;
-            if (!recv_drained) {
-                REQUIRE_TRUE (wait_state.wait_token != 0);
-                REQUIRE_TRUE (pending.size () == 1);
-            }
-        }
+    std::array<bool, request_count> seen = {};
+    size_t echo_count = 0;
+    for (size_t turn = 0; turn < request_count * 4 && echo_count < request_count; ++turn) {
+        REQUIRE_TRUE (drain_echoes (client.get (), &seen, &echo_count));
+        if (echo_count == request_count)
+            break;
+        REQUIRE_TRUE (wait_for_event (completion_poller.get (), ZLINK_POLLCOMPLETION));
+        REQUIRE_TRUE (drain_reply_writable (server.get (), &pending, &ready));
+        REQUIRE_TRUE (!ready.empty ());
+        REQUIRE_TRUE (flush_pending_replies (server.get (), &pending, &reservation_full, &ready));
     }
 
-    REQUIRE_TRUE (drain_echoes (client.get (), &next_echo));
-    REQUIRE_TRUE (next_echo == request_count);
-    REQUIRE_TRUE (all_input_received);
+    REQUIRE_TRUE (drain_echoes (client.get (), &seen, &echo_count));
+    REQUIRE_TRUE (echo_count == request_count);
     REQUIRE_TRUE (pending.empty ());
-    REQUIRE_TRUE (wait_state.wait_token == 0);
     return true;
 }
 

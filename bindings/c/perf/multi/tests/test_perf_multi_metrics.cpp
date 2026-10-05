@@ -5,6 +5,9 @@
 #include "perf_multi_weighted_latency.hpp"
 #include "../../common/streamclient/perf_stream_common.hpp"
 
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -220,9 +223,9 @@ void test_one_way_writable_retry_state ()
     timed_out.send_terminal_errno = EAGAIN;
     assert (record_writable_completion (&slot, timed_out));
     assert (slot.retained);
-    assert (!slot.retry_ready);
+    assert (slot.retry_ready);
     assert (slot.wait_token == 0);
-    assert ((tracker_slot_events (send_wait_tracker_t (), slot) & ZLINK_POLLOUT) != 0);
+    assert ((tracker_slot_events (send_wait_tracker_t (), slot) & ZLINK_POLLOUT) == 0);
 
     slot.retry_ready = false;
     slot.wait_token = 9;
@@ -452,10 +455,10 @@ void test_stream_writable_retry_accounting ()
     require_stream_test (perf_multi_stream::record_writable_completion (&session, &timed_out));
     require_stream_test (perf_multi_stream::outstanding_size (&session) == 1);
     require_stream_test (!session.retained_packet.empty ());
-    require_stream_test (!session.retry_ready);
+    require_stream_test (session.retry_ready);
     require_stream_test (session.wait_token == 0);
     require_stream_test ((perf_multi_stream::session_poll_events (&session, true) & ZLINK_POLLOUT)
-                         != 0);
+                         == 0);
 
     perf_multi_stream::release_retained_packet (&session);
     perf_multi_stream::finish_pending_submission (&session);
