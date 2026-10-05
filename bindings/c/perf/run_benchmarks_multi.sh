@@ -52,6 +52,7 @@ else
   export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
 fi
 source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
+source "${SCRIPT_DIR}/core_build_symlink.sh"
 NORMALIZE_TIMESTAMPS_SH="${ROOT_DIR}/core/tools/normalize_build_timestamps.sh"
 PERF_COMPARISON_SCRIPT="${SCRIPT_DIR}/run_comparison.py"
 PATTERNS="DEALER_DEALER,DEALER_ROUTER_SENDSEND,ROUTER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_REQREP,PUBSUB,STREAM"
@@ -469,8 +470,7 @@ prepare_core_runtime() {
   # A worktree may deliberately point core/build at the main tree. Treat that
   # runtime as externally owned: verify that it exists, but never mutate it
   # through the symlink.
-  if [[ -L "${ROOT_DIR}/core/build"
-        && "$(normalize_cmake_path "${core_build_dir}")" == "$(normalize_cmake_path "${ROOT_DIR}/core/build")" ]]; then
+  if perf_uses_external_core_build "${ROOT_DIR}" "${core_build_dir}"; then
     if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
       echo "Error: linked Core runtime not found under ${core_build_dir}." >&2
       return 1

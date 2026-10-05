@@ -264,8 +264,11 @@ inline reply_send_status_t try_send_reply_now (void *server,
 
 inline bool drain_reply_writable (void *server,
                                   reply_wait_state_t *state,
-                                  bool suppress_pollout_if_empty = false)
+                                  bool suppress_pollout_if_empty = false,
+                                  bool *timed_out = NULL)
 {
+    if (timed_out)
+        *timed_out = false;
     if (!server || !state || state->socket != server) {
         errno = EINVAL;
         return false;
@@ -302,9 +305,16 @@ inline bool drain_reply_writable (void *server,
         state->wait_token = 0;
         state->pollout_suppressed = false;
         std::memset (&state->target_rid, 0, sizeof (state->target_rid));
-        if (result == ZLINK_SEND_ADMITTED && terminal_errno == 0)
+        const perf_multi_client::writable_outcome_t outcome =
+          perf_multi_client::classify_writable_outcome (result, terminal_errno);
+        if (outcome == perf_multi_client::writable_ready)
             continue;
-        if (result == ZLINK_SEND_NOT_FOUND) {
+        if (outcome == perf_multi_client::writable_timed_out) {
+            if (timed_out)
+                *timed_out = true;
+            continue;
+        }
+        if (outcome == perf_multi_client::writable_not_found) {
             // A route can disappear while its wait token is live. Drop the
             // retained reply just like an immediate stale-route result.
             state->drop_retained_reply = true;
@@ -489,10 +499,13 @@ inline bool run_server_loop (void *server)
         if (poll_rc > 0
             && (event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
             && wait_state.wait_token != 0) {
-            if (!drain_reply_writable (server, &wait_state, true)) {
+            bool timed_out = false;
+            if (!drain_reply_writable (server, &wait_state, true, &timed_out)) {
                 loop_ok = false;
                 break;
             }
+            if (timed_out && (event.events & ZLINK_POLLOUT) == 0)
+                continue;
         }
         if (poll_rc > 0
             && (event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0

@@ -160,6 +160,22 @@ inline void clear_retained_request (client_slot_t *slot)
     std::memset (&slot->target_rid, 0, sizeof (slot->target_rid));
 }
 
+inline short client_slot_events (const client_slot_t &slot)
+{
+    short events = ZLINK_POLLCOMPLETION;
+    if (perf_multi_client::retained_waits_for_pollout (slot.retained_request, slot.wait_token,
+                                                       slot.retry_ready))
+        events = static_cast<short> (events | ZLINK_POLLOUT);
+    return events;
+}
+
+inline bool update_client_slot_events (client_slot_t *slot)
+{
+    return slot && slot->owner && slot->owner->poller && slot->socket
+           && zlink_poller_modify (slot->owner->poller, slot->socket, client_slot_events (*slot))
+                == ZLINK_CONFIG_OK;
+}
+
 inline void record_request_completion (client_slot_t *slot,
                                        zlink_request_result_t result,
                                        zlink_msg_t *parts,
@@ -380,20 +396,26 @@ inline bool drain_socket_completions (client_state_t *state,
                 continue;
             }
             const bool valid = completion.user_context == socket_slot
-                               && request_rid_matches (*socket_slot,
-                                                       completion.peer_rid)
-                               && completion.send_result == ZLINK_SEND_ADMITTED
-                               && completion.send_terminal_errno == 0;
-            if (valid) {
+                               && request_rid_matches (*socket_slot, completion.peer_rid);
+            const perf_multi_client::writable_outcome_t outcome =
+              valid ? perf_multi_client::classify_writable_outcome (completion.send_result,
+                                                                    completion.send_terminal_errno)
+                    : perf_multi_client::writable_failed;
+            if (outcome == perf_multi_client::writable_ready) {
                 socket_slot->wait_token = 0;
                 socket_slot->retry_ready = true;
+            } else if (outcome == perf_multi_client::writable_timed_out) {
+                socket_slot->wait_token = 0;
             } else {
                 const int terminal_errno = completion.send_terminal_errno;
                 clear_retained_request (socket_slot);
                 errno = terminal_errno != 0 ? terminal_errno : EPROTO;
             }
             zlink_completion_close (&completion);
-            if (!valid)
+            if (!valid || outcome == perf_multi_client::writable_failed
+                || outcome == perf_multi_client::writable_not_found)
+                return false;
+            if (!update_client_slot_events (socket_slot))
                 return false;
             continue;
         }
@@ -427,6 +449,13 @@ inline bool drain_ready_completions (client_state_t *state, int event_count)
         if ((event.events & ZLINK_POLLCOMPLETION) != 0
             && !drain_socket_completions (state, event.socket, slot))
             return false;
+        if (slot && (event.events & ZLINK_POLLOUT) != 0) {
+            const bool was_retry_ready = slot->retry_ready;
+            perf_multi_client::record_retained_pollout (true, slot->retained_request,
+                                                        slot->wait_token, &slot->retry_ready);
+            if (slot->retry_ready != was_retry_ready && !update_client_slot_events (slot))
+                return false;
+        }
     }
     return true;
 #endif
@@ -696,7 +725,7 @@ inline bool setup_client_state (const endpoint_config_t &config,
         return false;
     for (size_t i = 0; i < state->slots.size (); ++i) {
         if (zlink_poller_add (state->poller, state->slots[i].socket, &state->slots[i],
-                              ZLINK_POLLCOMPLETION)
+                              client_slot_events (state->slots[i]))
             != 0) {
             return false;
         }

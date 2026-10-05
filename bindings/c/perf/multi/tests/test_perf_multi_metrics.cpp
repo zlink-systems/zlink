@@ -53,6 +53,24 @@ void test_exact_sampler_statistics ()
     assert (close_to (stats.p99_ns, 99.01));
 }
 
+void test_echo_failure_reports_stderr ()
+{
+    const multi_bench_settings_t settings = {};
+    std::vector<void *> sockets;
+    std::vector<char> payload;
+    double throughput = 0.0;
+    bench_latency_stats_t latency;
+    std::ostringstream captured;
+    std::streambuf *const old_stderr = std::cerr.rdbuf (captured.rdbuf ());
+    const bool result = perf_multi_client::run_echo_duration (
+      sockets, settings, payload, 4096, 4096, perf_multi_metric::header_size (), "SERVER", true,
+      false, 1, &throughput, &latency);
+    std::cerr.rdbuf (old_stderr);
+    if (result
+        || captured.str ().find ("[perf-multi-echo] no sockets size=4096") == std::string::npos)
+        std::abort ();
+}
+
 void test_percentile_is_not_clamped_to_mean ()
 {
     bench_latency_sampler_t samples;
@@ -196,15 +214,27 @@ void test_one_way_writable_retry_state ()
 
     slot.retry_ready = false;
     slot.wait_token = 8;
+    zlink_completion_t timed_out = admitted;
+    timed_out.completion_id = 8;
+    timed_out.send_result = ZLINK_SEND_TIMED_OUT;
+    timed_out.send_terminal_errno = EAGAIN;
+    assert (record_writable_completion (&slot, timed_out));
+    assert (slot.retained);
+    assert (!slot.retry_ready);
+    assert (slot.wait_token == 0);
+    assert ((tracker_slot_events (send_wait_tracker_t (), slot) & ZLINK_POLLOUT) != 0);
+
+    slot.retry_ready = false;
+    slot.wait_token = 9;
     zlink_completion_t wrong_id = admitted;
-    wrong_id.completion_id = 9;
+    wrong_id.completion_id = 10;
     assert (!record_writable_completion (&slot, wrong_id));
     assert (slot.retained);
-    assert (slot.wait_token == 8);
+    assert (slot.wait_token == 9);
     assert (errno == EPROTO);
 
     zlink_completion_t terminal = admitted;
-    terminal.completion_id = 8;
+    terminal.completion_id = 9;
     terminal.send_result = ZLINK_SEND_NOT_FOUND;
     terminal.send_terminal_errno = ENOENT;
     assert (!record_writable_completion (&slot, terminal));
@@ -410,11 +440,35 @@ void test_stream_writable_retry_accounting ()
     session.retained_packet.push_back (0x42);
     session.retained_rid.size = 1;
     session.retained_rid.data[0] = 0x23;
+    zlink_completion_t timed_out;
+    std::memset (&timed_out, 0, sizeof (timed_out));
+    timed_out.struct_size = sizeof (timed_out);
+    timed_out.kind = ZLINK_COMPLETION_WRITABLE;
+    timed_out.completion_id = 8;
+    timed_out.user_context = session.send_socket;
+    timed_out.peer_rid = session.retained_rid;
+    timed_out.send_result = ZLINK_SEND_TIMED_OUT;
+    timed_out.send_terminal_errno = EAGAIN;
+    require_stream_test (perf_multi_stream::record_writable_completion (&session, &timed_out));
+    require_stream_test (perf_multi_stream::outstanding_size (&session) == 1);
+    require_stream_test (!session.retained_packet.empty ());
+    require_stream_test (!session.retry_ready);
+    require_stream_test (session.wait_token == 0);
+    require_stream_test ((perf_multi_stream::session_poll_events (&session, true) & ZLINK_POLLOUT)
+                         != 0);
+
+    perf_multi_stream::release_retained_packet (&session);
+    perf_multi_stream::finish_pending_submission (&session);
+    session.outstanding_count.store (1, std::memory_order_release);
+    session.wait_token = 9;
+    session.retained_packet.push_back (0x42);
+    session.retained_rid.size = 1;
+    session.retained_rid.data[0] = 0x23;
     zlink_completion_t terminal;
     std::memset (&terminal, 0, sizeof (terminal));
     terminal.struct_size = sizeof (terminal);
     terminal.kind = ZLINK_COMPLETION_WRITABLE;
-    terminal.completion_id = 8;
+    terminal.completion_id = 9;
     terminal.user_context = session.send_socket;
     terminal.peer_rid = session.retained_rid;
     terminal.send_result = ZLINK_SEND_NOT_CONNECTED;
@@ -469,6 +523,7 @@ void test_stream_async_send_uses_writable_retry_loop ()
 int main ()
 {
     set_latency_sample_cap_env (NULL);
+    test_echo_failure_reports_stderr ();
     test_exact_sampler_statistics ();
     test_percentile_is_not_clamped_to_mean ();
     test_snapshot_does_not_reorder_reservoir ();

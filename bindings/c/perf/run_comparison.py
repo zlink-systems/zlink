@@ -19,6 +19,9 @@ IS_WINDOWS = os.name == "nt"
 IS_LINUX = platform.system() == "Linux"
 EXE_SUFFIX = ".exe" if IS_WINDOWS else ""
 SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+from failure_detail import process_failure_reason
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 BUILD_CONFIG_DIRS = ("Release", "Debug", "RelWithDebInfo", "MinSizeRel")
 RUN_STARTED_AT = time.time()
@@ -1104,10 +1107,7 @@ def _emit_result_metric_callback(
 ):
     if result_line_callback is None:
         return
-    try:
-        result_line_callback(line_transport, line_size, metric_name, value)
-    except Exception:
-        pass
+    result_line_callback(line_transport, line_size, metric_name, value)
 
 
 def emit_result_metrics_from_line(
@@ -2038,15 +2038,18 @@ def run_sizes_test_stream_shared(
                 "parsed": parsed,
                 "timed_out": True,
                 "returncode": sampled.get("returncode", -1),
-                "reason": "timeout",
+                "reason": "timeout; " + process_failure_reason(
+                    sampled.get("returncode", -1), client_stderr,
+                    server_rc, server_stderr_buffer.text()
+                ),
                 "warnings": warnings,
                 **progress_meta,
             }
         if sampled.get("returncode", 0) != 0:
-            detail = summarize_server_startup_detail(combined_stdout, combined_stderr)
-            reason = f"non_zero_exit_{sampled.get('returncode', -1)}"
-            if detail:
-                reason = f"{reason}_{detail}"
+            reason = process_failure_reason(
+                sampled.get("returncode", -1), client_stderr,
+                server_rc, server_stderr_buffer.text()
+            )
             return {
                 "status": "fail",
                 "parsed": parsed,
@@ -2057,12 +2060,10 @@ def run_sizes_test_stream_shared(
                 **progress_meta,
             }
         if server_rc not in (0, None):
-            detail = summarize_server_startup_detail(
-                server_stdout_buffer.text(), server_stderr_buffer.text()
+            reason = process_failure_reason(
+                sampled.get("returncode", 0), client_stderr,
+                server_rc, server_stderr_buffer.text()
             )
-            reason = f"server_non_zero_exit_{server_rc}"
-            if detail:
-                reason = f"{reason}::{detail}"
             return {
                 "status": "fail",
                 "parsed": parsed,
@@ -2688,15 +2689,18 @@ def run_sizes_test_split(
                 "parsed": parsed,
                 "timed_out": True,
                 "returncode": sampled.get("returncode", -1),
-                "reason": "timeout",
+                "reason": "timeout; " + process_failure_reason(
+                    sampled.get("returncode", -1), client_stderr,
+                    server_rc, server_stderr_buffer.text()
+                ),
                 "warnings": warnings,
                 **progress_meta,
             }
         if sampled.get("returncode", 0) != 0:
-            detail = summarize_server_startup_detail(client_stdout, client_stderr)
-            reason = f"non_zero_exit_{sampled.get('returncode', -1)}"
-            if detail:
-                reason = f"{reason}_{detail}"
+            reason = process_failure_reason(
+                sampled.get("returncode", -1), client_stderr,
+                server_rc, server_stderr_buffer.text()
+            )
             return {
                 "status": "fail",
                 "parsed": parsed,
@@ -2707,12 +2711,10 @@ def run_sizes_test_split(
                 **progress_meta,
             }
         if server_rc not in (0, None):
-            detail = summarize_server_startup_detail(
-                server_stdout_buffer.text(), server_stderr_buffer.text()
+            reason = process_failure_reason(
+                sampled.get("returncode", 0), client_stderr,
+                server_rc, server_stderr_buffer.text()
             )
-            reason = f"server_non_zero_exit_{server_rc}"
-            if detail:
-                reason = f"{reason}::{detail}"
             return {
                 "status": "fail",
                 "parsed": parsed,
@@ -2885,18 +2887,12 @@ def run_sizes_test(
     def notify_size_result(size_value, size_outcome):
         if size_result_callback is None:
             return
-        try:
-            size_result_callback(transport, size_value, size_outcome)
-        except Exception:
-            pass
+        size_result_callback(transport, size_value, size_outcome)
 
     for size_index, size in enumerate(size_list):
         isolated = None
         if size_start_callback is not None:
-            try:
-                size_start_callback(transport, size)
-            except Exception:
-                pass
+            size_start_callback(transport, size)
         isolated = run_one_size_case(size)
         merged["warnings"].extend(isolated.get("warnings", []))
 
@@ -3182,6 +3178,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
 
             def emit_size_row(sz, status, **kwargs):
                 emit_size_section(sz)
+                reason = kwargs.pop("reason", "")
                 _emit_table_row(
                     emit,
                     pattern_name,
@@ -3191,6 +3188,8 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                     status,
                     **kwargs,
                 )
+                if status == "fail":
+                    emit(f"      reason: {reason or 'size_case_failed'}")
 
             for run_idx in range(pattern_runs):
                 run_no = run_idx + 1
@@ -3230,6 +3229,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                         emit_size_row(
                             line_size,
                             "unsupported" if size_status == "unsupported" else "fail",
+                            reason=size_outcome.get("reason", ""),
                         )
                         live_emitted_sizes.add(line_size)
                         return
@@ -3246,7 +3246,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                         or lat95_key not in parsed
                         or lat99_key not in parsed
                     ):
-                        emit_size_row(line_size, "fail")
+                        emit_size_row(line_size, "fail", reason="missing_result_metrics")
                         live_emitted_sizes.add(line_size)
                         return
                     emit_size_row(
@@ -3260,31 +3260,16 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                     )
                     live_emitted_sizes.add(line_size)
 
-                try:
-                    outcome = run_sizes_test(
-                        binary_name,
-                        lib_name,
-                        tr,
-                        sizes,
-                        pattern_name,
-                        result_line_callback=live_result_callback,
-                        size_start_callback=lambda _tr, sz: emit_size_section(sz),
-                        size_result_callback=on_size_result,
-                    )
-                except TypeError as exc:
-                    if (
-                        "size_start_callback" not in str(exc)
-                        and "size_result_callback" not in str(exc)
-                    ):
-                        raise
-                    outcome = run_sizes_test(
-                        binary_name,
-                        lib_name,
-                        tr,
-                        sizes,
-                        pattern_name,
-                        result_line_callback=live_result_callback,
-                    )
+                outcome = run_sizes_test(
+                    binary_name,
+                    lib_name,
+                    tr,
+                    sizes,
+                    pattern_name,
+                    result_line_callback=live_result_callback,
+                    size_start_callback=lambda _tr, sz: emit_size_section(sz),
+                    size_result_callback=on_size_result,
+                )
                 rc = outcome.get("returncode", 0)
                 for warning in outcome.get("warnings", []) or []:
                     print(f"warning: {warning}", file=sys.stderr)
@@ -3304,7 +3289,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                     for sz in sizes:
                         if sz in live_emitted_sizes:
                             continue
-                        emit_size_row(sz, "fail")
+                        emit_size_row(sz, "fail", reason=skip_reason)
                     break
 
                 parsed = outcome.get("parsed", {}) or {}
@@ -3320,7 +3305,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                             continue
                         failures.append((pattern_name, lib_name, tr, sz, "timeout"))
                         run_failed_sizes.add(sz)
-                        emit_size_row(sz, "fail")
+                        emit_size_row(sz, "fail", reason="timeout")
                     if FAIL_FAST:
                         return final_stats, failures
                     maybe_cooldown()
@@ -3336,7 +3321,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                             continue
                         failures.append((pattern_name, lib_name, tr, sz, reason))
                         run_failed_sizes.add(sz)
-                        emit_size_row(sz, "fail")
+                        emit_size_row(sz, "fail", reason=reason)
                     if FAIL_FAST:
                         return final_stats, failures
                     maybe_cooldown()
@@ -3357,7 +3342,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                             )
                         failures.append((pattern_name, lib_name, tr, sz, reason))
                         if sz not in live_emitted_sizes:
-                            emit_size_row(sz, "fail")
+                            emit_size_row(sz, "fail", reason=reason)
                         if FAIL_FAST:
                             return final_stats, failures
                         continue
@@ -3396,7 +3381,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                                     reason = f"missing_{metric}{suffix}"
                             failures.append((pattern_name, lib_name, tr, sz, reason))
                         if sz not in live_emitted_sizes:
-                            emit_size_row(sz, "fail")
+                            emit_size_row(sz, "fail", reason=failures[-1][4])
                         if FAIL_FAST:
                             return final_stats, failures
                         continue
@@ -3448,7 +3433,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                     emit("      median:")
                     _emit_table_header(emit, True, "        ")
                     for sz in sizes:
-                        emit_size_row(sz, "fail")
+                        emit_size_row(sz, "fail", reason=skip_reason)
                 emit(f"    Testing {tr}: Done")
                 maybe_transport_cooldown()
                 continue
@@ -3472,7 +3457,12 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                         and metrics_raw.get(lat95_key)
                         and metrics_raw.get(lat99_key)
                     ):
-                        emit_size_row(sz, "fail")
+                        median_reason = next(
+                            (entry[4] for entry in failures
+                             if entry[2] == tr and entry[3] == sz),
+                            "missing_result_metrics",
+                        )
+                        emit_size_row(sz, "fail", reason=median_reason)
                         continue
                     emit_size_row(
                         sz,

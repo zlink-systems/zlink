@@ -97,7 +97,9 @@ inline bool create_client_sockets (ctx_guard_t &ctx,
 inline short dd_slot_events (const dd_send_slot_t &slot)
 {
     short events = static_cast<short> (ZLINK_POLLIN | ZLINK_POLLCOMPLETION);
-    if (slot.wait_token != 0 && !slot.pollout_suppressed)
+    if ((slot.wait_token != 0 && !slot.pollout_suppressed)
+        || perf_multi_client::retained_waits_for_pollout (slot.retained, slot.wait_token,
+                                                          slot.retry_ready))
         events = static_cast<short> (events | ZLINK_POLLOUT);
     return events;
 }
@@ -243,11 +245,15 @@ inline bool record_dd_writable (dd_send_slot_t *slot,
 
     slot->wait_token = 0;
     slot->pollout_suppressed = false;
-    if (completion.send_result == ZLINK_SEND_ADMITTED
-        && completion.send_terminal_errno == 0) {
+    const perf_multi_client::writable_outcome_t outcome =
+      perf_multi_client::classify_writable_outcome (completion.send_result,
+                                                    completion.send_terminal_errno);
+    if (outcome == perf_multi_client::writable_ready) {
         slot->retry_ready = true;
         return true;
     }
+    if (outcome == perf_multi_client::writable_timed_out)
+        return true;
 
     const int terminal_errno = completion.send_terminal_errno;
     clear_retained_message (slot);
@@ -255,7 +261,7 @@ inline bool record_dd_writable (dd_send_slot_t *slot,
     return false;
 }
 
-inline bool drain_dd_writable (dd_send_state_t *state, dd_send_slot_t *slot)
+inline bool drain_dd_writable (dd_send_state_t *state, dd_send_slot_t *slot, bool pollout)
 {
     if (!state || !slot || !slot->socket)
         return false;
@@ -284,6 +290,8 @@ inline bool drain_dd_writable (dd_send_state_t *state, dd_send_slot_t *slot)
     }
 
     send_status_t retry_status = send_status_ok;
+    perf_multi_client::record_retained_pollout (pollout, slot->retained, slot->wait_token,
+                                                &slot->retry_ready);
     if (slot->retry_ready)
         retry_status = submit_retained_message (slot);
     if (retry_status == send_status_fatal)
@@ -321,7 +329,7 @@ inline bool service_dd_events (dd_send_state_t *state, int timeout_ms, int *even
             return false;
         }
         if ((event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
-            && !drain_dd_writable (state, slot)) {
+            && !drain_dd_writable (state, slot, (event.events & ZLINK_POLLOUT) != 0)) {
             return false;
         }
     }

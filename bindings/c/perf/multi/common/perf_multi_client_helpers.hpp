@@ -33,6 +33,38 @@ enum send_status_t
     send_error = 2
 };
 
+enum writable_outcome_t
+{
+    writable_ready,
+    writable_timed_out,
+    writable_not_found,
+    writable_failed
+};
+
+inline writable_outcome_t classify_writable_outcome (zlink_send_complete_result_t result,
+                                                     int terminal_errno)
+{
+    if (result == ZLINK_SEND_ADMITTED && terminal_errno == 0)
+        return writable_ready;
+    if (result == ZLINK_SEND_TIMED_OUT && terminal_errno == EAGAIN)
+        return writable_timed_out;
+    if (result == ZLINK_SEND_NOT_FOUND && terminal_errno == ENOENT)
+        return writable_not_found;
+    return writable_failed;
+}
+
+inline bool retained_waits_for_pollout (bool retained, uint64_t wait_token, bool retry_ready)
+{
+    return retained && wait_token == 0 && !retry_ready;
+}
+
+inline void
+record_retained_pollout (bool pollout, bool retained, uint64_t wait_token, bool *retry_ready)
+{
+    if (pollout && retry_ready && retained_waits_for_pollout (retained, wait_token, *retry_ready))
+        *retry_ready = true;
+}
+
 inline int send_retry_drain_timeout_ms ()
 {
     return resolve_multi_int_env ("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS", 5000, 1);
@@ -87,7 +119,8 @@ inline short tracker_slot_events (const send_wait_tracker_t &tracker,
                                   const send_wait_slot_t &slot)
 {
     short events = static_cast<short> (tracker.base_events | ZLINK_POLLCOMPLETION);
-    if (slot.wait_token != 0 && !slot.pollout_suppressed)
+    if ((slot.wait_token != 0 && !slot.pollout_suppressed)
+        || retained_waits_for_pollout (slot.retained, slot.wait_token, slot.retry_ready))
         events = static_cast<short> (events | ZLINK_POLLOUT);
     return events;
 }
@@ -181,11 +214,14 @@ inline bool record_writable_completion (send_wait_slot_t *slot,
 
     slot->wait_token = 0;
     slot->pollout_suppressed = false;
-    if (completion.send_result == ZLINK_SEND_ADMITTED
-        && completion.send_terminal_errno == 0) {
+    const writable_outcome_t outcome =
+      classify_writable_outcome (completion.send_result, completion.send_terminal_errno);
+    if (outcome == writable_ready) {
         slot->retry_ready = true;
         return true;
     }
+    if (outcome == writable_timed_out)
+        return true;
 
     const int terminal_errno = completion.send_terminal_errno;
     clear_retained_send (slot);
@@ -262,11 +298,15 @@ inline bool service_tracker_writable_events (send_wait_tracker_t *tracker,
             const bool was_pollout_suppressed = slot->pollout_suppressed;
             if (!drain_writable_completions (slot, true))
                 return false;
+            record_retained_pollout ((event.events & ZLINK_POLLOUT) != 0, slot->retained,
+                                     slot->wait_token, &slot->retry_ready);
             // Drain to NO_DATA before retrying the exact retained record.
             if (slot->retry_ready && !retry_retained_send (tracker, slot))
                 return false;
             if (!slot->retry_ready
-                && slot->pollout_suppressed != was_pollout_suppressed
+                && (slot->pollout_suppressed != was_pollout_suppressed
+                    || retained_waits_for_pollout (slot->retained, slot->wait_token,
+                                                   slot->retry_ready))
                 && !update_tracker_slot_events (tracker, slot))
                 return false;
         }
@@ -1359,13 +1399,21 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
     }
 
     if (!fatal_error
-        && (tracker_has_retained_sends (tracker)
-            || tracker_has_pending_replies (tracker))) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[perf-multi-echo] drain timeout phase="
-                      << static_cast<unsigned int> (phase) << " size=" << expected_msg_size
-                      << std::endl;
+        && (tracker_has_retained_sends (tracker) || tracker_has_pending_replies (tracker))) {
+        size_t retained_with_token = 0;
+        size_t retained_waiting_pollout = 0;
+        size_t pending_replies = 0;
+        for (size_t i = 0; i < tracker.slots.size (); ++i) {
+            const send_wait_slot_t &slot = tracker.slots[i];
+            retained_with_token += slot.retained && slot.wait_token != 0;
+            retained_waiting_pollout +=
+              retained_waits_for_pollout (slot.retained, slot.wait_token, slot.retry_ready);
+            pending_replies += slot.replies;
         }
+        std::cerr << "[perf-multi-echo] drain timeout phase=" << static_cast<unsigned int> (phase)
+                  << " size=" << expected_msg_size << " retained_with_token=" << retained_with_token
+                  << " retained_waiting_pollout=" << retained_waiting_pollout
+                  << " pending_replies=" << pending_replies << std::endl;
         errno = ETIMEDOUT;
         fatal_error = true;
     }
@@ -1409,8 +1457,10 @@ inline bool run_echo_duration (const std::vector<void *> &sockets,
 
     *throughput_out = 0.0;
     *latency_out = bench_latency_stats_t ();
-    if (sockets.empty ())
+    if (sockets.empty ()) {
+        std::cerr << "[perf-multi-echo] no sockets size=" << msg_size << std::endl;
         return false;
+    }
 
     long recv_count = 0;
     double lat_sum = 0.0;
@@ -1422,15 +1472,15 @@ inline bool run_echo_duration (const std::vector<void *> &sockets,
           perf_multi_metric::phase_active, scratch_capacity,
           static_cast<double> (std::max (1, settings.duration_seconds)), true, true,
           per_socket_payload, &recv_count, &lat_sum, &lat_count, &active_latency)) {
+        std::cerr << "[perf-multi-echo] active window failed size=" << msg_size
+                  << " errno=" << errno << std::endl;
         return false;
     }
 
     if (recv_count <= 0 || lat_count <= 0 || active_latency.mean_ns <= 0.0) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[perf-multi-echo] active metrics invalid recv=" << recv_count
-                      << " lat_count=" << lat_count << " run_id=" << run_id
-                      << " msg_size=" << msg_size << std::endl;
-        }
+        std::cerr << "[perf-multi-echo] active metrics invalid recv=" << recv_count
+                  << " lat_count=" << lat_count << " run_id=" << run_id << " msg_size=" << msg_size
+                  << std::endl;
         return false;
     }
 

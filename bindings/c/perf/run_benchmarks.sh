@@ -49,6 +49,7 @@ else
   export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
 fi
 source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
+source "${SCRIPT_DIR}/core_build_symlink.sh"
 NORMALIZE_TIMESTAMPS_SH="${ROOT_DIR}/core/tools/normalize_build_timestamps.sh"
 
 SECONDS=0
@@ -402,6 +403,18 @@ prepare_core_runtime() {
       return 1
     fi
     echo "Perf Core release prefix: ${core_build_dir}"
+    echo "Perf runtime libzlink: ${runtime_lib}"
+    return 0
+  fi
+
+  # A worktree may point core/build at the main tree. Verify the externally
+  # owned runtime without rebuilding through the symlink.
+  if perf_uses_external_core_build "${ROOT_DIR}" "${core_build_dir}"; then
+    if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
+      echo "Error: linked Core runtime not found under ${core_build_dir}." >&2
+      return 1
+    fi
+    echo "Perf core build dir: ${core_build_dir} (external symlink; rebuild skipped)"
     echo "Perf runtime libzlink: ${runtime_lib}"
     return 0
   fi

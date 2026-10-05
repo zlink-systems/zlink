@@ -269,7 +269,9 @@ class RunComparisonPolicyTests(unittest.TestCase):
             )
 
             self.assertEqual(outcome.status, "fail")
-            self.assertEqual(outcome.reason, "timeout")
+            self.assertEqual(
+                outcome.reason, "timeout; client_exit=-9; client_stderr=timeout"
+            )
             self.assertEqual(len(calls), 1)
         finally:
             RC.run_command_with_metrics = old_run_command_with_metrics
@@ -327,7 +329,9 @@ class RunComparisonPolicyTests(unittest.TestCase):
             )
 
             self.assertEqual(outcome.status, "fail")
-            self.assertEqual(outcome.reason, "non_zero_exit_1")
+            self.assertEqual(
+                outcome.reason, "client_exit=1; client_stderr=runner flake"
+            )
             self.assertEqual(len(calls), 1)
         finally:
             RC.run_command_with_metrics = old_run_command_with_metrics
