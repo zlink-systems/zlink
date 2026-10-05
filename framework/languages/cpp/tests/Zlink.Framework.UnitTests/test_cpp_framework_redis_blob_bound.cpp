@@ -3,6 +3,7 @@
 #include <zlink/locations/redis.hpp>
 
 #include <sw/redis++/redis++.h>
+#include <sw/redis++/async_redis.h>
 
 #include <gtest/gtest.h>
 
@@ -16,8 +17,50 @@ using namespace zlink::framework::redis;
 class ZLinkFrameworkRedisBlobBound : public ::testing::Test
 {
   protected:
-    void TearDown () override { sw::redis::Redis::on_eval = {}; }
+    void TearDown () override
+    {
+        sw::redis::Redis::on_eval = {};
+        sw::redis::AsyncRedis::dispatch = {};
+    }
 };
+
+TEST_F (ZLinkFrameworkRedisBlobBound, LocationReadsSubmitBeforeEarlierReply)
+{
+    std::vector<std::function<void ()>> pending;
+    sw::redis::AsyncRedis::dispatch = [&] (std::function<void ()> work) {
+        pending.push_back (std::move (work));
+    };
+    sw::redis::Redis::on_eval = [] (std::string_view, std::span<const std::string>,
+                                    std::span<const std::string>) {
+        return std::vector<std::string>{"missing", "1000"};
+    };
+    redis_location_store_t store (
+      {.connection_string = "tcp://fake-redis:6379", .key_prefix = "zlink:test:async"});
+    location_store_t &provider = store;
+    auto first = provider.read ({"first"});
+    auto second = provider.read ({"second"});
+    ASSERT_EQ (pending.size (), 2u);
+    pending[1]();
+    EXPECT_TRUE (second.result ().has_value ());
+    pending[0]();
+    EXPECT_TRUE (first.result ().has_value ());
+}
+
+TEST_F (ZLinkFrameworkRedisBlobBound, LocationReplyFailureCompletesTask)
+{
+    sw::redis::Redis::on_eval = [] (std::string_view, std::span<const std::string>,
+                                    std::span<const std::string>) -> std::vector<std::string> {
+        throw sw::redis::Error ("Redis reply failure");
+    };
+    redis_location_store_t store (
+      {.connection_string = "tcp://fake-redis:6379", .key_prefix = "zlink:test:async"});
+    location_store_t &provider = store;
+    const auto result = provider.read ({"failure"}).result ();
+    ASSERT_FALSE (result.has_value ());
+    ASSERT_NE (result.error (), nullptr);
+    EXPECT_EQ (result.error_kind (), framework_error_kind_t::internal_failure);
+    EXPECT_EQ (result.error ()->what (), std::string ("Redis reply failure"));
+}
 
 TEST_F (ZLinkFrameworkRedisBlobBound, Accepts64MiBPlus23ByteEnvelope)
 {
