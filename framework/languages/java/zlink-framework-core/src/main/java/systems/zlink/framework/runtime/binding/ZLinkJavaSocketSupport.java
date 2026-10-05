@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.PublishOperation;
 import systems.zlink.contracts.messaging.Received;
@@ -27,6 +28,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
@@ -67,8 +69,9 @@ final class ZLinkJavaSocketSupport {
         return admission(submission.result(), submission::admitted);
     }
 
-    static CompletionStage<List<Message>> reply(RequestSubmission submission) {
-        CompletionStage<Void> admitted = admission(submission.result(), submission::admitted);
+    static CompletionStage<List<Message>> reply(RequestSubmission submission, long deadlineNanos) {
+        SubmitResult submitResult = submission.result();
+        CompletionStage<Void> admitted = admission(submitResult, submission::admitted);
         CompletionStage<List<Message>> bindingReply = submission.reply();
         CompletableFuture<List<Message>> result = new CompletableFuture<>();
         admitted.whenComplete(
@@ -81,6 +84,18 @@ final class ZLinkJavaSocketSupport {
                     else ZLinkCompletionBridge.completeOrDiscard(result, parts, Message::closeAll);
                 });
         ZLinkCompletionBridge.forwardCancellation(result, admitted, bindingReply);
+        if (submitResult == SubmitResult.BACKPRESSURED && !result.isDone()) {
+            var deadline =
+                    ZLinkProcessExecutionLanes.deadlines()
+                            .schedule(
+                                    () -> {
+                                        result.completeExceptionally(
+                                                new ZlinkRequestException(RequestResult.TIMED_OUT));
+                                    },
+                                    Math.max(0L, deadlineNanos - System.nanoTime()),
+                                    TimeUnit.NANOSECONDS);
+            result.whenComplete((ignored, failure) -> deadline.cancel(false));
+        }
         return result;
     }
 
@@ -121,12 +136,13 @@ final class ZLinkJavaSocketSupport {
 
     static CompletionStage<ZLinkBackendReceived> submitRequest(
             RequestOperation operation, List<Message> parts, Duration timeout) {
+        long deadlineNanos = System.nanoTime() + timeout.toNanos();
         var submit = operation.message(parts.get(0)).timeout(timeout);
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
         }
         try {
-            CompletionStage<List<Message>> bindingReply = reply(submit.submit());
+            CompletionStage<List<Message>> bindingReply = reply(submit.submit(), deadlineNanos);
             CompletableFuture<ZLinkBackendReceived> result = new CompletableFuture<>();
             bindingReply.whenComplete(
                     (replyParts, failure) -> {
