@@ -9,12 +9,15 @@ internal static class ZLinkRequestSubmissionOutcome
     )
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        // Binding owns the reply timeout and caller cancellation. Only an
+        // initial admission wait needs the Framework's end-to-end budget.
+        var submission = operation.Async(cancellationToken);
+        if (!ZLinkBindingSubmissionOutcome.RequiresAdmission(submission.Result))
+            return AwaitReplyAsync(submission.Result, submission.Admitted, submission.Reply);
+
         var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         try
         {
-            // Immediate submit failures remain synchronous. The same budget
-            // covers binding admission and reply, starting before submission.
-            var submission = operation.Async(deadline.Token);
             return AwaitWithDeadlineAsync(
                 AwaitReplyAsync(submission.Result, submission.Admitted, submission.Reply),
                 deadline,

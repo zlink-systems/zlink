@@ -88,13 +88,23 @@ public sealed class SubmitAdmissionRuntimeTests
             pair.Client.Request().Message(requestPart).Timeout(TimeSpan.FromSeconds(5))
         );
 
+        using var cancellation = new CancellationTokenSource();
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         var completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
             operation,
-            TimeSpan.FromSeconds(5)
+            TimeSpan.FromSeconds(5),
+            cancellation.Token
         );
+        var frameworkAllocated =
+            GC.GetAllocatedBytesForCurrentThread() - allocatedBefore - operation.AllocatedBytes;
 
         Assert.Equal(1, operation.SubmissionCount);
         Assert.Equal(SubmitResult.Ok, operation.LastSubmission.Result);
+        // Measure only the Framework wrapper: the public binding's allocations
+        // are counted separately inside Async on the same thread.
+        Assert.Equal(0, frameworkAllocated);
+        Assert.Equal(cancellation.Token, operation.SubmissionToken);
+        Assert.Same(operation.LastSubmission.Reply, completion);
         using var received = Received.Create();
         Assert.True(pair.Server.Recv(received));
         Assert.Equal("request-once", received.SinglePartOrThrow().GetString());
@@ -171,15 +181,21 @@ public sealed class SubmitAdmissionRuntimeTests
         }
     }
 
-    [Fact]
-    public async Task RequestBudget_ExpiresWhileBindingAdmissionIsPending()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BackpressuredRequestBudget_ExpiresAndDisposesLateReply(
+        bool admitBeforeDeadline
+    )
     {
         using var pair = new AdmissionPair();
         SendSubmission blocked = default;
+        var fillerCount = 0;
         for (var sequence = 0; sequence < 32; sequence++)
         {
             using var filler = Message.From(AdmissionPair.Payload(sequence));
             blocked = pair.Client.Send().Message(filler).Async();
+            fillerCount++;
             if (blocked.Result == SubmitResult.Backpressured)
                 break;
         }
@@ -193,11 +209,77 @@ public sealed class SubmitAdmissionRuntimeTests
             TimeSpan.FromMilliseconds(100)
         );
         Assert.Equal(SubmitResult.Backpressured, operation.LastSubmission.Result);
+        if (admitBeforeDeadline)
+            await RecoverCapacityAsync();
         var failure = await Assert.ThrowsAsync<ZlinkRequestException>(() =>
             completion.WaitAsync(TimeSpan.FromSeconds(2))
         );
         Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, failure.Result);
         Assert.Equal(1, operation.SubmissionCount);
+
+        // Ending the caller wait does not cancel binding's pending submission.
+        // Recover capacity, then deliver a real reply to the closed caller.
+        if (!admitBeforeDeadline)
+            await RecoverCapacityAsync();
+        using var received = Received.Create();
+        Assert.True(pair.Server.Recv(received));
+        Assert.Equal(AdmissionPair.Payload(100), received.SinglePartOrThrow().ToArray());
+        using var reply = Message.From("late-reply");
+        received.Reply().Message(reply).Submit();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    pair.DrainCompletions();
+                    return operation.LastSubmission.Reply.IsCompleted;
+                },
+                TimeSpan.FromSeconds(2)
+            )
+        );
+        var lateReply = Assert.Single(await operation.LastSubmission.Reply);
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        _ = lateReply.Size;
+                        return false;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        return true;
+                    }
+                },
+                TimeSpan.FromSeconds(2)
+            ),
+            "The late reply must be disposed by the existing request completion owner."
+        );
+        Assert.Equal(1, operation.SubmissionCount);
+
+        async Task RecoverCapacityAsync()
+        {
+            for (var sequence = 0; sequence < fillerCount; sequence++)
+            {
+                using var filler = Received.Create();
+                Assert.True(pair.Server.Recv(filler));
+                Assert.Equal(AdmissionPair.Payload(sequence), filler.SinglePartOrThrow().ToArray());
+                pair.DrainCompletions();
+            }
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        pair.DrainCompletions();
+                        return operation.LastSubmission.Admitted.IsCompleted;
+                    },
+                    TimeSpan.FromSeconds(2)
+                )
+            );
+            await operation.LastSubmission.Admitted;
+            if (admitBeforeDeadline)
+                Assert.False(completion.IsCompleted);
+        }
     }
 
     [Fact]
@@ -408,6 +490,10 @@ public sealed class SubmitAdmissionRuntimeTests
 
         internal RequestSubmission LastSubmission { get; private set; }
 
+        internal long AllocatedBytes { get; private set; }
+
+        internal CancellationToken SubmissionToken { get; private set; }
+
         public RequestSubmitOperation Message(Message message)
         {
             _inner.Message(message);
@@ -425,7 +511,10 @@ public sealed class SubmitAdmissionRuntimeTests
         public RequestSubmission Async(CancellationToken cancellationToken = default)
         {
             SubmissionCount++;
+            SubmissionToken = cancellationToken;
+            var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
             LastSubmission = _inner.Async(cancellationToken);
+            AllocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
             return LastSubmission;
         }
     }
