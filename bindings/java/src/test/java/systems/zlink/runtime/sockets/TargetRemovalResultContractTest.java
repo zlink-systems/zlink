@@ -117,10 +117,9 @@ class TargetRemovalResultContractTest {
                         "admission and reply must expose the same terminal cause");
                     var submit = assertInstanceOf(ZlinkSubmitException.class, failure);
                     assertEquals(completionResult == 801 ? SubmitResult.NOT_FOUND
-                        : completionResult == 803 ? SubmitResult.BACKPRESSURED
-                        : completionResult == 999 ? SubmitResult.INTERNAL_ERROR
+                        : completionResult == 803 || completionResult == 999 ? SubmitResult.INTERNAL_ERROR
                         : SubmitResult.NOT_CONNECTED, submit.getResult());
-                    assertEquals(completionResult == 999 ? NativeErrno.EPROTO
+                    assertEquals(submit.getResult() == SubmitResult.INTERNAL_ERROR ? NativeErrno.EPROTO
                         : terminal ? terminalErrno : NativeErrno.EHOSTUNREACH,
                         assertInstanceOf(ZlinkException.class, failure).getNativeErrno());
                 }

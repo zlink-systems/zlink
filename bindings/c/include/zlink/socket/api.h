@@ -35,7 +35,7 @@ typedef enum zlink_send_complete_result_t
     ZLINK_SEND_ADMITTED = 0,
     ZLINK_SEND_NOT_FOUND = 801,
     ZLINK_SEND_NOT_CONNECTED = 802,
-    ZLINK_SEND_TIMED_OUT = 803
+    ZLINK_SEND_TIMED_OUT = 803 /* ABI preservation only; Core does not emit this result. */
 } zlink_send_complete_result_t;
 
 typedef uint64_t zlink_completion_id_t;
@@ -228,7 +228,8 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect_rid (void *s_,
  * wait token retaining the target and user_context_. Credit recovery reports
  * ZLINK_SEND_ADMITTED; explicit target removal reports ZLINK_SEND_NOT_FOUND
  * with ENOENT; STREAM physical disconnect reports ZLINK_SEND_NOT_CONNECTED
- * with ENOTCONN. SNDTIMEO expiry reports ZLINK_SEND_TIMED_OUT with EAGAIN.
+ * with ENOTCONN. SNDTIMEO applies only to a blocking NONE submission; a
+ * DONTWAIT wait token has no deadline.
  * Close and context termination discard pending tokens and
  * unread records without delivery. A missing ROUTER/STREAM route
  * returns NOT_CONNECTED without a token; a DEALER with no peers gets a token.

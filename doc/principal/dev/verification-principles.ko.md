@@ -52,6 +52,7 @@
 | Node Store fixture가 lease 교체를 검증하나 | 가공한 claim 결과를 돌려준 뒤 test 통과 | Store에 lease를 기록하지 않으면 교체 경로가 실행되지 않는다. 기존 repository로 실제 lease를 확정하고 Store 상태와 결과를 함께 검사한다 | #1083 |
 | 종료 중 target CAS가 settlement를 마쳤나 | CAS 진입 횟수 1과 종료 성공 | CAS 제출만 확인하며 commit 확인과 definitive conflict를 구분하지 못한다. 검증 선행 시험은 실제 Store 결과를, 응답 유실 시험은 적용 성공 뒤 확인 read를 각각 검사한다 | #1082 |
 | Prefix scan이 무관한 key를 작업 한도에서 제외하나 | 무관한 key 130개와 page limit 100에서 통과 | 작업 한도는 page limit보다 클 수 있다. 무관한 key 수가 실제 작업 한도를 넘는 입력에서 수정 전 실패와 수정 후 통과를 확인한다 | #1082 |
+| CTest에 등록된 선택 케이스가 실행됐나 | 실행 파일의 종료 코드 0과 CTest 통과 | 선택한 케이스를 삭제해도 실행 파일이 시험 0건으로 성공할 수 있다. 등록 이름과 실행 파일의 케이스 목록을 함께 대조한다 | #1452 |
 
 ## 4. 무엇이 실제로 답을 줬나
 

@@ -5,7 +5,6 @@
 #include "utils/precompiled.hpp"
 
 #include "core/c_api_copy_internal.hpp"
-#include "api/socket/request_timeout_scheduler_internal.hpp"
 #include "core/mailbox.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/common/socket_submit_retry_fault_injection.hpp"
@@ -81,22 +80,9 @@ int zlink::send_terminal_errno (zlink_send_complete_result_t result_)
             return ENOENT;
         case ZLINK_SEND_NOT_CONNECTED:
             return ENOTCONN;
-        case ZLINK_SEND_TIMED_OUT:
-            return EAGAIN;
         default:
             zlink_assert (false);
             return EINVAL;
-    }
-}
-
-void zlink::socket_base_t::expire_send_writable_wait (
-  zlink_completion_id_t completion_id_)
-{
-    if (socket_completion::expire_writable_waiter (&completion_runtime (),
-                                                    completion_id_)
-        > 0) {
-        notify_request_completion ();
-        static_cast<mailbox_t *> (_mailbox)->signal ();
     }
 }
 
@@ -229,19 +215,12 @@ int zlink::socket_base_t::register_send_writable_wait_after_failure (
         return -1;
     }
 
-    // The token's SNDTIMEO deadline is taken here, where the rejected submit
-    // creates the token, so an admitted send never reads the option or the clock.
-    const int send_timeout = send_timeout_ms ();
-    const uint64_t deadline_ns =
-      send_timeout < 0 ? 0
-                       : request_timeout::deadline_after_ms (
-                           static_cast<uint32_t> (send_timeout));
     const bool correlation_wait = request_wait_ && !request_wait_->empty ();
     socket_completion::reservation_t *reservation = NULL;
     zlink_completion_id_t completion_id = 0;
-    if (socket_completion::reserve_writable_wait (
-          &completion_runtime (), user_context_, target_rid_or_null_,
-          &reservation, &completion_id, request_wait_, deadline_ns, this)
+    if (socket_completion::reserve_writable_wait (&completion_runtime (), user_context_,
+                                                  target_rid_or_null_, &reservation, &completion_id,
+                                                  request_wait_)
         != 0)
         return -1;
     zlink_assert (reservation);

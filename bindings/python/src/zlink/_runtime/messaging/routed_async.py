@@ -15,7 +15,6 @@ from ..._native.ffi import (
     ZLINK_SEND_ADMITTED,
     ZLINK_SEND_NOT_FOUND,
     ZLINK_SEND_NOT_CONNECTED,
-    ZLINK_SEND_TIMED_OUT,
     ZlinkCompletion,
     ZlinkMsg,
     lib,
@@ -717,9 +716,6 @@ class CompletionOwner:
             result = (SubmitResult.NOT_FOUND if send_result == ZLINK_SEND_NOT_FOUND
                       else SubmitResult.NOT_CONNECTED)
             entry.fail(SubmitError(result, terminal_errno))
-            return False
-        if send_result == ZLINK_SEND_TIMED_OUT:
-            entry.fail(SubmitError(SubmitResult.BACKPRESSURED, errno.EAGAIN))
             return False
         if send_result != ZLINK_SEND_ADMITTED or terminal_errno != 0:
             entry.fail(SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO))

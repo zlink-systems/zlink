@@ -5,8 +5,6 @@
 #include "completion_test_helpers.hpp"
 
 #include <atomic>
-#include <chrono>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -25,7 +23,7 @@ bool should_run_phase3_completion_test (const char *name_)
     const char *const selected = getenv ("ZLINK_TEST_CASE");
     if (selected && *selected)
         return strcmp (selected, name_) == 0;
-    return strcmp (name_, "test_all_wait_tokens_expire_in_bounded_time") != 0;
+    return true;
 }
 
 
@@ -498,7 +496,7 @@ void test_socket_close_retires_and_reclaims_wait_tokens ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_ctx_term (context));
 }
 
-void test_send_wait_token_uses_snapshotted_sndtimeo ()
+void test_send_wait_token_ignores_sndtimeo ()
 {
     void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
     TEST_ASSERT_NOT_NULL (sender);
@@ -507,13 +505,8 @@ void test_send_wait_token_uses_snapshotted_sndtimeo ()
                            zlink_set_option (sender, ZLINK_OPT_LINGER,
                                              &zero_linger, sizeof (zero_linger)));
 
-    // An expiring token has no delivery deadline in the contract, so the
-    // receive waits without a limit. Only the never-expiring token is
-    // observed for a bounded window to show that no completion appears.
-    const int expiring_receive_timeout = -1;
-    const int absent_receive_timeout = 150;
-
     const int timeouts[] = {0, 40, -1};
+    zlink_completion_id_t ids[3];
     for (size_t i = 0; i != 3; ++i) {
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                                zlink_set_option (sender, ZLINK_OPT_SNDTIMEO,
@@ -527,67 +520,47 @@ void test_send_wait_token_uses_snapshotted_sndtimeo ()
                       sender, &id));
         TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
         TEST_ASSERT_NOT_EQUAL (0, id);
+        ids[i] = id;
         assert_part_consumed (&part);
 
-        // Changing the option after submit does not change this token.
-        const int changed_timeout = timeouts[i] < 0 ? 0 : -1;
-        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
-                               zlink_set_option (sender, ZLINK_OPT_SNDTIMEO,
-                                                 &changed_timeout,
-                                                 sizeof (changed_timeout)));
-        const int receive_timeout =
-          timeouts[i] < 0 ? absent_receive_timeout : expiring_receive_timeout;
+        const int receive_timeout = 150;
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                                zlink_set_option (sender, ZLINK_OPT_RCVTIMEO,
                                                  &receive_timeout,
                                                  sizeof (receive_timeout)));
         zlink_completion_t completion;
         init_empty_completion (&completion);
-        if (timeouts[i] < 0) {
-            TEST_ASSERT_EQUAL_INT (
-              ZLINK_RECV_NO_DATA,
-              zlink_completion_recv (sender, &completion, ZLINK_RECV_FLAGS_NONE));
-            TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-        } else {
-            TEST_ASSERT_EQUAL_INT (
-              ZLINK_RECV_OK,
-              zlink_completion_recv (sender, &completion, ZLINK_RECV_FLAGS_NONE));
-            TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
-            TEST_ASSERT_EQUAL_UINT64 (id, completion.completion_id);
-            TEST_ASSERT_EQUAL_PTR (sender, completion.user_context);
-            TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TIMED_OUT, completion.send_result);
-            TEST_ASSERT_EQUAL_INT (EAGAIN, completion.send_terminal_errno);
-            zlink_completion_close (&completion);
-        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA,
+                               zlink_completion_recv (sender, &completion, ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     }
-    test_context_socket_close_zero_linger (sender);
-}
-
-void test_close_cancels_live_writable_timeout ()
-{
-    void *socket = test_context_socket (ZLINK_SOCKET_PAIR);
-    TEST_ASSERT_NOT_NULL (socket);
-    const int zero_linger = 0;
-    const int send_timeout = 50;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
-                           zlink_set_option (socket, ZLINK_OPT_LINGER,
-                                             &zero_linger, sizeof (zero_linger)));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
-                           zlink_set_option (socket, ZLINK_OPT_SNDTIMEO,
-                                             &send_timeout, sizeof (send_timeout)));
-    zlink_msg_t part;
-    init_part (&part, "close-before-expiry");
-    zlink_completion_id_t id = 0;
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (receiver);
+    const char *endpoint = "inproc://phase3-send-wait-no-deadline";
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (receiver, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (sender, endpoint));
+    const int recovery_timeout = 5000;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_BACKPRESSURED,
-      zlink_send (socket, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, &id));
-    TEST_ASSERT_NOT_EQUAL (0, id);
-    assert_part_consumed (&part);
-    test_context_socket_close_zero_linger (socket);
-    msleep (send_timeout * 2);
+      ZLINK_CONFIG_OK,
+      zlink_set_option (sender, ZLINK_OPT_RCVTIMEO, &recovery_timeout, sizeof (recovery_timeout)));
+    for (size_t i = 0; i != 3; ++i) {
+        zlink_completion_t completion;
+        init_empty_completion (&completion);
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
+                               zlink_completion_recv (sender, &completion, ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
+        TEST_ASSERT_EQUAL_UINT64 (ids[i], completion.completion_id);
+        TEST_ASSERT_EQUAL_PTR (sender, completion.user_context);
+        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
+        TEST_ASSERT_EQUAL_INT (0, completion.send_terminal_errno);
+        zlink_completion_close (&completion);
+    }
+    assert_no_completion (sender);
+    test_context_socket_close_zero_linger (sender);
+    test_context_socket_close_zero_linger (receiver);
 }
 
-void test_request_wait_token_uses_sndtimeo ()
+void test_request_wait_token_ignores_sndtimeo ()
 {
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (dealer);
@@ -601,6 +574,7 @@ void test_request_wait_token_uses_sndtimeo ()
                                              &receive_timeout,
                                              sizeof (receive_timeout)));
     const int timeouts[] = {0, 35, -1};
+    zlink_completion_id_t ids[3];
     for (size_t i = 0; i != 3; ++i) {
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                                zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO,
@@ -614,30 +588,42 @@ void test_request_wait_token_uses_sndtimeo ()
                          ZLINK_SEND_FLAGS_DONTWAIT, 1000, dealer, &id));
         TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
         TEST_ASSERT_NOT_EQUAL (0, id);
+        ids[i] = id;
         assert_part_consumed (&request);
 
         zlink_completion_t completion;
         init_empty_completion (&completion);
-        if (timeouts[i] < 0) {
-            TEST_ASSERT_EQUAL_INT (
-              ZLINK_RECV_NO_DATA,
-              zlink_completion_recv (dealer, &completion, ZLINK_RECV_FLAGS_NONE));
-            TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-        } else {
-            TEST_ASSERT_EQUAL_INT (
-              ZLINK_RECV_OK,
-              zlink_completion_recv (dealer, &completion, ZLINK_RECV_FLAGS_NONE));
-            TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
-            TEST_ASSERT_EQUAL_UINT64 (id, completion.completion_id);
-            TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TIMED_OUT, completion.send_result);
-            TEST_ASSERT_EQUAL_INT (EAGAIN, completion.send_terminal_errno);
-            zlink_completion_close (&completion);
-        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA,
+                               zlink_completion_recv (dealer, &completion, ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     }
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (router);
+    const char *endpoint = "inproc://phase3-request-wait-no-deadline";
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (router, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (dealer, endpoint));
+    const int recovery_timeout = 5000;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer, ZLINK_OPT_RCVTIMEO, &recovery_timeout, sizeof (recovery_timeout)));
+    for (size_t i = 0; i != 3; ++i) {
+        zlink_completion_t completion;
+        init_empty_completion (&completion);
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
+                               zlink_completion_recv (dealer, &completion, ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
+        TEST_ASSERT_EQUAL_UINT64 (ids[i], completion.completion_id);
+        TEST_ASSERT_EQUAL_PTR (dealer, completion.user_context);
+        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
+        TEST_ASSERT_EQUAL_INT (0, completion.send_terminal_errno);
+        zlink_completion_close (&completion);
+    }
+    assert_no_completion (dealer);
     test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
 }
 
-void test_wait_token_recovery_and_expiry_publish_once ()
+void test_wait_token_recovery_after_sndtimeo_publishes_once ()
 {
     void *sender = NULL;
     void *receiver = NULL;
@@ -657,9 +643,10 @@ void test_wait_token_recovery_and_expiry_publish_once ()
                                                                 sender, &id);
     TEST_ASSERT_NOT_EQUAL (0, id);
 
+    msleep (send_timeout * 2);
+    assert_no_completion (sender);
     std::atomic<size_t> drained (0);
     std::thread recovery ([&] () {
-        msleep (send_timeout);
         for (size_t i = 0; i != accepted; ++i) {
             zlink_msg_t part;
             zlink_msg_init (&part);
@@ -680,16 +667,17 @@ void test_wait_token_recovery_and_expiry_publish_once ()
       zlink_completion_recv (sender, &completion, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_EQUAL_UINT64 (id, completion.completion_id);
     TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
-    TEST_ASSERT_TRUE (completion.send_result == ZLINK_SEND_TIMED_OUT
-                      || completion.send_result == ZLINK_SEND_ADMITTED);
-    TEST_ASSERT_EQUAL_INT (completion.send_result == ZLINK_SEND_TIMED_OUT
-                             ? EAGAIN : 0,
-                           completion.send_terminal_errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
+    TEST_ASSERT_EQUAL_INT (0, completion.send_terminal_errno);
     zlink_completion_close (&completion);
     recovery.join ();
     TEST_ASSERT_EQUAL_UINT64 (accepted,
                               drained.load (std::memory_order_acquire));
     msleep (send_timeout * 2);
+    assert_no_completion (sender);
+    zlink_completion_id_t next_id = 0;
+    TEST_ASSERT_TRUE (fill_unrouted_until_backpressured (sender, sender, &next_id) != 0);
+    TEST_ASSERT_TRUE (next_id > id);
     assert_no_completion (sender);
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);
@@ -781,62 +769,6 @@ void test_shared_reservation_limit_backpressures_send_and_request ()
     assert_part_consumed (&retried_request);
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
-}
-
-void test_all_wait_tokens_expire_in_bounded_time ()
-{
-    void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
-    TEST_ASSERT_NOT_NULL (sender);
-    const int zero_linger = 0;
-    const int send_timeout_ms = 10000;
-    const int receive_timeout_ms = 30000;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (sender, ZLINK_OPT_LINGER, &zero_linger,
-                        sizeof (zero_linger)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (sender, ZLINK_OPT_SNDTIMEO, &send_timeout_ms,
-                        sizeof (send_timeout_ms)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (sender, ZLINK_OPT_RCVTIMEO, &receive_timeout_ms,
-                        sizeof (receive_timeout_ms)));
-
-    const size_t token_count = 65536;
-    const std::chrono::steady_clock::time_point started =
-      std::chrono::steady_clock::now ();
-    for (size_t i = 0; i != token_count; ++i) {
-        zlink_msg_t part;
-        init_part (&part, "expiry-capacity");
-        zlink_completion_id_t id = 0;
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_BACKPRESSURED,
-          zlink_send (sender, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT,
-                      NULL, &id));
-        TEST_ASSERT_NOT_EQUAL (0, id);
-        assert_part_consumed (&part);
-    }
-
-    for (size_t i = 0; i != token_count; ++i) {
-        zlink_completion_t completion;
-        init_empty_completion (&completion);
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_RECV_OK,
-          zlink_completion_recv (sender, &completion, ZLINK_RECV_FLAGS_NONE));
-        TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
-        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TIMED_OUT, completion.send_result);
-        TEST_ASSERT_EQUAL_INT (EAGAIN, completion.send_terminal_errno);
-        zlink_completion_close (&completion);
-    }
-    const std::chrono::milliseconds elapsed =
-      std::chrono::duration_cast<std::chrono::milliseconds> (
-        std::chrono::steady_clock::now () - started);
-    std::printf ("expiry_capacity tokens=%zu elapsed_ms=%lld\n", token_count,
-                 static_cast<long long> (elapsed.count ()));
-    TEST_ASSERT_LESS_THAN_INT (20000, elapsed.count ());
-    assert_no_completion (sender);
-    test_context_socket_close_zero_linger (sender);
 }
 
 void test_completion_recv_rejects_dirty_zero_size_routing_id ()
@@ -1622,11 +1554,10 @@ void test_router_writable_completion_is_scoped_to_the_drained_rid ()
     TEST_ASSERT_NOT_NULL (dealers[0]);
     TEST_ASSERT_NOT_NULL (dealers[1]);
 
-    const int no_token_deadline = -1;
+    const int send_timeout = 35;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
-      zlink_set_option (router, ZLINK_OPT_SNDTIMEO, &no_token_deadline,
-                        sizeof (no_token_deadline)));
+      zlink_set_option (router, ZLINK_OPT_SNDTIMEO, &send_timeout, sizeof (send_timeout)));
     const int zero_linger = 0;
     const int mandatory = 1;
     TEST_ASSERT_EQUAL_INT (
@@ -1681,6 +1612,7 @@ void test_router_writable_completion_is_scoped_to_the_drained_rid ()
     TEST_ASSERT_TRUE (accepted_a != 0);
     TEST_ASSERT_TRUE (accepted_b != 0);
     TEST_ASSERT_NOT_EQUAL (completion_ids[0], completion_ids[1]);
+    msleep (send_timeout * 2);
     assert_no_completion (router);
     assert_writable_poller_quiet (poller);
 
@@ -1738,6 +1670,12 @@ void test_router_writable_completion_is_scoped_to_the_drained_rid ()
                                   target_rids[1].size);
         zlink_completion_close (&completion);
     }
+    assert_no_completion (router);
+
+    zlink_completion_id_t next_id = 0;
+    TEST_ASSERT_TRUE (fill_routed_until_backpressured (router, &target_rids[0], NULL, &next_id)
+                      != 0);
+    TEST_ASSERT_TRUE (next_id > completion_ids[1]);
     assert_no_completion (router);
 
     destroy_writable_completion_poller (&poller, router);
@@ -1943,11 +1881,7 @@ void test_router_none_wait_explicit_rid_removal_is_synchronous_not_found ()
 
 int main ()
 {
-    const char *const selected = getenv ("ZLINK_TEST_CASE");
-    const bool expiry_capacity_case =
-      selected && strcmp (selected,
-                          "test_all_wait_tokens_expire_in_bounded_time") == 0;
-    setup_test_environment (expiry_capacity_case ? 40 : 30);
+    setup_test_environment (30);
     UNITY_BEGIN ();
 #define RUN_PHASE3_COMPLETION_TEST(test_)                                  \
     do {                                                                   \
@@ -1963,13 +1897,10 @@ int main ()
       test_pair_none_timeout_has_zero_id_no_completion_and_consumes_input);
     RUN_PHASE3_COMPLETION_TEST (
       test_socket_close_retires_and_reclaims_wait_tokens);
-    RUN_PHASE3_COMPLETION_TEST (test_send_wait_token_uses_snapshotted_sndtimeo);
-    RUN_PHASE3_COMPLETION_TEST (test_close_cancels_live_writable_timeout);
-    RUN_PHASE3_COMPLETION_TEST (test_request_wait_token_uses_sndtimeo);
-    RUN_PHASE3_COMPLETION_TEST (test_wait_token_recovery_and_expiry_publish_once);
-    RUN_PHASE3_COMPLETION_TEST (
-      test_shared_reservation_limit_backpressures_send_and_request);
-    RUN_PHASE3_COMPLETION_TEST (test_all_wait_tokens_expire_in_bounded_time);
+    RUN_PHASE3_COMPLETION_TEST (test_send_wait_token_ignores_sndtimeo);
+    RUN_PHASE3_COMPLETION_TEST (test_request_wait_token_ignores_sndtimeo);
+    RUN_PHASE3_COMPLETION_TEST (test_wait_token_recovery_after_sndtimeo_publishes_once);
+    RUN_PHASE3_COMPLETION_TEST (test_shared_reservation_limit_backpressures_send_and_request);
     RUN_PHASE3_COMPLETION_TEST (
       test_completion_recv_rejects_dirty_zero_size_routing_id);
     RUN_PHASE3_COMPLETION_TEST (

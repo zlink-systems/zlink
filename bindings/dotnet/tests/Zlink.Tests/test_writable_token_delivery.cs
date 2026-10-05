@@ -116,8 +116,8 @@ public sealed class test_writable_token_delivery
     [InlineData(true, true, 801, "ENoent", (int)ZlinkSubmitException.ErrorCode.NotFound, "ENoent")]
     [InlineData(false, false, 802, "ENotConn", (int)ZlinkSubmitException.ErrorCode.NotConnected, "ENotConn")]
     [InlineData(true, false, 802, "ENotConn", (int)ZlinkSubmitException.ErrorCode.NotConnected, "ENotConn")]
-    [InlineData(false, false, 803, "EAgain", (int)ZlinkSubmitException.ErrorCode.Backpressured, "EAgain")]
-    [InlineData(true, false, 803, "EAgain", (int)ZlinkSubmitException.ErrorCode.Backpressured, "EAgain")]
+    [InlineData(false, false, 803, "EAgain", (int)ZlinkSubmitException.ErrorCode.InternalError, "EProto")]
+    [InlineData(true, false, 803, "EAgain", (int)ZlinkSubmitException.ErrorCode.InternalError, "EProto")]
     [InlineData(false, false, 999, "ENoent", (int)ZlinkSubmitException.ErrorCode.InternalError, "EProto")]
     [InlineData(true, false, 999, "ENoent", (int)ZlinkSubmitException.ErrorCode.InternalError, "EProto")]
     public async Task writable_delivers_core_result_to_matching_token(

@@ -302,7 +302,7 @@ typedef enum zlink_send_complete_result_t {
   ZLINK_SEND_ADMITTED = 0,         // WRITABLE: 같은 target에 다시 submit할 수 있음
   ZLINK_SEND_NOT_FOUND = 801,      // WRITABLE: target이 명시적으로 제거됨(ENOENT)
   ZLINK_SEND_NOT_CONNECTED = 802,  // WRITABLE: STREAM 물리 연결이 끝나 RID가 없어짐(ENOTCONN)
-  ZLINK_SEND_TIMED_OUT = 803       // WRITABLE: SNDTIMEO 안에 admission되지 않음(EAGAIN)
+  ZLINK_SEND_TIMED_OUT = 803       // ABI 보존 전용, Core는 이 결과를 발행하지 않음
 } zlink_send_complete_result_t;
 
 typedef struct zlink_completion_t {
@@ -1031,11 +1031,11 @@ STREAM은 물리 연결 종료 시 RID가 끝나므로 [STREAM routed send](08-s
 `NONE`은 토큰을 만들지 않고 snapshot한 `SNDTIMEO` 안에서 같은 target의 reconnect와 admission을
 기다린다.
 
-토큰을 반환한 submit이 snapshot한 `SNDTIMEO`의 기한까지 종료되지 않은 대기 토큰은
-`send_result == ZLINK_SEND_TIMED_OUT`, `send_terminal_errno == EAGAIN`인 WRITABLE record로 끝난다.
-`NONE`의 `SNDTIMEO` 만료와 같은 기한·errno이며, `SNDTIMEO`가 `-1`이면 기한이 없다.
+대기 토큰에는 기한이 없다. `SNDTIMEO`는 `NONE` wait에만 적용하며 대기 토큰을 끝내지 않는다.
+대기를 중단한 application은 뒤에 오는 WRITABLE record를 `zlink_completion_recv()`로 꺼내
+reservation을 반환한다. 끝나지 않은 대기 토큰의 수는 위의 completion reservation 상한이 제한한다.
 
-PAIR·DEALER·ROUTER의 대기 토큰은 위의 자원 회복 WRITABLE record와 기한 만료 외에 다음으로 종료된다. (a) target의 명시적
+PAIR·DEALER·ROUTER의 대기 토큰은 위의 자원 회복 WRITABLE record 외에 다음으로 종료된다. (a) target의 명시적
 제거(`zlink_disconnect_rid`, 해당 RID의 endpoint termination)로 `send_result == ZLINK_SEND_NOT_FOUND`,
 `send_terminal_errno == ENOENT`인 WRITABLE record. (b) socket close·context termination — Core가
 token을 내부에서 정리하고
@@ -1106,7 +1106,7 @@ record(`send_result == ZLINK_SEND_ADMITTED`)가 정확히 한 건 뒤따르고, 
 거절되면 새 토큰을 받는다. 거절 원인이 pair의 correlation work·count 한도 부족(systems/06-auto-hwm §work budget)이면
 아직 종료되지 않은 그 토큰은 **해당 pair의 correlation reservation이 반환될 때(terminal reply·timeout·disconnect)만** 자원 회복에 따른 `ZLINK_SEND_ADMITTED` WRITABLE을 발행하고,
 physical write credit만 회복된 상태에서는 발행하지 않는다(거절 원인이 되는 자원의 회복만 wake 조건이다 — 규칙 하나). 토큰의 target 단위, wake edge, `ZLINK_POLLOUT`·`ZLINK_POLLCOMPLETION`
-level 유지와 기한 만료를 포함한 종료 조건은
+level 유지와 종료 조건은
 [whole-message send](#whole-message-send와-pending-admission)의 SEND 대기 토큰과 같다. ROUTER RID에 route가 없는 request의 결과는 이 절의 첫 문단을 따른다.
 
 `timeout_ms_ == 0`은 requester socket의 request timeout을 snapshot하며 기본값은 5,000 ms다.
@@ -1348,9 +1348,12 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - SEND 결과·대기 토큰·WRITABLE 재제출·replay 검증은 [whole-message send](#whole-message-send와-pending-admission)를 참조한다.
 - 65,536개의 공유 reservation을 채운 뒤 SEND `DONTWAIT`과 REQUEST가 각각 `BACKPRESSURED`·`EAGAIN`, ID `0`,
   completion 없음으로 끝나고, completion 수신으로 reservation을 반환한 뒤 재제출할 수 있음을 검증한다.
-- SEND·REQUEST 대기 토큰의 종료 결과(자원 회복, 명시적 제거, STREAM 물리 종료, `SNDTIMEO` 0·양수의
-  기한 만료와 `-1`의 시간 만료 부재, 자원 회복과 만료의 경합, close·termination 뒤 record 부재)와 WRITABLE 한 건·reservation의
+- SEND·REQUEST 대기 토큰의 종료 결과(자원 회복, 명시적 제거, STREAM 물리 종료, `SNDTIMEO` 값과 관계없는
+  기한 부재, close·termination 뒤 record 부재)와 WRITABLE 한 건·reservation의
   receive 시 해제를 [whole-message send](#whole-message-send와-pending-admission)에 따라 검증한다.
+- SEND·REQUEST 각각에서 `SNDTIMEO`를 `0`·양수·`-1`로 두고, 그 값이 지난 뒤에도 대기 토큰이 끝나지 않으며
+  WRITABLE을 만들지 않음을 검증한다. Application이 대기를 중단한 뒤 자원 회복이나 대상 제거로 온
+  WRITABLE을 수신하면 reservation이 반환되어 다음 대기 토큰 발급에 쓰일 수 있음을 검증한다.
 - REQUEST admission·timeout·completion·reply token 검증은 [Request와 reply](#request와-reply)를 참조한다.
 - HWM·pending request 수용 검증은 [Auto HWM의 admission](../systems/06-auto-hwm.ko.md#message-처리-순서)과 [pending request 수용](../systems/06-auto-hwm.ko.md#pending-request-수용)을 참조한다.
 
