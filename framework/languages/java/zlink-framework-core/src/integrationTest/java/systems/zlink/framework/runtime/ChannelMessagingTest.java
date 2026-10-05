@@ -575,8 +575,7 @@ final class ChannelMessagingTest {
                         backendFactory.createChannelAdapter(
                                 new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)));
                 try (var rawContext = channelAdapter.createContext();
-                        var rawDealer =
-                                channelAdapter.createDealerSocket(rawContext)) {
+                        var rawDealer = channelAdapter.createDealerSocket(rawContext)) {
                     rawDealer.connect(endpoint);
                     admitRawClient(rawDealer);
                     List<Message> malformedParts = malformedDecodeRequest();
@@ -766,8 +765,7 @@ final class ChannelMessagingTest {
                         backendFactory.createChannelAdapter(
                                 new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)));
                 try (var rawContext = channelAdapter.createContext();
-                        var rawDealer =
-                                channelAdapter.createDealerSocket(rawContext)) {
+                        var rawDealer = channelAdapter.createDealerSocket(rawContext)) {
                     rawDealer.connect(endpoint);
                     admitRawClient(rawDealer);
                     List<Message> malformedParts = malformedDecodeRequest();
