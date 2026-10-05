@@ -675,10 +675,11 @@ class fanout_publish_service_t final : public fw::hosted_service_t
         /* The subscriber connects asynchronously; a fanout publish before the
          * subscription lands is silently dropped by the wire, so the publisher
          * repeats until the runner sees the marker or the deadline passes. */
-        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (15);
+        const auto deadline = std::chrono::steady_clock::now () + publish_window;
         while (std::chrono::steady_clock::now () < deadline) {
-            publisher.publish (_channel, _topic, test_host_published_event_t{_value}).async ();
-            std::this_thread::sleep_for (std::chrono::milliseconds (250));
+            co_await publisher.publish (_channel, _topic, test_host_published_event_t{_value})
+              .async ();
+            std::this_thread::sleep_for (publish_interval);
         }
         sink.append ("channel-publisher-done|" + _topic + ":" + _value);
         co_return;
@@ -687,6 +688,8 @@ class fanout_publish_service_t final : public fw::hosted_service_t
     void stop () noexcept override {}
 
   private:
+    static constexpr auto publish_window = std::chrono::seconds (15);
+    static constexpr auto publish_interval = std::chrono::milliseconds (250);
     std::string _channel;
     std::string _topic;
     std::string _value;

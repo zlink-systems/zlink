@@ -676,18 +676,6 @@ class channel_native_publisher_t
     std::atomic_bool _closed{false};
 };
 
-// Writes the listener record of a publisher this caller admitted. listener_statuses is null
-// when the caller did not admit it.
-void record_native_publisher (
-  const std::shared_ptr<runtime::listener_status_registry_t> &listener_statuses,
-  const std::string &channel_name,
-  const channel_native_publisher_t &native)
-{
-    if (listener_statuses && !native.listener_endpoint ().empty ())
-        listener_statuses->update (listener_kind_t::fanout, channel_name,
-                                   native.listener_endpoint ());
-}
-
 // Admits a publisher built outside the channel lane. The lane turn only decides admission; the
 // listener record is written after the turn, so no turn waits on the registry lane.
 std::shared_ptr<channel_native_publisher_t>
@@ -710,7 +698,9 @@ admit_native_publisher (const std::shared_ptr<channel_runtime_state_t> &state,
                       .get ();
     if (admitted != native)
         native->close ();
-    record_native_publisher (listener_statuses, channel_name, *native);
+    if (listener_statuses && !native->listener_endpoint ().empty ())
+        listener_statuses->update (listener_kind_t::fanout, channel_name,
+                                   native->listener_endpoint ());
     return admitted;
 }
 
@@ -1347,10 +1337,6 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
                 throw framework_exception_t (framework_error_kind_t::internal_failure,
                                              "channel message exceeds configured max message size");
             }
-            // The lane turn creates and binds the publisher, so two first publishes cannot both
-            // bind. Only the listener record write, which waits on the registry lane, runs after
-            // the turn.
-            std::shared_ptr<runtime::listener_status_registry_t> created_listener_statuses;
             auto native_publisher =
               state->lane
                 .run ([&] {
@@ -1359,24 +1345,14 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
                           channel_runtime_outbound_error_state_locked (*state),
                           channel_runtime_outbound_error_message_locked (*state));
                     }
-                    auto &stored = state->native_publishers[channel_name];
-                    if (!stored) {
-                        std::optional<std::string> advertise_host;
-                        if (const auto configured =
-                              state->fanout_publisher_advertise_hosts.find (channel_name);
-                            configured != state->fanout_publisher_advertise_hosts.end ()) {
-                            advertise_host = configured->second;
-                        }
-                        stored = std::make_shared<detail::channel_native_publisher_t> (
-                          channel_name, *publisher, state->core_context,
-                          std::move (advertise_host));
-                        created_listener_statuses = state->listener_statuses;
+                    const auto found = state->native_publishers.find (channel_name);
+                    if (found == state->native_publishers.end ()) {
+                        throw framework_exception_t (framework_error_kind_t::unavailable,
+                                                     "channel publisher has not started");
                     }
-                    return stored;
+                    return found->second;
                 })
                 .get ();
-            detail::record_native_publisher (created_listener_statuses, channel_name,
-                                             *native_publisher);
             co_await native_publisher->publish (topic, parts);
         }
         catch (const framework_exception_t &) {
