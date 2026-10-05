@@ -22,7 +22,6 @@ import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -168,9 +167,6 @@ final class ZLinkSpotOutboundApplicationFlowTest {
                             if (method.getName().equals(methodName)) {
                                 parts.set(copyParts(arguments));
                                 return CompletableFuture.completedFuture(null);
-                            }
-                            if (method.getName().equals("admissionTimeout")) {
-                                return Duration.ofSeconds(1);
                             }
                             return defaultValue(method.getReturnType());
                         });

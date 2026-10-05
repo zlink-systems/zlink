@@ -5,7 +5,7 @@ import java.time.Duration;
 public interface ZLinkChannelBackendAdapter {
     ZLinkBackendContext createContext();
 
-    ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context, Duration sendTimeout);
+    ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context);
 
     ZLinkBackendRouterSocket createRouterSocket(ZLinkBackendContext context);
 

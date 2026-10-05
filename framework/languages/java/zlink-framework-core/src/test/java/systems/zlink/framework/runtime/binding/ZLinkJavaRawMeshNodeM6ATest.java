@@ -89,6 +89,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             // 01-execution/01-submit-and-completion.ko.md:193: typed NOT_ADMITTED maps to Rejected.
             assertEquals(
                     rejected == systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED
+                                    || rejected == SubmitResult.BACKPRESSURED
                             ? systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE
                             : rejected == SubmitResult.NOT_ADMITTED
                                     ? systems.zlink.framework.errors.ZLinkFrameworkErrorKind

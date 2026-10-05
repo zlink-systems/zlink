@@ -35,7 +35,7 @@ public final class ChannelRegistration {
     private boolean routingIdPrefixConfigured;
     private RoutingId routeRoutingId;
     private Duration defaultRequestTimeout;
-    private Duration sendTimeout = ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT;
+    private Duration publisherSendTimeout = ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT;
 
     public ChannelRegistration(String name, ChannelKind kind) {
         this.name = name;
@@ -176,12 +176,12 @@ public final class ChannelRegistration {
         return defaultRequestTimeout;
     }
 
-    Duration sendTimeout() {
-        return sendTimeout;
+    Duration publisherSendTimeout() {
+        return publisherSendTimeout;
     }
 
-    void setSendTimeout(Duration timeout) {
-        sendTimeout = ZLinkChannelAdmissionTimeout.normalize(timeout);
+    void setPublisherSendTimeout(Duration timeout) {
+        publisherSendTimeout = ZLinkChannelAdmissionTimeout.normalize(timeout);
     }
 
     void setDefaultRequestTimeout(Duration timeout) {

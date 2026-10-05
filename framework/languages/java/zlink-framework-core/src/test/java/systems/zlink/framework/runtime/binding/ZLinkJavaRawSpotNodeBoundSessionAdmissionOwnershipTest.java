@@ -61,8 +61,7 @@ final class ZLinkJavaRawSpotNodeBoundSessionAdmissionOwnershipTest {
                     .get(1, TimeUnit.SECONDS);
             stream.publishBoundActor(sessionRid, actor.actorId());
 
-            node.spotNode()
-                    .sendLocalActorBoundSessionAsync(actor, List.of(frame), Duration.ofSeconds(1));
+            node.spotNode().sendLocalActorBoundSessionAsync(actor, List.of(frame));
 
             assertEquals(11, sink.actorSlot);
             sink.terminal.complete(null);
@@ -182,8 +181,7 @@ final class ZLinkJavaRawSpotNodeBoundSessionAdmissionOwnershipTest {
         }
 
         @Override
-        public CompletionStage<Void> sendAsync(
-                RoutingId sessionRid, List<Message> parts, Duration timeout) {
+        public CompletionStage<Void> sendAsync(RoutingId sessionRid, List<Message> parts) {
             asyncAttempts.incrementAndGet();
             ZLinkStreamFrameCodec.DecodedFrame decoded =
                     ZLinkStreamFrameCodec.tryDecode(parts.getFirst().toByteArray()).orElseThrow();

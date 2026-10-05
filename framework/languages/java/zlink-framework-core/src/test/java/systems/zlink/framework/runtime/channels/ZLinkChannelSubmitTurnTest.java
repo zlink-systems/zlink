@@ -53,12 +53,14 @@ final class ZLinkChannelSubmitTurnTest {
             f.sockets.registerSpotRouterNode("orders", f.node(newCalls, observedTimeout, () -> {}));
 
             assertTerminal(request.submit(String.class));
+            assertTrue(observedTimeout.get().compareTo(Duration.ofSeconds(7)) <= 0);
+            observedTimeout.set(null);
             send.submit().toCompletableFuture().join();
             assertEquals(0, oldCalls.get(), "builders must not capture the old node");
             assertEquals(2, newCalls.get());
-            assertEquals(Duration.ofSeconds(7), observedTimeout.get());
+            assertNull(observedTimeout.get());
             assertTerminal(f.request().timeout(Duration.ofSeconds(3)).submit(String.class));
-            assertEquals(Duration.ofSeconds(3), observedTimeout.get());
+            assertTrue(observedTimeout.get().compareTo(Duration.ofSeconds(3)) <= 0);
         }
     }
 
@@ -88,12 +90,12 @@ final class ZLinkChannelSubmitTurnTest {
                     new ChannelRegistration("orders", ChannelKind.CLIENT_SERVER);
             channel.enableClient();
             f.sockets.registerChannel(channel);
-            // 02-channel-transport/02-channel-messaging.ko.md: ClientServer readiness admission
-            // completes with DeadlineExceeded when the configured send timeout expires.
             for (Map<String, String> values :
                     java.util.List.of(Map.<String, String>of(), Map.of("key", "value"))) {
                 ZLinkSendCall send = f.send().metadata(values);
                 ZLinkRequestCall request = f.request().metadata(values);
+                var pending = send.submit().toCompletableFuture();
+                assertFalse(pending.isDone());
                 assertEquals(
                         systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                         assertInstanceOf(
@@ -102,23 +104,22 @@ final class ZLinkChannelSubmitTurnTest {
                                         assertThrows(
                                                         CompletionException.class,
                                                         () ->
-                                                                send.submit()
+                                                                request.timeout(
+                                                                                Duration.ofMillis(
+                                                                                        50))
+                                                                        .submit(String.class)
                                                                         .toCompletableFuture()
                                                                         .join())
                                                 .getCause())
                                 .kind());
+                f.sockets.closeAll();
+                var shutdown = assertThrows(CompletionException.class, pending::join);
                 assertEquals(
-                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.SHUTTING_DOWN,
                         assertInstanceOf(
                                         systems.zlink.framework.errors.ZLinkFrameworkException
                                                 .class,
-                                        assertThrows(
-                                                        CompletionException.class,
-                                                        () ->
-                                                                request.submit(String.class)
-                                                                        .toCompletableFuture()
-                                                                        .join())
-                                                .getCause())
+                                        shutdown.getCause())
                                 .kind());
             }
         }

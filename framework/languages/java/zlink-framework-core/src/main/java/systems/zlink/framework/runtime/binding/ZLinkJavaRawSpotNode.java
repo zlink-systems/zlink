@@ -55,7 +55,7 @@ import java.util.logging.Logger;
  * Framework-owned service runtime projected over the raw MeshNode transport. Stateful Spot and
  * Actor identity remains inside the Framework runtime.
  */
-final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmissionBacked {
+final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private static final Logger LOGGER = Logger.getLogger(ZLinkJavaRawSpotNode.class.getName());
     private final ZLinkJavaRawMeshNode owner;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -600,7 +600,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
 
     @Override
     public CompletionStage<Void> sendLocalActorBoundSessionAsync(
-            ZLinkBackendActorRef actor, List<Message> parts, Duration timeout) {
+            ZLinkBackendActorRef actor, List<Message> parts) {
         StreamBinding binding = streamBindings.get(actor.actorId());
         if (binding == null || !binding.actor().equals(actor)) {
             return CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
@@ -608,7 +608,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
         CompletionStage<Void> submitted =
                 binding.stream()
                         .sendBoundSessionPushAsync(
-                                binding.sessionRid(), binding.actorSlot(), parts, timeout);
+                                binding.sessionRid(), binding.actorSlot(), parts);
         return submitted;
     }
 
@@ -993,8 +993,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                                 "bound Session reply requires one encoded STREAM frame"));
                 return;
             }
-            stream.sendBoundSessionPushAsync(
-                            sessionRid, actorSlot, reply, stream.admissionTimeout())
+            stream.sendBoundSessionPushAsync(sessionRid, actorSlot, reply)
                     .whenComplete(
                             (ignored, failure) -> {
                                 if (failure != null) {
@@ -1030,8 +1029,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                                                     requestHeader.actorSlot().orElse(actorSlot))),
                             ZLinkStreamErrorPayload.encode(failure));
             try (Message error = Message.from(errorFrame)) {
-                stream.sendBoundSessionPushAsync(
-                        sessionRid, List.of(error), stream.admissionTimeout());
+                stream.sendBoundSessionPushAsync(sessionRid, List.of(error));
             }
         } catch (RuntimeException encodingFailure) {
         }

@@ -18,12 +18,10 @@ final class ZLinkJavaChannelBackendAdapter implements ZLinkChannelBackendAdapter
     }
 
     @Override
-    public ZLinkBackendDealerSocket createDealerSocket(
-            ZLinkBackendContext context, Duration sendTimeout) {
+    public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
         var socket =
                 ZLinkJavaSocketOptions.configureFrameworkSocket(
                         nativeContext(context).createDealerSocket());
-        socket.options().sendTimeout(sendTimeout);
         return new ZLinkJavaDealerSocket(socket);
     }
 

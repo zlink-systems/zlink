@@ -10,9 +10,14 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 public suspend fun <T> CompletionStage<T>.await(): T = awaitFrameworkStage(this)
 
 @PublishedApi
-internal suspend fun <T> awaitFrameworkStage(stage: CompletionStage<T>): T {
+internal suspend fun <T> awaitFrameworkStage(
+    stage: CompletionStage<T>,
+    cancelOperation: Boolean = true,
+): T {
     return suspendCancellableCoroutine { continuation ->
-        continuation.invokeOnCancellation { stage.toCompletableFuture().cancel(false) }
+        if (cancelOperation) {
+            continuation.invokeOnCancellation { stage.toCompletableFuture().cancel(false) }
+        }
         stage.whenComplete { value, error ->
             if (error == null) {
                 continuation.resume(value)

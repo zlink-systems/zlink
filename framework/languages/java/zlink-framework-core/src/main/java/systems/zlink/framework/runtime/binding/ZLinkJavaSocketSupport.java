@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.errors.ZlinkRecvException;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.PublishOperation;
 import systems.zlink.contracts.messaging.Received;
@@ -89,7 +88,10 @@ final class ZLinkJavaSocketSupport {
             SubmitResult result, Supplier<CompletionStage<Void>> admitted) {
         if (result == SubmitResult.OK) return ZLinkOneWayCalls.immediateAdmission();
         if (result == SubmitResult.BACKPRESSURED) return admitted.get();
-        return CompletableFuture.failedFuture(new ZlinkSubmitException(result));
+        return ZLinkOneWayCalls.adaptOneWay(
+                CompletableFuture.failedFuture(
+                        new systems.zlink.contracts.errors.ZlinkSubmitException(result)),
+                true);
     }
 
     static boolean submitSync(SendOperation operation, List<Message> parts) {

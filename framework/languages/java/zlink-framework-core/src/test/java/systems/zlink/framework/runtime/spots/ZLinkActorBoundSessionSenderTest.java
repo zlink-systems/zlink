@@ -44,7 +44,7 @@ final class ZLinkActorBoundSessionSenderTest {
                                                             method.getName());
                                         });
         var result =
-                new ZLinkActorBoundSessionSender(Duration.ofSeconds(1), () -> false)
+                new ZLinkActorBoundSessionSender(() -> false)
                         .send(
                                 node,
                                 new ZLinkBackendActorRef(RoutingId.from("node"), "actor", 1),
@@ -90,7 +90,7 @@ final class ZLinkActorBoundSessionSenderTest {
                                                             method.getName());
                                         });
         var result =
-                new ZLinkActorBoundSessionSender(Duration.ofMillis(80), () -> false)
+                new ZLinkActorBoundSessionSender(() -> false)
                         .send(
                                 node,
                                 new ZLinkBackendActorRef(RoutingId.from("node"), "actor", 1),
@@ -132,8 +132,7 @@ final class ZLinkActorBoundSessionSenderTest {
                                                     throw new UnsupportedOperationException(
                                                             method.getName());
                                         });
-        ZLinkActorBoundSessionSender sender =
-                new ZLinkActorBoundSessionSender(Duration.ofSeconds(1), closing::get);
+        ZLinkActorBoundSessionSender sender = new ZLinkActorBoundSessionSender(closing::get);
 
         CompletionStage<Void> submitted =
                 sender.send(
@@ -180,8 +179,7 @@ final class ZLinkActorBoundSessionSenderTest {
                                     }
                                     throw new UnsupportedOperationException(method.getName());
                                 });
-        ZLinkActorBoundSessionSender sender =
-                new ZLinkActorBoundSessionSender(Duration.ofSeconds(1), () -> false);
+        ZLinkActorBoundSessionSender sender = new ZLinkActorBoundSessionSender(() -> false);
 
         sender.send(
                         node,

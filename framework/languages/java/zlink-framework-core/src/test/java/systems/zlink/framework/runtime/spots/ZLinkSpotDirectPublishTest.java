@@ -19,7 +19,6 @@ import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -96,7 +95,6 @@ final class ZLinkSpotDirectPublishTest {
                                         switch (method.getName()) {
                                             case "name", "routingId" -> "source";
                                             case "admissionSource" -> ignored;
-                                            case "admissionTimeout" -> Duration.ofSeconds(1);
                                             case "admissionPendingCapacity" -> 8;
                                             case "publishAsync" -> {
                                                 publishCalls.incrementAndGet();
@@ -167,7 +165,7 @@ final class ZLinkSpotDirectPublishTest {
     }
 
     @Test
-    void publicSpotPublishCancellationReachesBindingAdmission() {
+    void publicSpotPublishCallerCancellationLeavesBindingAdmissionPending() {
         CompletableFuture<Void> admission = new CompletableFuture<>();
         ZLinkBackendSpot spot =
                 (ZLinkBackendSpot)
@@ -194,7 +192,9 @@ final class ZLinkSpotDirectPublishTest {
                             .toCompletableFuture();
 
             assertTrue(publicStage.cancel(false));
-            assertTrue(admission.isCancelled());
+            assertFalse(admission.isDone());
+            admission.complete(null);
+            assertTrue(admission.isDone());
         }
     }
 

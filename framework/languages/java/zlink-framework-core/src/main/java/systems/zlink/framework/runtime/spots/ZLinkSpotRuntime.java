@@ -458,7 +458,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         serializer,
                         routeMessages,
                         Math.max(2, Runtime.getRuntime().availableProcessors()),
-                        backendFactory.admissionTimeout(),
                         registration.codecs()::contentTypeFor,
                         dispatchErrors.flow());
         this.suspendHandlerInvokers = registration.suspendHandlerInvokers();
@@ -482,8 +481,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         this.context = context == null ? channelAdapter.createContext() : context;
         this.ownsContext = ownsContext;
         this.defaultRequestTimeout = registration.defaultRequestTimeout();
-        this.boundSessionSender =
-                new ZLinkActorBoundSessionSender(defaultRequestTimeout, this::isClosing);
+        this.boundSessionSender = new ZLinkActorBoundSessionSender(this::isClosing);
         Map<String, ZLinkInternalSpotNode> routeBridgeNodesByName = new HashMap<>();
         Set<Class<? extends ZLinkSpot<?>>> initializedSpotTypes = new HashSet<>();
         Map<Class<? extends ZLinkSpot<?>>, ZLinkUserSpotExecutionMode>
@@ -2355,8 +2353,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     Optional<String> packetName,
                     String contentType,
                     Map<String, String> metadata) {
-                Duration timeout = defaultRequestTimeout;
-                long deadline = System.currentTimeMillis() + timeout.toMillis();
+                long deadline = Long.MAX_VALUE;
                 return activateInstanceSpot(
                                 spotId,
                                 stableType,
@@ -2387,8 +2384,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             .ZLinkApplicationMetadata.copyOf(
                                                                     metadata)
                                                             .encode(),
-                                                    parts,
-                                                    timeout)
+                                                    parts)
                                             .thenAccept(ignored -> {})
                                             .whenComplete(
                                                     (ignored, failure) -> {
@@ -2508,6 +2504,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             long deadline) {
         systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator.requireCallerAssignable(
                 spotId);
+        var admissionFailure = spotHostAdmissionFailure(spotId);
+        if (admissionFailure != null) {
+            return CompletableFuture.failedFuture(admissionFailure);
+        }
         var store = requireUserSpotLocationStore();
         String key = systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(spotId);
         return store.read(key, () -> false)
@@ -2577,6 +2577,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private CompletionStage<InstanceTarget> selectInstanceSpotTarget(
             ZLinkLocationRepository store, String meshName, String stableType, long deadline) {
+        var admissionFailure = spotHostAdmissionFailure(stableType);
+        if (admissionFailure != null) {
+            return CompletableFuture.failedFuture(admissionFailure);
+        }
         return store.listMeshNodes(meshName, new ZLinkPageRequest(1000, null))
                 .thenCompose(
                         page -> {
@@ -2807,6 +2811,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkAuthoritySnapshot snapshot,
             String stableType,
             long deadline) {
+        var admissionFailure = spotHostAdmissionFailure(key);
+        if (admissionFailure != null) {
+            return CompletableFuture.failedFuture(admissionFailure);
+        }
         var authority =
                 userSpotAuthorities
                         .decode(snapshot.payload())
@@ -4995,7 +5003,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             .orElseThrow(
                                                     () ->
                                                             new IllegalStateException(
-                                                                    "Instance Spot factory is not registered"));
+                                                                    "Instance Spot factory is not"
+                                                                            + " registered"));
                             if (instanceCloseReleaseFailure() != null) {
                                 return releaseInstanceSpotAuthority(activation)
                                         .thenApply(
@@ -5161,7 +5170,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                             .ZLinkAuthorityStored
                                                                                                                     stored)) {
                                                                                                         throw new IllegalStateException(
-                                                                                                                "Instance Spot Reincarnate Ready fence changed");
+                                                                                                                "Instance"
+                                                                                                                        + " Spot"
+                                                                                                                        + " Reincarnate"
+                                                                                                                        + " Ready"
+                                                                                                                        + " fence"
+                                                                                                                        + " changed");
                                                                                                     }
                                                                                                     fresh
                                                                                                             .setAuthorityFence(
@@ -5276,7 +5290,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                 return CompletableFuture
                                                                                                                         .failedFuture(
                                                                                                                                 new IllegalStateException(
-                                                                                                                                        "Instance Spot Reincarnate failure cleanup fence changed"));
+                                                                                                                                        "Instance"
+                                                                                                                                                + " Spot"
+                                                                                                                                                + " Reincarnate"
+                                                                                                                                                + " failure"
+                                                                                                                                                + " cleanup"
+                                                                                                                                                + " fence"
+                                                                                                                                                + " changed"));
                                                                                                             }
                                                                                                             var
                                                                                                                     currentActivation =
@@ -5364,7 +5384,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                                                 .locations
                                                                                                                                                 .ZLinkAuthorityDeleted)) {
                                                                                                                                     throw new IllegalStateException(
-                                                                                                                                            "Instance Spot Reincarnate failure Delete fence changed");
+                                                                                                                                            "Instance"
+                                                                                                                                                    + " Spot"
+                                                                                                                                                    + " Reincarnate"
+                                                                                                                                                    + " failure"
+                                                                                                                                                    + " Delete"
+                                                                                                                                                    + " fence"
+                                                                                                                                                    + " changed");
                                                                                                                                 }
                                                                                                                                 return false;
                                                                                                                             });

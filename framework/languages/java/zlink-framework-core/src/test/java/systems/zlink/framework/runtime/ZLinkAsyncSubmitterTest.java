@@ -35,15 +35,28 @@ import java.util.concurrent.CompletionStage;
 
 final class ZLinkChannelSubmissionContractTest {
     @Test
-    void oneWaySendWaitsUntilTheAdmissionDeadline() {
+    void oneWaySendWaitsForCapacityWithoutAnAdmissionDeadline() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addClientServerChannel("profile").client().connect("inproc://profile");
 
+        BackpressuredBackend backend = new BackpressuredBackend();
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(options, new BackpressuredBackend())) {
-            var result = runtime.client().sendToChannel("profile", "hello").submit();
-
-            assertEquals(2, OneWayTestStatus.status(result));
+                ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
+            var result =
+                    runtime.client()
+                            .sendToChannel("profile", "hello")
+                            .submit()
+                            .toCompletableFuture();
+            java.util.concurrent.atomic.AtomicInteger completions =
+                    new java.util.concurrent.atomic.AtomicInteger();
+            result.whenComplete((ignored, failure) -> completions.incrementAndGet());
+            Thread.sleep(3100);
+            Assertions.assertFalse(result.isDone());
+            assertEquals(1, backend.submissions);
+            backend.admission.complete(null);
+            result.get(1, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(1, backend.submissions);
+            assertEquals(1, completions.get());
         }
     }
 
@@ -239,8 +252,7 @@ final class ZLinkChannelSubmissionContractTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(
-                ZLinkBackendContext context, Duration sendTimeout) {
+        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             return new NoReplyDealer();
         }
 
@@ -274,36 +286,22 @@ final class ZLinkChannelSubmissionContractTest {
 
     private static final class CloseFailureBackend extends NoReplyBackend {
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(
-                ZLinkBackendContext context, Duration sendTimeout) {
+        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             return new CloseFailureDealer();
         }
     }
 
     private static final class BackpressuredBackend extends NoReplyBackend {
+        private final CompletableFuture<Void> admission = new CompletableFuture<>();
+        private int submissions;
+
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(
-                ZLinkBackendContext context, Duration sendTimeout) {
+        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             return new NoReplyDealer() {
-                //  Since 8bae89dc0f the BINDING owns one-way admission and its
-                //  deadline (ZLinkOneWayCalls: "the binding owns retries");
-                //  the framework no longer consults admissionTimeout() nor
-                //  bounds this stage. The fake therefore simulates a socket
-                //  whose admission wait ends at its own 20ms deadline with
-                //  backpressure, which adaptOneWay maps to DeadlineExceeded.
                 @Override
                 public CompletionStage<Void> send(List<Message> parts) {
-                    CompletableFuture<Void> result = new CompletableFuture<>();
-                    CompletableFuture.delayedExecutor(
-                                    20, java.util.concurrent.TimeUnit.MILLISECONDS)
-                            .execute(
-                                    () ->
-                                            result.completeExceptionally(
-                                                    new systems.zlink.contracts.errors
-                                                            .ZlinkSubmitException(
-                                                            systems.zlink.contracts.sockets
-                                                                    .SubmitResult.BACKPRESSURED)));
-                    return result;
+                    submissions++;
+                    return admission;
                 }
             };
         }
@@ -313,8 +311,7 @@ final class ZLinkChannelSubmissionContractTest {
         private Duration timeout;
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(
-                ZLinkBackendContext context, Duration sendTimeout) {
+        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             return new NoReplyDealer() {
                 @Override
                 public CompletionStage<ZLinkBackendReceived> request(

@@ -45,6 +45,70 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkClientServerReadyWaitTest {
     @Test
+    void publicPendingCapacitySendWaitsBeyondThreeSecondsAndCompletesOnce() throws Exception {
+        try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
+            fixture.sendAdmission = new CompletableFuture<>();
+            fixture.admit();
+            var completed = new AtomicInteger();
+            var pending =
+                    fixture.runtime
+                            .sendToChannel("orders", new Request("capacity"))
+                            .submit()
+                            .whenComplete((value, failure) -> completed.incrementAndGet())
+                            .toCompletableFuture();
+            Thread.sleep(3100);
+            assertFalse(pending.isDone());
+            fixture.sendAdmission.complete(null);
+            pending.get(1, TimeUnit.SECONDS);
+            assertEquals(1, completed.get());
+            assertEquals(1, fixture.businessSends.get());
+        }
+    }
+
+    @Test
+    void publicPendingCapacitySendRouteRemovalIsUnavailable() throws Exception {
+        try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
+            fixture.sendAdmission = new CompletableFuture<>();
+            fixture.admit();
+            var pending =
+                    fixture.runtime
+                            .sendToChannel("orders", new Request("removed"))
+                            .submit()
+                            .toCompletableFuture();
+            assertFalse(pending.isDone());
+            fixture.sendAdmission.completeExceptionally(
+                    new systems.zlink.contracts.errors.ZlinkSubmitException(
+                            systems.zlink.contracts.sockets.SubmitResult.NOT_FOUND));
+            var failure = assertThrows(CompletionException.class, pending::join);
+            assertEquals(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            fixture.runtime.channelSocketRegistry().signalTopologyChanged();
+            assertEquals(1, fixture.businessSends.get());
+        }
+    }
+
+    @Test
+    void publicPendingCapacitySendSocketCloseIsShuttingDown() throws Exception {
+        try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
+            fixture.sendAdmission = new CompletableFuture<>();
+            fixture.admit();
+            var pending =
+                    fixture.runtime
+                            .sendToChannel("orders", new Request("closed"))
+                            .submit()
+                            .toCompletableFuture();
+            assertFalse(pending.isDone());
+            fixture.runtime.close();
+            var failure = assertThrows(CompletionException.class, pending::join);
+            assertEquals(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            assertEquals(1, fixture.businessSends.get());
+        }
+    }
+
+    @Test
     void admissionTimeoutAfterBeginCloseDoesNotRestartHello() throws Exception {
         Fixture fixture = new Fixture(Duration.ofSeconds(1));
         fixture.runtime.beginClose();
@@ -76,7 +140,7 @@ final class ZLinkClientServerReadyWaitTest {
     }
 
     @Test
-    void callTimeoutStartsAfterClientServerAdmission() throws Exception {
+    void requestTimeoutIncludesClientServerReadiness() throws Exception {
         try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
             ZLinkRequestCall call =
                     fixture.runtime
@@ -97,7 +161,7 @@ final class ZLinkClientServerReadyWaitTest {
     }
 
     @Test
-    void lateReadyServerReceivesFullCallTimeoutAfterAdmission() throws Exception {
+    void readinessConsumesRequestBudget() throws Exception {
         try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
             ZLinkRequestCall call =
                     fixture.runtime
@@ -115,15 +179,15 @@ final class ZLinkClientServerReadyWaitTest {
             assertEquals(new Reply("reply"), reply.join());
             assertEquals(1, fixture.businessRequests.get());
             assertEquals(started + Duration.ofMillis(150).toNanos(), fixture.requestStarted);
-            assertEquals(Duration.ofMillis(400), fixture.requestTimeout.get());
+            assertEquals(Duration.ofMillis(250), fixture.requestTimeout.get());
             assertEquals(
-                    started + Duration.ofMillis(550).toNanos(),
+                    started + Duration.ofMillis(400).toNanos(),
                     fixture.requestStarted + fixture.requestTimeout.get().toNanos());
         }
     }
 
     @Test
-    void lateReadyRequestReplyUsesTheFullTimeoutFromAdmission() throws Exception {
+    void replyUsesBudgetRemainingAfterReadiness() throws Exception {
         try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
             fixture.replyImmediately = false;
             ZLinkRequestCall call =
@@ -142,9 +206,9 @@ final class ZLinkClientServerReadyWaitTest {
             assertTrue(fixture.businessRequestStarted.await(1, TimeUnit.SECONDS));
             assertEquals(1, fixture.businessRequests.get());
             assertEquals(started + Duration.ofMillis(150).toNanos(), fixture.requestStarted);
-            assertEquals(Duration.ofMillis(400), fixture.requestTimeout.get());
+            assertEquals(Duration.ofMillis(250), fixture.requestTimeout.get());
             assertFalse(reply.isDone());
-            fixture.time.advanceBy(Duration.ofMillis(400).toNanos() - 1);
+            fixture.time.advanceBy(Duration.ofMillis(250).toNanos() - 1);
             assertFalse(
                     reply.isDone(), "the request must remain pending before its reply deadline");
             fixture.time.advanceBy(1);
@@ -156,32 +220,63 @@ final class ZLinkClientServerReadyWaitTest {
             assertEquals(
                     ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
-            assertEquals(started + Duration.ofMillis(550).toNanos(), fixture.time.nanoTime());
+            assertEquals(started + Duration.ofMillis(400).toNanos(), fixture.time.nanoTime());
         }
     }
 
     @Test
-    void readyWaitUsesSendTimeoutInsteadOfCallTimeout() throws Exception {
-        try (Fixture fixture = new Fixture(Duration.ofMillis(150))) {
-            ZLinkRequestCall call =
+    void publicSendWaitsBeyondThreeSecondsThenAdmitsExactlyOnce() throws Exception {
+        try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
+            var pending =
                     fixture.runtime
-                            .requestToChannel("orders", new Request("cap"))
-                            .timeout(Duration.ofSeconds(8));
-            long started = fixture.time.nanoTime();
-            CompletableFuture<Reply> reply = call.submit(Reply.class).toCompletableFuture();
-            assertFalse(reply.isDone(), "admission must wait until its family deadline");
-            assertDeadlineExceeded(reply);
-            // 02-channel-transport/02-channel-messaging.ko.md:172: admission uses its own deadline.
-            // No business request starts, so the independent call clock and its full timeout budget
-            // are untouched.
-            assertEquals(started, fixture.time.nanoTime());
-            assertEquals(0, fixture.businessRequests.get());
+                            .sendToChannel("orders", new Request("held"))
+                            .submit()
+                            .toCompletableFuture();
+            Thread.sleep(3100);
+            assertFalse(pending.isDone());
+            fixture.admit();
+            pending.get(1, TimeUnit.SECONDS);
+            assertEquals(1, fixture.businessSends.get());
+            fixture.runtime.channelSocketRegistry().signalTopologyChanged();
+            assertEquals(1, fixture.businessSends.get());
         }
     }
 
     @Test
-    void serverReadyWithinSendTimeoutReceivesFullCallTimeoutAfterAdmission() throws Exception {
-        try (Fixture fixture = new Fixture(Duration.ofMillis(150))) {
+    void publicSendCallerCancellationDoesNotCancelReadiness() throws Exception {
+        try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
+            var pending =
+                    fixture.runtime
+                            .sendToChannel("orders", new Request("held"))
+                            .submit()
+                            .toCompletableFuture();
+            assertTrue(pending.cancel(false));
+            fixture.admit();
+            assertEquals(1, fixture.businessSends.get());
+        }
+    }
+
+    @Test
+    void publicSendReadinessEndsOnShutdown() throws Exception {
+        try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
+            var pending =
+                    fixture.runtime
+                            .sendToChannel("orders", new Request("held"))
+                            .submit()
+                            .toCompletableFuture();
+            fixture.runtime.beginClose();
+            var failure = assertThrows(CompletionException.class, pending::join);
+            assertEquals(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            fixture.admit();
+            assertEquals(0, fixture.businessSends.get());
+        }
+    }
+
+    @Test
+    void readyRequestHasAtMostOriginalBudget() throws Exception {
+        try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
             ZLinkRequestCall call =
                     fixture.runtime
                             .requestToChannel("orders", new Request("cap-ready"))
@@ -198,28 +293,10 @@ final class ZLinkClientServerReadyWaitTest {
             assertEquals(new Reply("reply"), reply.join());
             assertEquals(1, fixture.businessRequests.get());
             assertEquals(started + Duration.ofMillis(500).toNanos(), fixture.requestStarted);
-            assertEquals(Duration.ofSeconds(8), fixture.requestTimeout.get());
+            assertTrue(fixture.requestTimeout.get().compareTo(Duration.ofSeconds(8)) <= 0);
             assertEquals(
-                    started + Duration.ofMillis(8_500).toNanos(),
+                    started + Duration.ofMillis(8_000).toNanos(),
                     fixture.requestStarted + fixture.requestTimeout.get().toNanos());
-        }
-    }
-
-    @Test
-    void noReadyServerSendEndsAsDeadlineExceededAtFamilyTimeout() throws Exception {
-        try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
-            long started = fixture.time.nanoTime();
-            var admission = fixture.runtime.sendToChannel("orders", new Request("cold")).submit();
-            assertFalse(
-                    admission.toCompletableFuture().isDone(),
-                    "send admission must wait until its family deadline");
-            var failure = assertSubmitFailure(ZLinkFrameworkException.class, () -> admission);
-            assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failure.kind());
-            // 02-channel-transport/02-channel-messaging.ko.md:172: admission uses its own deadline.
-            // No business request starts, so the independent call clock and its full timeout budget
-            // are untouched.
-            assertEquals(started, fixture.time.nanoTime());
-            assertEquals(0, fixture.businessRequests.get());
         }
     }
 
@@ -330,6 +407,8 @@ final class ZLinkClientServerReadyWaitTest {
         private final AtomicInteger connects = new AtomicInteger();
         private final AtomicInteger disconnects = new AtomicInteger();
         private final AtomicInteger businessRequests = new AtomicInteger();
+        private final AtomicInteger businessSends = new AtomicInteger();
+        private CompletableFuture<Void> sendAdmission = CompletableFuture.completedFuture(null);
         private final CountDownLatch businessRequestStarted = new CountDownLatch(1);
         private final AtomicReference<Duration> requestTimeout = new AtomicReference<>();
         private volatile long requestStarted;
@@ -377,13 +456,24 @@ final class ZLinkClientServerReadyWaitTest {
                                                             : new CompletableFuture<
                                                                     ZLinkBackendReceived>();
                                                 }
-                                                case "send" ->
-                                                        CompletableFuture.completedFuture(null);
                                                 case "recv" -> null;
                                                 case "waitForReadable" -> false;
                                                 case "name" -> "ready-wait-dealer";
                                                 case "hashCode" -> System.identityHashCode(proxy);
                                                 case "equals" -> proxy == args[0];
+                                                case "send" -> {
+                                                    businessSends.incrementAndGet();
+                                                    yield sendAdmission;
+                                                }
+                                                case "close" -> {
+                                                    sendAdmission.completeExceptionally(
+                                                            new systems.zlink.contracts.errors
+                                                                    .ZlinkSubmitException(
+                                                                    systems.zlink.contracts.sockets
+                                                                            .SubmitResult
+                                                                            .TERMINATED));
+                                                    yield null;
+                                                }
                                                 case "connect" -> {
                                                     connects.incrementAndGet();
                                                     yield null;
@@ -392,9 +482,7 @@ final class ZLinkClientServerReadyWaitTest {
                                                     disconnects.incrementAndGet();
                                                     yield null;
                                                 }
-                                                case "setReceiveFlowState",
-                                                        "setChannelName",
-                                                        "close" ->
+                                                case "setReceiveFlowState", "setChannelName" ->
                                                         null;
                                                 default ->
                                                         throw new UnsupportedOperationException(

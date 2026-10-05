@@ -50,7 +50,7 @@ private class JavaMessageSendCall(
 
     override suspend fun await() {
         terminal.enter()
-        awaitFrameworkStage(call.submit())
+        awaitFrameworkStage(call.submit(), cancelOperation = false)
     }
 }
 
@@ -63,7 +63,7 @@ private class JavaActorMessageSendCall(
 
     override suspend fun await() {
         terminal.enter()
-        awaitFrameworkStage(call.submit())
+        awaitFrameworkStage(call.submit(), cancelOperation = false)
     }
 }
 
@@ -76,7 +76,7 @@ private class JavaBoundSessionMessageSendCall(
 
     override suspend fun await() {
         terminal.enter()
-        awaitFrameworkStage(call.submit())
+        awaitFrameworkStage(call.submit(), cancelOperation = false)
     }
 }
 
@@ -100,7 +100,7 @@ private class DeferredSubmissionCall(
 ) : ZLinkKotlinSubmissionCall {
     override suspend fun await() {
         terminal.enter()
-        awaitFrameworkStage(submit())
+        awaitFrameworkStage(submit(), cancelOperation = false)
     }
 }
 
@@ -179,7 +179,7 @@ private class JavaSpotSendCall(
 
     override suspend fun await() {
         terminal.enter()
-        awaitFrameworkStage(call.submit())
+        awaitFrameworkStage(call.submit(), cancelOperation = false)
     }
 }
 
@@ -456,13 +456,9 @@ private class JavaSessionSendCall(
 
     override fun compress(): ZLinkKotlinSessionSendCall = apply { call = call.compress() }
 
-    override fun timeout(timeout: Duration): ZLinkKotlinSessionSendCall = apply {
-        call = call.timeout(timeout)
-    }
-
     override suspend fun await() {
         terminal.enter()
-        awaitFrameworkStage(call.submit())
+        awaitFrameworkStage(call.submit(), cancelOperation = false)
     }
 }
 
@@ -474,7 +470,7 @@ private class JavaSessionReplyCall(
 
     override suspend fun await() {
         terminal.enter()
-        awaitFrameworkStage(call.submit())
+        awaitFrameworkStage(call.submit(), cancelOperation = false)
     }
 }
 

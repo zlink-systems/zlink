@@ -48,6 +48,11 @@ final class ZLinkNodeSubmitTurnTest {
     private static final IllegalStateException TERMINAL =
             new IllegalStateException("test terminal");
 
+    private static void assertRemainingRequestBudget(Duration remaining, Duration original) {
+        assertTrue(remaining.isPositive());
+        assertTrue(remaining.compareTo(original) <= 0);
+    }
+
     @Test
     void buildersResolveTheNodeAndTimeoutAtSubmitAndPreserveCallOptions() throws Exception {
         try (Fixture f = new Fixture()) {
@@ -66,11 +71,11 @@ final class ZLinkNodeSubmitTurnTest {
             send.submit().toCompletableFuture().join();
             assertEquals(0, oldNode.nodeCalls());
             assertEquals(2, newNode.nodeCalls());
-            assertEquals(Duration.ofSeconds(7), newNode.timeout.get());
+            assertRemainingRequestBudget(newNode.timeout.get(), Duration.ofSeconds(7));
             assertEquals(Map.of("tenant", "blue"), newNode.metadata.get());
 
             assertTerminal(f.request().timeout(Duration.ofSeconds(3)).submit(String.class));
-            assertEquals(Duration.ofSeconds(3), newNode.timeout.get());
+            assertRemainingRequestBudget(newNode.timeout.get(), Duration.ofSeconds(3));
 
             assertThrows(
                     CompletionException.class,
@@ -91,7 +96,7 @@ final class ZLinkNodeSubmitTurnTest {
             assertTerminal(request.submit(String.class));
             send.submit().toCompletableFuture().join();
             assertEquals(2, node.nodeCalls());
-            assertEquals(DEFAULT_TIMEOUT, node.timeout.get());
+            assertRemainingRequestBudget(node.timeout.get(), DEFAULT_TIMEOUT);
 
             ZLinkRequestCall missingRequest = f.runtime.requestToNode("missing", TARGET, "request");
             ZLinkSendCall missingSend = f.runtime.sendToNode("missing", TARGET, "send");
@@ -359,7 +364,7 @@ final class ZLinkNodeSubmitTurnTest {
             assertEquals(0, node.nodeCalls());
             assertEquals(1, router.requests.get());
             assertEquals(1, router.sends.get());
-            assertEquals(Duration.ofSeconds(4), router.timeout.get());
+            assertRemainingRequestBudget(router.timeout.get(), Duration.ofSeconds(4));
         }
     }
 
@@ -407,10 +412,10 @@ final class ZLinkNodeSubmitTurnTest {
                     }
                     replacement.get(5, TimeUnit.SECONDS);
                     if (request) {
-                        assertEquals(Duration.ofSeconds(2), oldNode.timeout.get());
+                        assertRemainingRequestBudget(oldNode.timeout.get(), Duration.ofSeconds(2));
                     }
                     assertTerminal(f.request().submit(String.class));
-                    assertEquals(Duration.ofSeconds(7), newNode.timeout.get());
+                    assertRemainingRequestBudget(newNode.timeout.get(), Duration.ofSeconds(7));
                     assertEquals(1, oldNode.nodeCalls());
                     assertEquals(1, newNode.nodeCalls());
                 } finally {
@@ -492,7 +497,7 @@ final class ZLinkNodeSubmitTurnTest {
                 admission.toCompletableFuture().join();
                 assertEquals(1, node.spotRequests.get());
                 assertEquals(1, node.spotSends.get());
-                assertEquals(Duration.ofSeconds(3), node.timeout.get());
+                assertRemainingRequestBudget(node.timeout.get(), Duration.ofSeconds(3));
             }
         }
     }
@@ -880,7 +885,7 @@ final class ZLinkNodeSubmitTurnTest {
 
         @Override
         public systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket
-                createDealerSocket(ZLinkBackendContext context, Duration sendTimeout) {
+                createDealerSocket(ZLinkBackendContext context) {
             throw new UnsupportedOperationException();
         }
 

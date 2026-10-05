@@ -80,7 +80,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 sourceNodeRid,
                 sourceSessionRid,
                 encoded.payload(),
-                timeout,
                 options,
                 metadataPolicy);
     }
@@ -88,8 +87,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
     CompletionStage<Void> sendFrame(byte[] frameBytes) {
         ZLinkBackendActorRef currentActorRef = currentActorRef();
         Message frame = Message.from(frameBytes);
-        return submitBoundSessionFrame(spotNode, currentActorRef, frame, timeout)
-                .thenApply(ignored -> null);
+        return submitBoundSessionFrame(spotNode, currentActorRef, frame).thenApply(ignored -> null);
     }
 
     @Override
@@ -110,7 +108,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
             Message payload,
-            Duration timeout,
             ZLinkBoundSessionSendOptions options,
             ZLinkRelayMetadataPolicy metadataPolicy,
             AtomicBoolean submitGate)
@@ -122,7 +119,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 RoutingId sourceNodeRid,
                 RoutingId sourceSessionRid,
                 Message payload,
-                Duration timeout,
                 ZLinkBoundSessionSendOptions options,
                 ZLinkRelayMetadataPolicy metadataPolicy) {
             this(
@@ -132,7 +128,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                     sourceNodeRid,
                     sourceSessionRid,
                     payload,
-                    timeout,
                     options,
                     metadataPolicy,
                     new AtomicBoolean());
@@ -146,7 +141,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                     sourceNodeRid,
                     sourceSessionRid,
                     payload,
-                    timeout,
                     options.withPacketName(packetName),
                     metadataPolicy,
                     submitGate);
@@ -161,7 +155,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                     sourceNodeRid,
                     sourceSessionRid,
                     payload,
-                    timeout,
                     options.withMetadata(key, value),
                     metadataPolicy,
                     submitGate);
@@ -182,16 +175,13 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                     payload.close();
                 }
                 Message frame = Message.from(frameBytes);
-                return submitBoundSessionFrame(spotNode, currentActorRef, frame, timeout);
+                return submitBoundSessionFrame(spotNode, currentActorRef, frame);
             }
         }
     }
 
     private static CompletionStage<Void> submitBoundSessionFrame(
-            ZLinkInternalSpotNode spotNode,
-            ZLinkBackendActorRef actorRef,
-            Message frame,
-            Duration timeout) {
+            ZLinkInternalSpotNode spotNode, ZLinkBackendActorRef actorRef, Message frame) {
         if (spotNode.hasRemoteActorBoundSessionRoute(actorRef)) {
             CompletionStage<Void> submission;
             try {
@@ -200,8 +190,9 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 Message.closeAll(List.of(frame));
                 return CompletableFuture.failedFuture(failure);
             }
-            return ZLinkOneWayCalls.adaptOneWay(submission)
-                    .whenComplete((ignored, failure) -> Message.closeAll(List.of(frame)));
+            return ZLinkOneWayCalls.adaptOneWay(
+                    submission.whenComplete(
+                            (ignored, failure) -> Message.closeAll(List.of(frame))));
         }
         if (!spotNode.hasLocalActorBoundSessionRoute(actorRef)) {
             frame.close();
@@ -209,14 +200,12 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
         }
         CompletionStage<Void> submission;
         try {
-            submission =
-                    spotNode.sendLocalActorBoundSessionAsync(actorRef, List.of(frame), timeout);
+            submission = spotNode.sendLocalActorBoundSessionAsync(actorRef, List.of(frame));
         } catch (RuntimeException failure) {
             frame.close();
             return CompletableFuture.failedFuture(failure);
         }
-        CompletionStage<Void> adapted = ZLinkOneWayCalls.adaptOneWay(submission);
-        adapted.whenComplete((ignored, failure) -> frame.close());
-        return adapted;
+        submission.whenComplete((ignored, failure) -> frame.close());
+        return ZLinkOneWayCalls.adaptOneWay(submission);
     }
 }

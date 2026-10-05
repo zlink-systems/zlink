@@ -371,7 +371,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
 
     /** Submits one local bound-Session frame through binding-owned admission. */
     default CompletionStage<Void> sendLocalActorBoundSessionAsync(
-            ZLinkBackendActorRef actor, List<Message> parts, Duration timeout) {
+            ZLinkBackendActorRef actor, List<Message> parts) {
         return CompletableFuture.failedFuture(
                 new UnsupportedOperationException(
                         "local bound-Session async admission is unavailable"));
@@ -383,10 +383,13 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         try {
             return sendActorBoundSession(actor, parts, SendFlags.DONT_WAIT)
                     ? CompletableFuture.completedFuture(null)
-                    : CompletableFuture.failedFuture(
-                            new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+                    : systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                            CompletableFuture.failedFuture(
+                                    new ZlinkSubmitException(SubmitResult.BACKPRESSURED)),
+                            true);
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            return systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                    CompletableFuture.failedFuture(failure), true);
         }
     }
 
@@ -406,10 +409,13 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         try {
             return sendToActor(actor, parts, SendFlags.DONT_WAIT)
                     ? CompletableFuture.completedFuture(null)
-                    : CompletableFuture.failedFuture(
-                            new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+                    : systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                            CompletableFuture.failedFuture(
+                                    new ZlinkSubmitException(SubmitResult.BACKPRESSURED)),
+                            true);
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            return systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                    CompletableFuture.failedFuture(failure), true);
         }
     }
 

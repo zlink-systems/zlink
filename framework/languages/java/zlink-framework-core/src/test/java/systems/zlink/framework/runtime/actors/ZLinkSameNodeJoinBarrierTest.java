@@ -20,7 +20,6 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
@@ -36,8 +35,6 @@ import systems.zlink.framework.spots.ZLinkSpotContext;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
-import java.util.IdentityHashMap;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
@@ -45,7 +42,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Function;
 
 /**
  * Spec 05-spot-actor-membership §4: after a same-node {@code JoinSpot}, the target Actor processes
@@ -141,27 +137,18 @@ final class ZLinkSameNodeJoinBarrierTest {
             assertEquals(
                     0,
                     meshJoinSubmissions.get(),
-                    "same-node public Actor Join must use one Framework local path without Mesh Join records");
+                    "same-node public Actor Join must use one Framework local path without Mesh"
+                            + " Join records");
         }
     }
 
     static ZLinkBackendAdapterProvider observeMeshJoins(AtomicInteger submissions) {
         var delegate = new ZLinkJavaBackendAdapterFactory();
-        Map<ZLinkBackendObject, ZLinkBackendObject> originals =
-                java.util.Collections.synchronizedMap(new IdentityHashMap<>());
         return (ZLinkBackendAdapterProvider)
                 Proxy.newProxyInstance(
                         ZLinkBackendAdapterProvider.class.getClassLoader(),
                         new Class<?>[] {ZLinkBackendAdapterProvider.class},
                         (proxy, method, arguments) -> {
-                            if (method.getName().equals("admissionTimeout")) {
-                                return (Function<ZLinkBackendObject, Duration>)
-                                        backend ->
-                                                delegate.admissionTimeout()
-                                                        .apply(
-                                                                originals.getOrDefault(
-                                                                        backend, backend));
-                            }
                             if (method.getName().equals("createMeshAdapter")) {
                                 ZLinkMeshBackendAdapter adapter =
                                         (ZLinkMeshBackendAdapter)
@@ -209,7 +196,6 @@ final class ZLinkSameNodeJoinBarrierTest {
                                                                                     : invoke(
                                                                                             m, mesh,
                                                                                             a));
-                                            originals.put(observed, mesh);
                                             return observed;
                                         };
                             }

@@ -297,11 +297,11 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         return ZLinkJavaSocketSupport.submitSync(socket.send(routingId), parts);
     }
 
-    CompletionStage<Void> sendBoundSessionPushAsync(
-            RoutingId routingId, List<Message> parts, Duration timeout) {
+    @Override
+    public CompletionStage<Void> sendBoundSessionPushAsync(
+            RoutingId routingId, List<Message> parts) {
         if (boundSessionSink != null) {
-            return boundSessionSink.sendAsync(
-                    routingId, parts, timeout == null ? admissionTimeout() : timeout);
+            return boundSessionSink.sendAsync(routingId, parts);
         }
         if (parts == null || parts.size() != 1) {
             throw new IllegalArgumentException(
@@ -313,26 +313,15 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
-        return submitOwnedStreamFrameAsync(routingId, frame, timeout);
-    }
-
-    @Override
-    public CompletionStage<Void> sendBoundSessionPushAsync(
-            RoutingId routingId, List<Message> parts) {
-        return sendBoundSessionPushAsync(routingId, parts, null);
+        return submitOwnedStreamFrameAsync(routingId, frame);
     }
 
     @Override
     public CompletionStage<Void> sendBoundSessionPushAsync(
             RoutingId routingId, int actorSlot, List<Message> parts) {
-        return sendBoundSessionPushAsync(routingId, actorSlot, parts, null);
-    }
-
-    CompletionStage<Void> sendBoundSessionPushAsync(
-            RoutingId routingId, int actorSlot, List<Message> parts, Duration timeout) {
         Message frame = ZLinkJavaStreamFraming.withActorSlot(parts, actorSlot);
         try {
-            return sendBoundSessionPushAsync(routingId, List.of(frame), timeout);
+            return sendBoundSessionPushAsync(routingId, List.of(frame));
         } finally {
             frame.close();
         }
@@ -357,13 +346,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     @Override
     public CompletionStage<Void> sendAsync(
             RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
-        return submitStreamFrameAsync(routingId, header, parts, null);
-    }
-
-    @Override
-    public CompletionStage<Void> sendAsync(
-            RoutingId routingId, ZLinkStreamHeader header, List<Message> parts, Duration timeout) {
-        return submitStreamFrameAsync(routingId, header, parts, timeout);
+        return submitStreamFrameAsync(routingId, header, parts);
     }
 
     @Override
@@ -380,7 +363,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                     () -> {
                         try {
                             return FrameworkStreamOperations.send(
-                                    socket, routingId, List.of(frame), admissionTimeoutOnLane());
+                                    socket, routingId, List.of(frame), null);
                         } finally {
                             frame.close();
                         }
@@ -419,32 +402,28 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     @Override
     public CompletionStage<Void> replyAsync(
             RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
-        return submitStreamFrameAsync(routingId, header, parts, admissionTimeout());
+        return submitStreamFrameAsync(routingId, header, parts);
     }
 
     private CompletionStage<Void> submitStreamFrameAsync(
-            RoutingId routingId, ZLinkStreamHeader header, List<Message> parts, Duration timeout) {
+            RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
         Message frame;
         try {
             frame = ZLinkJavaStreamFraming.frame(header, parts);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
-        return submitOwnedStreamFrameAsync(routingId, frame, timeout);
+        return submitOwnedStreamFrameAsync(routingId, frame);
     }
 
-    private CompletionStage<Void> submitOwnedStreamFrameAsync(
-            RoutingId routingId, Message frame, Duration timeout) {
+    private CompletionStage<Void> submitOwnedStreamFrameAsync(RoutingId routingId, Message frame) {
         try {
             return stateLane
                     .<CompletionStage<Void>>runAsync(
                             () -> {
                                 try {
                                     return FrameworkStreamOperations.send(
-                                            socket,
-                                            routingId,
-                                            List.of(frame),
-                                            timeout == null ? admissionTimeoutOnLane() : timeout);
+                                            socket, routingId, List.of(frame), null);
                                 } finally {
                                     frame.close();
                                 }
@@ -454,11 +433,6 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             frame.close();
             throw failure;
         }
-    }
-
-    private Duration admissionTimeoutOnLane() {
-        Duration configured = socket.options().sendTimeout();
-        return configured.isNegative() || configured.isZero() ? Duration.ofSeconds(1) : configured;
     }
 
     @Override
@@ -893,8 +867,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     interface BoundSessionSink {
         boolean send(RoutingId sessionRid, List<Message> parts, SendFlags flags);
 
-        default CompletionStage<Void> sendAsync(
-                RoutingId sessionRid, List<Message> parts, Duration timeout) {
+        default CompletionStage<Void> sendAsync(RoutingId sessionRid, List<Message> parts) {
             try {
                 return send(sessionRid, parts, SendFlags.DONT_WAIT)
                         ? CompletableFuture.completedFuture(null)
