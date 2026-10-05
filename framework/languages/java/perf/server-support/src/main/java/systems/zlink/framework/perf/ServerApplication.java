@@ -139,12 +139,11 @@ public final class ServerApplication {
         }
     }
 
-    /** An automatic RouteMesh node on this role's mesh listener; the family send timeout is the §5.2 value. */
+    /** An automatic RouteMesh node on this role's mesh listener. One-way sends have no send timeout (#1461). */
     public static ZLinkMeshNodeBuilder routeMesh(ZLinkFrameworkOptions options, RoleConfig config, String routingIdPrefix) {
         ZLinkMeshNodeBuilder mesh = options.addRouteMesh(config.meshName())
                 .setRoutingIdPrefix(routingIdPrefix)
                 .listen(config.transportEndpoints().get("mesh"));
-        mesh.configureRouterSocket().setSendTimeout(Duration.ofMillis(config.workload().socketSendTimeoutMs()));
         return mesh;
     }
 
