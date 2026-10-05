@@ -1,11 +1,11 @@
 # Framework archives are static; dependencies retain the triplet's linkage.
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
-# Replace the inherited SHA512 with the published framework-cpp/v0.27.0 source archive digest.
+# Replace the inherited SHA512 with the published framework-cpp/v0.28.0 source archive digest.
 vcpkg_download_distfile(ARCHIVE
     URLS "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v${VERSION}/zlink-framework-cpp-${VERSION}.tar.gz"
     FILENAME "zlink-framework-cpp-${VERSION}.tar.gz"
-    SHA512 bad9341708a1dd5a751babeeceecdcfc692738987996870ba54beca7c9aa9c7fce214763e8bd29f45bbc9e2b5508433ab3d936dc40514bd9b89e2bd3498b75af
+    SHA512 fd0f118459bf5000a75850bfad6b4df07c0cd6515a62ddd496258f4483560c0e4edf50abfe305d0836d25c3935177640ed259c310d4481ed521cc5f573acd211
 )
 vcpkg_extract_source_archive(SOURCE_PATH ARCHIVE "${ARCHIVE}")
 if(NOT EXISTS "${SOURCE_PATH}/runtime/protocol/generated/cpp/service_wire_constants.hpp")
