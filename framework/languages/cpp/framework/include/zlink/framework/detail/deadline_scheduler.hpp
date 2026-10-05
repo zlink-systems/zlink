@@ -42,6 +42,12 @@ class deadline_scheduler_t
         _changed.notify_one ();
     }
 
+    std::uint64_t scheduled_count ()
+    {
+        std::lock_guard lock (_mutex);
+        return _next_sequence - 1;
+    }
+
     void wake () noexcept { _changed.notify_one (); }
 
   private:

@@ -2,6 +2,7 @@
 
 #include "runtime/channels/channel_outbound_exchange.hpp"
 #include "runtime/messaging/request_deadline.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/channels/channel_socket_options.hpp"
@@ -300,16 +301,20 @@ class channel_native_client_t
              const endpoint_provider_t &endpoints,
              std::chrono::milliseconds timeout)
     {
-        const auto deadline = std::chrono::steady_clock::now () + timeout;
-        return runtime::messaging::with_request_deadline (
-          request_native (parts, endpoints, timeout), deadline);
+        std::optional<std::chrono::steady_clock::time_point> caller_deadline;
+        // task_t starts eagerly: request_native writes this snapshot before
+        // its first suspension and never accesses the reference after that.
+        auto operation = request_native (parts, endpoints, timeout, caller_deadline);
+        return runtime::messaging::with_request_deadline (std::move (operation), caller_deadline);
     }
 
     task_t<runtime::messaging::message_parts_t>
     request_native (const runtime::messaging::message_parts_t &parts,
                     const endpoint_provider_t &endpoints,
-                    std::chrono::milliseconds timeout)
+                    std::chrono::milliseconds timeout,
+                    std::optional<std::chrono::steady_clock::time_point> &caller_deadline)
     {
+        const auto deadline = std::chrono::steady_clock::now () + timeout;
         if (_closed.load (std::memory_order_acquire)) {
             co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
               detail::boundary_error_t::shutdown, "channel native client is closed");
@@ -325,7 +330,7 @@ class channel_native_client_t
                   detail::boundary_error_t::disconnected,
                   "channel client has no connected server endpoint");
             }
-            std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> pending;
+            std::optional<detail::backend::request_submission_stages_t> pending;
             std::shared_ptr<transport_t> transport;
             {
                 std::lock_guard lock (_mutex);
@@ -351,14 +356,18 @@ class channel_native_client_t
                     co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
                       detail::boundary_error_t::shutdown, "channel native client is closed");
                 }
-                pending.emplace (transport->socket->request ()
-                                   .message (request_header)
-                                   .message (request_body)
-                                   .timeout (request_timeout)
-                                   .async ()
-                                   .reply);
+                pending.emplace (detail::backend::submit_request_once (
+                  [&] {
+                      return transport->socket->request ()
+                        .message (request_header)
+                        .message (request_body)
+                        .timeout (request_timeout)
+                        .async ();
+                  },
+                  deadline));
+                caller_deadline = pending->caller_deadline;
             }
-            auto reply = co_await std::move (*pending);
+            auto reply = co_await std::move (pending->reply);
             co_return runtime::messaging::message_parts_t (std::move (reply));
         }
         catch (const std::exception &error) {

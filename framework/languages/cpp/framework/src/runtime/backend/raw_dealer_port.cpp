@@ -93,7 +93,7 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
                 operation = std::move (operation).message (messages[index]);
             }
             stages.emplace (submit_request_once (
-              [&] { return std::move (operation).timeout (timeout).async (); }));
+              [&] { return std::move (operation).timeout (timeout).async (); }, deadline));
         }
     }
     catch (const zlink::submit_error_t &error) {
@@ -103,8 +103,9 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
           raw_request_failure_t{raw_request_failure_phase_t::initial_admission, error.result (),
                                 error.internal_errno ()}};
     }
+    const auto caller_deadline = stages->caller_deadline;
     observe_request_completion (std::move (*stages), source);
-    co_return co_await runtime::messaging::with_request_deadline (source->task (), deadline);
+    co_return co_await runtime::messaging::with_request_deadline (source->task (), caller_deadline);
 }
 
 std::optional<raw_message_t> raw_dealer_port_t::try_receive ()

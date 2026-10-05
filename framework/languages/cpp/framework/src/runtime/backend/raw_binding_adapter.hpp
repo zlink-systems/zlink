@@ -51,13 +51,21 @@ struct request_submission_stages_t
 {
     std::optional<zlink::async_result_t<void>> admission;
     zlink::async_result_t<std::vector<zlink::message_t>> reply;
+    std::optional<std::chrono::steady_clock::time_point> caller_deadline;
 };
 
-template <typename TSubmit> request_submission_stages_t submit_request_once (TSubmit &&submit)
+template <typename TSubmit>
+request_submission_stages_t submit_request_once (
+  TSubmit &&submit,
+  std::optional<std::chrono::steady_clock::time_point> caller_deadline = std::nullopt)
 {
     auto submission = std::forward<TSubmit> (submit) ();
     auto admission = take_submission_admission (submission);
-    return {std::move (admission), std::move (submission.reply)};
+    // Core bounds the reply after immediate admission. Only its wait-token
+    // result needs a Framework deadline covering admission and the later reply.
+    if (!admission)
+        caller_deadline.reset ();
+    return {std::move (admission), std::move (submission.reply), caller_deadline};
 }
 
 // A successful binding receive owns native parts until close(). This guard

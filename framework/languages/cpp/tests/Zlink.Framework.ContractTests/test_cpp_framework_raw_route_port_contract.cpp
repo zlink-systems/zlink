@@ -631,16 +631,88 @@ void verify_backpressured_send_waits_for_admission ()
     }
     assert (waiting);
 
-    target.set_receive_flow_state (zlink::receive_flow_state_t::running);
-    const auto deadline = std::chrono::steady_clock::now () + raw_route_fixture_timeout;
-    while (!waiting->await_ready () && std::chrono::steady_clock::now () < deadline) {
+    auto &scheduler = zlink::framework::detail::deadline_scheduler_t::instance ();
+    const auto before = scheduler.scheduled_count ();
+    auto request = source_port.request (request_parts (), raw_request_capacity_timeout);
+    assert (scheduler.scheduled_count () == before + 1);
+    std::atomic_int terminals{0};
+    zlink::framework::detail::observe_task_completion (request, [&] (const auto &result) {
+        assert (!result
+                && result.error_kind ()
+                     == zlink::framework::framework_error_kind_t::deadline_exceeded);
+        terminals.fetch_add (1, std::memory_order_release);
+    });
+    const auto held_until = std::chrono::steady_clock::now () + 4 * raw_request_capacity_timeout;
+    while (std::chrono::steady_clock::now () < held_until) {
         zlink::poll_event_t event;
         (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
     }
+    assert (request.await_ready ());
+    assert (terminals.load (std::memory_order_acquire) == 1);
+    assert (!request.result ()
+            && request.result ().error_kind ()
+                 == zlink::framework::framework_error_kind_t::deadline_exceeded);
+
+    target.set_receive_flow_state (zlink::receive_flow_state_t::running);
+    backend::raw_route_port_t target_port (target);
+    int replies = 0;
+    const auto deadline = std::chrono::steady_clock::now () + raw_route_fixture_timeout;
+    while ((!waiting->await_ready () || replies == 0)
+           && std::chrono::steady_clock::now () < deadline) {
+        zlink::poll_event_t event;
+        (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
+        auto received = target_port.receive_if_ready (target_port.poll (0ms));
+        if (received && received->reply_token) {
+            assert (target_port.reply (*received, request_parts ()));
+            ++replies;
+        }
+    }
+    assert (replies == 1);
     assert (waiting->await_ready ());
     assert (waiting->result ().value () == zlink::submit_result_t::ok);
 
+    auto healthy = source_port.request (request_parts (), raw_route_fixture_timeout);
+    while (!healthy.await_ready () && std::chrono::steady_clock::now () < deadline) {
+        auto received =
+          target_port.receive_if_ready (target_port.poll (raw_route_fixture_poll_interval));
+        if (received && received->reply_token) {
+            assert (target_port.reply (*received, request_parts ()));
+            ++replies;
+        }
+        zlink::poll_event_t event;
+        (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
+    }
+    assert (healthy.await_ready ()
+            && healthy.result ().value ().terminal == zlink::request_result_t::ok);
+    assert (replies == 2);
+    assert (terminals.load (std::memory_order_acquire) == 1);
+    assert (!request.result ()
+            && request.result ().error_kind ()
+                 == zlink::framework::framework_error_kind_t::deadline_exceeded);
     source_port.close ();
+    target_port.close ();
+    monitor.close ();
+}
+
+void verify_immediate_request_has_no_framework_deadline ()
+{
+    zlink::context_t context;
+    zlink::dealer_socket_t source (context);
+    zlink::router_socket_t target (context);
+    source.options ().linger (0ms);
+    target.options ().linger (0ms);
+    target.bind ("inproc://framework-immediate-request-deadline");
+    auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
+    source.connect ("inproc://framework-immediate-request-deadline");
+    assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready,
+                                    raw_route_fixture_timeout));
+    backend::raw_dealer_port_t port (source);
+    auto &scheduler = zlink::framework::detail::deadline_scheduler_t::instance ();
+    const auto before = scheduler.scheduled_count ();
+    auto pending = port.request (request_parts (), raw_route_fixture_timeout);
+    assert (!pending.await_ready ());
+    assert (scheduler.scheduled_count () == before);
+    port.close ();
     monitor.close ();
 }
 
@@ -834,6 +906,7 @@ void verify_pending_send_route_removal_and_shutdown ()
 int main ()
 {
     verify_pending_send_route_removal_and_shutdown ();
+    verify_immediate_request_has_no_framework_deadline ();
     verify_request_submission_stages ();
     verify_submission_admission_consumes_only_backpressure ();
     verify_capacity_refusal_phase_controls_public_terminal ();
