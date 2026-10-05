@@ -156,6 +156,8 @@ endif()
                            multi/tests/test_perf_multi_metrics.cpp)
     add_current_bench_multi(perf_relay_completion_progress_test
                            tests/test_relay_completion_progress.cpp)
+    add_current_bench_multi(perf_reqrep_reply_progress_test
+                           tests/test_reqrep_reply_progress.cpp)
     if(ZLINK_C_REGISTER_CTEST)
         add_test(NAME perf_multi_metrics_test COMMAND perf_multi_metrics_test)
         set_tests_properties(perf_multi_metrics_test PROPERTIES
@@ -164,6 +166,11 @@ endif()
         add_test(NAME perf_relay_completion_progress_test
                  COMMAND perf_relay_completion_progress_test)
         set_tests_properties(perf_relay_completion_progress_test PROPERTIES
+            LABELS "perf-regression"
+            TIMEOUT 30)
+        add_test(NAME perf_reqrep_reply_progress_test
+                 COMMAND perf_reqrep_reply_progress_test)
+        set_tests_properties(perf_reqrep_reply_progress_test PROPERTIES
             LABELS "perf-regression"
             TIMEOUT 30)
     endif()

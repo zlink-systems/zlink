@@ -1011,7 +1011,9 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             os.environ["PERF_TRANSPORT_TRANSITION_MS"] = "23"
 
             def fake_run_sizes_test(binary_name, lib_name, transport, sizes,
-                                    pattern_name, result_line_callback=None):
+                                    pattern_name, result_line_callback=None,
+                                    size_start_callback=None,
+                                    size_result_callback=None):
                 calls.append((transport, list(sizes), pattern_name))
                 parsed = {}
                 if result_line_callback is not None:
@@ -1220,6 +1222,10 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             self.assertEqual(final_stats["tcp|65536|throughput"], 0)
             self.assertEqual(final_stats["tcp|131072|throughput"], 10.0)
             output = stdout.getvalue()
+            self.assertRegex(
+                output,
+                r"(?m)^\s*\| 65536B[^\n]*FAIL[^\n]*\n      reason: server_non_zero_exit_1$",
+            )
             self.assertIn("| 65536B", output)
             self.assertIn("| 131072B", output)
             self.assertLess(
@@ -1243,7 +1249,9 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             os.environ["PERF_TRANSPORT_TRANSITION_MS"] = "0"
 
             def fake_run_sizes_test(binary_name, lib_name, transport, sizes,
-                                    pattern_name, result_line_callback=None):
+                                    pattern_name, result_line_callback=None,
+                                    size_start_callback=None,
+                                    size_result_callback=None):
                 for size in sizes:
                     if result_line_callback is not None:
                         for metric_name, value in tier1_metrics(1.0):
@@ -1301,7 +1309,9 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             os.environ["PERF_TRANSPORT_TRANSITION_MS"] = "0"
 
             def fake_run_sizes_test(binary_name, lib_name, transport, sizes,
-                                    pattern_name, result_line_callback=None):
+                                    pattern_name, result_line_callback=None,
+                                    size_start_callback=None,
+                                    size_result_callback=None):
                 for size in sizes:
                     if result_line_callback is not None:
                         for metric_name, value in tier1_metrics(1.0):

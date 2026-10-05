@@ -15,6 +15,9 @@ import time
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from failure_detail import process_failure_reason
+
 IS_WINDOWS = os.name == "nt"
 IS_LINUX = (os.name != "nt") and platform.system().lower().startswith("linux")
 EXE_SUFFIX = ".exe" if IS_WINDOWS else ""
@@ -840,7 +843,9 @@ def run_single_test(
     if sampled.get("timed_out"):
         return RunOutcome(
             status="fail",
-            reason="timeout",
+            reason="timeout; " + process_failure_reason(
+                sampled.get("returncode"), stderr
+            ),
             warnings=warnings or None,
             stderr=stderr,
         )
@@ -850,7 +855,7 @@ def run_single_test(
     if return_code != 0:
         return RunOutcome(
             status="fail",
-            reason=f"non_zero_exit_{return_code}",
+            reason=process_failure_reason(return_code, stderr),
             warnings=warnings or None,
             stderr=stderr,
         )
@@ -1402,8 +1407,11 @@ def main() -> int:
                                 remain_size, "fail", row_record, pattern
                             )
                             line = f"{row_indent}{row}"
-                            print(line)
+                            print(line, flush=True)
                             table_lines.append(line)
+                            reason_line = f"      reason: {reason}"
+                            print(reason_line, flush=True)
+                            table_lines.append(reason_line)
                         break
 
                     reason = outcome.reason or "fail"
@@ -1417,8 +1425,11 @@ def main() -> int:
                     failed_records[size] = failed_record
                     row = single_table_row_line(size, "fail", failed_record, pattern)
                     line = f"{row_indent}{row}"
-                    print(line)
+                    print(line, flush=True)
                     table_lines.append(line)
+                    reason_line = f"      reason: {reason}"
+                    print(reason_line, flush=True)
+                    table_lines.append(reason_line)
                     if FAIL_FAST:
                         abort_pattern = True
                         break
@@ -1484,8 +1495,12 @@ def main() -> int:
                     else:
                         row = single_table_row_line(size, "fail", record, pattern)
                     line = f"        {row}"
-                    print(line)
+                    print(line, flush=True)
                     table_lines.append(line)
+                    if not record or record.status == "fail":
+                        reason_line = f"      reason: {failed_sizes.get(size, 'no_data')}"
+                        print(reason_line, flush=True)
+                        table_lines.append(reason_line)
 
             done_line = f"    Testing {transport}: Done"
             print(done_line)

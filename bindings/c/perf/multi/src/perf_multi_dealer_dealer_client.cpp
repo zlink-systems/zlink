@@ -243,12 +243,13 @@ inline bool record_dd_writable (dd_send_slot_t *slot,
 
     slot->wait_token = 0;
     slot->pollout_suppressed = false;
-    if (completion.send_result == ZLINK_SEND_ADMITTED
-        && completion.send_terminal_errno == 0) {
+    const perf_multi_client::writable_outcome_t outcome =
+      perf_multi_client::classify_writable_outcome (completion.send_result,
+                                                    completion.send_terminal_errno);
+    if (outcome == perf_multi_client::writable_retry) {
         slot->retry_ready = true;
         return true;
     }
-
     const int terminal_errno = completion.send_terminal_errno;
     clear_retained_message (slot);
     errno = terminal_errno != 0 ? terminal_errno : EIO;
