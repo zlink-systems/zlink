@@ -78,7 +78,7 @@ await routeClient
     .Async(ct);
 ```
 
-**옵션.** `SendToChannel`과 동일하다 — `.Metadata(...)`, terminal `.Async(ct)`.
+**옵션.** `SendToChannel`과 동일하다 — `.Metadata(...)`, terminal `.Async()`(token 없음 — send에는 시간 상한과 caller cancellation이 없다).
 
 **완료 결과.** `SendToChannel`과 같은 완료 kind를 사용한다. 대상 RID가 Object Client(handler 등록이
 불가능한 RID)이면 다른 target으로 넘기지 않고 `NotFound`로 완료한다.

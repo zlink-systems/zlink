@@ -111,7 +111,7 @@ var reply = await actorClient
     .Async<Inventory>(ct);
 ```
 
-**Options.** `SendToActor` has only `.Metadata(...)` and the terminal `.Async(ct)`.
+**Options.** `SendToActor` has only `.Metadata(...)` and the terminal `.Async()` (no token).
 `RequestToActor` also has the following.
 
 | Modifier | Default | Meaning |

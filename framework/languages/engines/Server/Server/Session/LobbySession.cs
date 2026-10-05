@@ -47,7 +47,7 @@ public sealed class LobbySession(IZLinkSessionContext context, ILogger<LobbySess
         if (bound.Count != 1)
             throw new InvalidOperationException("JoinReq before sending lobby packets.");
 
-        await bound.Single().RelayAsync(payload, cancellationToken);
+        await bound.Single().RelayAsync(payload);
     }
 }
 
@@ -58,7 +58,7 @@ public sealed class PingHandler : IZLinkSessionPacketHandler<IZLinkSessionContex
         ZLinkSessionDispatchContext dispatch,
         PingReq message,
         CancellationToken cancellationToken
-    ) => context.Client.Reply(new PingRes(message.SentAtUnixMs)).Async(cancellationToken);
+    ) => context.Client.Reply(new PingRes(message.SentAtUnixMs)).Async();
 }
 
 public sealed class JoinHandler(IZLinkActorManager actors)
@@ -87,8 +87,6 @@ public sealed class JoinHandler(IZLinkActorManager actors)
         };
 
         var bound = await context.Actors.BindAsync(actor, cancellationToken);
-        await context
-            .Client.Reply(new JoinRes(bound.ActorId, message.Name))
-            .Async(cancellationToken);
+        await context.Client.Reply(new JoinRes(bound.ActorId, message.Name)).Async();
     }
 }
