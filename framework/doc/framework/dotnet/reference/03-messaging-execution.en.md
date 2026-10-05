@@ -82,7 +82,7 @@ await routeClient
     .Async(ct);
 ```
 
-**Options.** Same as `SendToChannel` — `.Metadata(...)`, terminal `.Async(ct)`.
+**Options.** Same as `SendToChannel` — `.Metadata(...)`, terminal `.Async()` (no cancellation token; a send has no time limit or caller cancellation).
 
 **Completion.** Uses the same completion kinds as `SendToChannel`. If the target RID is an
 Object Client (an RID that cannot register a handler), it completes with `NotFound` instead of

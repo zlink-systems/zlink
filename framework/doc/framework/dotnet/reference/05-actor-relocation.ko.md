@@ -105,7 +105,7 @@ var reply = await actorClient
     .Async<Inventory>(ct);
 ```
 
-**옵션.** `SendToActor`는 `.Metadata(...)`와 terminal `.Async(ct)`만 있다. `RequestToActor`는
+**옵션.** `SendToActor`는 `.Metadata(...)`와 terminal `.Async()`(token 없음)만 있다. `RequestToActor`는
 다음이 더 있다.
 
 | Modifier | 기본값 | 의미 |

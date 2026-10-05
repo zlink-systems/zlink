@@ -201,7 +201,7 @@ app.MapPost(
             if (message is null)
                 return Results.BadRequest();
 
-            await rooms.SendToSpot(roomId, message).Async(cancellationToken);
+            await rooms.SendToSpot(roomId, message).Async();
             imported++;
         }
 
@@ -231,7 +231,7 @@ app.MapPost(
     async (string playerId, IZLinkRouteClient route, CancellationToken cancellationToken) =>
     {
         // Returns as soon as the message is sent, with no reply to wait for.
-        await route.SendToChannel("profile", new RecordLogin(playerId)).Async(cancellationToken);
+        await route.SendToChannel("profile", new RecordLogin(playerId)).Async();
 
         return Results.Accepted();
     }
@@ -320,7 +320,7 @@ app.MapPost(
     ) =>
     {
         // The id is enough; the Framework resolves where the room currently runs.
-        await rooms.SendToSpot(roomId, message).Async(cancellationToken);
+        await rooms.SendToSpot(roomId, message).Async();
 
         return Results.Accepted();
     }
@@ -443,7 +443,7 @@ app.MapPost(
     ) =>
     {
         // Addressed by player id, like a room is by room id.
-        await players.SendToActor(playerId, message).Async(cancellationToken);
+        await players.SendToActor(playerId, message).Async();
 
         return Results.Accepted();
     }

@@ -57,7 +57,7 @@ public sealed class LobbySpot(IZLinkEntrySpotContext context) : IZLinkEntrySpot<
         {
             try
             {
-                await participant.Context.BoundSession.Send(notification).Async(cancellationToken);
+                await participant.Context.BoundSession.Send(notification).Async();
             }
             catch (ZLinkFrameworkException error)
                 when (error.Kind == ZLinkFrameworkErrorKind.InvalidOperation) { }
