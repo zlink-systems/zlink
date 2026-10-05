@@ -439,8 +439,8 @@ export class ZLinkFrameworkRuntimeHost
               options
             );
       },
-      relay: (actor, header, payload, signal) =>
-        this.boundSessionRelay.actorPackets.relayActorPacket(actor, header, payload, signal),
+      relay: (actor, header, payload) =>
+        this.boundSessionRelay.actorPackets.relayActorPacket(actor, header, payload),
       notifyDisconnected: (actor, signal) =>
         this.boundSessionRelay.actorPackets.notifyBoundActorDisconnected(actor, signal)
     });

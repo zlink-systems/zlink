@@ -142,12 +142,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     }
   }
 
-  async submitBoundActor(
-    actorId: string,
-    parts: readonly Message[],
-    signal?: AbortSignal
-  ): Promise<ZLinkSubmitResult> {
-    throwIfAborted(signal);
+  async submitBoundActor(actorId: string, parts: readonly Message[]): Promise<ZLinkSubmitResult> {
     return (await this.sendBoundActor(actorId, parts, ZLINK_SEND_DONT_WAIT))
       ? { status: ZLinkSubmitStatus.Submitted }
       : { status: ZLinkSubmitStatus.Backpressured };

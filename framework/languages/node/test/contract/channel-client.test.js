@@ -634,8 +634,8 @@ test('ZLinkSendCall snapshots metadata and reports asynchronous admission once',
   const calls = [];
   const registration = meshChannelRegistration('mesh', 'api');
   const transport = {
-    async submitToChannel(meshName, channelName, packetName, message, signal, metadata) {
-      calls.push({ kind: 'async', meshName, channelName, packetName, message, signal, metadata: [...metadata] });
+    async submitToChannel(meshName, channelName, packetName, message, metadata) {
+      calls.push({ kind: 'async', meshName, channelName, packetName, message, metadata: [...metadata] });
       return { status: ZLinkSubmitStatus.Submitted };
     },
     async requestToChannel() {},
@@ -1383,7 +1383,7 @@ test('Logical Multicast call built before runtime disposal reports RuntimeShutdo
   });
 });
 
-test('ZLinkDealerChannelClientTransport rejects pre-aborted signal before creating socket operations', async () => {
+test('ZLinkDealerChannelClientTransport sends without cancellation and rejects pre-aborted request/publish', async () => {
   const controller = new AbortController();
   controller.abort();
   const calls = [];
@@ -1406,10 +1406,10 @@ test('ZLinkDealerChannelClientTransport rejects pre-aborted signal before creati
     }
   );
 
-  await assertAborted(() => transport.send('api', 'Greeting', 'hello', controller.signal));
+  assert.deepEqual(await transport.send('api', 'Greeting', 'hello'), { status: ZLinkSubmitStatus.Submitted });
   await assertAborted(() => transport.request('api', 'Ping', 'ping', 250, controller.signal));
   await assertAborted(() => transport.publish('events', 'topic', 'Event', 'event', controller.signal));
-  assert.deepEqual(calls, []);
+  assert.deepEqual(calls, ['dealer.send']);
 });
 
 test('ZLinkDealerChannelClientTransport maps native request connectivity failures to public route error', async () => {
@@ -4775,17 +4775,9 @@ test('self-RID RouteMesh waits on the shared application job queue without local
   assert.deepEqual(await second, { status: ZLinkSubmitStatus.Submitted });
   assert.equal(scheduled.length, 2);
 
-  const cancelledController = new AbortController();
-  cancelledController.abort();
-  const cancelled = host.routeTransport.submit(
-    'mesh',
-    'self-node',
-    'Notice',
-    { sequence: 3 },
-    cancelledController.signal
-  );
-  await assert.rejects(cancelled, (error) => error?.name === 'AbortError');
-  assert.equal(scheduled.length, 2);
+  const third = host.routeTransport.submit('mesh', 'self-node', 'Notice', { sequence: 3 });
+  assert.deepEqual(await third, { status: ZLinkSubmitStatus.Submitted });
+  assert.equal(scheduled.length, 3);
 
   const firstDispatch = scheduled.shift()();
   await waitUntil(() => handled === 1);
@@ -4795,13 +4787,15 @@ test('self-RID RouteMesh waits on the shared application job queue without local
   assert.equal(host.applicationJobQueue.snapshot().capacityWaiters, 1n);
   releaseFirstHandler();
   await Promise.all([firstDispatch, secondDispatch]);
+  assert.equal(scheduled.length, 1);
+  await scheduled.shift()();
   assert.equal(scheduled.length, 0);
 
   const recovered = host.routeTransport.submit('mesh', 'self-node', 'Notice', { sequence: 4 });
   assert.deepEqual(await recovered, { status: ZLinkSubmitStatus.Submitted });
   assert.equal(scheduled.length, 1);
   await scheduled.shift()();
-  assert.equal(handled, 3);
+  assert.equal(handled, 4);
   assert.equal(host.applicationJobQueue.snapshot().permitsInUse, 0n);
 });
 

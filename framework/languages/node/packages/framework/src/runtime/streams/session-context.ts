@@ -88,7 +88,6 @@ interface ZLinkSessionContextRuntime {
   relay(
     actor: DefaultZLinkSessionActor,
     payload: ZLinkMessage,
-    signal?: AbortSignal,
     dispatchHeader?: ZLinkStreamFrameHeader
   ): Promise<ZLinkSubmitResult>;
   notifyDisconnected(actor: DefaultZLinkSessionActor, signal?: AbortSignal): Promise<void>;
@@ -542,7 +541,7 @@ export class DefaultZLinkSessionActor implements ZLinkSessionActor {
   async relay(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void>;
   async relay(
     dispatchOrPayload: ZLinkSessionDispatchContext | ZLinkMessage,
-    payloadOrSignal?: ZLinkMessage
+    selectedPayload?: ZLinkMessage
   ): Promise<void> {
     const dispatch = isSessionDispatchContext(dispatchOrPayload) ? dispatchOrPayload : undefined;
     let payload: ZLinkMessage;
@@ -550,10 +549,10 @@ export class DefaultZLinkSessionActor implements ZLinkSessionActor {
     if (dispatch === undefined) {
       payload = dispatchOrPayload as ZLinkMessage;
     } else {
-      payload = payloadOrSignal as ZLinkMessage;
+      payload = selectedPayload as ZLinkMessage;
       header = sessionDispatchHeader(dispatch);
     }
-    const result = await this.runtime.relay(this, payload, undefined, header);
+    const result = await this.runtime.relay(this, payload, header);
     requireOneWayCompletion(
       result,
       'Session Actor relay',

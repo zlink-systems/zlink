@@ -24,10 +24,8 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     channelName: string,
     packetName: string | undefined,
     message: Message,
-    signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_METADATA
   ): Promise<ZLinkSubmitResult> {
-    throwIfAborted(signal);
     // Call-scoped flow (spec 27 §4): the envelope flow pair does not outlive
     // this outbound call.
     await runWithOutboundFlow(

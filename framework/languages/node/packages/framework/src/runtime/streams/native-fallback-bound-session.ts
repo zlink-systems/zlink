@@ -86,8 +86,7 @@ export class ZLinkNativeFallbackBoundSession implements ZLinkBoundSession {
         return;
       }
       await this.options.routedTransport.sendToSpot(target, payload, {
-        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-        signal
+        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
       });
       return;
     }

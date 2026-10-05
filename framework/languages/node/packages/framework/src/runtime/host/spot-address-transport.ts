@@ -87,7 +87,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
   sendToSpotAddress(
     spotId: RoutingId,
     message: unknown,
-    call: ZLinkSpotAddressCallOptions
+    call: Omit<ZLinkSpotAddressCallOptions, 'timeoutMs' | 'signal'>
   ): Promise<ZLinkSubmitResult> {
     // Call-scoped flow (spec 27 §4): the envelope encoders and the
     // traceInstanceAddress points share one ambient flow that does not
@@ -101,7 +101,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
   private async sendToSpotAddressScoped(
     spotId: RoutingId,
     message: unknown,
-    call: ZLinkSpotAddressCallOptions
+    call: Omit<ZLinkSpotAddressCallOptions, 'timeoutMs' | 'signal'>
   ): Promise<ZLinkSubmitResult> {
     const activationDeadlineUnixMs = BigInt(
       Math.round(Date.now() + this.options.defaultRequestTimeoutMs)

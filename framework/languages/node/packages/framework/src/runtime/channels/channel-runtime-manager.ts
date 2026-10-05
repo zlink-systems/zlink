@@ -233,10 +233,9 @@ export class ZLinkChannelRuntimeManager {
     channelName: string,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<ZLinkSubmitResult> {
-    return this.outbound.send(channelName, packetName, message, signal, metadata);
+    return this.outbound.send(channelName, packetName, message, metadata);
   }
 
   async request<TReply>(
@@ -283,17 +282,9 @@ export class ZLinkChannelRuntimeManager {
     targetNodeRid: string,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<ZLinkSubmitResult> {
-    return this.outbound.routeSubmit(
-      routerChannelId,
-      targetNodeRid,
-      packetName,
-      message,
-      signal,
-      metadata
-    );
+    return this.outbound.routeSubmit(routerChannelId, targetNodeRid, packetName, message, metadata);
   }
 
   async routeRequest<TReply>(
@@ -320,18 +311,9 @@ export class ZLinkChannelRuntimeManager {
     spotRouteTarget: ZLinkSpotRouteTarget,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>,
-    timeoutMs?: number
+    metadata?: ReadonlyMap<string, string>
   ): Promise<void> {
-    return this.spotRoutes.routeSendToSpot(
-      spotRouteTarget,
-      packetName,
-      message,
-      signal,
-      metadata,
-      timeoutMs
-    );
+    return this.spotRoutes.routeSendToSpot(spotRouteTarget, packetName, message, metadata);
   }
 
   async routeRequestToSpot<TReply>(
@@ -375,18 +357,14 @@ export class ZLinkChannelRuntimeManager {
     spotRouteTarget: ZLinkSpotRouteTarget,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>,
-    timeoutMs?: number
+    metadata?: ReadonlyMap<string, string>
   ): Promise<void> {
     return this.spotRoutes.routeSendFromSpotToSpot(
       sourceSpot,
       spotRouteTarget,
       packetName,
       message,
-      signal,
-      metadata,
-      timeoutMs
+      metadata
     );
   }
 

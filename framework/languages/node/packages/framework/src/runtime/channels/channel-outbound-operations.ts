@@ -58,13 +58,12 @@ export class ZLinkChannelOutboundOperations {
     channelName: string,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): Promise<ZLinkSubmitResult> {
     // Call-scoped flow (spec 27 §4): the envelope encoder and the trace
     // points below share one ambient flow that does not outlive this call.
     return runWithOutboundFlow(this.dispatchServices.flowCreationEnabled(), () =>
-      this.sendScoped(channelName, packetName, message, signal, metadata)
+      this.sendScoped(channelName, packetName, message, metadata)
     );
   }
 
@@ -72,11 +71,9 @@ export class ZLinkChannelOutboundOperations {
     channelName: string,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): Promise<ZLinkSubmitResult> {
-    throwIfAborted(signal);
-    const dealer = await this.sockets.awaitClientDealerForOutbound(channelName, signal);
+    const dealer = await this.sockets.awaitClientDealerForOutbound(channelName);
     if (dealer === undefined) {
       return { status: ZLinkSubmitStatus.Shutdown };
     }
@@ -339,11 +336,10 @@ export class ZLinkChannelOutboundOperations {
     targetNodeRid: string,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): Promise<ZLinkSubmitResult> {
     return runWithOutboundFlow(this.dispatchServices.flowCreationEnabled(), () =>
-      this.routeSubmitScoped(routerChannelId, targetNodeRid, packetName, message, signal, metadata)
+      this.routeSubmitScoped(routerChannelId, targetNodeRid, packetName, message, metadata)
     );
   }
 
@@ -352,10 +348,8 @@ export class ZLinkChannelOutboundOperations {
     targetNodeRid: string,
     packetName: string | undefined,
     message: unknown,
-    signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): Promise<ZLinkSubmitResult> {
-    throwIfAborted(signal);
     const router = this.sockets.routeRouter(routerChannelId);
     const parts = encodeChannelEnvelopeParts(
       ZLinkChannelMessageKind.Command,

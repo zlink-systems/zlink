@@ -2136,8 +2136,8 @@ test('channel send and request report a known disconnected member as NotConnecte
   }
 });
 
-test('channel send preserves pending admission failure and unexpected transport errors', async () => {
-  for (const cause of [
+test('channel send projects absent routes and propagates other admission failures', async () => {
+  for (const [index, cause] of [
     new ZLinkBackendResultError('submit', SubmitResult.NotFound, undefined, {
       phase: 'completion'
     }),
@@ -2145,7 +2145,7 @@ test('channel send preserves pending admission failure and unexpected transport 
       phase: 'completion'
     }),
     new Error('injected unexpected transport failure')
-  ]) {
+  ].entries()) {
     const runtime = rawServiceRuntime({
       descriptor: { ...descriptor('m6a-transport-source'), state: 'serving', channels: [] }
     });
@@ -2159,14 +2159,13 @@ test('channel send preserves pending admission failure and unexpected transport 
           throw cause;
         }
       };
-      await assert.rejects(
-        runtime.sendToChannel('alpha', {
-          packetName: 'ChannelNotice',
-          contentType: 'application/json',
-          payload: Buffer.from('notice')
-        }),
-        (error) => error === cause
-      );
+      const pending = runtime.sendToChannel('alpha', {
+        packetName: 'ChannelNotice',
+        contentType: 'application/json',
+        payload: Buffer.from('notice')
+      });
+      if (index === 0) assert.equal(await pending, SubmitResult.NotConnected);
+      else await assert.rejects(pending, (error) => error === cause);
     } finally {
       runtime.close();
     }

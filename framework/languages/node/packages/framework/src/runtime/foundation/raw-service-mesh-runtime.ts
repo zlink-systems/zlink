@@ -381,19 +381,9 @@ export class RawServiceMeshRuntime {
       this.peerAdmissionSealed?.() === true
     )
       return false;
-    let accepted: boolean;
-    try {
-      accepted = await this.send(nodeRoutingId, [
-        encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
-      ]);
-    } catch (error) {
-      if (isZLinkBackendResultError(error) && error.operation === 'submit') {
-        const terminal = submitToRequestResult(error.result, error.phase);
-        if (terminal === RequestResult.NotConnected || terminal === RequestResult.NotFound)
-          return false;
-      }
-      throw error;
-    }
+    const accepted = await this.send(nodeRoutingId, [
+      encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
+    ]);
     if (
       accepted &&
       this.expectedPeers.get(nodeRoutingId) === expected &&
@@ -841,17 +831,14 @@ export class RawServiceMeshRuntime {
             peer.connectionId,
             record.probeId
           );
-          const sent =
-            ack !== undefined &&
-            (await this.send(received.sourceRid, [
-              livenessCodec.encodeLivenessRecord({
-                command: M6aServiceWireCommand.livenessAck,
-                probeId: record.probeId
-              })
-            ]));
-          if (!sent) {
-            return 'protocolError';
-          }
+          if (ack === undefined) return 'protocolError';
+          const sent = await this.send(received.sourceRid, [
+            livenessCodec.encodeLivenessRecord({
+              command: M6aServiceWireCommand.livenessAck,
+              probeId: record.probeId
+            })
+          ]);
+          if (!sent) return 'dropped';
         } else {
           this.liveness.acknowledge(received.sourceRid, peer.connectionId, record.probeId, nowMs);
         }
@@ -1271,8 +1258,17 @@ export class RawServiceMeshRuntime {
   }
 
   private async send(targetNodeRoutingId: string, parts: readonly Uint8Array[]): Promise<boolean> {
-    await this.requireStarted().send(targetNodeRoutingId, parts);
-    return true;
+    try {
+      await this.requireStarted().send(targetNodeRoutingId, parts);
+      return true;
+    } catch (error) {
+      if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+        const terminal = submitToRequestResult(error.result, error.phase);
+        if (terminal === RequestResult.NotConnected || terminal === RequestResult.NotFound)
+          return false;
+      }
+      throw error;
+    }
   }
 }
 

@@ -191,7 +191,7 @@ export interface ZLinkSpotAddressTransport {
   sendToSpotAddress(
     spotId: RoutingId,
     message: unknown,
-    options: ZLinkSpotAddressCallOptions
+    options: Omit<ZLinkSpotAddressCallOptions, 'timeoutMs' | 'signal'>
   ): Promise<ZLinkSubmitResult>;
   requestToSpotAddress<TReply = unknown>(
     spotId: RoutingId,
@@ -228,14 +228,12 @@ export interface ZLinkSpotRoutedTransport {
 export interface ZLinkSpotRoutedSendOptions {
   readonly instanceSpot?: boolean;
   readonly packetName?: string;
-  /** Internal end-to-end budget remaining for route admission. */
-  readonly timeoutMs?: number;
-  readonly signal?: AbortSignal;
   readonly metadata?: ReadonlyMap<string, string>;
 }
 
 export interface ZLinkSpotRoutedRequestOptions extends ZLinkSpotRoutedSendOptions {
   readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
 }
 
 interface MutableAddressCallOptions {
@@ -289,7 +287,7 @@ function createAddressedSpotSendCall(
         pending: transport.sendToSpotAddress(
           spotId,
           message,
-          freezeAddressCallOptions(options, undefined, sourceSpotProvider?.())
+          freezeAddressCallOptions(options, sourceSpotProvider?.())
         )
       }));
       const result = await (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending));
@@ -314,11 +312,11 @@ function createAddressedSpotRequestCall(
     markSubmitted(options);
     rejectSameSpotAsyncRequest(serial, spotId, waitPolicy);
     return startRequestOnSerial<TReply>(serial, () => ({
-      pending: transport.requestToSpotAddress<TReply>(
-        spotId,
-        request,
-        freezeAddressCallOptions(options, signal, sourceSpotProvider?.())
-      )
+      pending: transport.requestToSpotAddress<TReply>(spotId, request, {
+        ...freezeAddressCallOptions(options, sourceSpotProvider?.()),
+        timeoutMs: options.timeoutMs,
+        signal
+      })
     }));
   };
   return {
@@ -422,7 +420,6 @@ function markSubmitted(options: MutableAddressCallOptions): void {
 
 function freezeAddressCallOptions(
   options: MutableAddressCallOptions,
-  signal: AbortSignal | undefined,
   sourceSpot: ZLinkBackendSpot | undefined
 ): ZLinkSpotAddressCallOptions {
   return {
@@ -430,8 +427,6 @@ function freezeAddressCallOptions(
     instanceSpot: options.instanceSpot,
     instanceSpotType: options.instanceSpotType,
     initialMeshName: options.initialMeshName,
-    timeoutMs: options.timeoutMs,
-    signal,
     sourceSpot
   };
 }
@@ -644,7 +639,7 @@ export async function sendToSpotHandle(
   transport: ZLinkSpotRoutedTransport,
   spot: SpotHandle,
   message: unknown,
-  options: ZLinkSpotHandleCallOptions = {}
+  options: Omit<ZLinkSpotHandleCallOptions, 'timeoutMs' | 'signal'> = {}
 ): Promise<ZLinkSubmitResult> {
   const packetName = resolveFrameworkPacketName(message, undefined, 'SPOT');
   const sendResolved = async (resolved: ResolvedSpotHandle): Promise<ZLinkSubmitResult> => {
@@ -652,20 +647,16 @@ export async function sendToSpotHandle(
     if (options.sourceSpot !== undefined && transport.sendFromSpotToSpot !== undefined) {
       return transport.sendFromSpotToSpot(options.sourceSpot, target, message, {
         packetName,
-        timeoutMs: options.timeoutMs,
-        signal: options.signal,
         metadata: options.metadata
       });
     }
     return transport.sendToSpot(target, message, {
       packetName,
-      timeoutMs: options.timeoutMs,
-      signal: options.signal,
       metadata: options.metadata
     });
   };
 
-  return sendResolved(await requireSpotRef(spot, options.signal));
+  return sendResolved(await requireSpotRef(spot));
 }
 
 export async function requestToSpotHandle<TReply = unknown>(
