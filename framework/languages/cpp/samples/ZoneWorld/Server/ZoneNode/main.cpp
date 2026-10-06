@@ -725,7 +725,7 @@ class node_report_service_t final : public fw::hosted_service_t
                     _work.push_back (report_spot_event (std::move (event)));
                 const auto now = std::chrono::steady_clock::now ();
                 if (now >= next_status_report) {
-                    _work.push_back (report_once ());
+                    _work.push_back (report_now (*_routes));
                     next_status_report = now + std::chrono::milliseconds (spec_t::report_period_ms);
                 }
                 std::this_thread::sleep_for (std::chrono::milliseconds (100));
@@ -785,27 +785,30 @@ class node_report_service_t final : public fw::hosted_service_t
         }
     }
 
-    fw::task_t<void> report_once ()
+  public:
+    static fw::task_t<void> report_now (fw::route_client_t &routes)
     {
         try {
-            co_await _routes
-              ->send_to_channel (names_t::report_channel,
-                                 report_node_status_msg_t{g_node_state->node_id,
-                                                          g_node_state->zone_snapshot (),
-                                                          g_node_state->player_count (),
-                                                          g_node_state->maintenance.load ()})
+            co_await routes
+              .send_to_channel (names_t::report_channel,
+                                report_node_status_msg_t{g_node_state->node_id,
+                                                         g_node_state->zone_snapshot (),
+                                                         g_node_state->player_count (),
+                                                         g_node_state->maintenance.load ()})
               .async ();
             std::cout << "zoneworld-status-report node=" << g_node_state->node_id << std::endl;
         }
-        catch (const std::exception &error) {
+        catch (const fw::framework_exception_t &error) {
             const std::string line = std::format (
               "zoneworld-status-report-failed node={} error={}\n",
               g_node_state->node_id,
               error.what ());
             std::cerr << line;
+            throw;
         }
     }
 
+  private:
     fw::route_client_t *_routes = nullptr;
     std::atomic_bool _running{false};
     std::thread _worker;
@@ -830,8 +833,14 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
             co_return;
         }
         _stopping.store (false);
+        auto *routes = &services.get_required<fw::route_client_t> ();
         auto *spots = &services.get_required<fw::spot_manager_t> ();
-        _worker = std::thread ([this, spots] { run_bootstrap (*spots); });
+        _worker = std::thread ([this, spots, routes] {
+            if (const auto zones = run_bootstrap (*spots)) {
+                (void) node_report_service_t::report_now (*routes).result ();
+                print_ready (*zones);
+            }
+        });
         co_return;
     }
     void request_stop () noexcept override
@@ -873,19 +882,19 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
 
     bool await_bootstrap (fw::task_t<void> work) { return static_cast<bool> (work.result ()); }
 
-    void run_bootstrap (fw::spot_manager_t &spots)
+    std::optional<std::vector<std::string>> run_bootstrap (fw::spot_manager_t &spots)
     {
         for (int attempt = 0; _configuration.allow_empty_zone_set
                               || g_node_state->zone_snapshot ().size ()
                                    != static_cast<std::size_t> (_configuration.zone_capacity);
              ++attempt) {
             if (_stopping.load ())
-                return;
+                return std::nullopt;
             const auto claimed = g_node_state->zone_snapshot ();
             if (!_configuration.allow_empty_zone_set
                 && !await_bootstrap (bootstrap (spots, claimed))) {
                 if (_stopping.load ())
-                    return;
+                    return std::nullopt;
                 const std::string line = std::format ("Zone Spot claim failed. node={}\n",
                                                       _configuration.node_id);
                 std::cerr << line;
@@ -893,8 +902,7 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
             const auto zones = g_node_state->zone_snapshot ();
             if (_configuration.allow_empty_zone_set && zones.empty ()
                 && attempt >= replacement_ready_attempts) {
-                print_ready (zones);
-                return;
+                return zones;
             }
             if (attempt + 1 >= retry_attempts) {
                 std::string line = std::format ("Zone Spot capacity did not settle. node={} zones=",
@@ -906,14 +914,14 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
                 }
                 line += '\n';
                 std::cerr << line;
-                return;
+                return std::nullopt;
             }
             std::unique_lock lock (_retry_mutex);
             _retry_ready.wait_for (lock, retry_delay, [this] { return _stopping.load (); });
             if (_stopping.load ())
-                return;
+                return std::nullopt;
         }
-        print_ready (g_node_state->zone_snapshot ());
+        return g_node_state->zone_snapshot ();
     }
 
     void print_ready (const std::vector<std::string> &zones) const
