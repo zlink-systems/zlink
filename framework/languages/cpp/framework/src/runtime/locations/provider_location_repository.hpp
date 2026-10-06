@@ -190,7 +190,7 @@ class provider_location_repository_t final : public location_repository_t
     task_t<location_page_t<mesh_node_descriptor_t>>
     list_mesh_nodes (std::string mesh_name, location_page_request_t page = {}) override
     {
-        co_return co_await list_descriptors<mesh_node_descriptor_t> (
+        return list_descriptors<mesh_node_descriptor_t> (
           prefix_mesh (mesh_name), std::move (page), [] (const nlohmann::json &record) {
               return decode_mesh_descriptor (record.at (location_record_fields::descriptor));
           });

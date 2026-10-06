@@ -1742,7 +1742,7 @@ void app_t::_apply_zlink_framework ()
                   framework_error_kind_t::invalid_operation,
                   "More than one object Mesh is configured; select one with in_mesh");
             const auto source = sources.front ();
-            std::vector<mesh_node_descriptor_t> candidates;
+            std::vector<const mesh_node_descriptor_t *> candidates;
             std::vector<mesh_node_descriptor_t> visible_targets;
             auto listed = co_await runtime::await_result (
               location_resolvers.list_live_mesh_nodes (source->mesh_name ()));
@@ -1817,7 +1817,7 @@ void app_t::_apply_zlink_framework ()
                                        && typed->usage.active + typed->usage.reserved
                                             >= static_cast<std::uint64_t> (typed->usage.limit);
                 if (capable && !spots_full && !type_full)
-                    candidates.push_back (candidate);
+                    candidates.push_back (&candidate);
             }
             if (candidates.empty ())
                 co_return result_t<selected_instance_target_t>::failure (
@@ -1825,7 +1825,7 @@ void app_t::_apply_zlink_framework ()
                   "No eligible Instance Spot target has capacity");
             const auto index = std::hash<std::string>{}(std::string (spot_id)) % candidates.size ();
             co_return result_t<selected_instance_target_t>::success (
-              {source, candidates[index], stable_type});
+              {source, *candidates[index], stable_type});
         };
         for (const auto &registration : mesh_node_registrations) {
             if (!registration->spot_state)
