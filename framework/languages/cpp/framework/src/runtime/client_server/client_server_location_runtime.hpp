@@ -16,6 +16,7 @@
 #include <zlink/framework/contracts/handlers/handler_registry.hpp>
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/contracts/monitoring/client_server_runtime.hpp>
+#include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
 #include <boost/asio/awaitable.hpp>
 
 #include <atomic>
@@ -162,6 +163,9 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     location_repository_t *_store;
     location_repository_t *_leases;
     service_provider_t _services;
+    // Resolved once during configuration. The service registry is not a concurrent
+    // structure, so snapshot turns read this reference instead of resolving again.
+    framework_runtime_t *_framework_runtime;
     serializer_registry_t *_serializers;
     const handler_registry_t *_handlers;
     std::shared_ptr<application_job_queue_t> _application_jobs;

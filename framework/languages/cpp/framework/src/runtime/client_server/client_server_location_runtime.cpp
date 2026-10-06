@@ -353,6 +353,7 @@ client_server_location_runtime_t::client_server_location_runtime_t (
     _store (&store),
     _leases (&leases),
     _services (services),
+    _framework_runtime (&_services.get_required<framework_runtime_t> ()),
     _serializers (&serializers),
     _handlers (&handlers),
     _application_jobs (
@@ -414,11 +415,10 @@ client_server_location_runtime_t::snapshot_source_locked (const std::string &cha
                                      "ClientServer channel is not configured: " + channel_name);
 
     source.role = local_role (*configured);
-    auto services = _services;
     source.host_state = _stop->load (std::memory_order_acquire)
                           ? (_transport_poller ? framework_runtime_state_t::draining
                                                : framework_runtime_state_t::stopped)
-                          : services.get_required<framework_runtime_t> ().status ().state;
+                          : _framework_runtime->status ().state;
     const auto client = _clients.find (channel_name);
     if (client != _clients.end ()) {
         source.connections.reserve (client->second->connections.size ());
@@ -796,8 +796,7 @@ void client_server_location_runtime_t::run ()
     std::shared_ptr<task_t<void>> pending_reconcile;
     std::unique_lock<std::mutex> maintenance_lock;
     std::optional<std::chrono::steady_clock::time_point> next_worker_deadline;
-    while (!_stop->load (std::memory_order_acquire) || pending_worker_snapshot
-           || pending_maintenance || pending_reconcile) {
+    for (;;) {
         if (pending_maintenance && pending_maintenance->await_ready ()) {
             auto completed = std::move (pending_maintenance);
             const auto &result = completed->result ();
@@ -893,14 +892,15 @@ void client_server_location_runtime_t::run ()
             catch (...) {
             }
         }
-        if (_stop->load (std::memory_order_acquire) && !pending_worker_snapshot
-            && !pending_maintenance && !pending_reconcile)
+        // The only exit. In-flight work references state that stop() releases after the
+        // join, so the worker leaves only once that work has completed.
+        const bool pending = pending_maintenance || pending_reconcile || pending_worker_snapshot;
+        if (_stop->load (std::memory_order_acquire) && !pending)
             break;
 
         const auto after_pump = std::chrono::steady_clock::now ();
         // In-flight work owns expired deadlines and signals when it completes.
         // Future deadlines still bound the wait even if the turn has no new input.
-        const bool pending = pending_maintenance || pending_reconcile || pending_worker_snapshot;
         auto wake_at = pending && next_reconcile <= after_pump
                          ? std::chrono::steady_clock::time_point::max ()
                          : next_reconcile;
@@ -925,9 +925,7 @@ void client_server_location_runtime_t::run ()
             }
         }
         catch (...) {
-            if (!_stop->load (std::memory_order_acquire))
-                continue;
-            break;
+            // A failed wait ends only this wait; the next iteration still owns pending work.
         }
     }
 }
