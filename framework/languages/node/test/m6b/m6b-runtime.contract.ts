@@ -7020,7 +7020,6 @@ test('Ready one-way Spot send forwards application metadata through runtime rout
           _target: unknown,
           _packet: unknown,
           _message: unknown,
-          _signal: unknown,
           forwarded: ReadonlyMap<string, string> | undefined
         ) {
           observed = forwarded;
