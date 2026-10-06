@@ -5,7 +5,8 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 /**
  * Framework-private access to the serial queue's two-phase relocation terminal. The public queue
@@ -17,9 +18,14 @@ public final class ZLinkRetainedSerialQueueCommit {
 
     private ZLinkRetainedSerialQueueCommit() {}
 
-    public static Optional<Commit> retain(
+    public static CompletionStage<Optional<Commit>> retain(
             ZLinkSerialExecutionQueue queue, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         Objects.requireNonNull(queue, "queue");
+        return queue.underSharedSpotGateAsync(() -> retainOnGate(queue, seal));
+    }
+
+    private static Optional<Commit> retainOnGate(
+            ZLinkSerialExecutionQueue queue, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         if (CURRENT.get() != null) {
             throw new IllegalStateException("nested retained serial queue commit is not supported");
         }
@@ -27,7 +33,7 @@ public final class ZLinkRetainedSerialQueueCommit {
         CURRENT.set(capture);
         Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> records;
         try {
-            records = queue.commitRelocation(seal);
+            records = queue.commitRelocationOnGate(seal);
         } finally {
             CURRENT.remove();
         }
@@ -62,6 +68,8 @@ public final class ZLinkRetainedSerialQueueCommit {
     /** Framework-private retained owner implemented by the serial queue. */
     public interface Owner {
         Object monitor();
+
+        ZLinkSerialExecutionQueue.SharedSpotGate gate();
 
         Cut cut();
 
@@ -114,7 +122,6 @@ public final class ZLinkRetainedSerialQueueCommit {
     public static final class Commit {
         private final List<ZLinkSerialExecutionQueue.QueuedRecord> records;
         private final Owner owner;
-        private final AtomicBoolean completed = new AtomicBoolean();
 
         private Commit(List<ZLinkSerialExecutionQueue.QueuedRecord> records, Owner owner) {
             this.records = List.copyOf(records);
@@ -125,19 +132,23 @@ public final class ZLinkRetainedSerialQueueCommit {
             return records;
         }
 
-        public Cut cut() {
-            return owner.cut();
+        public CompletionStage<Cut> cut() {
+            return underGate(List.of(this), owner::cut);
         }
 
-        public boolean tryFinishCapture(Cut cut) {
+        public CompletionStage<Cut> capture() {
+            return captureAll(List.of(this)).thenApply(cuts -> cuts.getFirst());
+        }
+
+        public CompletionStage<Boolean> tryFinishCapture(Cut cut) {
             return finishCapture(List.of(this), List.of(cut));
         }
 
-        public boolean tryEstablishDurableCut(Cut cut) {
+        public CompletionStage<Boolean> tryEstablishDurableCut(Cut cut) {
             return establishDurableCut(List.of(this), List.of(cut));
         }
 
-        public boolean tryEstablishAndFinishCapture(Cut cut) {
+        public CompletionStage<Boolean> tryEstablishAndFinishCapture(Cut cut) {
             return establishAndFinishCapture(List.of(this), List.of(cut));
         }
 
@@ -145,17 +156,16 @@ public final class ZLinkRetainedSerialQueueCommit {
          * Restores the retained entries when the relocation fails before the one-way cutover has
          * been accepted.
          */
-        public boolean abort() {
-            if (completed.get()) {
-                return false;
-            }
+        public CompletionStage<Boolean> abort() {
             return abortRetained(List.of(this));
         }
 
-        public void complete() {
-            if (completed.compareAndSet(false, true)) {
-                owner.complete();
-            }
+        public CompletionStage<Void> complete() {
+            return completeAll(List.of(this));
+        }
+
+        private void completeDirect() {
+            owner.complete();
         }
     }
 
@@ -164,43 +174,93 @@ public final class ZLinkRetainedSerialQueueCommit {
      * while all lane monitors are held, so no lane can detach while another lane accepts an
      * unrecorded suffix.
      */
-    public static boolean finishCapture(List<Commit> commits, List<Cut> cuts) {
+    public static CompletionStage<Boolean> finishCapture(List<Commit> commits, List<Cut> cuts) {
         List<Commit> owners = List.copyOf(commits);
         List<Cut> snapshots = List.copyOf(cuts);
         if (owners.isEmpty() || owners.size() != snapshots.size()) {
             throw new IllegalArgumentException(
                     "retained lane commits and cuts must have the same size");
         }
-        return withLocks(owners, snapshots, 0, false);
+        return underGate(owners, () -> withLocks(owners, snapshots, 0, false));
     }
 
-    public static boolean establishDurableCut(List<Commit> commits, List<Cut> cuts) {
+    public static CompletionStage<Boolean> establishDurableCut(
+            List<Commit> commits, List<Cut> cuts) {
         List<Commit> owners = List.copyOf(commits);
         List<Cut> snapshots = List.copyOf(cuts);
         if (owners.isEmpty() || owners.size() != snapshots.size()) {
             throw new IllegalArgumentException(
                     "retained lane commits and cuts must have the same size");
         }
-        return withLocks(owners, snapshots, 0, true);
+        return underGate(owners, () -> withLocks(owners, snapshots, 0, true));
     }
 
     /** Establishes and detaches one cut under the same lane-lock set. */
-    public static boolean establishAndFinishCapture(List<Commit> commits, List<Cut> cuts) {
+    public static CompletionStage<Boolean> establishAndFinishCapture(
+            List<Commit> commits, List<Cut> cuts) {
         List<Commit> owners = List.copyOf(commits);
         List<Cut> snapshots = List.copyOf(cuts);
         if (owners.isEmpty() || owners.size() != snapshots.size()) {
             throw new IllegalArgumentException(
                     "retained lane commits and cuts must have the same size");
         }
-        return withLocks(owners, snapshots, 0, true, true);
+        return underGate(owners, () -> withLocks(owners, snapshots, 0, true, true));
     }
 
-    public static boolean abortRetained(List<Commit> commits) {
+    public static CompletionStage<Boolean> abortRetained(List<Commit> commits) {
         List<Commit> owners = List.copyOf(commits);
-        if (owners.isEmpty() || owners.stream().anyMatch(commit -> commit.completed.get())) {
-            return false;
+        if (owners.isEmpty()) return CompletableFuture.completedFuture(false);
+        return underGate(owners, () -> withAbortLocks(owners, 0));
+    }
+
+    private static <T> CompletionStage<T> underGate(
+            List<Commit> commits, java.util.function.Supplier<T> work) {
+        ZLinkSerialExecutionQueue.SharedSpotGate gate =
+                commits.stream()
+                        .map(commit -> commit.owner.gate())
+                        .filter(Objects::nonNull)
+                        .findFirst()
+                        .orElse(null);
+        if (gate != null) return gate.controlAsync(work);
+        try {
+            return CompletableFuture.completedFuture(work.get());
+        } catch (RuntimeException | Error failure) {
+            return CompletableFuture.failedFuture(failure);
         }
-        return withAbortLocks(owners, 0);
+    }
+
+    public static CompletionStage<List<Cut>> cutAll(List<Commit> commits) {
+        List<Commit> owners = List.copyOf(commits);
+        return underGate(owners, () -> owners.stream().map(commit -> commit.owner.cut()).toList());
+    }
+
+    public static CompletionStage<Void> completeAll(List<Commit> commits) {
+        List<Commit> owners = List.copyOf(commits);
+        return underGate(
+                owners,
+                () -> {
+                    owners.forEach(Commit::completeDirect);
+                    return null;
+                });
+    }
+
+    public static CompletionStage<List<Cut>> captureAll(List<Commit> commits) {
+        List<Commit> owners = List.copyOf(commits);
+        if (owners.isEmpty())
+            throw new IllegalArgumentException("at least one retained lane is required");
+        return underGate(owners, () -> captureWithLocks(owners, 0));
+    }
+
+    private static List<Cut> captureWithLocks(List<Commit> commits, int index) {
+        if (index < commits.size()) {
+            synchronized (commits.get(index).owner.monitor()) {
+                return captureWithLocks(commits, index + 1);
+            }
+        }
+        List<Cut> cuts = commits.stream().map(commit -> commit.owner.cut()).toList();
+        if (!withLocks(commits, cuts, 0, true, true))
+            throw new IllegalStateException("retained capture lost its lane cut");
+        return cuts;
     }
 
     private static boolean withAbortLocks(List<Commit> commits, int index) {

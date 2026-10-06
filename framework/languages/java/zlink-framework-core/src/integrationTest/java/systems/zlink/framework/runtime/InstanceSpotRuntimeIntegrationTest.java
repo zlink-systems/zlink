@@ -600,7 +600,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                 (systems.zlink.framework.execution.ZLinkSerialExecutionQueue)
                         ownerQueue.invoke(context);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (queue.pendingMessages().isEmpty()) {
+        while (queue.pendingMessages().toCompletableFuture().join().isEmpty()) {
             if (System.nanoTime() > deadline) {
                 throw new java.util.concurrent.TimeoutException("probe never reached the owner");
             }

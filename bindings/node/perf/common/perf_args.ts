@@ -28,6 +28,13 @@ function integerEnv(name, fallback) {
   return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
 }
 
+function resolveMultiConnectReadyTimeoutMs(explicit) {
+  return Number.isFinite(explicit)
+    ? explicit
+    : integerEnv('PERF_MULTI_CONNECT_READY_TIMEOUT_MS',
+      integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 10000));
+}
+
 function parseSizeList(value, fallback) {
   if (!value) {
     return fallback;
@@ -283,6 +290,7 @@ module.exports = {
   defaultSingleTransports,
   integerEnv,
   parseCommonArgs,
+  resolveMultiConnectReadyTimeoutMs,
   resolveMultiPatternNames,
   resolveSinglePatternNames
 };

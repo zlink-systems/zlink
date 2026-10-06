@@ -13,7 +13,6 @@ class CoreHwmBudgetSnapshot:
     budget_generation: int
     measurement_epoch: int
     configured_memory_limit_bytes: int
-    runtime_memory_limit_bytes: int
     resolved_memory_limit_bytes: int
     configured_core_budget_bytes: int
     effective_core_budget_bytes: int

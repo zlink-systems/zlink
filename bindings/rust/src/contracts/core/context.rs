@@ -48,7 +48,6 @@ pub struct CoreHwmBudgetSnapshot {
     pub budget_generation: u64,
     pub measurement_epoch: u64,
     pub configured_memory_limit_bytes: u64,
-    pub runtime_memory_limit_bytes: u64,
     pub resolved_memory_limit_bytes: u64,
     pub configured_core_budget_bytes: u64,
     pub effective_core_budget_bytes: u64,

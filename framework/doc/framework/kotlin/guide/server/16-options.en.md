@@ -85,7 +85,7 @@ by [Backpressure](33-backpressure.en.md#2-core-hwm-and-the-application-job-queue
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `coreHwmMemoryLimitBytes` | Memory limit hint passed to the Core budget calculation | Not set |
+| `coreHwmMemoryLimitBytes` | Positive memory limit used for Core budget calculation and connection admission | Not set |
 | `coreHwmBudgetBytes` | Manual Core budget that takes precedence over the profile | Not set |
 | `CoreHwmProfile` | Core auto-budget profile | `Balanced` |
 | `ApplicationJobQueueProfile` | Profile used to compute the job limit | `Balanced` |

@@ -77,9 +77,8 @@ autotuning을 유지한다. Application이 0 이상의 값을 명시하면 compl
 ## 4. 측정과 한계
 
 실행 중 memory 상태를 조회하는 monitor는 application queue와 completion lane의 current byte,
-oversize 허용 이력을 구분해 제공한다. ABI-reserved field인
-`application_accounted_bytes`·`outstanding_application_lease_count`·
-`deferred_origin_credit_bytes`·`retired_queue_count`는 항상 0이다. [Core budget](../glossary.ko.md#auto-hwm-budget) — Core가
+oversize 허용 이력을 구분해 제공한다. Snapshot의 ABI 예약 field와 반환값은
+[Auto HWM §3](06-auto-hwm.ko.md#zlink_ctx_get_auto_hwm_budget_snapshot)의 budget snapshot 계약을 따른다. [Core budget](../glossary.ko.md#auto-hwm-budget) — Core가
 memory 입력에서 계산해 application queue들의 HWM을 나눌 때 기준으로 삼는 byte 총량 — 은 정상
 상태의 pipe별 HWM 분배 기준이지 context 실제 사용량 hard cap이 아니다. 이 값은 Core 회계를
 설명하지만 process resident memory의 정확한 측정값은 아니다.
