@@ -461,13 +461,15 @@ export function sharedContext(): SharedContext;
   thread에서 다시 부르면 같은 wrapper를 돌려준다. thread 사이에 넘기는 값은 없다.
 - **Worker 사이 `inproc://` 통신은 이 컨텍스트로 한다.** `createContext()`가 만든 컨텍스트는
   만든 thread에서만 쓴다.
-- **수명은 바인딩이 소유한다.** 패키지를 불러온 thread가 하나라도 남아 있는 동안 공유 Core
-  컨텍스트를 유지하고, 마지막 thread의 바인딩이 내려갈 때 한 번 종료한다. 종료는 Core 컨텍스트
-  종료 계약(linger에 따른 대기 포함)을 따른다.
+- **수명은 바인딩이 소유한다.** 각 thread의 바인딩은 내려갈 때 그 thread에서 공유
+  컨텍스트로 만든 socket을 닫고 thread 참조를 해제한다. socket close에는 각 socket의 linger가
+  적용된다. 마지막 참조가 해제되면 Core의 shutdown·term 순서로 공유 컨텍스트를 한 번 종료한다.
 - **`SharedContext`에는 `close()`와 `shutdown()`이 없다.** 한 thread가 다른 thread들이 쓰는
   컨텍스트를 끝낼 수 없기 때문이다. 종료 판정은 위의 thread 참조 하나다.
-- **처음 부를 때 Core 기본 옵션으로 만든다.** 컨텍스트 옵션은 어느 thread에서 바꿔도 하나의
-  Core 컨텍스트에 적용된다. 언제 바꿀 수 있는지는 Core 컨텍스트 옵션 계약이 정한다.
+- **처음 부를 때 Core 기본 옵션으로 만든다.** V8 heap limit은 isolate마다 다른 값이라 process
+  전역 컨텍스트의 runtime memory hint로 쓰지 않는다. 명시 옵션이 없으면 Core의 기본 계산을 따른다.
+  컨텍스트 옵션은 어느 thread에서 바꿔도 하나의 Core 컨텍스트에 적용된다. 언제 바꿀 수 있는지는
+  Core 컨텍스트 옵션 계약이 정한다.
 - socket 규칙은 바뀌지 않는다. 공유 컨텍스트에서 만든 socket도 만든 thread에서만 쓰고, 그
   thread가 닫는다.
 
@@ -902,7 +904,8 @@ Public TypeScript declaration, JavaScript result·error와 poller event만으로
 
 - Worker 둘이 각자 `sharedContext()`에서 PAIR를 만들어 `inproc://`로 bind·connect하면
   메시지가 양방향으로 전달된다.
-- 같은 thread에서 `sharedContext()`를 두 번 부르면 같은 객체이고, 선언에 `close`·`shutdown`이 없다.
+- 같은 thread에서 `sharedContext()`를 두 번 부르면 같은 객체다. TypeScript 선언과 JavaScript
+  런타임 wrapper 모두 `close`·`shutdown`을 노출하지 않는다.
 - 모든 Worker가 끝나고 main이 socket을 닫으면 process가 정상 종료한다.
 
 **Pull eventing**

@@ -494,14 +494,17 @@ export function sharedContext(): SharedContext;
   between threads.
 - **Worker-to-Worker `inproc://` communication uses this context.** A context created by
   `createContext()` is used only on the thread that created it.
-- **The binding owns the lifetime.** It keeps the shared Core context while any thread that loaded
-  the package remains, and terminates it once when the last thread's binding is torn down.
-  Termination follows the Core context termination contract, including waiting according to linger.
+- **The binding owns the lifetime.** When a thread's binding is torn down, it closes the sockets
+  that thread created from the shared context and releases its thread reference. Each socket's
+  linger applies to its close. When the last reference is released, the binding terminates the
+  shared context once in Core's shutdown and term order.
 - **`SharedContext` has no `close()` or `shutdown()`.** One thread cannot end a context other
   threads use. The only termination decision is the thread reference above.
-- **It is created with Core default options on the first call.** A context option changed from
-  any thread applies to the one Core context. When an option can be changed is defined by the Core
-  context option contract.
+- **It is created with Core default options on the first call.** The V8 heap limit differs per
+  isolate, so it is not used as the runtime memory hint for the process-wide context. Without
+  explicit options, Core's default calculation applies. A context option changed from any thread
+  applies to the one Core context. When an option can be changed is defined by the Core context
+  option contract.
 - Socket rules do not change. A socket created from the shared context is also used only on the
   thread that created it, and that thread closes it.
 
@@ -967,8 +970,8 @@ poller events. Each item maps to one contract test.
 
 - When two Workers each create a PAIR from `sharedContext()` and bind/connect over `inproc://`,
   messages are delivered in both directions.
-- Calling `sharedContext()` twice on the same thread returns the same object, and its declaration
-  has no `close` or `shutdown`.
+- Calling `sharedContext()` twice on the same thread returns the same object. Neither the
+  TypeScript declaration nor the JavaScript runtime wrapper exposes `close` or `shutdown`.
 - After every Worker ends and the main thread closes its sockets, the process exits normally.
 
 **Pull eventing**
