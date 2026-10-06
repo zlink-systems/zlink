@@ -417,9 +417,9 @@ the `zlink.host.*` instruments in [Runtime Metrics](#2-runtime-metrics).
 
 A server restarted immediately after forced termination with a fixed RoutingId can encounter the
 previous process's active owner lease. Publishing the descriptor for the same MeshName and RoutingId
-returns `REJECTED_CONFLICT` and fails host startup. Spring fails context startup, .NET throws from
-`StartAsync`, Node rejects the bootstrap Promise, and the C++ app host returns failure. Check the
-public runtime status after successful startup instead of treating an open port as readiness.
+returns `REJECTED_CONFLICT` and fails host startup, so the host start call of every language ends
+with a failure. Check the public runtime status after successful startup instead of treating an open
+port as readiness.
 
 Deployment should confirm the previous server's normal termination result before starting its
 replacement. After forced termination, start a new process once the previous owner lease has expired.
