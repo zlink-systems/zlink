@@ -94,6 +94,7 @@ if(ZLINK_CORE_BUILD_BINDING_INTEGRATION_TESTS
 endif()
 
 set(tests
+  ${INTEGRATION_TEST_ROOT}/test_pair_tcp_bindtodevice
   ${INTEGRATION_TEST_ROOT}/test_request_writable_credit
   ${INTEGRATION_TEST_ROOT}/test_ready_empty_pipe_first_data
   ${INTEGRATION_TEST_ROOT}/test_option_type_public

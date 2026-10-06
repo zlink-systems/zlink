@@ -6,6 +6,7 @@
 #include "core/options.hpp"
 #include "transports/tcp/tcp.hpp"
 #include "utils/fd.hpp"
+#include "utils/ip.hpp"
 
 namespace zlink
 {
@@ -13,6 +14,10 @@ inline int tune_asio_tcp_socket (fd_t fd_,
                                  const options_t &options_,
                                  bool apply_buffer_options_)
 {
+    if (!options_.bound_device.empty ()
+        && bind_to_device (fd_, options_.bound_device) != 0)
+        return -1;
+
     int rc = tune_tcp_socket (fd_, options_.tcp_nodelay);
 #ifdef ZLINK_HAVE_WINDOWS
     // The multi-socket benchmark and local applications commonly use TCP

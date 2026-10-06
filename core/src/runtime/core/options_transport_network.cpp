@@ -131,6 +131,12 @@ int zlink::options_setsockopt_transport_network (
             break;
 
         case ZLINK_INTERNAL_OPT_BINDTODEVICE:
+#ifndef ZLINK_HAVE_SO_BINDTODEVICE
+            if (optvallen_ > 0) {
+                errno = ENOTSUP;
+                return -1;
+            }
+#endif
             return options_do_setsockopt_string_allow_empty_strict (
               optval_, optvallen_, &self_->bound_device, BINDDEVSIZ);
 

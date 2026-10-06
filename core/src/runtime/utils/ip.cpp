@@ -10,6 +10,9 @@
 
 #if !defined ZLINK_HAVE_WINDOWS
 #include <fcntl.h>
+#ifdef ZLINK_HAVE_SO_BINDTODEVICE
+#include <net/if.h>
+#endif
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -215,12 +218,21 @@ int zlink::set_nosigpipe (fd_t s_)
 int zlink::bind_to_device (fd_t s_, const std::string &bound_device_)
 {
 #ifdef ZLINK_HAVE_SO_BINDTODEVICE
+    char current_device[IFNAMSIZ] = {};
+    socklen_t current_length = sizeof current_device;
+    if (getsockopt (s_, SOL_SOCKET, SO_BINDTODEVICE, current_device, &current_length)
+          == 0
+        && std::string (current_device,
+                        current_length > 0 && current_device[current_length - 1] == '\0'
+                          ? current_length - 1
+                          : current_length)
+             == bound_device_)
+        return 0;
+
     int rc =
       setsockopt (s_, SOL_SOCKET, SO_BINDTODEVICE, bound_device_.c_str (), bound_device_.length ());
-    if (rc != 0) {
-        assert_success_or_recoverable (s_, rc);
+    if (rc != 0)
         return -1;
-    }
     return 0;
 
 #else
