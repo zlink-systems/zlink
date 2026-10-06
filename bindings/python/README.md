@@ -1,5 +1,7 @@
 # Python Binding
 
+The binding forwards explicit memory limits and Core budgets unchanged. Core detects process and container hard limits; managed heap limits are not forwarded. The budget snapshot projects configured and resolved memory limits.
+
 Python wrapper for the Core 0.17.0 raw messaging contract. The normative
 public surface is `bindings/doc/spec/python/README.ko.md`; repository policy
 and the socket capability matrix live in `bindings/README.md`, and the native

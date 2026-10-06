@@ -1,5 +1,7 @@
 # Node Bindings
 
+The binding forwards explicit memory limits and Core budgets unchanged. Core detects process and container hard limits; managed heap limits are not forwarded. The budget snapshot projects configured and resolved memory limits.
+
 Aligned Node bindings for `libzlink`.
 
 ## Canonical Raw API

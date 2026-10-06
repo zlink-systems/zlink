@@ -1,5 +1,7 @@
 # zlink C++ Binding API Reference
 
+The binding forwards explicit memory limits and Core budgets unchanged. Core detects process and container hard limits; managed heap limits are not forwarded. The budget snapshot projects configured and resolved memory limits.
+
 This reference is generated from the C++20 public contract headers in
 `bindings/cpp/include/zlink`.
 

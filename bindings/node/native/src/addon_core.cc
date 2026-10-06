@@ -1502,8 +1502,6 @@ napi_value ctx_get_auto_hwm_budget_snapshot (napi_env env, napi_callback_info in
     set_uint64_bigint_property (env, out, "measurementEpoch", snapshot.measurement_epoch);
     set_uint64_bigint_property (env, out, "configuredMemoryLimitBytes",
                                 snapshot.configured_memory_limit_bytes);
-    set_uint64_bigint_property (env, out, "runtimeMemoryLimitBytes",
-                                snapshot.runtime_memory_limit_bytes);
     set_uint64_bigint_property (env, out, "resolvedMemoryLimitBytes",
                                 snapshot.resolved_memory_limit_bytes);
     set_uint64_bigint_property (env, out, "configuredCoreBudgetBytes",

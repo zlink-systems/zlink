@@ -16,7 +16,6 @@ export interface CoreHwmBudgetSnapshot {
   readonly budgetGeneration: bigint;
   readonly measurementEpoch: bigint;
   readonly configuredMemoryLimitBytes: bigint;
-  readonly runtimeMemoryLimitBytes: bigint;
   readonly resolvedMemoryLimitBytes: bigint;
   readonly configuredCoreBudgetBytes: bigint;
   readonly effectiveCoreBudgetBytes: bigint;
