@@ -101,6 +101,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             new AtomicReference<>();
     private static final AtomicReference<CompletableFuture<Void>> PUSH_TERMINAL =
             new AtomicReference<>();
+    private static final AtomicReference<CompletableFuture<Void>> RESTORE_ENTERED =
+            new AtomicReference<>();
+    private static final AtomicReference<CompletableFuture<Void>> RESTORE_GATE =
+            new AtomicReference<>();
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
@@ -145,6 +149,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         PUSH_SUBMITTED.set(new CompletableFuture<>());
         PUSH_TERMINAL.set(new CompletableFuture<>());
         LEAVE_GATE.set(new CompletableFuture<>());
+        RESTORE_ENTERED.set(new CompletableFuture<>());
+        RESTORE_GATE.set(CompletableFuture.completedFuture(null));
         var locationStore = new ZLinkInMemoryLocationStore();
         var relocationStore = new InMemoryRelocationStore();
         Duration sourceRetention =
@@ -448,7 +454,13 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             CompletionStage<Void> b1Accepted =
                     sourceQueue.enqueueRelocatable(
                             actorRecord("B1"),
-                            () -> fail("B1 must transfer instead of executing at source"),
+                            () -> {
+                                if (scenario == Scenario.SHUTDOWN_DURING_RESTORE) {
+                                    EVENTS.add("source.replay:B1");
+                                    return CompletableFuture.completedFuture(null);
+                                }
+                                return fail("B1 must transfer instead of executing at source");
+                            },
                             released::incrementAndGet,
                             null);
 
@@ -582,11 +594,49 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         link.b2Accepted.set(b2);
                         injectD1(endpoint, sourceDescriptor, targetDescriptor, sourceAuthority);
                     });
+            if (scenario == Scenario.SHUTDOWN_DURING_RESTORE) {
+                RESTORE_ENTERED.set(new CompletableFuture<>());
+                RESTORE_GATE.set(new CompletableFuture<>());
+            }
             CompletableFuture<ZLinkActorJoinRelocationPort.Submission> moved =
                     sourceJoin.relocate(goal, TIMEOUT).toCompletableFuture();
             assertFalse(moved.isDone(), "the source turn boundary must own capture admission");
             activeTurn.complete(null);
             blocker.toCompletableFuture().get(1, TimeUnit.SECONDS);
+            if (scenario == Scenario.SHUTDOWN_DURING_RESTORE) {
+                RESTORE_ENTERED.get().get(4, TimeUnit.SECONDS);
+                var terminal = targetMachine.sealAcceptedTargetRelocations().toCompletableFuture();
+                assertFalse(
+                        terminal.isDone(), "accepted Restore must finish before terminal cleanup");
+                assertFalse(EVENTS.contains("target.discard"));
+                RESTORE_GATE.get().complete(null);
+                terminal.get(4, TimeUnit.SECONDS);
+                assertEquals(1, EVENTS.stream().filter("target.discard"::equals).count());
+                assertTrue(targetJoin.findPrewarm(relocationId).isEmpty());
+                targetSpots.awaitDrainBarrier().toCompletableFuture().get(4, TimeUnit.SECONDS);
+                moved.handle((ignored, failure) -> null).get(4, TimeUnit.SECONDS);
+                b1Accepted.toCompletableFuture().get(4, TimeUnit.SECONDS);
+                assertEquals(1, EVENTS.stream().filter("command44.abort"::equals).count());
+                assertEquals(1, EVENTS.stream().filter("source.replay:B1"::equals).count());
+                assertTrue(
+                        EVENTS.indexOf("source.replay:B1") < EVENTS.indexOf("command44.abort"),
+                        "source queue must replay before command 44 abort: " + EVENTS);
+                assertEquals(0, targetCommits.get());
+                assertFalse(EVENTS.contains("target.open"));
+                assertEquals(0, sourceAttemptCount(sourceJoin));
+                var targetShutdown = targetHost.shutdown(TIMEOUT).toCompletableFuture();
+                var sourceShutdown = sourceHost.shutdown(TIMEOUT).toCompletableFuture();
+                assertEquals(
+                        systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome
+                                .STOPPED,
+                        targetShutdown.get(7, TimeUnit.SECONDS).outcome());
+                assertEquals(
+                        systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome
+                                .STOPPED,
+                        sourceShutdown.get(7, TimeUnit.SECONDS).outcome(),
+                        "source events: " + EVENTS);
+                return;
+            }
             if (scenario.joinedFailure() != null || scenario == Scenario.COMPLETION_FAILURE) {
                 ZLinkActorJoinCompletion completion = COMPLETION.get().get(4, TimeUnit.SECONDS);
                 if (scenario.joinedFailure() != null) {
@@ -751,6 +801,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertEquals(0, sourceAttemptCount(sourceJoin));
         } finally {
             LEAVE_GATE.get().complete(null);
+            RESTORE_GATE.get().complete(null);
         }
     }
 
@@ -1042,7 +1093,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         LEAVE_THROW(LeaveMode.THROW),
         JOINED_TYPED_FAILURE(LeaveMode.DELIVER),
         JOINED_GENERIC_FAILURE(LeaveMode.DELIVER),
-        COMPLETION_FAILURE(LeaveMode.DELIVER);
+        COMPLETION_FAILURE(LeaveMode.DELIVER),
+        SHUTDOWN_DURING_RESTORE(LeaveMode.DELIVER);
 
         private final LeaveMode leaveMode;
 
@@ -1304,6 +1356,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                             var route =
                                                     codec.decodeSessionRelocationRoute(
                                                             (byte[]) arguments[1]);
+                                            if (scenario == Scenario.SHUTDOWN_DURING_RESTORE) {
+                                                assertEquals(
+                                                        ZLinkServiceM6BWireCodec
+                                                                .SessionRelocationRouteAction.ABORT,
+                                                        route.action());
+                                                EVENTS.add("command44.abort");
+                                                yield CompletableFuture.completedFuture(null);
+                                            }
                                             assertEquals(
                                                     ZLinkServiceM6BWireCodec
                                                             .SessionRelocationRouteAction.COMMIT,
@@ -1469,6 +1529,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         @Override
         public CompletionStage<Void> discard(
                 Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
+            EVENTS.add("target.discard");
             var prepared = (ZLinkActorRuntime.PreparedTransferredActor) actor;
             return actors.discardRelocatedActor(prepared)
                     .thenRun(
@@ -1613,6 +1674,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 TrackingActor actor, byte[] state, ZLinkRelocationCancellation cancellation) {
             assertArrayEquals(new byte[] {7, 2, 6}, state);
             EVENTS.add("target.restore");
+            if (currentScenario == Scenario.SHUTDOWN_DURING_RESTORE) {
+                RESTORE_ENTERED.get().complete(null);
+                return RESTORE_GATE.get();
+            }
             return CompletableFuture.completedFuture(null);
         }
     }
