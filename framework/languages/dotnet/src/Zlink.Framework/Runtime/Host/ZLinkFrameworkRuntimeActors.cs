@@ -3037,7 +3037,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkEntrySpotActivation? EntrySpot
     );
 
-    internal async ValueTask<ZLinkRemoteSessionBindResponse> BindRemoteBoundSessionRouteAsync(
+    internal ValueTask<ZLinkRemoteSessionBindResponse> BindRemoteBoundSessionRouteAsync(
         ZLinkRemoteSessionBindRequest request,
         RoutingId sourceNodeRid,
         CancellationToken cancellationToken
@@ -3124,7 +3124,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"bound_session_replaced_candidate actor={request.ActorId} current={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(priorBindingForNotification?.SessionRid.ToHex())}"
         );
-        var replacement = _actorBoundSessionCoordinator.BeginActorSessionReplacement(
+        var replacement = _actorBoundSessionCoordinator.ReplaceActorSessionBinding(
             request.ActorId,
             sessionNodeRid,
             sessionRid,
@@ -3139,107 +3139,80 @@ internal sealed partial class ZLinkFrameworkRuntime
             request.AcceptedHighWater,
             request.SessionOwnerId,
             request.SessionOwnerLeaseGeneration,
-            ZLinkSessionBindingReplacement.CreateFence(request.PreviousBinding)
-        );
-        if (!replacement.OwnsExecution)
-        {
-            var joinedFailure = await replacement
-                .Completion.WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
-            if (joinedFailure is not null)
-                System
-                    .Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(joinedFailure)
-                    .Throw();
-        }
-        else
-        {
-            try
-            {
+            state =>
                 EnsureSessionReplacementAuthorityCurrent(
+                    state,
                     request,
                     targetNodeRid,
                     currentNodeGeneration,
                     authorityOwnerGeneration
-                );
-                _actorBoundSessionCoordinator.PublishActorSessionReplacement(
-                    request.ActorId,
-                    replacement
-                );
-                _actorBoundSessionCoordinator.CompleteActorSessionReplacement(
-                    request.ActorId,
-                    replacement
-                );
-
-                var previousForNotification = replacement.Previous ?? priorBindingForNotification;
-                if (
-                    previousForNotification is { } previous
-                    && previous.SessionNodeRid is { } previousSessionNodeRid
-                    && !previous.IsSamePhysicalSessionOwner(
-                        sessionNodeRid,
-                        request.SessionOwnerNodeGeneration,
-                        sessionRid,
-                        request.SessionOwnerId,
-                        request.SessionOwnerLeaseGeneration
-                    )
                 )
-                {
-                    var previousOwnerId = string.IsNullOrWhiteSpace(previous.SessionOwnerId)
-                        ? previousSessionNodeRid.ToHex()
-                        : previous.SessionOwnerId;
-                    var previousOwnerLease =
-                        previous.SessionOwnerLeaseGeneration == 0
-                            ? previous.SessionOwnerNodeGeneration
-                            : previous.SessionOwnerLeaseGeneration;
-                    var notification = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
-                        new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
-                            request.ActorId,
-                            request.ObjectGeneration,
-                            targetNodeRid,
-                            currentNodeGeneration,
-                            authorityOwnerGeneration,
-                            ownerLeaseGeneration
-                        ),
-                        new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
-                            previousSessionNodeRid,
-                            previous.SessionOwnerNodeGeneration,
-                            previousOwnerId,
-                            previousOwnerLease,
-                            previous.SessionRid,
-                            previous.BindingGeneration
-                        )
-                    );
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"bound_session_replaced_schedule actor={request.ActorId} source={targetNodeRid} target={previousSessionNodeRid} session={previous.SessionRid} binding={previous.BindingGeneration}"
-                    );
-                    ScheduleBoundSessionReplacedNotification(
-                        node,
-                        previousSessionNodeRid,
-                        notification
-                    );
-                }
-            }
-            catch (Exception failure)
+        );
+        if (replacement.Changed)
+        {
+            var previousForNotification = replacement.Previous ?? priorBindingForNotification;
+            if (
+                previousForNotification is { } previous
+                && previous.SessionNodeRid is { } previousSessionNodeRid
+                && !previous.IsSamePhysicalSessionOwner(
+                    sessionNodeRid,
+                    request.SessionOwnerNodeGeneration,
+                    sessionRid,
+                    request.SessionOwnerId,
+                    request.SessionOwnerLeaseGeneration
+                )
+            )
             {
-                _actorBoundSessionCoordinator.AbortActorSessionReplacement(
-                    request.ActorId,
-                    replacement,
-                    failure
+                var previousOwnerId = string.IsNullOrWhiteSpace(previous.SessionOwnerId)
+                    ? previousSessionNodeRid.ToHex()
+                    : previous.SessionOwnerId;
+                var previousOwnerLease =
+                    previous.SessionOwnerLeaseGeneration == 0
+                        ? previous.SessionOwnerNodeGeneration
+                        : previous.SessionOwnerLeaseGeneration;
+                var notification = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
+                    new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
+                        request.ActorId,
+                        request.ObjectGeneration,
+                        targetNodeRid,
+                        currentNodeGeneration,
+                        authorityOwnerGeneration,
+                        ownerLeaseGeneration
+                    ),
+                    new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
+                        previousSessionNodeRid,
+                        previous.SessionOwnerNodeGeneration,
+                        previousOwnerId,
+                        previousOwnerLease,
+                        previous.SessionRid,
+                        previous.BindingGeneration
+                    )
                 );
-                throw;
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"bound_session_replaced_schedule actor={request.ActorId} source={targetNodeRid} target={previousSessionNodeRid} session={previous.SessionRid} binding={previous.BindingGeneration}"
+                );
+                ScheduleBoundSessionReplacedNotification(
+                    node,
+                    previousSessionNodeRid,
+                    notification
+                );
             }
         }
-        return new ZLinkRemoteSessionBindResponse(
-            true,
-            request.ObjectGeneration,
-            localMeshName,
-            targetNodeRid.ToBytes().ToArray(),
-            currentNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration
+        return ValueTask.FromResult(
+            new ZLinkRemoteSessionBindResponse(
+                true,
+                request.ObjectGeneration,
+                localMeshName,
+                targetNodeRid.ToBytes().ToArray(),
+                currentNodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration
+            )
         );
     }
 
     private void EnsureSessionReplacementAuthorityCurrent(
+        ZLinkActorRuntimeState state,
         ZLinkRemoteSessionBindRequest request,
         RoutingId targetNodeRid,
         ulong targetNodeGeneration,
@@ -3265,7 +3238,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 request.MeshName,
                 StringComparison.Ordinal
             )
-            || !TryGetCreatedActorState(request.ActorId, out var state)
+            || state.IsDispatchBlocked
+            || state.Actor is null
             || state.NativeActorRef is not { } currentActor
             || currentActor != actorRef
             || node is not IZLinkBackendLocalActorAuthorityReader authorityReader
