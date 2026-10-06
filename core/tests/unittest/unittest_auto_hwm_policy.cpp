@@ -22,6 +22,7 @@ void tearDown ()
 void test_budget_input_priority_and_profile_ratio ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
     input.detected_physical_memory_bytes = 2000;
@@ -113,6 +114,7 @@ void test_finalize_recomputes_budget_from_queue_count ()
     const uint64_t gib = 1024ull * mib;
 
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
     input.configured_memory_limit_bytes = 64 * gib;
@@ -187,6 +189,7 @@ void test_profile_byte_boundaries ()
 void test_mixed_queue_water_filling_respects_budget_and_caps ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
     input.configured_core_budget_bytes = 512ull * 1024ull;
@@ -216,6 +219,7 @@ void test_mixed_queue_water_filling_respects_budget_and_caps ()
 void test_water_filling_remainder_is_stable ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
     input.configured_core_budget_bytes = 262147;
@@ -252,6 +256,7 @@ void test_water_filling_remainder_is_stable ()
 void test_insufficient_budget_keeps_role_minima_visible ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
     input.configured_core_budget_bytes = 64ull * 1024ull;
@@ -356,9 +361,21 @@ static void check_stream_pair_reservation_capacity (
     }
 }
 
+void test_stream_pair_reservation_uses_memory_limit_above_budget ()
+{
+    zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
+    input.enabled = true;
+    input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
+    input.configured_memory_limit_bytes = 3ull * 128ull * 1024ull;
+    input.configured_core_budget_bytes = 1;
+    check_stream_pair_reservation_capacity (input, 3, true);
+}
+
 void test_stream_pair_reservation_grows_beyond_fixed_cap ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
     input.configured_memory_limit_bytes = 64ull * 1024ull * 1024ull * 1024ull;
@@ -367,48 +384,52 @@ void test_stream_pair_reservation_grows_beyond_fixed_cap ()
     check_stream_pair_reservation_capacity (input, 4097, false);
 }
 
-void test_stream_pair_reservation_keeps_percent_limit_atomic ()
+void test_stream_pair_reservation_keeps_memory_limit_atomic ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
-    // The 5% share fits exactly 4097 pairs, above the fixed cap. The next
+    // The memory limit fits exactly 4097 pairs. The next
     // pair must leave both handles empty and the registry count unchanged.
-    input.configured_memory_limit_bytes = 4097ull * 128ull * 1024ull * 20ull;
+    input.configured_memory_limit_bytes = 4097ull * 128ull * 1024ull;
     check_stream_pair_reservation_capacity (input, 4097, true);
 }
 
-void test_stream_pair_reservation_keeps_manual_limit_atomic ()
+void test_stream_pair_reservation_manual_budget_does_not_limit_attach ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
     input.configured_memory_limit_bytes = 64ull * 1024ull * 1024ull * 1024ull;
-    // A manual budget remains authoritative despite plentiful host memory.
+    // A manual budget controls planning, not connection admission.
     input.configured_core_budget_bytes = 3ull * 128ull * 1024ull;
-    check_stream_pair_reservation_capacity (input, 3, true);
+    check_stream_pair_reservation_capacity (input, 4, false);
 }
 
-void test_stream_pair_reservation_keeps_profile_cap_when_floor_is_lower ()
+void test_stream_pair_reservation_exceeds_profile_cap_below_memory_limit ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_THROUGHPUT;
     input.configured_memory_limit_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     // STREAM reserves 256 KiB per direction, while this profile's effective
     // cap floor uses the general 128 KiB minimum. At 2049 pairs the floor is
-    // still below the 1 GiB fixed cap: plentiful percent share cannot admit it.
-    check_stream_pair_reservation_capacity (input, 2048, true);
+    // still below the 1 GiB fixed cap: admission uses the memory limit.
+    check_stream_pair_reservation_capacity (input, 2049, false);
 }
 
 void test_stream_pair_reservation_excludes_monitor_and_completion_from_cap ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_THROUGHPUT;
     input.configured_memory_limit_bytes = 64ull * 1024ull * 1024ull * 1024ull;
-    // Including the extra 4100 non-application directions in the queue floor
-    // would incorrectly raise the cap and admit a 2049th STREAM pair.
+    // Non-application queues do not consume the connection memory reservation.
+    input.configured_memory_limit_bytes = 2048ull * 512ull * 1024ull;
     check_stream_pair_reservation_capacity (
       input, 2048, true, zlink::physical_queue_class_monitor);
     check_stream_pair_reservation_capacity (
@@ -418,9 +439,10 @@ void test_stream_pair_reservation_excludes_monitor_and_completion_from_cap ()
 void test_atomic_pair_minimum_reservation_has_one_linearization_winner ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
-    input.configured_core_budget_bytes = 128ull * 1024ull;
+    input.configured_memory_limit_bytes = 128ull * 1024ull;
     zlink::auto_hwm_context_plan_t context;
     zlink::auto_hwm_context_plan_make (input, &context);
 
@@ -482,6 +504,7 @@ void test_atomic_pair_minimum_reservation_has_one_linearization_winner ()
 void test_completion_pair_does_not_consume_application_reservation ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
     input.configured_core_budget_bytes = 1;
@@ -508,6 +531,7 @@ void test_single_lane_reply_is_application_accounting_only ()
     zlink::physical_queue_handle_t outbound;
     zlink::physical_queue_handle_t inbound;
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = false;
     zlink::auto_hwm_context_plan_t context;
     zlink::auto_hwm_context_plan_make (input, &context);
@@ -562,6 +586,7 @@ void test_concurrent_provisional_transitions_preserve_record_ownership ()
     zlink::physical_queue_handle_t outbound;
     zlink::physical_queue_handle_t inbound;
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = false;
     zlink::auto_hwm_context_plan_t context;
     zlink::auto_hwm_context_plan_make (input, &context);
@@ -612,6 +637,7 @@ void test_concurrent_provisional_transitions_preserve_record_ownership ()
 void test_policy_disabled_pair_does_not_consume_application_reservation ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
     input.configured_core_budget_bytes = 1;
@@ -631,6 +657,7 @@ void test_policy_disabled_pair_does_not_consume_application_reservation ()
 void test_last_endpoint_retirement_reconciles_record_owned_accounting ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = true;
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
     input.configured_core_budget_bytes = 512ull * 1024ull;
@@ -680,6 +707,7 @@ void test_last_endpoint_retirement_reconciles_record_owned_accounting ()
 static zlink::auto_hwm_context_plan_t make_decoder_test_context ()
 {
     zlink::auto_hwm_budget_input_t input;
+    input.detected_physical_memory_bytes = 64ull * 1024ull * 1024ull * 1024ull;
     input.enabled = false;
     zlink::auto_hwm_context_plan_t context;
     zlink::auto_hwm_context_plan_make (input, &context);
@@ -900,6 +928,7 @@ int main ()
 {
     UNITY_BEGIN ();
     RUN_TEST (test_budget_input_priority_and_profile_ratio);
+    RUN_TEST (test_stream_pair_reservation_uses_memory_limit_above_budget);
     RUN_TEST (test_profile_byte_boundaries);
     RUN_TEST (test_profile_percent_and_fixed_caps);
     RUN_TEST (test_effective_budget_is_percent_clamped_by_cap_and_queue_floor);
@@ -908,9 +937,9 @@ int main ()
     RUN_TEST (test_water_filling_remainder_is_stable);
     RUN_TEST (test_insufficient_budget_keeps_role_minima_visible);
     RUN_TEST (test_stream_pair_reservation_grows_beyond_fixed_cap);
-    RUN_TEST (test_stream_pair_reservation_keeps_percent_limit_atomic);
-    RUN_TEST (test_stream_pair_reservation_keeps_manual_limit_atomic);
-    RUN_TEST (test_stream_pair_reservation_keeps_profile_cap_when_floor_is_lower);
+    RUN_TEST (test_stream_pair_reservation_keeps_memory_limit_atomic);
+    RUN_TEST (test_stream_pair_reservation_manual_budget_does_not_limit_attach);
+    RUN_TEST (test_stream_pair_reservation_exceeds_profile_cap_below_memory_limit);
     RUN_TEST (test_stream_pair_reservation_excludes_monitor_and_completion_from_cap);
     RUN_TEST (test_atomic_pair_minimum_reservation_has_one_linearization_winner);
     RUN_TEST (test_completion_pair_does_not_consume_application_reservation);
