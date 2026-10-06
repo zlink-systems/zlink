@@ -14,6 +14,16 @@ import { inferTransport } from './Transport/ZlinkStreamEndpoint';
 
 export { ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES as ZLINK_STREAM_DEFAULT_PAYLOAD_SIZE } from '../Contracts/ZlinkStreamConnectorOptions';
 
+const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+const DEFAULT_WAIT_TIMEOUT_MS = 5000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 1000;
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = 5000;
+const DEFAULT_RECONNECT_INITIAL_DELAY_MS = 250;
+const DEFAULT_RECONNECT_MAX_DELAY_MS = 5000;
+const DEFAULT_RECONNECT_BACKOFF_FACTOR = 2.0;
+const DEFAULT_RECONNECT_MAX_ATTEMPTS = 3;
+
 export function normalizeOptions(
   options: ZlinkStreamConnectorOptions,
   defaultTransportFactory: RequiredZlinkStreamConnectorOptions['transportFactory']
@@ -32,20 +42,23 @@ export function normalizeOptions(
   const normalized: RequiredZlinkStreamConnectorOptions = {
     endpoint,
     transport: inferredTransport,
-    connectTimeoutMs: options.connectTimeoutMs ?? 5000,
-    requestTimeoutMs: options.requestTimeoutMs ?? 30000,
-    waitTimeoutMs: options.waitTimeoutMs ?? 5000,
+    connectTimeoutMs: options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
+    requestTimeoutMs: options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    waitTimeoutMs: options.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS,
     heartbeat: {
       enabled: options.heartbeat?.enabled ?? true,
-      intervalMs: options.heartbeat?.intervalMs ?? 1000,
-      timeoutMs: options.heartbeat?.timeoutMs ?? 5000
+      intervalMs: options.heartbeat?.intervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
+      timeoutMs: options.heartbeat?.timeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS
     },
     reconnect: {
       enabled: options.reconnect?.enabled ?? true,
-      initialDelayMs: options.reconnect?.initialDelayMs ?? 250,
-      maxDelayMs: options.reconnect?.maxDelayMs ?? 5000,
-      backoffFactor: options.reconnect?.backoffFactor ?? 2.0,
-      maxAttempts: options.reconnect?.maxAttempts === undefined ? 3 : options.reconnect.maxAttempts
+      initialDelayMs: options.reconnect?.initialDelayMs ?? DEFAULT_RECONNECT_INITIAL_DELAY_MS,
+      maxDelayMs: options.reconnect?.maxDelayMs ?? DEFAULT_RECONNECT_MAX_DELAY_MS,
+      backoffFactor: options.reconnect?.backoffFactor ?? DEFAULT_RECONNECT_BACKOFF_FACTOR,
+      maxAttempts:
+        options.reconnect?.maxAttempts === undefined
+          ? DEFAULT_RECONNECT_MAX_ATTEMPTS
+          : options.reconnect.maxAttempts
     },
     maxSendPayloadSize: options.maxSendPayloadSize ?? ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES,
     maxReceivePayloadSize: options.maxReceivePayloadSize ?? ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES,
