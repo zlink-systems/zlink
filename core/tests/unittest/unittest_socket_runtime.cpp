@@ -4,9 +4,22 @@
 #include "../testutil_unity.hpp"
 
 #include "core/mailbox.hpp"
+#include "core/ctx.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/common/socket_runtime.hpp"
 #include "utils/config.hpp"
+
+namespace zlink
+{
+class session_termination_test_access_t
+{
+  public:
+    static socket_monitor_runtime_t &monitor_for (socket_base_t *socket_)
+    {
+        return socket_->monitor_runtime ();
+    }
+};
+}
 
 void setUp ()
 {
@@ -122,13 +135,39 @@ void test_socket_monitor_runtime_erases_transport_pair_by_endpoint_when_rid_diff
 
     TEST_ASSERT_TRUE (runtime.erase_ready_connection (
       endpoint, stale_routing_id, sizeof (stale_routing_id), &ready_count, 11, 1));
-    TEST_ASSERT_FALSE (runtime.erase_ready_connection_for_endpoint (endpoint, &ready_count, 11, 1));
+    TEST_ASSERT_FALSE (runtime.erase_ready_connection (
+      endpoint, stale_routing_id, sizeof (stale_routing_id), &ready_count, 11, 1));
     TEST_ASSERT_EQUAL_UINT32 (1u, ready_count);
     TEST_ASSERT_EQUAL_UINT32 (1u, runtime.ready_count ());
 
     TEST_ASSERT_TRUE (runtime.erase_ready_connection (
       endpoint, routing_id_b, sizeof (routing_id_b), &ready_count, 12, 1));
     TEST_ASSERT_EQUAL_UINT32 (0u, runtime.ready_count ());
+}
+
+void test_socket_monitor_runtime_unknown_connection_keeps_ready_peers ()
+{
+    zlink::ctx_t *ctx = new zlink::ctx_t;
+    zlink::socket_base_t *socket = ctx->create_socket (ZLINK_CORE_SOCKET_PAIR);
+    zlink::socket_monitor_runtime_t &runtime =
+      zlink::session_termination_test_access_t::monitor_for (socket);
+    const zlink::endpoint_uri_pair_t endpoint =
+      make_bind_endpoint ("tcp://127.0.0.1:5555", "tcp://peer");
+    const unsigned char ready_id[] = {'r'};
+    const unsigned char rejected_id[] = {'x'};
+    uint32_t count = 0;
+    TEST_ASSERT_TRUE (runtime.mark_ready_connection (
+      endpoint, ready_id, sizeof (ready_id), &count));
+    socket->event_disconnected (endpoint, 0, rejected_id, sizeof (rejected_id));
+    const uint32_t after_unknown = runtime.ready_count ();
+    socket->event_disconnected (endpoint, 0, ready_id, sizeof (ready_id));
+    const uint32_t after_ready = runtime.ready_count ();
+    const int zero = 0;
+    socket->setsockopt (ZLINK_INTERNAL_OPT_LINGER, &zero, sizeof (zero));
+    ctx->close_socket_and_wait (socket, 1000);
+    ctx->terminate ();
+    TEST_ASSERT_EQUAL_UINT32 (1, after_unknown);
+    TEST_ASSERT_EQUAL_UINT32 (0, after_ready);
 }
 
 void test_socket_monitor_runtime_pair_readiness_cleanup_is_generation_scoped ()
@@ -656,6 +695,7 @@ int main (int, char **)
     UNITY_BEGIN ();
     RUN_TEST (test_transport_pair_expected_lane_masks);
     RUN_TEST (test_socket_monitor_runtime_tracks_ready_connections_once);
+    RUN_TEST (test_socket_monitor_runtime_unknown_connection_keeps_ready_peers);
     RUN_TEST (test_socket_monitor_runtime_erases_only_matching_ready_connection);
     RUN_TEST (test_socket_monitor_runtime_erases_transport_pair_by_endpoint_when_rid_differs);
     RUN_TEST (
