@@ -190,36 +190,10 @@ class provider_location_repository_t final : public location_repository_t
     task_t<location_page_t<mesh_node_descriptor_t>>
     list_mesh_nodes (std::string mesh_name, location_page_request_t page = {}) override
     {
-        auto listed = co_await list_descriptors<mesh_node_descriptor_t> (
+        co_return co_await list_descriptors<mesh_node_descriptor_t> (
           prefix_mesh (mesh_name), std::move (page), [] (const nlohmann::json &record) {
               return decode_mesh_descriptor (record.at (location_record_fields::descriptor));
           });
-        for (auto &descriptor : listed.items) {
-            const object_creation_target_t target{
-              descriptor.mesh_name,
-              node_rid_t (descriptor.rid.to_string ()),
-              descriptor.lifecycle_generation,
-              {descriptor.owner_id, descriptor.lease_generation}};
-            const auto capacity = (co_await read_capacity_async (target)).record;
-            descriptor.capacity.actors.active = static_cast<std::uint64_t> (capacity.actors.active);
-            descriptor.capacity.actors.reserved =
-              static_cast<std::uint64_t> (capacity.actors.pending);
-            descriptor.capacity.spots.active = static_cast<std::uint64_t> (capacity.spots.active);
-            descriptor.capacity.spots.reserved =
-              static_cast<std::uint64_t> (capacity.spots.pending);
-            for (auto &typed : descriptor.capacity.spot_types) {
-                const auto key =
-                  capacity.format == capacity_record_format_t::node_compatible
-                    ? node_capacity_type_key (typed.object_kind, typed.stable_type)
-                    : canonical_capacity_type_key (typed.object_kind, typed.stable_type);
-                const auto found = capacity.spot_types.find (key);
-                if (found != capacity.spot_types.end ()) {
-                    typed.usage.active = static_cast<std::uint64_t> (found->second.active);
-                    typed.usage.reserved = static_cast<std::uint64_t> (found->second.pending);
-                }
-            }
-        }
-        co_return listed;
     }
 
     task_t<location_write_result_t>

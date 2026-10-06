@@ -4615,6 +4615,11 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                std::nullopt});
             co_return;
         }
+        if (std::holds_alternative<object_placement_capacity_exhausted_t> (reserved)) {
+            reply_terminal ({static_cast<std::uint32_t> (protocol::request_terminal_result::busy),
+                             0, std::nullopt});
+            co_return;
+        }
         if (!(co_await join_existing (co_await store->read_authority (authority_key))))
             reply_terminal (
               {105, static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),

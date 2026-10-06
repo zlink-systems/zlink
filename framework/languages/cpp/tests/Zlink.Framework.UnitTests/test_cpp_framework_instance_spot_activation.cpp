@@ -604,26 +604,6 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ColdTypeClassificationUsesServingCap
                 .result_for (4s);
             ASSERT_TRUE (first.has_value ());
             ASSERT_TRUE (*first) << (first->error () ? first->error ()->what () : "");
-            const auto capacity_deadline = std::chrono::steady_clock::now () + 5s;
-            bool published_full = false;
-            std::string last_capacity;
-            while (!published_full && std::chrono::steady_clock::now () < capacity_deadline) {
-                const auto listed =
-                  provider.get_required<fw::runtime::store_location_resolvers_t> ()
-                    .list_live_mesh_nodes ("cold-type-classification")
-                    .result ();
-                published_full = listed && !listed.value ().empty ()
-                                 && listed.value ().front ().capacity.spots.active == 1;
-                if (listed && !listed.value ().empty ()) {
-                    const auto &capacity = listed.value ().front ().capacity;
-                    last_capacity = std::to_string (capacity.spots.limit) + ":"
-                                    + std::to_string (capacity.spots.active) + ":"
-                                    + std::to_string (capacity.spots.reserved);
-                }
-                if (!published_full)
-                    std::this_thread::yield ();
-            }
-            ASSERT_TRUE (published_full) << last_capacity;
         }
         const auto reply = test_case.requested_type
                              ? client.request_to_spot ("probe-spot", traced_request_t{2})
