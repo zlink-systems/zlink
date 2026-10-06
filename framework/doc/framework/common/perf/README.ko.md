@@ -115,7 +115,7 @@ Object role과 Store 필요성은 [MeshNode 계약][mesh]을 따르며, Store가
 - **Window 안에 terminal이 된 operation만 센다.** Window가 끝나면 owner는 새 operation을
   시작하지 않고 원본을 확정한다. 이때 terminal이 아닌 operation은 `messages.inflightAtEnd`로만
   세고 성공·실패·latency에 넣지 않는다. 셀이 끝나면 process를 종료하므로 남은 작업을 기다리지 않는다.
-- **Warmup drain을 넘으면 실패 원본을 남긴다.** Connection 재생성이나
+- **Warmup drain을 넘으면 실패 원본을 남긴다.** Drain 한도는 §5.2의 `drainTimeoutMs`다. Connection 재생성이나
   임의 sleep으로 잔여 작업을 없앤 것처럼 처리하면 같은 조건을 비교할 수 없기 때문이다.
 
 `messages.completed`는 cohort 중 window 안에 검증까지 끝난 성공 수다.
@@ -136,8 +136,9 @@ Trigger는 `runId`, `cellId`, `resetSeq`, phase만 전달하고 그 설정을 �
 Spot handler 안에서 outbound call을 재는 셀은 같은 process의 application driver가 public
 Spot request/send로 handler를 실행한다. Driver 호출도 §4.3의 request 규칙으로 연속 제출한다.
 Local driver 호출을 별도 KOPS로 세지 않는다.
-Driver 호출의 deadline은 §5.2의 `driverTimeoutMs`다. Driver 호출은 측정 대상 remote call을 감싸므로,
-remote call이 자기 deadline에 끝나도 driver가 그 결과를 받을 수 있어야 하기 때문이다.
+Driver 호출의 deadline은 §5.2의 측정 call deadline보다 `drainTimeoutMs`만큼 늦다. Driver 호출은
+측정 대상 remote call을 감싸므로, remote call이 자기 deadline에 끝나도 driver가 그 결과를 받을 수
+있어야 하기 때문이다.
 §10.5의 주 latency는 handler 안 remote call 직전부터 완료까지이며, driver부터의 전체 시간은
 `driver.latency.*`에 따로 기록한다. `driver.latency.*` 표본은 측정 operation이 검증까지 성공한 경우만이고,
 `driver.failed`는 driver 호출 자체의 실패만 센다. 측정 operation의 실패는 handler가 한 번만 기록한다.
@@ -250,15 +251,21 @@ Subscriber는 `role=subscriber`, `roleInstance=subscriberId`로 각각 한 항�
 
 ### 5.2 공통 workload 값
 
-표준 echo의 role config에는 `requestTimeoutMs=1000`, `correlationExpiryMs=1000`,
-`driverTimeoutMs=2000`, `setupTimeoutMs=30000`, `adminTimeoutMs=5000`을 기록한다.
-앞의 request 값은 public request call, expiry는 harness correlation, driver는 §4.2의 local driver 호출,
-setup은 공통 runner/준비 caller, admin 값은 HTTP client가 소비한다. 이 값의 소유자는 공통 runner이며
-role과 client는 role config에서 읽기만 한다. Send에는 시간 상한이 없다. Classic fanout publisher만
-public socket 설정의 송신 timeout 실제 값(표준 1000ms)을 기록한다([설정 소유 계약][submit]).
+표준 echo의 role config에는 `drainTimeoutMs=30000`, `setupTimeoutMs=30000`, `adminTimeoutMs=5000`을
+기록한다. 이 값의 소유자는 공통 runner이며 role과 client는 role config에서 읽기만 한다.
+
+- **측정 call의 deadline은 그 call이 속한 phase(warmup 또는 measured)가 끝나는 시각에
+  `drainTimeoutMs`를 더한 값이다.** Public request call의 deadline, send/send harness correlation의
+  expiry, worker call의 timeout이 모두 이 값이다. §4.3의 연속 제출은 backpressure 경계까지 queue를 채우므로
+  queue 대기는 latency에 들어가야 하고, 고정된 짧은 deadline으로 실패를 만들면 포화 상태를 잴 수 없기
+  때문이다. Measured window가 끝날 때 terminal이 아닌 operation은 §4.1대로 `inflightAtEnd`로만 센다.
+- Setup 값은 공통 runner와 준비 caller, admin 값은 HTTP client가 소비한다. Send에는 시간 상한이 없다.
+- Classic fanout publisher의 public socket 송신 timeout은 `drainTimeoutMs`로 설정하고 실제 값을
+  기록한다([설정 소유 계약][submit]). `NoDrop` publish의 admission 대기도 위와 같은 이유로 실패가 아니라
+  latency로 재기 때문이다.
 
 Worker config에는 `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
-`idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`와 executor의 실효 제한을 기록한다.
+`idleTimeoutMs=60000`과 executor의 실효 제한을 기록한다. Worker call의 timeout은 위의 측정 call deadline이다.
 적용은 각 언어의 public worker options만 사용한다(§10.8). Worker queue에는 상한이 없다
 ([Framework API](../spec/server/00-foundation/06-framework-api.ko.md)). Host가 받는 job의 상한은
 Application job queue가 소유하며 §23 manifest로만 바꾼다.
