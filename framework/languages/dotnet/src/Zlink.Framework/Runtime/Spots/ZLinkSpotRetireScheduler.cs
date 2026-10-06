@@ -510,7 +510,11 @@ internal sealed class ZLinkSpotRetireScheduler(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            if (!activation.FreezeRelocationIngress(seal, out heldAtCutoff))
+            var freezeResult = await activation
+                .FreezeRelocationIngressAsync(seal)
+                .ConfigureAwait(false);
+            heldAtCutoff = freezeResult.Held;
+            if (!freezeResult.Succeeded)
                 throw new InvalidOperationException(
                     "SPOT could not freeze its bounded ingress hold at the commit boundary."
                 );
@@ -905,36 +909,42 @@ internal sealed class ZLinkSpotRetireScheduler(
                         await cutoverFailures
                             .CaptureAsync(() => detachSource(activation))
                             .ConfigureAwait(false);
-                        cutoverFailures.Capture(() =>
-                        {
-                            if (!sourceCommitted)
+                        await cutoverFailures
+                            .CaptureAsync(async () =>
                             {
-                                if (
-                                    !activation.CommitRelocation(
-                                        seal,
-                                        out var releasedHeld,
-                                        preserveActorExecution: perActorShell
-                                    ) || !SameAcceptedWork(heldAtCutoff, releasedHeld)
-                                )
-                                    throw new ZLinkRelocationDataLostException(
-                                        $"SPOT '{activation.SpotId}' accepted ingress changed after its durable root was prepared."
+                                if (!sourceCommitted)
+                                {
+                                    var commitResult = await activation
+                                        .CommitRelocationAsync(
+                                            seal,
+                                            preserveActorExecution: perActorShell
+                                        )
+                                        .ConfigureAwait(false);
+                                    var releasedHeld = commitResult.Held;
+                                    if (
+                                        !commitResult.Succeeded
+                                        || !SameAcceptedWork(heldAtCutoff, releasedHeld)
+                                    )
+                                        throw new ZLinkRelocationDataLostException(
+                                            $"SPOT '{activation.SpotId}' accepted ingress changed after its durable root was prepared."
+                                        );
+                                    committedHeld = releasedHeld;
+                                    sourceCommitted = true;
+                                }
+                                if (!committedHeldValidated)
+                                {
+                                    ZLinkSpotRetireTargetRuntime.ValidateHeldRecords(
+                                        committedHeld
+                                            .Select(static record => new ZLinkSpotRetireHeldRecord(
+                                                record.AcceptedSequence,
+                                                record.Payload.ToArray()
+                                            ))
+                                            .ToArray()
                                     );
-                                committedHeld = releasedHeld;
-                                sourceCommitted = true;
-                            }
-                            if (!committedHeldValidated)
-                            {
-                                ZLinkSpotRetireTargetRuntime.ValidateHeldRecords(
-                                    committedHeld
-                                        .Select(static record => new ZLinkSpotRetireHeldRecord(
-                                            record.AcceptedSequence,
-                                            record.Payload.ToArray()
-                                        ))
-                                        .ToArray()
-                                );
-                                committedHeldValidated = true;
-                            }
-                        });
+                                    committedHeldValidated = true;
+                                }
+                            })
+                            .ConfigureAwait(false);
                         cutoverFailures.ThrowIfAny();
                         if (!targetCompletionDelivered)
                         {

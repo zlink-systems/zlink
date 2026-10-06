@@ -771,9 +771,19 @@ internal abstract partial class ZLinkSpotActivation
         _actorsLeavingForEntrySpot.Add(RuntimeActorId(actor));
         try
         {
-            await _runtime
-                .JoinActorEntrySpotAsync(NodeRid, actor, ZLinkMessage.Empty, cancellationToken)
-                .ConfigureAwait(false);
+            ValueTask<ZLinkActorJoinResult> JoinEntryAsync(CancellationToken ct)
+            {
+                using var suppressed = ZLinkSerialTurn.Suppress();
+                return _runtime.JoinActorEntrySpotAsync(NodeRid, actor, ZLinkMessage.Empty, ct);
+            }
+
+            // Actor ingress uses this same gate. Keep the lifecycle record
+            // until membership is decided, and resume its turn through the gate.
+            await (
+                ZLinkSerialTurn.Current is { } turn
+                    ? turn.YieldFrameworkCallAsync(JoinEntryAsync, cancellationToken)
+                    : JoinEntryAsync(cancellationToken)
+            ).ConfigureAwait(false);
         }
         catch
         {

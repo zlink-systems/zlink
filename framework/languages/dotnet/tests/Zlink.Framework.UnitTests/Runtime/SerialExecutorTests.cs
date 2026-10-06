@@ -10,14 +10,11 @@ public sealed class SerialExecutorTests
     {
         await using var queue = CreateQueue(CancellationToken.None);
 
-        Assert.True(
-            queue.TrySealRelocation(
-                reservedAcceptedSequences: 2,
-                static _ => true,
-                out var seal,
-                out var firstTimerSequence
-            )
+        var (succeeded, seal, firstTimerSequence) = await queue.TrySealRelocationAsync(
+            reservedAcceptedSequences: 2,
+            static _ => true
         );
+        Assert.True(succeeded);
         Assert.Equal<ulong>(1, firstTimerSequence);
         Assert.Equal(
             ZLinkAcceptedWorkAdmission.Accepted,
@@ -29,7 +26,9 @@ public sealed class SerialExecutorTests
             )
         );
 
-        Assert.True(queue.TryCommitRelocation(seal, out var held));
+        var (heldSucceeded, held) = await queue.TryCommitRelocationAsync(seal);
+
+        Assert.True(heldSucceeded);
         Assert.Equal<ulong>(3, Assert.Single(held).AcceptedSequence);
     }
 
@@ -102,7 +101,7 @@ public sealed class SerialExecutorTests
                 out _
             )
         );
-        Assert.True(queue.TryAbortRelocation(seal));
+        Assert.True(await queue.TryAbortRelocationAsync(seal));
 
         await WaitUntilAsync(() => executionOrder.Count == 3, TimeSpan.FromSeconds(5));
         Assert.Equal(new[] { 1, 2, 3 }, executionOrder);
@@ -156,7 +155,7 @@ public sealed class SerialExecutorTests
 
         Assert.Equal(1, Volatile.Read(ref materialized));
         Assert.Equal(new byte[] { 7, 8, 9 }, Assert.Single(seal.Captured).Payload.ToArray());
-        Assert.True(queue.TryAbortRelocation(seal));
+        Assert.True(await queue.TryAbortRelocationAsync(seal));
     }
 
     [Fact]
@@ -202,7 +201,7 @@ public sealed class SerialExecutorTests
         await nextRan.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var seal = await queue.SealRelocationAsync(CancellationToken.None);
-        Assert.True(queue.TryAbortRelocation(seal));
+        Assert.True(await queue.TryAbortRelocationAsync(seal));
     }
 
     [Fact]
@@ -255,7 +254,8 @@ public sealed class SerialExecutorTests
                 out _
             )
         );
-        Assert.True(queue.TryCommitRelocation(seal, out var held));
+        var (heldSucceeded, held) = await queue.TryCommitRelocationAsync(seal);
+        Assert.True(heldSucceeded);
         Assert.Equal<ulong>(2, Assert.Single(held).AcceptedSequence);
     }
 
@@ -317,7 +317,7 @@ public sealed class SerialExecutorTests
             var followed = Post(3, followed: true);
             var directSecond = Post(4, followed: false);
 
-            Assert.True(queue.TryOpenRelocationAfterMessageFollow(seal));
+            Assert.True(await queue.TryOpenRelocationAfterMessageFollowAsync(seal));
             await Task.WhenAll(
                     active.Completion,
                     captured.Completion,
@@ -352,7 +352,9 @@ public sealed class SerialExecutorTests
             )
         );
 
-        Assert.True(queue.TryCommitRelocation(seal, out var held));
+        var (heldSucceeded, held) = await queue.TryCommitRelocationAsync(seal);
+
+        Assert.True(heldSucceeded);
         await heldItem.Completion.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Collection(
             held,
@@ -390,7 +392,9 @@ public sealed class SerialExecutorTests
                 )
             );
 
-        Assert.True(queue.TryCommitRelocation(seal, out var held));
+        var (heldSucceeded, held) = await queue.TryCommitRelocationAsync(seal);
+
+        Assert.True(heldSucceeded);
         Assert.Equal(1_025, held.Count);
     }
 
@@ -418,7 +422,9 @@ public sealed class SerialExecutorTests
             )
         );
 
-        Assert.True(queue.TryCommitRelocation(seal, out var held));
+        var (heldSucceeded, held) = await queue.TryCommitRelocationAsync(seal);
+
+        Assert.True(heldSucceeded);
         Assert.Equal(2, held.Count);
     }
 
@@ -444,7 +450,7 @@ public sealed class SerialExecutorTests
 
         await queue.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await executed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.False(queue.TryAbortRelocation(seal));
+        Assert.False(await queue.TryAbortRelocationAsync(seal));
     }
 
     [Fact]
@@ -1589,7 +1595,7 @@ public sealed class SerialExecutorTests
             releaseLifecycle.TrySetResult();
             await lifecycle.WaitAsync(TimeSpan.FromSeconds(5));
             var committed = await seal.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(queue.TryAbortRelocation(committed));
+            Assert.True(await queue.TryAbortRelocationAsync(committed));
         }
         finally
         {
