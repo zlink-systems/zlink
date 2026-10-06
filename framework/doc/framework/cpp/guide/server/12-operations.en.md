@@ -416,6 +416,25 @@ draining, stopped, error). The notation follows the language. The status's reloc
 termination results must match that operation's terminal result. To view it as numbers, use
 the `zlink.host.*` instruments in [Runtime Metrics](#2-runtime-metrics).
 
+### 8.2 Restarting with the same RoutingId
+
+A server restarted immediately after forced termination with a fixed RoutingId can encounter the
+previous process's active owner lease. Publishing the descriptor for the same MeshName and RoutingId
+returns `REJECTED_CONFLICT` and fails host startup. Spring fails context startup, .NET throws from
+`StartAsync`, Node rejects the bootstrap Promise, and the C++ app host returns failure. Check the
+public runtime status after successful startup instead of treating an open port as readiness.
+
+Deployment should confirm the previous server's normal termination result before starting its
+replacement. After forced termination, start a new process once the previous owner lease has expired.
+The default owner lease TTL is 15 seconds and can be configured. Framework does not retry the conflict
+or select another RoutingId within the same startup operation. Also check that two processes are not
+using the same fixed RoutingId concurrently.
+
+Normal shutdown cleans up the host's descriptors and owner lease. Forced termination may prevent
+that cleanup, leaving the active claim until lease renewal stops and the lease expires. Check the
+termination result to confirm that cleanup finished within the shutdown deadline. Process exit or a
+shutdown call alone does not guarantee that an immediate restart can claim the same RoutingId.
+
 ## 9. Related Documents
 
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`
