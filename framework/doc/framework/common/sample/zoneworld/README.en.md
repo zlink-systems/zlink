@@ -749,8 +749,7 @@ different signals, so the same ID tested something different in each language.
 never an automatic replacement, so a restarted ZoneNode uses the zone set and readiness check of
 the replacement configuration in §3.
 
-Without the replacement configuration, a restarted node demand as many zones as its first start and retry the claim until its budget
-runs out, which is exactly the state the cpp implementation was in.
+Without the replacement configuration, a restarted node demands as many zones as at its initial startup and retries claims until its budget runs out, which is exactly the state the cpp implementation was in.
 
 **The ZW-E5 judging connection opens before the ZoneNode stop begins.** The order is fixed:
 
