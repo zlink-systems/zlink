@@ -6132,12 +6132,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var allowed = IsAllowedInfrastructureControl(received.Parts, out var command);
             var currentSource =
                 allowed && HasCurrentInfrastructureControlSource(sourceRid, command);
-            ZLinkFrameworkDebugLog.InboundCommand(
-                $"mesh={_meshName} source={sourceRid} command={(byte)head[3]} "
-                    + $"name={command} parts={received.Parts.Count} bytes="
-                    + $"{ZLinkReceiveBatchBudget.MeasureParts(received.Parts)} "
-                    + $"allowed={allowed} current_source={currentSource}"
-            );
             var processed =
                 allowed
                 && currentSource
@@ -12164,21 +12158,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var current = HasCurrentControlTarget(target, routeGeneration, command);
         if (!current)
-        {
-            ZLinkFrameworkDebugLog.InboundCommand(
-                $"mesh={_meshName} control_send_skipped target={target} "
-                    + $"generation={routeGeneration}"
-            );
             return false;
-        }
 
         try
         {
             await SendRoutedAsync(target, [head], cancellationToken).ConfigureAwait(false);
-            ZLinkFrameworkDebugLog.InboundCommand(
-                $"mesh={_meshName} control_send_submitted target={target} "
-                    + $"generation={routeGeneration}"
-            );
             return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -12192,10 +12176,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 && submit.Result != ZlinkSubmitException.ErrorCode.Terminated
             )
         {
-            ZLinkFrameworkDebugLog.InboundCommand(
-                $"mesh={_meshName} control_send_nonterminal target={target} "
-                    + $"generation={routeGeneration} result={submit.Result}"
-            );
             //  Spec 13-mesh-node:331 (condition 3) — only route/lifecycle
             //  terminal evidence ("the previous pipe has ended") may demote
             //  the peer epoch. Backpressure (queue/HWM/submit timeout),
