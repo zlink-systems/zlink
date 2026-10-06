@@ -20,6 +20,33 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
     )
     {
         var actorState = actorSessionManager.GetOrCreateState(actor.Context.ActorId);
+        if (actorState.OwnsCurrentDispatch)
+            return await JoinCoreAsync(spotNodeRid, actor, request, cancellationToken)
+                .ConfigureAwait(false);
+
+        ZLinkActorJoinResult result = null!;
+        await actorState
+            .ExecuteLifecycleAsync(
+                async ct =>
+                {
+                    using var dispatch = actorState.EnterDeferredJoinExecution();
+                    result = await JoinCoreAsync(spotNodeRid, actor, request, ct)
+                        .ConfigureAwait(false);
+                },
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        return result;
+    }
+
+    private async ValueTask<ZLinkActorJoinResult> JoinCoreAsync(
+        RoutingId spotNodeRid,
+        IZLinkActor actor,
+        ZLinkMessage request,
+        CancellationToken cancellationToken
+    )
+    {
+        var actorState = actorSessionManager.GetOrCreateState(actor.Context.ActorId);
         var node =
             getActorSpotNode()
             ?? throw new InvalidOperationException(

@@ -469,13 +469,7 @@ internal sealed partial class ZLinkEntrySpotActivation
             return;
         var admission = QueueSerialized(
             (activation, ct) =>
-                activation.InvokeActorLifecycleAsync(
-                    descriptor,
-                    actor,
-                    request: null,
-                    acquireActorTurn: false,
-                    ct
-                )
+                activation.InvokeActorLifecycleAsync(descriptor, actor, request: null, ct)
         );
         if (admission == ZLinkSerialPostAdmission.Closed)
             ErrorSink.ReportRuntimeTaskException(
@@ -491,12 +485,10 @@ internal sealed partial class ZLinkEntrySpotActivation
         ZLinkSpotActorLifecycleDescriptor descriptor,
         IZLinkActor actor,
         ZLinkMessage? request,
-        bool acquireActorTurn,
         CancellationToken cancellationToken
     )
     {
         var actorState = _runtime.GetOrCreateActorState(actor.Context.ActorId);
-        var actorTurnAlreadyOwned = !acquireActorTurn || actorState.OwnsCurrentDispatch;
         await ExecuteAsync(
                 static async (activation, state, ct) =>
                 {
@@ -506,46 +498,17 @@ internal sealed partial class ZLinkEntrySpotActivation
                         activation._runtime.Flow.CaptureEnabled,
                         ZLinkFlowOrigin.Lifecycle
                     );
-                    if (state.ActorTurnAlreadyOwned)
-                    {
-                        await InvokeActorLifecycleOnOwnedTurnAsync(
-                                activation,
-                                state.ActorState,
-                                state.Descriptor,
-                                state.Actor,
-                                state.Request,
-                                ct
-                            )
-                            .ConfigureAwait(false);
-                        return;
-                    }
-
-                    // Entry Spot lifecycle callbacks execute on the Spot's serial
-                    // lane, outside the Actor mailbox. Make that callback an Actor
-                    // lifecycle turn so destroy closes admission behind it and
-                    // native terminal cleanup starts only after it returns.
-                    await state
-                        .ActorState.ExecuteLifecycleAsync(
-                            token =>
-                                InvokeActorLifecycleOnOwnedTurnAsync(
-                                    activation,
-                                    state.ActorState,
-                                    state.Descriptor,
-                                    state.Actor,
-                                    state.Request,
-                                    token
-                                ),
+                    await InvokeActorLifecycleOnOwnedTurnAsync(
+                            activation,
+                            state.ActorState,
+                            state.Descriptor,
+                            state.Actor,
+                            state.Request,
                             ct
                         )
                         .ConfigureAwait(false);
                 },
-                (
-                    Descriptor: descriptor,
-                    Actor: actor,
-                    Request: request,
-                    ActorState: actorState,
-                    ActorTurnAlreadyOwned: actorTurnAlreadyOwned
-                ),
+                (Descriptor: descriptor, Actor: actor, Request: request, ActorState: actorState),
                 cancellationToken
             )
             .ConfigureAwait(false);
