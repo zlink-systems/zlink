@@ -99,14 +99,13 @@ class session_echo_only_scenario_t
         _measurement.set_setup_evidence (std::move (evidence));
     }
 
-    // Every connector runs `inflight` independent request chains until the window ends (§13 closed loop).
+    // A STREAM connector has one unresolved echo at a time (§4.3).
     void run (const loops_t &loops)
     {
-        for (const auto &slot : _connectors)
-            for (int i = 0; i < _manifest.workload.inflight; ++i) {
-                loops->enter ();
-                issue (loops, slot, std::make_shared<request_chain_t> ());
-            }
+        for (const auto &slot : _connectors) {
+            loops->enter ();
+            issue (loops, slot, std::make_shared<request_chain_t> ());
+        }
     }
 
   private:

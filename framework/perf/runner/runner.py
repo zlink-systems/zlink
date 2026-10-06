@@ -163,7 +163,7 @@ def preflight(args: argparse.Namespace, environment: dict) -> None:
     if environment["memoryLimit"] not in (None, "max") and environment.get("memoryCurrent") is not None:
         available = min(available, int(environment["memoryLimit"]) - int(environment["memoryCurrent"]))
     # A necessary lower bound from the harness's sequence and task-reference arrays, not an estimate of Core queues.
-    if any(available <= 8 * (v.get("connections") or v["logical_streams"]) * (1 + v["inflight"]) for v in consumed):
+    if any(available <= 16 * (v.get("connections") or v["logical_streams"]) for v in consumed):
         raise ValueError("Available memory cannot hold even the required harness sequence/task-reference arrays")
 
 
@@ -405,7 +405,7 @@ def comparison(args: argparse.Namespace, cell: Cell, env: dict) -> tuple[dict, s
     scenario, v = cell.scenario, values(cell.scenario, args)
     cs = scenario.driver == "clients"
     workload = {"payloadSize": cell.payload, "durationSeconds": args.duration_seconds, "warmupSeconds": args.warmup_seconds,
-                "inflight": v["inflight"], "connections": v.get("connections"),
+                "connections": v.get("connections"),
                 "logicalStreams": v.get("logical_streams"), "clientCount": v["client_count"],
                 "connectConcurrency": v.get("connect_concurrency"),
                 "requestTimeoutMs": 1000, "correlationExpiryMs": 1000, "driverTimeoutMs": 2000,
@@ -427,6 +427,8 @@ def comparison(args: argparse.Namespace, cell: Cell, env: dict) -> tuple[dict, s
                   "memoryLimit": env["memoryLimit"], "runtimeOptions": env["runtimeOptions"],
                   "runtimeSettings": env.get("runtimeSettings", {}), "installedRuntimes": env.get("installedRuntimes"),
                   "workloadHash": None, "repetition": None}
+    if scenario.name == "pubsub-fanout-echo":
+        comparable["publisherChannel"] = {"noDrop": True}
     comparable["diagnostics"] = "Normal" if args.operation == "diagnostic" else "Off"
     exact = json.dumps(comparable, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
     return comparable, exact

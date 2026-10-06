@@ -56,42 +56,40 @@ class pubsub_fanout_echo_scenario_t
         auto &measurement = _role.measurement;
         auto &fanout = _role.service<fw::publisher_t> ();
         const auto &config = _role.config;
-        while (measurement.can_issue ()) {
-            const auto reset_seq = measurement.reset_seq ();
-            const bool warmup = reset_seq == "0";
-            const auto sets = std::atomic_load (&_sets);
-            publish_event_t message;
-            message.run_id = config.run_id;
-            message.cell_id = config.cell_id;
-            message.reset_seq = reset_seq;
-            message.phase = warmup ? "warmup" : "measured";
-            message.topic = fanout_topic;
-            message.clock_domain_id = clock_domain ();
-            message.payload = measurement.pattern ().base64 ();
-            std::int64_t started = 0;
-            if (!measurement.begin_operation (started, "event"))
-                break;
-            const auto sequence = _issued.fetch_add (1) + 1;
-            message.sequence = dec (sequence);
-            message.sent_ticks = dec (started);
-            std::exception_ptr error;
-            try {
-                co_await fanout.publish (*config.channel_name, fanout_topic, message).async ();
-            }
-            catch (...) {
-                error = std::current_exception ();
-            }
-            if (error) {
-                measurement.complete_operation (started, error);
-                continue;
-            }
-            const auto completed = now_ticks ();
-            if (measurement.complete_operation (started, nullptr, completed))
-                sets->record_window_success (sequence);
-            if (warmup) {
-                if (!measurement.has_setup_evidence ())
-                    measurement.set_setup_evidence (json::array ({{{"kind", "warmupMarkerPublished"}, {"source", "publisher_t.publish.async"}, {"observedValue", message.sequence}}}));
-            }
+        const auto reset_seq = measurement.reset_seq ();
+        const bool warmup = reset_seq == "0";
+        const auto sets = std::atomic_load (&_sets);
+        publish_event_t message;
+        message.run_id = config.run_id;
+        message.cell_id = config.cell_id;
+        message.reset_seq = reset_seq;
+        message.phase = warmup ? "warmup" : "measured";
+        message.topic = fanout_topic;
+        message.clock_domain_id = clock_domain ();
+        message.payload = measurement.pattern ().base64 ();
+        std::int64_t started = 0;
+        if (!measurement.begin_operation (started, "event"))
+            co_return;
+        const auto sequence = _issued.fetch_add (1) + 1;
+        message.sequence = dec (sequence);
+        message.sent_ticks = dec (started);
+        std::exception_ptr error;
+        try {
+            co_await fanout.publish (*config.channel_name, fanout_topic, message).async ();
+        }
+        catch (...) {
+            error = std::current_exception ();
+        }
+        if (error) {
+            measurement.complete_operation (started, error);
+            co_return;
+        }
+        const auto completed = now_ticks ();
+        if (measurement.complete_operation (started, nullptr, completed))
+            sets->record_window_success (sequence);
+        if (warmup) {
+            if (!measurement.has_setup_evidence ())
+                measurement.set_setup_evidence (json::array ({{{"kind", "warmupMarkerPublished"}, {"source", "publisher_t.publish.async"}, {"observedValue", message.sequence}}}));
         }
     }
 
@@ -115,7 +113,7 @@ class pubsub_fanout_echo_scenario_t
             fanout_metrics::value (snapshot, "fanout.publishOpsPerSec", static_cast<double> (published_in_window) / seconds.get<double> ());
         else
             fanout_metrics::null_key (snapshot, "fanout.publishOpsPerSec", "PHASE_NOT_STARTED", "No measured window has run.");
-        snapshot["provenance"]["fanout"] = {{"channelName", _role.config.channel_name}, {"topic", fanout_topic}, {"noDrop", false},
+        snapshot["provenance"]["fanout"] = {{"channelName", _role.config.channel_name}, {"topic", fanout_topic}, {"noDrop", true},
                                             {"publisherSequenceScope", "one counter per run; warmup and measured ranges are disjoint"},
                                             {"sequenceOriginal", "publisher-sequences.json"}};
         if (!final)

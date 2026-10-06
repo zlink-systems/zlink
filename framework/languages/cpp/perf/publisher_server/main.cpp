@@ -18,7 +18,8 @@ int main (int argc, char **argv)
     return perf::run_role (std::move (role), [&, scenario] (fw::zlink_framework_options_t &options, fw::app_t &app) {
         options.add_fanout_channel (*role_ref.config.channel_name)
           .enable_publisher (role_ref.config.transport_endpoints.at ("fanout"))
-                    .set_automatic_routing_id_prefix ("perf-publisher");
+          .set_automatic_routing_id_prefix ("perf-publisher")
+          .set_no_drop (true);
         app.add_hosted_service (std::make_unique<perf::prepare_service_t> (role_ref, [scenario] (const std::atomic<bool> &stopping) { scenario->prepare (stopping); }));
     });
 }

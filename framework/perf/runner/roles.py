@@ -75,7 +75,9 @@ def plan_roles(cell: Cell, values: dict, common: dict, stream_scheme: str, reser
                   "actorIds": ids["actor"] if role.objects == "actor" else [],
                   "spotCount": cell.spot_count, "subscriberCount": cell.subscriber_count, "worker": common["worker"],
                   "executionMode": scenario.execution, "workload": common["workload"],
-                  "diagnostics": common["diagnostics"](name), "provenance": {**common["provenance"], "processKey": name}}
+                  "diagnostics": common["diagnostics"](name),
+                  "provenance": {**common["provenance"], "processKey": name,
+                                 **({"fanout": {"noDrop": True}} if role.kind == "publisher" else {})}}
         manifest = {"role": role.kind, "roleInstance": index, "streamEndpoint": listeners.get("stream"),
                     "applicationTriggerUrl": config["applicationTriggerUrl"],
                     "metrics": {"transport": "http", "baseUrl": config["metricsUrl"]},

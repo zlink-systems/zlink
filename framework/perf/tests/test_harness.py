@@ -91,7 +91,7 @@ class HarnessTests(unittest.TestCase):
             ["single", "--scenario", "session-echo-only", "--mode", "send-send"],
             ["single", "--scenario", "session-echo-only", "--codec", "protobuf"],
             ["single", "--scenario", "session-echo-only", "--duration-seconds", "nan"],
-            ["single", "--scenario", "session-echo-only", "--inflight", "2147483648"],
+            ["single", "--scenario", "session-echo-only", "--inflight", "1"],
             ["single", "--scenario", "session-echo-only", "--client-index", "0"],
             ["matrix", "--payload-size", "1024"],
             ["matrix", "--payload-sizes", "1024,1024"],
@@ -111,7 +111,7 @@ class HarnessTests(unittest.TestCase):
             ("s2s-channel-to-spot-send-send-echo", ["--mode", "send-send", "--channel-topology", "routemesh"]),
             ("s2s-spot-to-channel-request-echo", ["--terminal", "yield", "--spot-count", "1"]),
             ("spot-worker-offload-echo", ["--worker-task-millis", "3", "--worker-pool-size", "2", "--terminal", "ordinary", "--mode", "worker-offload"]),
-            ("pubsub-fanout-echo", ["--subscriber-count", "3", "--mode", "publish", "--inflight", "4"]),
+            ("pubsub-fanout-echo", ["--subscriber-count", "3", "--mode", "publish"]),
             ("actor-no-bind-request-echo", ["--logical-streams", "8", "--connect-concurrency", "4"]),
         ]
         for scenario, extra in accepted:
@@ -276,8 +276,25 @@ class HarnessTests(unittest.TestCase):
         cell_a, cell_b = expand(a, False)[0], expand(b, False)[0]
         self.assertEqual(comparison(a, cell_a, env)[1], comparison(b, cell_b, env)[1])
         self.assertEqual(comparison(a, cell_a, env)[0]["packageSource"], "published")
-        b.inflight = 2
+        b.connections = 9
         self.assertNotEqual(comparison(a, cell_a, env)[1], comparison(b, cell_b, env)[1])
+
+    def test_load_config_has_no_window_and_publisher_records_no_drop(self):
+        env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
+        env["serializer"] = {"name": "typed JSON"}
+        args = options(["single", "--scenario", "pubsub-fanout-echo", *COMMON])
+        cell = expand(args, False)[0]
+        comparable = comparison(args, cell, env)[0]
+        workload = comparable["workload"]
+        self.assertNotIn("inflight", workload)
+        self.assertEqual(comparable["publisherChannel"], {"noDrop": True})
+        common = {"runId": "r", "cellId": "c", "configHash": "a" * 64, "language": "cpp",
+                  "workload": workload, "worker": None, "store": None, "diagnostics": lambda name: None, "provenance": {}}
+        ports = iter(range(20000, 30000))
+        roles = plan_roles(cell, {"subscriber_count": cell.subscriber_count, "logical_streams": 4},
+                           common, "tcp", lambda: next(ports))
+        publisher = next(role.config for role in roles if role.config["role"] == "publisher")
+        self.assertIs(publisher["provenance"]["fanout"]["noDrop"], True)
 
     def test_workload_owns_timeouts_and_worker_has_no_queue_limit(self):
         env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}

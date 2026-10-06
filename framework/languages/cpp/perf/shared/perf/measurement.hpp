@@ -459,14 +459,13 @@ class measurement_t
             else
                 null_metric (name, "NOT_APPLICABLE", "This process owns no physical connector pool.");
         }
-        for (const char *key : {"logicalStreams", "inflightPerStream", "inflight.max"}) {
+        for (const char *key : {"logicalStreams", "inflight.max"}) {
             const std::string name = std::string ("load.") + key;
             if (_primary && (std::string (key) != "logicalStreams" || !cs_client))
                 metrics[name] = dec (std::string (key) == "logicalStreams" ? static_cast<std::uint64_t> (*_config.workload.logical_streams)
-                                     : std::string (key) == "inflightPerStream" ? static_cast<std::uint64_t> (_config.workload.inflight)
                                                                                 : _max_inflight);
             else
-                null_metric (name, "NOT_APPLICABLE", "No server logical streams are owned here; CS slots are connector based.");
+                null_metric (name, "NOT_APPLICABLE", "This process has no applicable source load observation.");
         }
         std::uint64_t application_count = 0;
         for (const char *direction : {"request", "send", "reply", "event"}) {

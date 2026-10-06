@@ -51,36 +51,35 @@ class actor_no_bind_send_send_echo_scenario_t
 
     void run (const loops_t &loops)
     {
-        spawn_stream_loops (loops, _role, [this] (int stream) { return loop (stream); });
+        spawn_stream_loops (loops, _role, [this, loops] (int stream) { return loop (stream, loops); });
     }
 
   private:
-    fw::task_t<void> loop (int stream)
+    fw::task_t<void> loop (int stream, loops_t loops)
     {
         auto &measurement = _role.measurement;
         auto &actors = _role.service<fw::actor_client_t> ();
         auto &correlations = *_role.correlations;
         const auto &config = _role.config;
         const fw::actor_id_t actor_id (config.actor_ids[static_cast<std::size_t> (stream)]);
-        while (measurement.can_issue ()) {
-            auto request = measurement.request (stream, _sequences.next (stream));
-            request.return_channel = config.channel_name;
-            std::int64_t started = 0;
-            if (!measurement.begin_operation (started, "send"))
-                break;
-            request.sent_ticks = dec (started);
-            const auto entry = correlations.register_request (request, started); // §13: registered right before the first public send
-            try {
-                co_await actors.send (actor_id, request).async ();
-                _role.metrics.record ("sourceAdmissionMs", started, now_ticks ());
-                correlations.first_send_ended (entry, nullptr);
-            }
-            catch (...) {
-                correlations.first_send_ended (entry, std::current_exception ());
-            }
-            const auto [result, completed] = co_await correlations.complete (entry); // the return Channel handler decides
-            measurement.complete_operation (started, result, completed);
+        auto request = measurement.request (stream, _sequences.next (stream));
+        request.return_channel = config.channel_name;
+        std::int64_t started = 0;
+        if (!measurement.begin_operation (started, "send"))
+            co_return;
+        request.sent_ticks = dec (started);
+        const auto entry = correlations.register_request (request, started); // §13: registered right before the first public send
+        try {
+            co_await actors.send (actor_id, request).async ();
+            _role.metrics.record ("sourceAdmissionMs", started, now_ticks ());
+            correlations.first_send_ended (entry, nullptr);
         }
+        catch (...) {
+            correlations.first_send_ended (entry, std::current_exception ());
+        }
+        loops->spawn (observe_send_echo (_role, entry), [this] (std::exception_ptr error) {
+            _role.measurement.record_diagnostic (std::move (error));
+        });
     }
 
     role_t &_role;

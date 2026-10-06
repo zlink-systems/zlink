@@ -129,44 +129,42 @@ class s2s_spot_to_channel_request_echo_scenario_t
 
     void run (const loops_t &loops)
     {
-        spawn_stream_loops (loops, _role, [this] (int stream) { return loop (stream); });
+        spawn_request_streams (loops, _role, [this] (int stream) { return loop (stream); });
     }
 
   private:
-    // The local driver: one PerfDriveRequest per operation; the in-flight slot is the driver's until the handler returns.
+    // The local driver submits each PerfDriveRequest without waiting for an earlier drive reply.
     fw::task_t<void> loop (int stream)
     {
         auto &measurement = _role.measurement;
         auto &route = _role.service<fw::route_client_t> ();
         const auto &config = _role.config;
         const auto &spot_id = config.spot_ids[static_cast<std::size_t> (stream) % config.spot_ids.size ()];
-        while (measurement.can_issue ()) {
-            const auto echo = measurement.request (stream, _sequences.next (stream));
-            const auto started = now_ticks ();
-            _role.metrics.count ("driver.issued");
-            std::exception_ptr error;
+        const auto echo = measurement.request (stream, _sequences.next (stream));
+        const auto started = now_ticks ();
+        _role.metrics.count ("driver.issued");
+        std::exception_ptr error;
+        try {
+            drive_reply_t driven;
             try {
-                drive_reply_t driven;
-                try {
-                    driven = co_await route.request_to_spot (spot_id, drive_request_t{echo})
-                               .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms)).async<drive_reply_t> ();
-                }
-                catch (...) {
-                    _role.metrics.count ("driver.failed");
-                    throw;
-                }
-                const auto driver_finished = now_ticks ();
-                if (!driven.started)
-                    _role.metrics.count ("driver.notStarted");
-                else if (driven.echo)
-                    _role.metrics.record ("driverLatencyMs", started, driver_finished);
+                driven = co_await route.request_to_spot (spot_id, drive_request_t{echo})
+                           .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms)).async<drive_reply_t> ();
             }
             catch (...) {
-                error = std::current_exception ();
+                _role.metrics.count ("driver.failed");
+                throw;
             }
-            if (error) {
-                measurement.record_diagnostic (error);
-            }
+            const auto driver_finished = now_ticks ();
+            if (!driven.started)
+                _role.metrics.count ("driver.notStarted");
+            else if (driven.echo)
+                _role.metrics.record ("driverLatencyMs", started, driver_finished);
+        }
+        catch (...) {
+            error = std::current_exception ();
+        }
+        if (error) {
+            measurement.record_diagnostic (error);
         }
     }
 

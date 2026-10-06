@@ -55,6 +55,8 @@ json measured_snapshot (measurement_t &measurement)
 void test_terminal_window_and_inflight_accounting ()
 {
     measurement_t measurement (config (), true);
+    require (!measured_snapshot (measurement).at ("metrics").contains ("load.inflightPerStream"),
+             "the removed load window must not appear in the result schema");
     require (measured_snapshot (measurement).at ("metrics").at ("messages.inflightAtEnd") == "0",
              "inflightAtEnd must be numeric before the measured window");
     require (measurement.start (trigger ("warmup", "0"), {}).accepted, "warmup did not start");
@@ -65,6 +67,8 @@ void test_terminal_window_and_inflight_accounting ()
 
     std::int64_t inside = 0, after = 0;
     require (measurement.begin_operation (inside), "inside-window operation was rejected");
+    require (measured_snapshot (measurement).at ("metrics").at ("load.inflight.max") == "1",
+             "observed outstanding work must be reported without a configured window");
     require (measurement.complete_operation (inside, nullptr, inside + 1),
              "an unsealed success before endTicks must return true");
     require (measurement.begin_operation (after), "late-terminal operation was rejected before the end");

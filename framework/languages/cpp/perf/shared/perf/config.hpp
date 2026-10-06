@@ -15,7 +15,6 @@ struct workload_t
 {
     int payload_size = 0;
     double duration_seconds = 0, warmup_seconds = 0;
-    int inflight = 1;
     std::optional<int> connections, logical_streams;
     int client_count = 1;
     std::optional<int> connect_concurrency;
@@ -27,7 +26,6 @@ inline void from_json (const json &in, workload_t &v)
     v.payload_size = in.at ("payloadSize").get<int> ();
     v.duration_seconds = in.at ("durationSeconds").get<double> ();
     v.warmup_seconds = in.at ("warmupSeconds").get<double> ();
-    v.inflight = in.at ("inflight").get<int> ();
     v.connections = in.at ("connections").get<std::optional<int>> ();
     v.logical_streams = in.at ("logicalStreams").get<std::optional<int>> ();
     v.client_count = in.at ("clientCount").get<int> ();

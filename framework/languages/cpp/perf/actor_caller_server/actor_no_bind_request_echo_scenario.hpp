@@ -48,7 +48,7 @@ class actor_no_bind_request_echo_scenario_t
 
     void run (const loops_t &loops)
     {
-        spawn_stream_loops (loops, _role, [this] (int stream) { return loop (stream); });
+        spawn_request_streams (loops, _role, [this] (int stream) { return loop (stream); });
     }
 
   private:
@@ -58,25 +58,23 @@ class actor_no_bind_request_echo_scenario_t
         auto &actors = _role.service<fw::actor_client_t> ();
         const auto &config = _role.config;
         const fw::actor_id_t actor_id (config.actor_ids[static_cast<std::size_t> (stream)]);
-        while (measurement.can_issue ()) {
-            auto request = measurement.request (stream, _sequences.next (stream));
-            std::int64_t started = 0;
-            if (!measurement.begin_operation (started))
-                break;
-            request.sent_ticks = dec (started);
-            std::exception_ptr error;
-            try {
-                const auto reply = co_await actors.request (actor_id, request)
-                                     .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
-                                     .async<echo_reply_t> ();
-                payload_pattern_t::validate_identity (request, reply);
-                measurement.pattern ().validate (reply.payload);
-            }
-            catch (...) {
-                error = std::current_exception ();
-            }
-            measurement.complete_operation (started, error);
+        auto request = measurement.request (stream, _sequences.next (stream));
+        std::int64_t started = 0;
+        if (!measurement.begin_operation (started))
+            co_return;
+        request.sent_ticks = dec (started);
+        std::exception_ptr error;
+        try {
+            const auto reply = co_await actors.request (actor_id, request)
+                                 .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
+                                 .async<echo_reply_t> ();
+            payload_pattern_t::validate_identity (request, reply);
+            measurement.pattern ().validate (reply.payload);
         }
+        catch (...) {
+            error = std::current_exception ();
+        }
+        measurement.complete_operation (started, error);
     }
 
     role_t &_role;
