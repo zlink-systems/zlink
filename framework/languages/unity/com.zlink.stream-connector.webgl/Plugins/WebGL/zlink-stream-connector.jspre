@@ -1933,7 +1933,8 @@ var ZlinkStreamConnectorBundle = (() => {
           cause instanceof Error ? cause.cause : void 0
         );
       }
-      const { slot, actorId } = binding;
+      const slot = binding.slot;
+      const actorId = binding.actorId;
       if (actorId.length === 0 || this.bySlot.has(slot) || this.byId.has(actorId)) {
         throw invalidControl("Actor bound identity is already in use.");
       }
@@ -2189,7 +2190,8 @@ var ZlinkStreamConnectorBundle = (() => {
             this.events.runUserCallback(queued.callback, "Connector callback failed.");
             continue;
           }
-          const { message, signal } = queued;
+          const message = queued.message;
+          const signal = queued.signal;
           const handlers = this.receiversOf(message);
           for (const handler of currentRegistrations(this.handlers.get(message.name), handlers)) {
             if (!receives(handler, message)) continue;
