@@ -62,208 +62,141 @@ public sealed class ActorBoundSessionRelayTests
     }
 
     [Fact]
-    public async Task Failed_Replacement_Rolls_Back_And_Releases_Duplicate_Joiners()
+    public void Failed_Replacement_Preserves_The_Previous_Binding_And_Allows_Exact_Retry()
     {
         var state = new ZLinkActorRuntimeState("actor-rollback");
         _ = Bind(state, "binding-a", "session-a", authorityGeneration: 1);
-        var replacement = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
-        var duplicate = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
-        Assert.True(replacement.OwnsExecution);
-        Assert.False(duplicate.OwnsExecution);
-        Assert.Same(replacement.Completion, duplicate.Completion);
-        Assert.True(state.TryGetBoundSession(out var beforeTerminal));
-        Assert.Equal("binding-a", beforeTerminal.BindingToken);
-
         var failure = new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
-            "tombstone failed",
+            "authority changed",
             ZLinkRetryAdvice.RetryAfterBackoff
         );
-        state.AbortSessionReplacement(replacement, failure);
-
-        Assert.Same(failure, await duplicate.Completion);
-        Assert.True(state.TryGetBoundSession(out var rolledBack));
-        Assert.Equal("binding-a", rolledBack.BindingToken);
-        var next = Begin(state, "binding-c", "session-c", authorityGeneration: 3);
-        Assert.True(next.OwnsExecution);
-        var cancellation = new OperationCanceledException(new CancellationToken(canceled: true));
-        state.AbortSessionReplacement(next, cancellation);
-        Assert.Same(cancellation, await next.Completion);
-        Assert.True(state.TryGetBoundSession(out var afterCancellation));
-        Assert.Equal("binding-a", afterCancellation.BindingToken);
+        Assert.Same(
+            failure,
+            Assert.Throws<ZLinkFrameworkException>(() =>
+                Replace(state, "binding-b", "session-b", 2, _ => throw failure)
+            )
+        );
+        Assert.True(state.TryGetBoundSession(out var retained));
+        Assert.Equal("binding-a", retained.BindingToken);
+        Assert.Equal(0, state.SessionBindingTombstoneCount);
+        var retry = Replace(state, "binding-b", "session-b", 2);
+        Assert.True(retry.Changed);
+        Assert.Equal("binding-a", retry.Previous?.BindingToken);
     }
 
     [Fact]
-    public async Task Completed_Replacement_Rejects_A_Response_Loss_Replay_Of_The_Old_Bind()
+    public void Completed_Replacement_Rejects_A_Response_Loss_Replay_Of_The_Old_Bind()
     {
         var state = new ZLinkActorRuntimeState("actor-response-loss");
         _ = Bind(state, "binding-a", "session-a", authorityGeneration: 1);
-        var replacement = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
-        var duplicate = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
-        state.PublishSessionReplacement(replacement);
-        state.CompleteSessionReplacement(replacement);
-        Assert.Null(await replacement.Completion);
-        Assert.Null(await duplicate.Completion);
-
+        Assert.True(Replace(state, "binding-b", "session-b", 2).Changed);
         var stale = Assert.Throws<ZLinkFrameworkException>(() =>
-            Begin(state, "binding-a", "session-a", authorityGeneration: 1)
+            Replace(state, "binding-a", "session-a", 1)
         );
-        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, stale.Kind);
         Assert.Equal(ZLinkRetryAdvice.DoNotRetry, stale.RetryAdvice);
         Assert.True(state.TryGetBoundSession(out var current));
         Assert.Equal("binding-b", current.BindingToken);
-
-        var exactReplay = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
-        Assert.False(exactReplay.OwnsExecution);
-        Assert.Null(await exactReplay.Completion);
+        var exactReplay = Replace(state, "binding-b", "session-b", 2);
+        Assert.False(exactReplay.Changed);
+        Assert.Null(exactReplay.Previous);
     }
 
     [Fact]
-    public async Task Published_Replacement_Survives_Cleanup_Failure_And_Exact_Retry_Completes()
+    public async Task Concurrent_Exact_Duplicates_Have_One_Installation_And_One_Retirement()
     {
-        var state = new ZLinkActorRuntimeState("actor-forward-completion");
+        var state = new ZLinkActorRuntimeState("actor-duplicates");
         _ = Bind(state, "binding-a", "session-a", authorityGeneration: 1);
-        var first = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
-
-        state.PublishSessionReplacement(first);
-        var cleanupFailure = new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.Unavailable,
-            "second tombstone failed",
-            ZLinkRetryAdvice.RetryAfterBackoff
+        var results = await Task.WhenAll(
+            Enumerable
+                .Range(0, 8)
+                .Select(_ => Task.Run(() => Replace(state, "binding-b", "session-b", 2)))
         );
-        state.AbortSessionReplacement(first, cleanupFailure);
-
-        Assert.Same(cleanupFailure, await first.Completion);
-        Assert.True(state.TryGetBoundSession(out var terminal));
-        Assert.Equal("binding-b", terminal.BindingToken);
-
-        var retry = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
-        Assert.True(retry.OwnsExecution);
-        state.PublishSessionReplacement(retry);
-        state.CompleteSessionReplacement(retry);
-
-        Assert.Null(await retry.Completion);
-        Assert.True(state.TryGetBoundSession(out terminal));
-        Assert.Equal("binding-b", terminal.BindingToken);
-        var delayedOld = Assert.Throws<ZLinkFrameworkException>(() =>
-            Begin(state, "binding-a", "session-a", authorityGeneration: 1)
-        );
-        Assert.Equal(ZLinkRetryAdvice.DoNotRetry, delayedOld.RetryAdvice);
+        Assert.Single(results.Where(result => result.Changed));
+        Assert.Single(results.Where(result => result.Previous is not null));
+        Assert.Equal(1, state.SessionBindingTombstoneCount);
+        Assert.True(state.TryGetBoundSession(out var current));
+        Assert.Equal("binding-b", current.BindingToken);
     }
 
     [Fact]
-    public async Task Previous_Session_Unbind_Does_Not_Invalidate_Prepared_Replacement()
+    public async Task Previous_Session_Unbind_Cannot_Invalidate_The_Replacement_Turn()
     {
         var state = new ZLinkActorRuntimeState("actor-previous-unbind-race");
         _ = Bind(state, "binding-a", "session-a", authorityGeneration: 1);
-        var replacement = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
-
-        state.UnbindSession("binding-a");
-        state.PublishSessionReplacement(replacement);
-        state.CompleteSessionReplacement(replacement);
-
-        Assert.Null(await replacement.Completion);
+        Task cleanup = Task.CompletedTask;
+        var replacement = Replace(
+            state,
+            "binding-b",
+            "session-b",
+            2,
+            _ =>
+            {
+                Assert.NotNull(ZLinkStateLane.Current);
+                using (ExecutionContext.SuppressFlow())
+                    cleanup = Task.Run(() => state.UnbindSession("binding-a"));
+            }
+        );
+        await cleanup;
+        Assert.True(replacement.Changed);
+        Assert.Equal("binding-a", replacement.Previous?.BindingToken);
         Assert.True(state.TryGetBoundSession(out var current));
         Assert.Equal("binding-b", current.BindingToken);
-
         state.UnbindSession("binding-a");
         Assert.True(state.TryGetBoundSession(out current));
         Assert.Equal("binding-b", current.BindingToken);
-
         var delayedOld = Assert.Throws<ZLinkFrameworkException>(() =>
             Bind(state, "binding-a", "session-a", authorityGeneration: 1)
         );
         Assert.Equal(ZLinkRetryAdvice.DoNotRetry, delayedOld.RetryAdvice);
-
         state.UnbindSession("binding-b");
         Assert.False(state.TryGetBoundSession(out _));
     }
 
     [Fact]
-    public async Task Replacement_Token_Unbind_Cancels_Only_That_Replacement()
+    public async Task Replacement_Token_Unbind_Runs_After_Installation()
     {
         var state = new ZLinkActorRuntimeState("actor-replacement-unbind");
         _ = Bind(state, "binding-a", "session-a", authorityGeneration: 1);
-        var replacement = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
+        Task cleanup = Task.CompletedTask;
+        var result = Replace(
+            state,
+            "binding-b",
+            "session-b",
+            2,
+            _ =>
+            {
+                using (ExecutionContext.SuppressFlow())
+                    cleanup = Task.Run(() => state.UnbindSession("binding-b"));
+            }
+        );
+        await cleanup;
+        Assert.True(result.Changed);
+        Assert.False(state.TryGetBoundSession(out _));
+        Assert.Equal(1, state.SessionBindingTombstoneCount);
+    }
 
-        state.UnbindSession("binding-b");
-
-        var failure = Assert.IsType<ZLinkFrameworkException>(await replacement.Completion);
+    [Fact]
+    public void Tombstone_Capacity_Failure_Preserves_Current_And_Exact_Retry_Can_Install()
+    {
+        var time = new ManualTimeProvider();
+        var state = new ZLinkActorRuntimeState(
+            "actor-capacity",
+            time,
+            sessionBindingTombstoneRetention: TimeSpan.FromSeconds(1),
+            maxSessionBindingTombstones: 1
+        );
+        Replace(state, "binding-a", "session-a", 1);
+        Replace(state, "binding-b", "session-b", 2);
+        var failure = Assert.Throws<ZLinkFrameworkException>(() =>
+            Replace(state, "binding-c", "session-c", 3)
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
-        Assert.True(state.TryGetBoundSession(out var current));
-        Assert.Equal("binding-a", current.BindingToken);
-    }
-
-    [Fact]
-    public async Task Prepared_Replacement_Rolls_Back_Before_Publication()
-    {
-        var state = new ZLinkActorRuntimeState("actor-prepared-forward-completion");
-        _ = Bind(state, "binding-a", "session-a", authorityGeneration: 1);
-        var first = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
-
-        var publishFailure = new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.Unavailable,
-            "authority changed before publication",
-            ZLinkRetryAdvice.RetryAfterBackoff
-        );
-        state.AbortSessionReplacement(first, publishFailure);
-
-        Assert.Same(publishFailure, await first.Completion);
-        Assert.True(state.TryGetBoundSession(out var unchanged));
-        Assert.Equal("binding-a", unchanged.BindingToken);
-
-        var retry = Begin(state, "binding-b", "session-b", authorityGeneration: 2);
-        Assert.True(retry.OwnsExecution);
-        state.PublishSessionReplacement(retry);
-        state.CompleteSessionReplacement(retry);
-        Assert.Null(await retry.Completion);
-
-        var next = Begin(state, "binding-c", "session-c", authorityGeneration: 3);
-        Assert.True(next.OwnsExecution);
-        state.AbortSessionReplacement(
-            next,
-            new OperationCanceledException(new CancellationToken(true))
-        );
-    }
-
-    [Fact]
-    public void Destroy_Or_Relocation_During_Replacement_Makes_Publish_Fail_Closed()
-    {
-        var destroyed = new ZLinkActorRuntimeState("actor-destroy-race");
-        _ = Bind(destroyed, "binding-a", "session-a", authorityGeneration: 1);
-        var destroyAttempt = Begin(destroyed, "binding-b", "session-b", authorityGeneration: 2);
-        destroyed.ClearAfterDestroy();
-        var destroyFailure = Assert.Throws<ZLinkFrameworkException>(() =>
-            destroyed.PublishSessionReplacement(destroyAttempt)
-        );
-        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, destroyFailure.Kind);
-
-        var relocated = new ZLinkActorRuntimeState("actor-relocate-race");
-        _ = Bind(relocated, "binding-a", "session-a", authorityGeneration: 1);
-        var relocationAttempt = Begin(relocated, "binding-b", "session-b", authorityGeneration: 2);
-        var source = new ZLinkBackendActorRef(RoutingId.From("source-node"), relocated.ActorId, 7);
-        var target = new ZLinkBackendActorRef(RoutingId.From("target-node"), relocated.ActorId, 7);
-        relocated.Handoff.BeginCapture();
-        _ = relocated.Handoff.CutoverCaptureToMessageFollow(
-            0,
-            source,
-            target,
-            "actors",
-            sourceNodeGeneration: 1,
-            targetNodeGeneration: 1,
-            sourceAuthorityOwnerGeneration: 1,
-            targetAuthorityOwnerGeneration: 2,
-            sourceOwnerLeaseGeneration: 1,
-            targetOwnerLeaseGeneration: 2
-        );
-        relocated.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
-        relocated.RetireMigratedActorInstance(source);
-        var relocationFailure = Assert.Throws<ZLinkFrameworkException>(() =>
-            relocated.PublishSessionReplacement(relocationAttempt)
-        );
-        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, relocationFailure.Kind);
-        Assert.True(relocated.TryGetBoundSession(out var retained));
-        Assert.Equal("binding-a", retained.BindingToken);
+        Assert.True(state.TryGetBoundSession(out var retained));
+        Assert.Equal("binding-b", retained.BindingToken);
+        Assert.False(Replace(state, "binding-b", "session-b", 2).Changed);
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.True(Replace(state, "binding-c", "session-c", 3).Changed);
     }
 
     [Fact]
@@ -282,32 +215,6 @@ public sealed class ActorBoundSessionRelayTests
         );
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, delayed.Kind);
         Assert.Equal(ZLinkRetryAdvice.DoNotRetry, delayed.RetryAdvice);
-    }
-
-    [Fact]
-    public void Exact_Retry_Rejects_A_Different_Previous_Binding_Fence()
-    {
-        var state = new ZLinkActorRuntimeState("actor-previous-fence");
-        var firstFence = PreviousFence("previous-a");
-        var first = Begin(
-            state,
-            "binding-b",
-            "session-b",
-            authorityGeneration: 2,
-            previousFence: firstFence
-        );
-
-        var conflict = Assert.Throws<ZLinkFrameworkException>(() =>
-            Begin(
-                state,
-                "binding-b",
-                "session-b",
-                authorityGeneration: 2,
-                previousFence: PreviousFence("previous-b")
-            )
-        );
-        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, conflict.Kind);
-        state.AbortSessionReplacement(first, new InvalidOperationException("test cleanup"));
     }
 
     [Fact]
@@ -348,10 +255,10 @@ public sealed class ActorBoundSessionRelayTests
     public void Duplicate_Token_Requires_The_Full_Immutable_Binding_Identity()
     {
         var state = new ZLinkActorRuntimeState("actor-conflict");
-        var pending = Begin(state, "binding-a", "session-a", authorityGeneration: 1);
+        var installed = Replace(state, "binding-a", "session-a", authorityGeneration: 1);
 
         var conflict = Assert.Throws<ZLinkFrameworkException>(() =>
-            state.BeginSessionReplacement(
+            state.ReplaceSessionBinding(
                 RoutingId.From("session-node"),
                 RoutingId.From("session-a"),
                 "binding-a",
@@ -366,7 +273,7 @@ public sealed class ActorBoundSessionRelayTests
             )
         );
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, conflict.Kind);
-        Assert.True(pending.OwnsExecution);
+        Assert.True(installed.Changed);
     }
 
     [Fact]
@@ -471,15 +378,15 @@ public sealed class ActorBoundSessionRelayTests
         );
     }
 
-    private static ZLinkActorSessionReplacementAttempt Begin(
+    private static ZLinkActorSessionBindingTransition Replace(
         ZLinkActorRuntimeState state,
         string token,
         string session,
         ulong authorityGeneration,
-        ZLinkActorPreviousBindingFence? previousFence = null
+        Action<ZLinkActorRuntimeState>? acceptAuthority = null
     )
     {
-        return state.BeginSessionReplacement(
+        return state.ReplaceSessionBinding(
             RoutingId.From("session-node"),
             RoutingId.From(session),
             token,
@@ -491,25 +398,9 @@ public sealed class ActorBoundSessionRelayTests
             ownerLeaseGeneration: 1,
             sessionOwnerNodeGeneration: 1,
             acceptedHighWater: 0,
-            previousFence: previousFence
+            acceptAuthority: acceptAuthority
         );
     }
-
-    private static ZLinkActorPreviousBindingFence PreviousFence(string token) =>
-        new(
-            RoutingId.From("previous-node"),
-            RoutingId.From("session-node"),
-            RoutingId.From("session-a"),
-            token,
-            BindingGeneration: 1,
-            ObjectGeneration: 7,
-            MeshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
-            TargetNodeGeneration: 1,
-            AuthorityOwnerGeneration: 1,
-            OwnerLeaseGeneration: 1,
-            SessionOwnerNodeGeneration: 1,
-            AcceptedHighWater: 0
-        );
 
     private static MeshNodeStatus NodeStatus(RoutingId rid, ulong lifecycleGeneration) =>
         new(

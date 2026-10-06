@@ -1308,19 +1308,16 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Fact]
-    public async Task Cross_Owner_Rebind_Completes_After_New_Binding_Is_Published()
+    public void Cross_Owner_Rebind_Completes_After_New_Binding_Is_Published()
     {
         var state = new ZLinkActorRuntimeState("actor-order");
         _ = BindActorSession(state, "old-token", "old-session", 1);
-        var replacement = BeginActorSessionReplacement(state, "new-token", "new-session", 2);
+        var replacement = ReplaceActorSessionBinding(state, "new-token", "new-session", 2);
         var cleanupAck = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
 
-        state.PublishSessionReplacement(replacement);
-        state.CompleteSessionReplacement(replacement);
-
-        Assert.Null(await replacement.Completion);
+        Assert.True(replacement.Changed);
         Assert.False(cleanupAck.Task.IsCompleted);
         Assert.True(state.TryGetBoundSession(out var current));
         Assert.Equal("new-token", current.BindingToken);
@@ -1328,50 +1325,43 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Fact]
-    public async Task Rebind_Does_Not_Roll_Back_When_Retired_Session_Cleanup_Is_Unavailable()
+    public void Rebind_Does_Not_Roll_Back_When_Retired_Session_Cleanup_Is_Unavailable()
     {
         var state = new ZLinkActorRuntimeState("actor-cleanup-gap");
         _ = BindActorSession(state, "old-token", "old-session", 1);
-        var replacement = BeginActorSessionReplacement(state, "new-token", "new-session", 2);
+        var replacement = ReplaceActorSessionBinding(state, "new-token", "new-session", 2);
 
-        state.PublishSessionReplacement(replacement);
-        state.CompleteSessionReplacement(replacement);
-
-        Assert.Null(await replacement.Completion);
+        Assert.True(replacement.Changed);
         Assert.True(state.TryGetBoundSession(out var current));
         Assert.Equal("new-token", current.BindingToken);
         var stale = Assert.Throws<ZLinkFrameworkException>(() =>
-            BeginActorSessionReplacement(state, "old-token", "old-session", 1)
+            ReplaceActorSessionBinding(state, "old-token", "old-session", 1)
         );
         Assert.Equal(ZLinkRetryAdvice.DoNotRetry, stale.RetryAdvice);
     }
 
     [Fact]
-    public async Task Same_Session_Rebind_Is_Idempotent_Without_A_Replacement_Notification()
+    public void Same_Session_Rebind_Is_Idempotent_Without_A_Replacement_Notification()
     {
         var state = new ZLinkActorRuntimeState("actor-same-session");
         _ = BindActorSession(state, "same-token", "same-session", 1);
-        var first = BeginActorSessionReplacement(state, "next-token", "next-session", 2);
-        state.PublishSessionReplacement(first);
-        state.CompleteSessionReplacement(first);
-        Assert.Null(await first.Completion);
+        var first = ReplaceActorSessionBinding(state, "next-token", "next-session", 2);
 
-        var replay = BeginActorSessionReplacement(state, "next-token", "next-session", 2);
-        Assert.False(replay.OwnsExecution);
-        Assert.Null(await replay.Completion);
+        Assert.True(first.Changed);
+        var replay = ReplaceActorSessionBinding(state, "next-token", "next-session", 2);
+        Assert.False(replay.Changed);
         Assert.Null(replay.Previous);
     }
 
     [Fact]
-    public async Task Same_Session_Replacement_Does_Not_Create_A_Previous_Fence()
+    public void Same_Session_Replacement_Does_Not_Create_A_Previous_Fence()
     {
         var state = new ZLinkActorRuntimeState("actor-same-owner");
         _ = BindActorSession(state, "same-token", "same-session", 1);
-        var replacement = BeginActorSessionReplacement(state, "same-token", "same-session", 1);
+        var replacement = ReplaceActorSessionBinding(state, "same-token", "same-session", 1);
 
-        Assert.False(replacement.OwnsExecution);
+        Assert.False(replacement.Changed);
         Assert.Null(replacement.Previous);
-        Assert.Null(await replacement.Completion);
     }
 
     [Fact]
@@ -2587,13 +2577,13 @@ public sealed class SessionActorCoordinatorTests
             sessionOwnerLeaseGeneration: 1
         );
 
-    private static ZLinkActorSessionReplacementAttempt BeginActorSessionReplacement(
+    private static ZLinkActorSessionBindingTransition ReplaceActorSessionBinding(
         ZLinkActorRuntimeState state,
         string bindingToken,
         string sessionRid,
         ulong authorityOwnerGeneration
     ) =>
-        state.BeginSessionReplacement(
+        state.ReplaceSessionBinding(
             RoutingId.From("session-owner"),
             RoutingId.From(sessionRid),
             bindingToken,

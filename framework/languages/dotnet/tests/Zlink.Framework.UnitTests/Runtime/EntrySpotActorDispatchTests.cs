@@ -1964,6 +1964,93 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task RemoteSessionBindPublication_OldCleanup_Cannot_Interrupt_The_Owner_Turn()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            RegisterProbeActor(runtime, actorRef);
+            var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+            var sessionNode = RoutingId.From("session-node-bind-cleanup");
+            node.AdmittedMeshPeers.Add(
+                new MeshNodePeer(
+                    1,
+                    MeshPeerSource.Discovery,
+                    MeshPeerState.Admitted,
+                    sessionNode,
+                    61,
+                    1,
+                    "inproc://session-node-bind-cleanup",
+                    1,
+                    0,
+                    1
+                )
+            );
+            node.SetLocalActorAuthorityFence(actorRef, 41, 51);
+            var request = new ZLinkRemoteSessionBindRequest(
+                actorRef.ActorId,
+                actorRef.NodeRid.ToBytes().ToArray(),
+                sessionNode.ToBytes().ToArray(),
+                RoutingId.From("session-old").ToBytes().ToArray(),
+                "binding-old",
+                1,
+                actorRef.Generation,
+                "entry",
+                61,
+                0,
+                SessionOwnerId: "session-owner",
+                SessionOwnerLeaseGeneration: 71
+            );
+            await runtime.BindRemoteBoundSessionRouteAsync(
+                request,
+                sessionNode,
+                CancellationToken.None
+            );
+            ZLinkStateLane? publicationLane = null;
+            Task cleanup = Task.CompletedTask;
+            var readCount = 0;
+            node.AfterLocalActorAuthorityRead = (_, _) =>
+            {
+                if (++readCount != 2)
+                    return;
+                publicationLane = ZLinkStateLane.Current;
+                // The existing authority-reader double places old cleanup at the
+                // acceptance boundary. A single owner turn queues it after install.
+                if (publicationLane is null)
+                {
+                    state.UnbindSession("binding-old");
+                    Assert.False(state.TryGetBoundSession(out _));
+                }
+                else
+                {
+                    using (ExecutionContext.SuppressFlow())
+                        cleanup = Task.Run(() => state.UnbindSession("binding-old"));
+                }
+            };
+            var response = await runtime.BindRemoteBoundSessionRouteAsync(
+                request with
+                {
+                    SessionRid = RoutingId.From("session-new").ToBytes().ToArray(),
+                    BindingToken = "binding-new",
+                },
+                sessionNode,
+                CancellationToken.None
+            );
+            await cleanup;
+            Assert.NotNull(publicationLane);
+            Assert.True(response.Acknowledged);
+            Assert.True(state.TryGetBoundSession(out var current));
+            Assert.Equal("binding-new", current.BindingToken);
+            Assert.Equal(1, state.SessionBindingTombstoneCount);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task RemoteSessionBindPublication_IgnoresOwnerLeaseChange()
     {
         var node = new CapturingSpotNode();
@@ -2017,6 +2104,111 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.True(response.Acknowledged);
             Assert.Equal(authorityGeneration, response.AuthorityOwnerGeneration);
             Assert.Equal(51UL, response.OwnerLeaseGeneration);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemoteSessionBindPublication_Rejects_Destroyed_Or_Migrated_Actor(
+        bool migrated
+    )
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            RegisterProbeActor(runtime, actorRef);
+            var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+            node.SetLocalActorAuthorityFence(actorRef, 41, 51);
+            var sessionNode = RoutingId.From("session-node-bind-terminal");
+            node.AdmittedMeshPeers.Add(
+                new MeshNodePeer(
+                    1,
+                    MeshPeerSource.Discovery,
+                    MeshPeerState.Admitted,
+                    sessionNode,
+                    61,
+                    1,
+                    "inproc://session-node-bind-terminal",
+                    1,
+                    0,
+                    1
+                )
+            );
+            var request = new ZLinkRemoteSessionBindRequest(
+                actorRef.ActorId,
+                actorRef.NodeRid.ToBytes().ToArray(),
+                sessionNode.ToBytes().ToArray(),
+                RoutingId.From("session-terminal").ToBytes().ToArray(),
+                "binding-before-terminal",
+                1,
+                actorRef.Generation,
+                "entry",
+                61,
+                0,
+                SessionOwnerId: "session-owner",
+                SessionOwnerLeaseGeneration: 71
+            );
+            await runtime.BindRemoteBoundSessionRouteAsync(
+                request,
+                sessionNode,
+                CancellationToken.None
+            );
+            if (migrated)
+            {
+                var target = new ZLinkBackendActorRef(
+                    RoutingId.From("target-node"),
+                    actorRef.ActorId,
+                    actorRef.Generation
+                );
+                state.Handoff.BeginCapture();
+                _ = state.Handoff.CutoverCaptureToMessageFollow(
+                    0,
+                    actorRef,
+                    target,
+                    "entry",
+                    sourceNodeGeneration: 1,
+                    targetNodeGeneration: 1,
+                    sourceAuthorityOwnerGeneration: 41,
+                    targetAuthorityOwnerGeneration: 42,
+                    sourceOwnerLeaseGeneration: 51,
+                    targetOwnerLeaseGeneration: 52
+                );
+                state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
+            }
+            var retired = false;
+            node.AfterLocalActorAuthorityRead = (_, _) =>
+            {
+                if (retired)
+                    return;
+                retired = true;
+                if (migrated)
+                    state.RetireMigratedActorInstance(actorRef);
+                else
+                    state.ClearAfterDestroy();
+            };
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                runtime
+                    .BindRemoteBoundSessionRouteAsync(
+                        request with
+                        {
+                            BindingToken = "binding-after-terminal",
+                        },
+                        sessionNode,
+                        CancellationToken.None
+                    )
+                    .AsTask()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+            Assert.Equal(migrated, state.TryGetBoundSession(out var retained));
+            if (migrated)
+                Assert.Equal("binding-before-terminal", retained.BindingToken);
+            Assert.Equal(0, state.SessionBindingTombstoneCount);
         }
         finally
         {

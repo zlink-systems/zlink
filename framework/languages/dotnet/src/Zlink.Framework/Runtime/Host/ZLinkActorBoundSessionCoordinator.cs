@@ -634,7 +634,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         return previous;
     }
 
-    public ZLinkActorSessionReplacementAttempt BeginActorSessionReplacement(
+    public ZLinkActorSessionBindingTransition ReplaceActorSessionBinding(
         string actorId,
         RoutingId? sessionNodeRid,
         RoutingId sessionRid,
@@ -649,11 +649,11 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong acceptedHighWater,
         string sessionOwnerId = "",
         ulong sessionOwnerLeaseGeneration = 0,
-        ZLinkActorPreviousBindingFence? previousFence = null
+        Action<ZLinkActorRuntimeState>? acceptAuthority = null
     )
     {
-        return _getState(actorId)
-            .BeginSessionReplacement(
+        var transition = _getState(actorId)
+            .ReplaceSessionBinding(
                 sessionNodeRid,
                 sessionRid,
                 bindingToken,
@@ -667,38 +667,14 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 acceptedHighWater,
                 sessionOwnerId,
                 sessionOwnerLeaseGeneration,
-                previousFence
+                acceptAuthority
             );
-    }
-
-    public void CompleteActorSessionReplacement(
-        string actorId,
-        ZLinkActorSessionReplacementAttempt attempt
-    )
-    {
-        _getState(actorId).CompleteSessionReplacement(attempt);
-    }
-
-    public void PublishActorSessionReplacement(
-        string actorId,
-        ZLinkActorSessionReplacementAttempt attempt
-    )
-    {
-        _getState(actorId).PublishSessionReplacement(attempt);
         _boundSessions.Register(
             actorId,
-            attempt.Replacement.SessionRid,
-            attempt.Replacement.BindingToken
+            transition.Replacement.SessionRid,
+            transition.Replacement.BindingToken
         );
-    }
-
-    public void AbortActorSessionReplacement(
-        string actorId,
-        ZLinkActorSessionReplacementAttempt attempt,
-        Exception failure
-    )
-    {
-        _getState(actorId).AbortSessionReplacement(attempt, failure);
+        return transition;
     }
 
     public void TombstoneSessionActorBinding(
