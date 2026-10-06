@@ -16,6 +16,7 @@
 #include <zlink/framework/contracts/handlers/handler_registry.hpp>
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/contracts/monitoring/client_server_runtime.hpp>
+#include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
 #include <boost/asio/awaitable.hpp>
 
 #include <atomic>
@@ -95,6 +96,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     struct snapshot_connection_t;
     struct snapshot_source_t;
     struct worker_lane_snapshot_t;
+    struct publication_request_t;
 
     void start_server (const channel_snapshot_t &channel,
                        const std::optional<location_owner_token_t> &publication_owner);
@@ -103,7 +105,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     void reconcile ();
     task_t<void> reconcile_task ();
     task_t<void> reconcile_channel_task (client_channel_t &channel);
-    bool publish_servers ();
+    bool request_publication () noexcept;
     task_t<bool> publish_servers_task ();
     task_t<void> pump ();
     task_t<worker_lane_snapshot_t> run_worker_turn ();
@@ -162,6 +164,9 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     location_repository_t *_store;
     location_repository_t *_leases;
     service_provider_t _services;
+    // Resolved once during configuration. The service registry is not a concurrent
+    // structure, so snapshot turns read this reference instead of resolving again.
+    framework_runtime_t *_framework_runtime;
     serializer_registry_t *_serializers;
     const handler_registry_t *_handlers;
     std::shared_ptr<application_job_queue_t> _application_jobs;
@@ -184,13 +189,13 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::shared_ptr<eventing::runtime_wake_timer_t> _wake_timer =
       std::make_shared<eventing::runtime_wake_timer_t> ();
     std::shared_ptr<std::atomic_bool> _stop = std::make_shared<std::atomic_bool> (false);
-    // Protects _descriptor_publish_pending/result, _active_application_drains,
-    // server_entry_t::pump_task, and publication of pump_task_state_t::task.
-    // Terminal waits read the published task, which owns its completion.
+    // Guards short updates only and is never held across a wait: queued publication
+    // requests, _active_application_drains, server_entry_t::pump_task and publication of
+    // pump_task_state_t::task. The worker alone runs publication; it takes the queued
+    // requests when a maintenance turn starts and completes them when it ends.
     std::mutex _server_progress_mutex;
     std::condition_variable _server_progress_changed;
-    bool _descriptor_publish_pending = false;
-    bool _descriptor_publish_result = false;
+    std::vector<std::shared_ptr<publication_request_t>> _publication_requests;
     std::size_t _active_application_drains = 0;
     std::thread _thread;
 };
