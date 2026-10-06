@@ -1450,12 +1450,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                 })
                         .thenCompose(
                                 retained ->
-                                        abortSessionRoute(sessionSealer, sealedSessionRoute)
-                                                .thenCompose(
-                                                        ignored ->
-                                                                actors
-                                                                        .abortRelocationMessageFollowAsync(
-                                                                                sourceRoute()))
+                                        actors.abortRelocationMessageFollowAsync(sourceRoute())
                                                 .thenCompose(
                                                         ignored ->
                                                                 retained == null
@@ -1487,13 +1482,18 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                         throw new IllegalStateException(
                                                 "Actor relocation source queue was lost");
                                     }
-                                    relocationReplies.resumeActorTimersAfterRelocationAbort(
-                                            owned.actorId());
-                                    return stateLane.runNowOrQueue(
-                                            () -> {
-                                                terminal = true;
-                                                return null;
-                                            });
+                                    return abortSessionRoute(sessionSealer, sealedSessionRoute)
+                                            .thenCompose(
+                                                    ignored -> {
+                                                        relocationReplies
+                                                                .resumeActorTimersAfterRelocationAbort(
+                                                                        owned.actorId());
+                                                        return stateLane.runNowOrQueue(
+                                                                () -> {
+                                                                    terminal = true;
+                                                                    return null;
+                                                                });
+                                                    });
                                 });
             } catch (RuntimeException failure) {
                 return failed(failure);

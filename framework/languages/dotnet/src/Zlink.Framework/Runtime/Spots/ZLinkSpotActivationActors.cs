@@ -519,14 +519,7 @@ internal abstract partial class ZLinkSpotActivation
     )
     {
         ArgumentNullException.ThrowIfNull(actor);
-        return ReferenceEquals(ZLinkSpotAmbientContext.CurrentOrDefault, this)
-            ? NotifyActorLeftAfterNativeJoinEntrySpotCoreAsync(actor, cancellationToken)
-            : ExecuteSerializedAsync(
-                static (activation, state, ct) =>
-                    activation.NotifyActorLeftAfterNativeJoinEntrySpotCoreAsync(state, ct),
-                actor,
-                cancellationToken
-            );
+        return NotifyActorLeftAfterJoinCommitCoreAsync(actor, cancellationToken);
     }
 
     internal ValueTask NotifyActorLeftAfterManagedJoinSpotAsync(
@@ -789,15 +782,6 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
-    private async ValueTask NotifyActorLeftAfterNativeJoinEntrySpotCoreAsync(
-        IZLinkActor actor,
-        CancellationToken cancellationToken
-    )
-    {
-        await NotifyActorLeftAfterJoinCommitCoreAsync(actor, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
     private async ValueTask NotifyActorLeftAfterJoinCommitCoreAsync(
         IZLinkActor actor,
         CancellationToken cancellationToken
@@ -826,14 +810,10 @@ internal abstract partial class ZLinkSpotActivation
                 .ConfigureAwait(false);
         }
 
-        if (
-            _actorHandlers is not null
-            && _actorHandlers.TryResolveLeft(actor.GetType(), out var descriptor)
-            && descriptor is not null
-        )
-            await HandlerInvoker
-                .InvokeActorLifecycleAsync(descriptor, actor, cancellationToken)
-                .ConfigureAwait(false);
+        _serial.QueueLifecycle(
+            (activation, ct) =>
+                activation.CompleteActorLeftAfterCommittedMembershipCoreAsync(actor, ct)
+        );
     }
 
     private void SignalPerActorMembersDrainedIfNeeded()

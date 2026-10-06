@@ -2808,6 +2808,65 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public async Task Raw_dealer_admission_resumes_after_a_backpressured_peer_reads()
+    {
+        const ulong BackpressureHighWaterMark = 1;
+        const int MaximumFillerRecords = 32;
+        const int AdmissionWaitTimeoutSeconds = 5;
+
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        context.Options.AutoHwmEnabled = false;
+        using var peer = context.CreateRouterSocket();
+        using var source = context.CreateDealerSocket();
+        var suffix = Guid.NewGuid().ToString("N");
+        var endpoint = $"inproc://raw-dealer-backpressure-{suffix}";
+        var peerRid = RoutingId.From("raw-dealer-backpressure-peer");
+        var sourceRid = RoutingId.From("raw-dealer-backpressure-source");
+
+        peer.Options.ReceiveHighWaterMark = BackpressureHighWaterMark;
+        source.Options.SendHighWaterMark = BackpressureHighWaterMark;
+        peer.SetRoutingId(peerRid);
+        source.SetRoutingId(sourceRid);
+        peer.Bind(endpoint);
+        source.Connect(endpoint);
+
+        using (var handshake = Message.From("ready"))
+            source.Send().Message(handshake).Submit();
+        using (var received = Received.Create())
+            Assert.True(peer.Recv(received));
+
+        using var sourceCompletionOwner = new TestCompletionPollerDriver(source);
+        var acceptedCount = 0;
+        SendSubmission blocked = default;
+        for (var sequence = 0; sequence < MaximumFillerRecords; sequence++)
+        {
+            using var payload = Message.From(BitConverter.GetBytes(sequence));
+            var submission = source.Send().Message(payload).Async();
+            if (submission.Result == SubmitResult.Backpressured)
+            {
+                blocked = submission;
+                break;
+            }
+            Assert.Equal(SubmitResult.Ok, submission.Result);
+            acceptedCount++;
+        }
+
+        Assert.True(acceptedCount > 0);
+        Assert.Equal(SubmitResult.Backpressured, blocked.Result);
+        for (var index = 0; index < acceptedCount; index++)
+        {
+            using var received = Received.Create();
+            Assert.True(peer.Recv(received));
+        }
+
+        await blocked
+            .EnsureAcceptedAsync()
+            .WaitAsync(TimeSpan.FromSeconds(AdmissionWaitTimeoutSeconds));
+        using var admitted = Received.Create();
+        Assert.True(peer.Recv(admitted));
+    }
+
+    [Fact]
     public async Task Managed_mesh_node_releases_shared_permit_after_control_and_malformed_records()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -2838,6 +2897,7 @@ public sealed class ServiceRuntimeFoundationTests
         using var source = context.CreateDealerSocket();
         source.SetRoutingId(sourceRid);
         source.Connect(targetEndpoint);
+        using var sourceCompletionOwner = new TestCompletionPollerDriver(source);
         using (
             var hello = Message.From(
                 ZLinkServiceWireCodec.EncodeRouteAdmission(
