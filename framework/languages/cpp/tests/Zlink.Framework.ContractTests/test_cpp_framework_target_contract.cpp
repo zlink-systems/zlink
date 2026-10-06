@@ -243,6 +243,15 @@ int main ()
     const auto channel_outbound_exchange =
       read_text_file (root / "framework/src/runtime/channels/channel_outbound_exchange.cpp");
     gate_t gate;
+    const auto inbound_calls =
+      read_text_file (root / "connector/core/src/runtime/calls/zlink_stream_calls.cpp");
+    const auto take_frame_begin = inbound_calls.find ("try_take_inbound_frame (");
+    const auto take_frame_end = inbound_calls.find ("void kick_async_write", take_frame_begin);
+    const auto take_frame =
+      inbound_calls.substr (take_frame_begin, take_frame_end - take_frame_begin);
+    gate.require (take_frame.find ("inbound_buffer.erase") == std::string::npos,
+                  "CPP-INBOUND-BATCH-01",
+                  "frame extraction moves the remainder of the batch for each frame");
 
     const auto actor_hpp =
       read_text_file (include_root / "zlink/framework/contracts/actors/actor.hpp");
