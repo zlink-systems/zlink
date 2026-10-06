@@ -572,7 +572,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         CancellationToken cancellationToken
     )
     {
-        var pending = _pending.Create();
+        var pending = _pending.Create(name);
         try
         {
             var frame = _frameSender.BuildOutboundFrame(
