@@ -1,9 +1,12 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include <zlink/framework.hpp>
+#include "runtime/handlers/handler_registry_runtime.hpp"
 
 #include <chrono>
 #include <coroutine>
+#include <filesystem>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -403,6 +406,55 @@ bool verify_filter_snapshot_reuse (zlink::framework::service_provider_t &provide
 
 int main ()
 {
+#ifdef __linux__
+    // Execution gate §10: call and filter counts must not allocate OS workers.
+    const auto executor = zlink::framework::detail::handler_invocation_executor ();
+    const auto worker_count = [] {
+        return std::distance (std::filesystem::directory_iterator ("/proc/self/task"),
+                              std::filesystem::directory_iterator{});
+    };
+    const auto workers_before = worker_count ();
+    bool allocated_workers = false;
+    {
+        zlink::framework::actor_manager_t manager;
+        auto create =
+          manager.create (zlink::framework::actor_id_t ("worker-create"), "WorkerActor");
+        auto get =
+          manager.get_or_create (zlink::framework::actor_id_t ("worker-get"), "WorkerActor");
+        if (worker_count () != workers_before) {
+            std::cerr << "Actor create calls allocated OS workers\n";
+            allocated_workers = true;
+        }
+    }
+    zlink::framework::service_collection_t filter_services;
+    filter_services.add_singleton<handler_t> ();
+    auto filter_provider = filter_services.build_provider ();
+    zlink::framework::serializer_registry_t filter_serializers;
+    zlink::framework::handler_registry_t filter_registry;
+    filter_registry.on_send<handler_t, command_t> ("game", "worker", &handler_t::on_command,
+                                                   {.packet_name = "worker"});
+    filter_registry
+      .invoke ("game", "worker", "worker", filter_provider, filter_serializers,
+               zlink::message_t::from (std::string ("7")))
+      .value ();
+    const auto filter_workers_before = worker_count ();
+    filter_registry.add_filter (
+      [&] (auto &, auto &, const auto &,
+           zlink::framework::handler_next_t next) -> zlink::framework::task_t<void> {
+          if (worker_count () != filter_workers_before)
+              throw std::runtime_error ("Filter level allocated an OS worker");
+          co_await next ();
+      });
+    auto filtered =
+      filter_registry.invoke ("game", "worker", "worker", filter_provider, filter_serializers,
+                              zlink::message_t::from (std::string ("7")));
+    if (!filtered) {
+        std::cerr << filtered.error ()->what () << '\n';
+        allocated_workers = true;
+    }
+    if (allocated_workers)
+        return 150;
+#endif
     zlink::framework::service_collection_t services;
     services.add_singleton<handler_t> ();
     services.add_singleton<auditing_filter_t> ();
