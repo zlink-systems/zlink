@@ -8,9 +8,12 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
+#include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
-#include "runtime/locations/store_location_resolvers.hpp"
+#include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/provider_relocation_repository.hpp"
+#include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
@@ -26,10 +29,43 @@
 #include <future>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 namespace
 {
+
+class reserve_loser_repository_t final
+    : public zlink::framework::runtime::in_memory_location_repository_t
+{
+  public:
+    zlink::framework::task_t<zlink::framework::authority_read_result_t>
+    read_authority (zlink::framework::authority_key_t, std::stop_token = {}) override
+    {
+        ++reads;
+        co_return zlink::framework::authority_missing_t{std::chrono::system_clock::now ()};
+    }
+
+    zlink::framework::task_t<zlink::framework::object_reserve_result_t>
+    reserve (zlink::framework::object_reserve_request_t request, std::stop_token = {}) override
+    {
+        ++reserves;
+        observed = std::move (request);
+        captured = zlink::framework::runtime::protocol::decode_instance_activation_recovery (
+          relocations->get (observed->intent.request_content_reference).value (), false);
+        if (expire_deadline)
+            std::this_thread::sleep_until (observed->operation_deadline);
+        co_return zlink::framework::object_reserve_conflict_t{
+          zlink::framework::authority_missing_t{std::chrono::system_clock::now ()}};
+    }
+
+    int reads = 0;
+    int reserves = 0;
+    bool expire_deadline = false;
+    std::optional<zlink::framework::object_reserve_request_t> observed;
+    std::shared_ptr<zlink::framework::runtime::stateful::relocation_store_port_t> relocations;
+    std::optional<zlink::framework::runtime::protocol::instance_activation_recovery_t> captured;
+};
 
 struct event_t
 {
@@ -657,6 +693,330 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingRequestUsesDefaultTimeoutForC
 
     EXPECT_FALSE (result);
     EXPECT_EQ (std::chrono::seconds (30), observed_timeout);
+}
+
+void verify_reserve_loser (bool expire_deadline, bool one_way)
+{
+    using namespace std::chrono_literals;
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    namespace host = rt::host;
+    auto store = std::make_shared<reserve_loser_repository_t> ();
+    store->expire_deadline = expire_deadline;
+    auto blob_store = std::make_shared<rt::in_memory_relocation_store_t> ();
+    auto blobs = std::make_shared<rt::provider_relocation_repository_t> (*blob_store);
+    auto relocations = std::make_shared<rt::stateful::public_relocation_store_adapter_t> (blobs);
+    store->relocations = relocations;
+    auto options = host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "reserve-loser",
+                              .node_routing_id = zlink::routing_id_t::from ("target").to_bytes (),
+                              .lifecycle_generation = 1,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"}}};
+    std::promise<fw::framework_error_kind_t> diagnostic_promise;
+    auto diagnostic_future = diagnostic_promise.get_future ();
+    int diagnostics = 0;
+    if (one_way)
+        fw::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+          options.mesh.dispatch, [&] (const fw::message_dispatch_error_event_t &event) {
+              ++diagnostics;
+              EXPECT_EQ (fw::dispatch_error_action_t::drop, event.action);
+              EXPECT_EQ (fw::dispatch_message_kind_t::send, event.message_kind);
+              try {
+                  std::rethrow_exception (event.exception);
+              }
+              catch (const fw::framework_exception_t &error) {
+                  diagnostic_promise.set_value (error.kind ());
+              }
+          });
+    auto target = std::make_shared<host::public_host_runtime_t> (std::move (options));
+    int prepares = 0;
+    int handlers = 0;
+    target->configure_instance_spot_operations (
+      store, relocations, [] { return fw::location_owner_token_t{"target-owner", 1}; },
+      host::instance_spot_activation_materializer_t{
+        [&] (const auto &, const auto &) {
+            ++prepares;
+            return true;
+        },
+        [&] (auto, auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+            ++handlers;
+            co_return host::instance_spot_activation_result_t{};
+        }});
+    target->start ();
+    const auto deadline = std::chrono::system_clock::now () + (expire_deadline ? 150ms : 3s);
+    rt::protocol::instance_spot_activation_header_t request{
+      {target->status ().routing_id ().to_bytes (), target->status ().lifecycle_generation (),
+       "contested", "reserve-loser", "room", "descriptor-1",
+       static_cast<std::uint64_t> (
+         std::chrono::duration_cast<std::chrono::milliseconds> (deadline.time_since_epoch ())
+           .count ())},
+      target->status ().lifecycle_generation (),
+      target->status ().routing_id ().to_bytes (),
+      std::nullopt,
+      !one_way,
+      {11, 13},
+      one_way ? 0u : 17u,
+      false};
+    rt::protocol::instance_activation_recovery_t command{
+      request, std::nullopt,
+      rt::protocol::application_payload_t{"probe", "application/json", {1, 2, 3}}};
+    int terminals = 0;
+    std::uint64_t reply_correlation = 0;
+    std::promise<rt::protocol::reply_header_t> reply_promise;
+    auto reply_future = reply_promise.get_future ();
+    const auto submitted =
+      one_way
+        ? target
+            ->send_instance_spot_activation_remote (target->status ().routing_id (), request,
+                                                    command.metadata, command.application_payload)
+            .result ()
+        : target
+            ->activate_instance_spot_remote (
+              target->status ().routing_id (), request, command.metadata,
+              command.application_payload, 3s,
+              [&] (auto terminal, auto header, auto) {
+                  EXPECT_EQ (rt::foundation::operation_terminal_t::completed, terminal);
+                  ++terminals;
+                  reply_promise.set_value (header);
+              })
+            .result ();
+    ASSERT_TRUE (submitted);
+    ASSERT_TRUE (submitted.value ());
+    const auto pump_deadline = std::chrono::steady_clock::now () + 3s;
+    while ((one_way ? diagnostic_future.wait_for (0ms) : reply_future.wait_for (0ms))
+             != std::future_status::ready
+           && std::chrono::steady_clock::now () < pump_deadline) {
+        ASSERT_TRUE (
+          target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
+        std::this_thread::yield ();
+    }
+    if (one_way) {
+        ASSERT_EQ (std::future_status::ready, diagnostic_future.wait_for (0ms));
+        EXPECT_EQ (fw::framework_error_kind_t::unavailable, diagnostic_future.get ());
+        EXPECT_EQ (1, diagnostics);
+        EXPECT_EQ (0, terminals);
+    } else {
+        ASSERT_EQ (std::future_status::ready, reply_future.wait_for (0ms));
+        const auto reply = reply_future.get ();
+        reply_correlation = reply.correlation;
+        const auto error = rt::messaging::request_failure_mapper_t{}.reply_header_exception (
+          reply.terminal_result, reply.failure_code, "Reserve loser");
+        EXPECT_EQ (expire_deadline ? fw::framework_error_kind_t::deadline_exceeded
+                                   : fw::framework_error_kind_t::unavailable,
+                   error.kind ());
+        EXPECT_EQ (1, terminals);
+        EXPECT_EQ (0, diagnostics);
+    }
+    EXPECT_EQ (1, store->reads);
+    EXPECT_EQ (1, store->reserves);
+    EXPECT_EQ (0, prepares);
+    EXPECT_EQ (0, handlers);
+    ASSERT_TRUE (store->observed);
+    EXPECT_EQ (std::chrono::system_clock::time_point (
+                 std::chrono::milliseconds (request.target.deadline_unix_ms)),
+               store->observed->operation_deadline);
+    ASSERT_TRUE (store->captured);
+    auto admitted_request = request;
+    admitted_request.reply_route_id = reply_correlation;
+    EXPECT_EQ (admitted_request, store->captured->activation);
+    EXPECT_EQ (command.application_payload.payload_bytes (),
+               store->captured->application_payload.payload_bytes ());
+    EXPECT_EQ (command.metadata, store->captured->metadata);
+    target->close ();
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation,
+      ReserveLoserReturnsUnavailableWithoutReadingCurrentOwner)
+{
+    verify_reserve_loser (false, false);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, ExpiredReserveLoserKeepsTimeoutTerminal)
+{
+    verify_reserve_loser (true, false);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, OneWayReserveLoserReportsUnavailableOnce)
+{
+    verify_reserve_loser (false, true);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, RecoveredRequestWithoutNativeTokenDoesNotSubmitReply)
+{
+    namespace rt = zlink::framework::runtime;
+    rt::mesh::raw_mesh_node_owner_t target (
+      {.descriptor = {.mesh_name = "recovered-cold",
+                      .node_routing_id = {1},
+                      .lifecycle_generation = 1,
+                      .descriptor_revision = 1,
+                      .advertised_endpoint = "tcp://127.0.0.1:0"}});
+    target.start ();
+    rt::mesh::service_mailbox_record_t recovered{
+      "source", rt::mesh::service_mailbox_domain_t::infrastructure, {}, {2}, std::nullopt, 17};
+    EXPECT_NO_THROW (EXPECT_FALSE (target.reply_instance_spot_activation (recovered, 0, 0)));
+    target.close ();
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, ColdSendUsesServiceSendAdmissionBeforePeerIsAdmitted)
+{
+    using namespace std::chrono_literals;
+    namespace rt = zlink::framework::runtime;
+    rt::mesh::raw_mesh_node_owner_t target (
+      {.descriptor = {.mesh_name = "cold-admission",
+                      .node_routing_id = {1},
+                      .lifecycle_generation = 1,
+                      .descriptor_revision = 1,
+                      .advertised_endpoint = "tcp://127.0.0.1:0"}});
+    rt::mesh::raw_mesh_node_owner_t source (
+      {.descriptor = {.mesh_name = "cold-admission",
+                      .node_routing_id = {2},
+                      .lifecycle_generation = 2,
+                      .descriptor_revision = 1,
+                      .advertised_endpoint = "tcp://127.0.0.1:0"}});
+    target.start ();
+    source.start ();
+    ASSERT_TRUE (source.connect_peer (target.endpoint ()));
+    ASSERT_FALSE (source.topology ().peer ({1}));
+    rt::protocol::application_payload_t payload{"probe", "application/json", {1}};
+    EXPECT_FALSE (source.send_to_node ({1}, payload).result ().value ());
+    rt::protocol::instance_spot_activation_header_t command{
+      {{1},
+       1,
+       "contested",
+       "cold-admission",
+       "room",
+       "descriptor-1",
+       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                     std::chrono::system_clock::now ().time_since_epoch () + 2s)
+                                     .count ())},
+      2,
+      {2},
+      std::nullopt,
+      false,
+      {11, 13},
+      0,
+      false};
+    auto cold = source.send_instance_spot_activation ({1}, command, std::nullopt, payload);
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while (!cold.await_ready () && std::chrono::steady_clock::now () < deadline) {
+        ASSERT_TRUE (source.pump_one (rt::mesh::service_liveness_registry_t::clock_t::now (), false)
+                       .result ());
+        std::this_thread::yield ();
+    }
+    const auto admitted = cold.result_for (0ms);
+    ASSERT_TRUE (admitted);
+    ASSERT_TRUE (*admitted);
+    EXPECT_FALSE (admitted->value ());
+    EXPECT_FALSE (source.topology ().peer ({1}));
+    source.close ();
+    target.close ();
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, ColdTypeClassificationUsesServingCapabilities)
+{
+    using namespace std::chrono_literals;
+    namespace fw = zlink::framework;
+    struct case_t
+    {
+        const char *name;
+        int weight;
+        int spot_limit;
+        int type_limit;
+        bool second_type;
+        bool fill_first;
+        std::optional<std::string> requested_type;
+        fw::framework_error_kind_t expected;
+    };
+    const std::vector<case_t> cases{
+      {"absent", 100, 0, 0, false, false, "absent", fw::framework_error_kind_t::not_found},
+      {"weight-zero", 0, 0, 0, false, false, "traced-player",
+       fw::framework_error_kind_t::unavailable},
+      {"aggregate-full", 100, 1, 0, false, true, "traced-player",
+       fw::framework_error_kind_t::unavailable},
+      {"per-type-full", 100, 0, 1, false, true, "traced-player",
+       fw::framework_error_kind_t::unavailable},
+      {"multiple-types-after-full", 100, 1, 0, true, true, std::nullopt,
+       fw::framework_error_kind_t::invalid_operation}};
+
+    for (const auto &test_case : cases) {
+        SCOPED_TRACE (test_case.name);
+        auto app = fw::app_t::create ();
+        auto &options = app.add_zlink_framework ();
+        options.add_location_store (std::make_shared<fw::runtime::in_memory_location_store_t> ());
+        options.add_relocation_store (
+          std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+        options.configure_locations ().polling_interval = 10ms;
+        auto mesh = options.add_route_mesh ("cold-type-classification");
+        mesh.set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from ("cold-type-node"))
+          .listen ("tcp://127.0.0.1:0")
+          .set_placement_weight (test_case.weight);
+        if (test_case.spot_limit != 0)
+            mesh.set_spot_limit (test_case.spot_limit);
+        mesh.add_instance_spot_factory<traced_instance_spot_t> (
+          "traced-player",
+          [] (fw::instance_spot_context_t context) {
+              return std::make_shared<traced_instance_spot_t> (std::move (context));
+          },
+          [limit = test_case.type_limit] (auto &factory) {
+              if (limit)
+                  factory.set_stable_type_limit (limit);
+              factory.disable_relocation ();
+          });
+        if (test_case.second_type) {
+            mesh.add_instance_spot_factory<traced_instance_spot_t> (
+              "other-player",
+              [] (fw::instance_spot_context_t context) {
+                  return std::make_shared<traced_instance_spot_t> (std::move (context));
+              },
+              [] (auto &factory) { factory.disable_relocation (); });
+        }
+        char command[] = "cold-type-classification";
+        char *argv[] = {command};
+        int exit_code = -1;
+        std::thread host ([&] { exit_code = app.run (1, argv); });
+        auto cleanup =
+          std::unique_ptr<fw::app_t, std::function<void (fw::app_t *)>> (&app, [&] (auto *) {
+              app.stop ();
+              host.join ();
+          });
+        const auto ready_deadline = std::chrono::steady_clock::now () + 5s;
+        while (!app.is_ready () && std::chrono::steady_clock::now () < ready_deadline)
+            std::this_thread::yield ();
+        ASSERT_TRUE (app.is_ready ());
+        auto provider = app.advanced ().services ().build_provider ();
+        auto &client = provider.get_required<fw::route_client_t> ();
+        if (test_case.fill_first) {
+            const auto first =
+              client.request_to_spot ("filled-spot", traced_request_t{1})
+                .instance_spot (test_case.second_type ? "other-player" : "traced-player")
+                .in_mesh ("cold-type-classification")
+                .timeout (3s)
+                .async<traced_reply_t> ()
+                .result_for (4s);
+            ASSERT_TRUE (first.has_value ());
+            ASSERT_TRUE (*first) << (first->error () ? first->error ()->what () : "");
+        }
+        const auto reply = test_case.requested_type
+                             ? client.request_to_spot ("probe-spot", traced_request_t{2})
+                                 .instance_spot (*test_case.requested_type)
+                                 .in_mesh ("cold-type-classification")
+                                 .timeout (3s)
+                                 .async<traced_reply_t> ()
+                                 .result_for (4s)
+                             : client.request_to_spot ("probe-spot", traced_request_t{2})
+                                 .instance_spot ()
+                                 .in_mesh ("cold-type-classification")
+                                 .timeout (3s)
+                                 .async<traced_reply_t> ()
+                                 .result_for (4s);
+        ASSERT_TRUE (reply.has_value ());
+        ASSERT_FALSE (*reply);
+        EXPECT_EQ (test_case.expected, reply->error_kind ());
+        cleanup.reset ();
+        EXPECT_EQ (0, exit_code);
+    }
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation,

@@ -63,40 +63,6 @@ public sealed class EntrySpotIdentityStoreTests
     }
 
     [Fact]
-    public async Task StartupConflictClassification_DistinguishesRidAndEntrySpot()
-    {
-        var store = new ZLinkInMemoryLocationStore();
-        var runtimeOptions = new ZLinkLocationOptions();
-        var runtime = new ZLinkLocationRuntime(runtimeOptions, store);
-        await runtime.RenewOwnerLeaseOnceAsync();
-        var existingOwner = await ClaimOwnerAsync(store, "existing-owner");
-        _ = await store.UpdateMeshNodeAsync(
-            Descriptor(existingOwner, "node-a", EntrySpotId),
-            ZLinkLocationWriteIntent.NewClaim
-        );
-        var tracker = new ZLinkOwnerLeaseTracker(store, runtimeOptions);
-        var resolvers = new ZLinkStoreLocationResolvers(store, tracker);
-        await using var lifecycle = new ZLinkLocationLifecycle(runtime, resolvers);
-
-        Assert.Equal(
-            ZLinkFrameworkErrorKind.AlreadyExists,
-            await lifecycle.ClassifyMeshNodeClaimConflictAsync(
-                "play",
-                RoutingId.From("node-a"),
-                "other-entry-00000000-0000-4000-8000-000000000002"
-            )
-        );
-        Assert.Equal(
-            ZLinkFrameworkErrorKind.AlreadyExists,
-            await lifecycle.ClassifyMeshNodeClaimConflictAsync(
-                "play",
-                RoutingId.From("node-b"),
-                EntrySpotId
-            )
-        );
-    }
-
-    [Fact]
     public async Task ExactDescriptorRemove_ReleasesEntrySpotClaim()
     {
         var store = new ZLinkInMemoryLocationStore();

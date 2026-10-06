@@ -52,7 +52,6 @@ import {
   resolveApplicationJobQueueConfiguration
 } from '../../packages/framework/src/runtime/host/application-job-queue';
 import {
-  ServiceInstanceActivationRedirectError,
   ServiceStatefulRuntime,
   type ServiceAsyncInstanceActivationAuthority,
   type ServiceInstanceActivationAuthority
@@ -82,6 +81,8 @@ import {
   type ServiceInstanceRouteFence
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
 import { encodeApplicationPayload } from '../../packages/framework/src/runtime/foundation/service-wire-m6a-codec';
+import { ServiceWireFrameworkErrorCode } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
+import type { ZLinkDispatchErrorReporter } from '../../packages/framework/src/runtime/channels/dispatch-error-reporter';
 import { crc32c } from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
 import {
   decodeServiceReadySpotAuthority,
@@ -3471,19 +3472,11 @@ test('Instance activation CAS loser does not invoke the local factory', async ()
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
-  const winnerRoute = {
-    targetNodeRid: 'other-target',
-    targetNodeGeneration: 8n,
-    targetSpotId: 'tenant-42',
-    objectGeneration: 2n,
-    ownerId: 'other-target',
-    authorityOwnerGeneration: 9n,
-    leaseGeneration: 4n,
-    storeVersion: '19'
-  };
   runtime.registerInstanceActivationAuthority({
     read: () => ({ kind: 'missing' }),
-    reserve: () => ({ kind: 'ready', route: winnerRoute }),
+    reserve: () => {
+      throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, 'Reserve refused');
+    },
     commit: () => assert.fail('CAS loser must not commit'),
     abort: () => assert.fail('CAS loser must not abort another owner')
   });
@@ -3502,95 +3495,13 @@ test('Instance activation CAS loser does not invoke the local factory', async ()
     { high: 7n, low: 32n },
     BigInt(Date.now() + 10_000)
   );
-  await assert.rejects(
-    async () =>
-      ingress({
-        command: M6bServiceWireCommand.instanceSpot,
-        flags: 0,
-        sourceRoutingId: 'source',
-        parts: [
-          header,
-          encodeApplicationPayload({
-            packetName: 'FirstMessage',
-            contentType: 'application/octet-stream',
-            payload: Buffer.from('first')
-          })
-        ]
-      }),
-    ServiceInstanceActivationRedirectError
-  );
-  assert.equal(runtime.registry.spot('tenant-42'), undefined);
-  runtime.close();
-});
-
-test('Promise authority redirects the retained activation envelope to the Ready winner', async () => {
-  let ingress!: (record: {
-    readonly command: number;
-    readonly flags: number;
-    readonly sourceRoutingId: string;
-    readonly parts: readonly Buffer[];
-  }) => string | undefined;
-  let redirected: { readonly targetNodeRid: string; readonly parts: readonly Buffer[] } | undefined;
-  const raw = {
-    topology: {
-      peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
-    },
-    mailbox: { tryEnqueue: () => assert.fail('CAS loser must not admit locally') },
-    sendService: (targetNodeRid: string, parts: readonly Buffer[]) => {
-      redirected = { targetNodeRid, parts };
-      return true;
-    },
-    observePeerConnectionIntentRemoved() {
-      return () => {};
-    },
-    setServiceIngress: (handler: typeof ingress) => {
-      ingress = (record) => handler!(withIngressOwner(record));
-    }
-  } as unknown as RawServiceMeshRuntime;
-  const runtime = new ServiceStatefulRuntime(raw, 'loser', 3n);
-  runtime.registerAsyncInstanceActivationAuthority({
-    read: async () => ({
-      kind: 'ready',
-      route: {
-        targetNodeRid: 'winner',
-        targetNodeGeneration: 9n,
-        targetSpotId: 'tenant-redirect',
-        objectGeneration: 4n,
-        ownerId: 'winner-owner',
-        authorityOwnerGeneration: 6n,
-        leaseGeneration: 2n,
-        storeVersion: 'ready-v1'
-      }
-    }),
-    reserve: async () => assert.fail('Ready authority must not reserve'),
-    resume: async () => assert.fail('Ready authority must not resume'),
-    commit: async () => assert.fail('Ready authority must not commit'),
-    complete: async () => assert.fail('Redirected activation must not complete locally'),
-    abort: async () => assert.fail('Ready authority must not abort')
-  });
-
-  const operation = { high: 7n, low: 44n };
   assert.equal(
     await ingress({
       command: M6bServiceWireCommand.instanceSpot,
       flags: 0,
       sourceRoutingId: 'source',
       parts: [
-        encodeInstanceSpotActivationHeader(
-          {
-            targetNodeRid: 'loser',
-            targetNodeGeneration: 3n,
-            targetSpotId: 'tenant-redirect',
-            stableType: 'TenantWorker',
-            descriptorVersion: 'descriptor-loser'
-          },
-          7n,
-          'source',
-          'source-spot',
-          'send',
-          operation,
-          BigInt(Date.now() + 10_000)
-        ),
+        header,
         encodeApplicationPayload({
           packetName: 'FirstMessage',
           contentType: 'application/octet-stream',
@@ -3600,26 +3511,139 @@ test('Promise authority redirects the retained activation envelope to the Ready 
     }),
     'infrastructure'
   );
-  await new Promise<void>((resolve) => setImmediate(resolve));
-
-  assert.equal(redirected?.targetNodeRid, 'winner');
-  if (redirected === undefined) throw new Error('Activation envelope was not redirected.');
-  const redirectedHeader = decodeStatefulHeader(redirected.parts[0]!);
-  assert.equal(redirectedHeader.kind, 'instanceSpot');
-  if (redirectedHeader.kind !== 'instanceSpot') throw new Error('Redirect header is invalid.');
-  assert.equal(redirectedHeader.activation, 'missing');
-  assert.deepEqual(redirectedHeader.operation, operation);
-  assert.equal(redirectedHeader.sourceNodeRid, 'loser');
-  assert.equal(redirectedHeader.sourceNodeGeneration, 3n);
-  assert.equal(redirectedHeader.sourceSpotId, 'source-spot');
-  if (redirectedHeader.activation === 'missing') {
-    assert.equal(redirectedHeader.target.targetNodeRid, 'winner');
-    assert.equal(redirectedHeader.target.targetNodeGeneration, 9n);
-  }
+  assert.equal(runtime.registry.spot('tenant-42'), undefined);
   runtime.close();
 });
 
-test('Missing Instance activation joins a new reservation after the prior local generation closes', async () => {
+for (const scenario of [
+  { operationKind: 'request', expired: false },
+  { operationKind: 'request', expired: true },
+  { operationKind: 'send', expired: false }
+] as const) {
+  test(`cold activation refuses another node Ready authority (${scenario.operationKind}, expired=${scenario.expired})`, async () => {
+    let ingress!: (record: {
+      readonly command: number;
+      readonly flags: number;
+      readonly sourceRoutingId: string;
+      readonly requestSequence?: bigint;
+      readonly parts: readonly Buffer[];
+    }) => string | undefined;
+    let redirected:
+      { readonly targetNodeRid: string; readonly parts: readonly Buffer[] } | undefined;
+    let forwardedRequests = 0;
+    const diagnostics: unknown[] = [];
+    const replies: Array<{
+      readonly ingress: RawServiceIngressRecord;
+      readonly parts: readonly Buffer[];
+    }> = [];
+    const raw = {
+      topology: {
+        peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
+      },
+      mailbox: { tryEnqueue: () => assert.fail('CAS loser must not admit locally') },
+      sendService: (targetNodeRid: string, parts: readonly Buffer[]) => {
+        redirected = { targetNodeRid, parts };
+        return true;
+      },
+      requestService: () => {
+        forwardedRequests += 1;
+        assert.fail('Cold activation must not forward the original request');
+      },
+      replyService: (record: RawServiceIngressRecord, parts: readonly Buffer[]) => {
+        replies.push({ ingress: record, parts });
+      },
+      observePeerConnectionIntentRemoved() {
+        return () => {};
+      },
+      setServiceIngress: (handler: typeof ingress) => {
+        ingress = (record) => handler!(withIngressOwner(record));
+      }
+    } as unknown as RawServiceMeshRuntime;
+    const runtime = new ServiceStatefulRuntime(raw, 'loser', 3n);
+    runtime.setDispatchErrorReporter(
+      {
+        captureEnabled: () => true,
+        report: (event: { readonly error?: unknown }) => diagnostics.push(event.error)
+      } as unknown as ZLinkDispatchErrorReporter,
+      'test-mesh'
+    );
+    runtime.registerAsyncInstanceActivationAuthority({
+      read: async () => ({
+        kind: 'ready',
+        route: {
+          targetNodeRid: 'winner',
+          targetNodeGeneration: 9n,
+          targetSpotId: 'tenant-redirect',
+          objectGeneration: 4n,
+          ownerId: 'winner-owner',
+          authorityOwnerGeneration: 6n,
+          leaseGeneration: 2n,
+          storeVersion: 'ready-v1'
+        }
+      }),
+      reserve: async () => assert.fail('Ready authority must not reserve'),
+      resume: async () => assert.fail('Ready authority must not resume'),
+      commit: async () => assert.fail('Ready authority must not commit'),
+      complete: async () => assert.fail('Refused activation must not complete locally'),
+      abort: async () => assert.fail('Ready authority must not abort')
+    });
+
+    const operation = { high: 7n, low: 44n };
+    assert.equal(
+      await ingress({
+        command: M6bServiceWireCommand.instanceSpot,
+        flags: 0,
+        sourceRoutingId: 'source',
+        ...(scenario.operationKind === 'request' ? { requestSequence: 44n } : {}),
+        parts: [
+          encodeInstanceSpotActivationHeader(
+            {
+              targetNodeRid: 'loser',
+              targetNodeGeneration: 3n,
+              targetSpotId: 'tenant-redirect',
+              stableType: 'TenantWorker',
+              descriptorVersion: 'descriptor-loser'
+            },
+            7n,
+            'source',
+            'source-spot',
+            scenario.operationKind,
+            operation,
+            BigInt(Date.now() + (scenario.expired ? -1 : 10_000)),
+            scenario.operationKind === 'request' ? 144n : undefined
+          ),
+          encodeApplicationPayload({
+            packetName: 'FirstMessage',
+            contentType: 'application/octet-stream',
+            payload: Buffer.from('first')
+          })
+        ]
+      }),
+      'infrastructure'
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(redirected, undefined);
+    assert.equal(forwardedRequests, 0);
+    assert.equal(replies.length, scenario.operationKind === 'request' && !scenario.expired ? 1 : 0);
+    if (scenario.operationKind === 'request' && !scenario.expired) {
+      assert.equal(replies[0]!.ingress.sourceRoutingId, 'source');
+      assert.equal(replies[0]!.ingress.requestSequence, 44n);
+      const reply = decodeStatefulReply(replies[0]!.parts[0]!, 144n, 'instanceSpotRequest');
+      assert.equal(reply.terminalResult, RequestResult.InternalError);
+      assert.equal(reply.failureCode, ServiceWireFrameworkErrorCode.routeNotConnected);
+    }
+    assert.equal(diagnostics.length, scenario.operationKind === 'send' ? 1 : 0);
+    if (scenario.operationKind === 'send') {
+      assert.ok(diagnostics[0] instanceof ZLinkFrameworkException);
+      assert.equal(diagnostics[0].kind, ZLinkFrameworkErrorKind.Unavailable);
+    }
+    assert.equal(runtime.registry.spot('tenant-redirect'), undefined);
+    runtime.close();
+  });
+}
+
+test('Missing Instance activation refuses a concurrent reservation after the prior local generation closes', async () => {
   let ingress!: (record: {
     readonly command: number;
     readonly flags: number;
@@ -3653,33 +3677,24 @@ test('Missing Instance activation joins a new reservation after the prior local 
   assert.equal(runtime.registry.spot('tenant-close-race'), undefined);
   runtime.registerInstanceApplicationLifecycle({
     isMaterialized: () => false,
-    materialize: async () =>
-      assert.fail('A concurrent reservation must be joined, not materialized here'),
+    materialize: async () => assert.fail('A refused reservation must not materialize here'),
     discard: async () => undefined,
     beginTerminal: () => undefined,
     completeTerminal: async () => false
   });
-  const winnerRoute: ServiceInstanceRouteFence = {
-    targetNodeRid: 'winner',
-    targetNodeGeneration: 9n,
-    targetSpotId: 'tenant-close-race',
-    objectGeneration: 2n,
-    ownerId: 'winner-owner',
-    authorityOwnerGeneration: 4n,
-    leaseGeneration: 2n,
-    storeVersion: 'winner-v2'
-  };
   runtime.registerAsyncInstanceActivationAuthority({
     read: async () => ({
       kind: 'creating',
       objectGeneration: 2n,
       authorityOwnerGeneration: 4n
     }),
-    reserve: async () => ({ kind: 'ready', route: winnerRoute }),
+    reserve: async () => {
+      throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, 'Reserve refused');
+    },
     resume: async () => assert.fail('Live activation must not resume a startup reservation'),
-    commit: async () => assert.fail('The concurrent winner must be used'),
-    complete: async () => assert.fail('The redirect must not complete locally'),
-    abort: async () => assert.fail('The redirect must not abort another owner')
+    commit: async () => assert.fail('A refused reservation must not commit'),
+    complete: async () => assert.fail('A refused reservation must not complete locally'),
+    abort: async () => assert.fail('A refused reservation must not abort another owner')
   });
 
   const operation = { high: 7n, low: 48n };
@@ -3715,14 +3730,7 @@ test('Missing Instance activation joins a new reservation after the prior local 
   );
   await new Promise<void>((resolve) => setImmediate(resolve));
 
-  assert.equal(redirected?.targetNodeRid, 'winner');
-  if (redirected === undefined)
-    throw new Error('Closing-generation activation was not redirected.');
-  const redirectedHeader = decodeStatefulHeader(redirected.parts[0]!);
-  assert.equal(redirectedHeader.kind, 'instanceSpot');
-  if (redirectedHeader.kind !== 'instanceSpot') throw new Error('Redirect header is invalid.');
-  assert.equal(redirectedHeader.activation, 'missing');
-  assert.deepEqual(redirectedHeader.operation, operation);
+  assert.equal(redirected, undefined);
   runtime.close();
 });
 
@@ -3797,7 +3805,7 @@ test('draining Instance owner rejects stale Missing activation before materializ
   assert.equal(runtime.registry.spot('draining-spot'), undefined);
 });
 
-test('stale local Instance projection redirects to a newer remote Ready authority', async () => {
+test('stale local Instance projection refuses a newer remote Ready authority', async () => {
   let ingress!: (record: {
     readonly command: number;
     readonly flags: number;
@@ -3850,7 +3858,7 @@ test('stale local Instance projection redirects to a newer remote Ready authorit
     reserve: async () => assert.fail('Remote Ready must not reserve'),
     resume: async () => assert.fail('Remote Ready must not resume'),
     commit: async () => assert.fail('Remote Ready must not commit'),
-    complete: async () => assert.fail('Redirected activation must not complete locally'),
+    complete: async () => assert.fail('Refused activation must not complete locally'),
     abort: async () => assert.fail('Remote Ready must not abort')
   });
 
@@ -3894,16 +3902,7 @@ test('stale local Instance projection redirects to a newer remote Ready authorit
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.equal(materializeCalls, 0);
-  assert.equal(redirected?.targetNodeRid, 'remote');
-  if (redirected === undefined) throw new Error('Remote Ready activation was not redirected.');
-  const redirectedHeader = decodeStatefulHeader(redirected.parts[0]!);
-  assert.equal(redirectedHeader.kind, 'instanceSpot');
-  if (redirectedHeader.kind !== 'instanceSpot') throw new Error('Redirect header is invalid.');
-  assert.equal(redirectedHeader.activation, 'missing');
-  assert.deepEqual(redirectedHeader.operation, operation);
-  assert.equal(redirectedHeader.deadlineUnixMs, deadline);
-  assert.deepEqual(redirected.parts[1], metadata);
-  assert.deepEqual(redirected.parts[2], payload);
+  assert.equal(redirected, undefined);
   runtime.close();
 });
 
@@ -5902,7 +5901,7 @@ test('production Instance Ready commit Store rejection is exposed as RequestFail
   );
 });
 
-test('concurrent Instance activation CAS loser joins Ready and returns the winner route', async () => {
+test('concurrent Instance activation CAS loser returns Unavailable without waiting or routing to the winner', async () => {
   const store = new ZLinkInMemoryAuthorityStore({ isTargetLive: () => true });
   const roots = new Map<string, Buffer>();
   const relocationStore: ZLinkRelocationStore = {
@@ -5973,33 +5972,17 @@ test('concurrent Instance activation CAS loser joins Ready and returns the winne
     ...activation,
     target: loserTarget
   });
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  const creating = await store.readAuthority(
+  await assert.rejects(
+    () => loser,
+    (error: unknown) =>
+      error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.Unavailable
+  );
+  const stillReserved = await store.readAuthority(
     encodeAuthorityKey('instance_spot', winnerTarget.targetSpotId)
   );
-  assert.equal(creating.kind, 'snapshot');
-  if (creating.kind !== 'snapshot') throw new Error('Winner reservation is missing.');
-  const committed = await winnerAuthority.commit(winnerTarget, winner.reservation, {
-    kind: 'instance',
-    stableType: winnerTarget.stableType,
-    ref: {
-      spotId: winnerTarget.targetSpotId,
-      generation: winner.reservation.attempt
-    },
-    authorityOwnerGeneration: creating.authorityOwnerGeneration
-  } as never);
-  assert.equal(committed.kind, 'committed');
-
-  const joined = await loser;
-  assert.equal(joined.kind, 'ready');
-  if (joined.kind !== 'ready') throw new Error('CAS loser did not join Ready.');
-  assert.equal(joined.route.targetNodeRid, winnerTarget.targetNodeRid);
-  assert.equal(joined.route.targetNodeGeneration, winnerTarget.targetNodeGeneration);
-  assert.equal(joined.route.storeVersion, committed.route.storeVersion);
-  assert.ok(
-    new ServiceInstanceActivationRedirectError(joined.route) instanceof
-      ServiceInstanceActivationRedirectError
-  );
+  assert.equal(stillReserved.kind, 'snapshot');
+  if (stillReserved.kind !== 'snapshot') throw new Error('Winner reservation is missing.');
+  assert.equal(stillReserved.allocation.state, 'reserved');
   assert.equal(roots.size, 2);
 });
 

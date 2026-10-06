@@ -12,6 +12,37 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class InstanceSpotActivationJournalTests
 {
     [Fact]
+    public void ColdActivationRootUsesCanonicalCodecAndIndependentReplyRoute()
+    {
+        var operation = Operation(new MeshOperationId(101, 103));
+        var bytes = ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
+            operation,
+            null,
+            [new byte[] { 1, 2, 3 }]
+        );
+        var context = new ServiceWireCodec.DecodeContext(
+            null,
+            null,
+            null,
+            bytes.Length,
+            bytes.Length
+        );
+        var root = ServiceWireCodec.DecodeDurableInstanceActivationRecoveryV1(bytes, context);
+        Assert.Equal(operation.Target.TargetSpotId, root.TargetSpotId.Value);
+        Assert.Equal(operation.OperationId.Low, root.Operation.Low.Value);
+        Assert.Equal(
+            operation.ReplyRouteId,
+            Assert
+                .IsType<ServiceWireCodec.InstanceReplyRouteCase1>(root.ReplyRoute)
+                .ReplyRouteId.Value
+        );
+        Assert.Equal(
+            bytes,
+            ServiceWireCodec.EncodeDurableInstanceActivationRecoveryV1(root, context)
+        );
+    }
+
+    [Fact]
     public void ReservedCrashRetainsCreatingFenceAndActivationRoot()
     {
         var expected = new ZLinkInstanceSpotAuthorityPayload(
@@ -357,10 +388,6 @@ public sealed class InstanceSpotActivationJournalTests
             4_102_444_800_000
         );
 
-    private static ZLinkServiceWireCodec.RequestSourceFence RequestSource(
-        InstanceSpotActivationOperation operation
-    ) => new("source-owner", 11, operation.SourceNodeRid, operation.SourceNodeGeneration);
-
     private static async Task<(
         ZLinkInMemoryLocationStore Store,
         ZLinkObjectReservation Reservation,
@@ -417,9 +444,8 @@ public sealed class InstanceSpotActivationJournalTests
             (await store.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)).Status
         );
         var operation = Operation(new MeshOperationId(101, 103));
-        var envelope = ZLinkInstanceSpotActivationEnvelopeCodec.Encode(
+        var envelope = ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
             operation,
-            RequestSource(operation),
             null,
             [new byte[] { 1 }]
         );

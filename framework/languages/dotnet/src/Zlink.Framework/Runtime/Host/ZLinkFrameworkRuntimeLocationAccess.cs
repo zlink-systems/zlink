@@ -83,18 +83,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         TimeSpan timeout,
         ReadOnlyMemory<byte> metadata,
         CancellationToken cancellationToken,
-        InstanceSpotActivationOperation? originalOperation = null,
         ulong? activationDeadlineUnixMs = null
     )
     {
-        if (
-            originalOperation is { } admitted
-            && admitted.DeadlineUnixMs
-                <= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-        )
-            throw ZLinkRequestFailureMapper.CreateTimedOutRequestException(
-                "Instance Spot activation"
-            );
         var source = ResolveActorCreationSource(address.MeshName);
         _ =
             Registration.Locations.ResolveStore()
@@ -113,8 +104,36 @@ internal sealed partial class ZLinkFrameworkRuntime
         var descriptors = await resolver
             .ListLiveMeshNodesAsync(address.MeshName, cancellationToken)
             .ConfigureAwait(false);
-        var eligible = descriptors
-            .Where(candidate => IsEligibleInstanceCandidate(candidate, address.InstanceSpotType))
+        var serving = descriptors.Where(static candidate =>
+            candidate.State == ZLinkFrameworkRuntimeState.Serving
+            && candidate.ObjectRole == ZLinkMeshNodeObjectRole.Server
+        );
+        var types = serving
+            .SelectMany(static candidate => candidate.ObjectCapabilities)
+            .Where(static capability =>
+                capability.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
+            )
+            .Select(static capability => capability.StableType)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var stableType = address.InstanceSpotType;
+        if (string.IsNullOrEmpty(stableType))
+        {
+            if (types.Length > 1)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    "InstanceSpot(instanceSpotType) is required when a Mesh serves multiple Instance Spot types."
+                );
+            stableType = types.SingleOrDefault() ?? string.Empty;
+        }
+        if (!types.Contains(stableType, StringComparer.Ordinal))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Mesh '{address.MeshName}' does not serve Instance Spot type '{stableType}'."
+            );
+        address = address with { InstanceSpotType = stableType };
+        var eligible = serving
+            .Where(candidate => IsEligibleInstanceCandidate(candidate, stableType))
             .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
             .ToArray();
         var selected =
@@ -129,8 +148,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkRetryAdvice.RetryAfterBackoff
             );
         var deadlineUnixMs =
-            originalOperation?.DeadlineUnixMs
-            ?? activationDeadlineUnixMs
+            activationDeadlineUnixMs
             ?? checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds());
         var target = new InstanceSpotActivationTarget(
             address.MeshName,
@@ -141,10 +159,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             selected.DescriptorRevision.ToString(System.Globalization.CultureInfo.InvariantCulture)
         );
         var sourceStatus = source.Node.MeshStatus();
-        var sourceSpotId =
-            originalOperation?.SourceSpotId
-            ?? ZLinkSpotAmbientContext.CurrentOrDefault?.SpotId
-            ?? string.Empty;
+        var sourceSpotId = ZLinkSpotAmbientContext.CurrentOrDefault?.SpotId ?? string.Empty;
         var state =
             _state
             ?? throw new ZLinkFrameworkException(
@@ -153,12 +168,12 @@ internal sealed partial class ZLinkFrameworkRuntime
             );
         if (state.FindSpotNodeByRoutingId(selected.Rid) is { } localTarget)
         {
-            var operationId = originalOperation?.OperationId ?? source.Node.AllocateOperationId();
+            var operationId = source.Node.AllocateOperationId();
             var local = await localTarget
                 .ActivateInstanceSpotLocalAsync(
                     target,
-                    originalOperation?.SourceNodeRid ?? source.Node.RoutingId,
-                    originalOperation?.SourceNodeGeneration ?? sourceStatus.LifecycleGeneration,
+                    source.Node.RoutingId,
+                    sourceStatus.LifecycleGeneration,
                     operationId,
                     sourceSpotId,
                     parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray(),
@@ -175,27 +190,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                     "Local Instance Spot activation"
                 );
             return local.ReplyParts.Select(Message.From).ToArray();
-        }
-        if (originalOperation is { } pending)
-        {
-            var terminal = await source
-                .Node.ForwardInstanceSpotActivationAsync(
-                    pending with
-                    {
-                        Target = target,
-                    },
-                    parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray(),
-                    metadata.IsEmpty ? null : metadata,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (terminal.Result != RequestResult.Ok)
-                throw ZLinkRequestFailureMapper.CreateCompletionException(
-                    terminal.Result,
-                    (int)terminal.FailureCode,
-                    "Forwarded Instance Spot activation"
-                );
-            return terminal.ReplyParts.Select(Message.From).ToArray();
         }
         return await source
             .Node.ActivateInstanceSpotAsync(
@@ -215,9 +209,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkMeshNodeDescriptor candidate,
         string stableType
     ) =>
-        candidate.State == ZLinkFrameworkRuntimeState.Serving
-        && candidate.ObjectRole == ZLinkMeshNodeObjectRole.Server
-        && candidate.PlacementWeight > 0
+        candidate.PlacementWeight > 0
         && (
             candidate.Capacity.Spots.Limit == 0
             || candidate.Capacity.Spots.Active + (long)candidate.Capacity.Spots.Reserved
