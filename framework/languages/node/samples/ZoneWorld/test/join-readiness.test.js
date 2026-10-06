@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const Module = require('node:module');
+const fs = require('node:fs');
+const ts = require('typescript');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -86,10 +88,15 @@ test('B8 rejoin ignores a settling source state until the committed target state
   };
   let joinAndWaitForOwnedState;
   try {
-    ({ joinAndWaitForOwnedState } = require(path.join(
-      sampleRoot,
-      'dist/Client/join-readiness.js'
-    )));
+    const filename = path.join(sampleRoot, 'dist/Client/join-readiness.js');
+    const loaded = new Module(filename, module);
+    loaded.filename = filename;
+    loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+    loaded._compile(ts.transpileModule(
+      fs.readFileSync(path.join(sampleRoot, 'Client/join-readiness.ts'), 'utf8'),
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }
+    ).outputText, filename);
+    ({ joinAndWaitForOwnedState } = loaded.exports);
   } finally {
     Module._load = originalLoad;
   }

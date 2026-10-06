@@ -15,7 +15,8 @@ public sealed record ZoneNodeSettings(
     bool DisableBots = false,
     bool SubscriberOnly = false,
     bool AllowEmptyZoneSet = false,
-    string? MeshAdvertiseHost = null
+    string? MeshAdvertiseHost = null,
+    int ZoneCapacity = 0
 );
 
 public sealed record GatewaySettings(

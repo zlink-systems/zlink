@@ -6124,7 +6124,8 @@ spot_node_runtime_t::commit_accepted_actor_join (const std::string &key,
             }
             if (previous_context)
                 decrement_actor_count_unlocked (*previous_context->_state);
-            erase_actor_route_unlocked (*_state, key);
+            // Replace the native projection without discarding the committed owner fence.
+            _state->native_actors.erase (key);
             _state->destroyed_actor_keys.erase (key);
             if (native_actor && !_state->native_actors.contains (key)
                 && !_state->mesh_runtime_owned_native_actor_ids.contains (
@@ -8968,14 +8969,11 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
     // A newer attempt displaces the older one before its admission queues, so
     // the older attempt's lifecycle position is released instead of awaited.
     std::vector<handoff_packet_t> displaced_backlog;
-    const bool admitted_attempt = _state->actor_transfer_coordinator.admit_attempt (
-      actor_key (store_actor), transfer_id, displaced_backlog);
+    (void) _state->actor_transfer_coordinator.admit_attempt (actor_key (store_actor), transfer_id,
+                                                             displaced_backlog);
     fail_handoff_backlog (_state, std::move (displaced_backlog));
-    if (!admitted_attempt) {
-        return task_t<spot_actor_join_result_t> (result_t<spot_actor_join_result_t>::failure (
-          framework_error_kind_t::protocol_error,
-          "remote actor admission conflicts with the pending prepare"));
-    }
+    // Source housekeeping may still own a move here. Normal callback rejection
+    // does not install an admission; accepted attempts arbitrate in try_add_admission.
     /* The admission callback is user code on the target Spot's lifecycle
      * lane; its item completes this task. A caller that holds that turn runs
      * it inline. The state lane is not held across it. */
@@ -9057,8 +9055,8 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
           }
           if (outcome->admission_conflict) {
               admitted->complete (result_t<spot_actor_join_result_t>::failure (
-                framework_error_kind_t::protocol_error,
-                "remote actor admission conflicts with the pending prepare"));
+                framework_error_kind_t::unavailable,
+                "remote actor admission conflicts with the current membership"));
               return;
           }
           if (outcome->reservation_failed) {

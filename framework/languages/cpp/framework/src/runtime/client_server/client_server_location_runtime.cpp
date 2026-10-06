@@ -233,6 +233,12 @@ struct client_server_location_runtime_t::pump_task_state_t
     }
 };
 
+struct client_server_location_runtime_t::publication_request_t
+{
+    bool completed = false;
+    bool published = false;
+};
+
 struct client_server_location_runtime_t::ready_waiter_t
 {
     std::string channel_name;
@@ -259,7 +265,7 @@ pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        receive_batch_budget_t budget)
 {
     bool progressed = (co_await server->drain_monitor_events_task (now)) != 0;
-    std::vector<mesh::service_mailbox_record_t> application_records;
+    std::vector<received_application_record_t> application_records;
     while (application_permit && budget.can_receive ()) {
         const auto result = co_await server->pump_one (now, std::move (application_permit), &budget,
                                                        &application_records);
@@ -353,6 +359,7 @@ client_server_location_runtime_t::client_server_location_runtime_t (
     _store (&store),
     _leases (&leases),
     _services (services),
+    _framework_runtime (&_services.get_required<framework_runtime_t> ()),
     _serializers (&serializers),
     _handlers (&handlers),
     _application_jobs (
@@ -414,11 +421,10 @@ client_server_location_runtime_t::snapshot_source_locked (const std::string &cha
                                      "ClientServer channel is not configured: " + channel_name);
 
     source.role = local_role (*configured);
-    auto services = _services;
     source.host_state = _stop->load (std::memory_order_acquire)
                           ? (_transport_poller ? framework_runtime_state_t::draining
                                                : framework_runtime_state_t::stopped)
-                          : services.get_required<framework_runtime_t> ().status ().state;
+                          : _framework_runtime->status ().state;
     const auto client = _clients.find (channel_name);
     if (client != _clients.end ()) {
         source.connections.reserve (client->second->connections.size ());
@@ -670,6 +676,7 @@ void client_server_location_runtime_t::start_server (
                                                  : std::optional<std::string> (advertise->second)};
     options.transport_poller = _transport_poller.get ();
     options.transport_poller_slot = next_transport_poller_slot ();
+    options.transport_monitor_slot = next_transport_poller_slot ();
     options.application_jobs = _application_jobs;
     options.runtime_failures = _channel_runtime.runtime_failures ();
     auto raw = std::make_shared<raw_client_server_server_t> (std::move (options),
@@ -761,31 +768,34 @@ void client_server_location_runtime_t::start_client (const channel_snapshot_t &c
 bool client_server_location_runtime_t::publish_descriptor_state (
   framework_runtime_state_t state) noexcept
 {
-    if (state != framework_runtime_state_t::draining)
-        return true;
+    return state != framework_runtime_state_t::draining || request_publication ();
+}
+
+bool client_server_location_runtime_t::republish_after_store_recovery ()
+{
+    // stop() owns descriptor removal, so a stopping runtime has nothing to republish.
+    return empty () || _stop->load (std::memory_order_acquire) || request_publication ();
+}
+
+bool client_server_location_runtime_t::request_publication () noexcept
+{
+    auto request = std::make_shared<publication_request_t> ();
     {
         std::lock_guard lock (_server_progress_mutex);
         if (_stop->load (std::memory_order_acquire))
             return false;
-        _descriptor_publish_result = false;
-        _descriptor_publish_pending = true;
+        _publication_requests.push_back (request);
     }
-    _server_progress_changed.notify_all ();
     _wake_timer->signal ();
 
     std::unique_lock lock (_server_progress_mutex);
     if (!runtime::infrastructure_wait_guard::condition_wait_for (
           _server_progress_changed, lock, std::chrono::seconds (5),
-          [this] { return !_descriptor_publish_pending; }, "client-server/descriptor-publish",
+          [&request] { return request->completed; }, "client-server/descriptor-publish",
           runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion)) {
         return false;
     }
-    return _descriptor_publish_result;
-}
-
-bool client_server_location_runtime_t::republish_after_store_recovery ()
-{
-    return publish_servers ();
+    return request->published;
 }
 
 void client_server_location_runtime_t::run ()
@@ -794,24 +804,28 @@ void client_server_location_runtime_t::run ()
     std::shared_ptr<task_t<worker_lane_snapshot_t>> pending_worker_snapshot;
     std::shared_ptr<task_t<bool>> pending_maintenance;
     std::shared_ptr<task_t<void>> pending_reconcile;
-    std::unique_lock<std::mutex> maintenance_lock;
+    // Requests taken by the in-flight maintenance turn; empty for a periodic turn.
+    std::vector<std::shared_ptr<publication_request_t>> serving;
     std::optional<std::chrono::steady_clock::time_point> next_worker_deadline;
-    while (!_stop->load (std::memory_order_acquire) || pending_worker_snapshot
-           || pending_maintenance || pending_reconcile) {
+    for (;;) {
         if (pending_maintenance && pending_maintenance->await_ready ()) {
             auto completed = std::move (pending_maintenance);
             const auto &result = completed->result ();
             const bool published = result && result.value ();
-            const bool reconcile_after_publish = !_descriptor_publish_pending;
+            const bool reconcile_after_publish = serving.empty ();
             if (!result)
                 _locations->record_store_error ();
-            if (_descriptor_publish_pending) {
-                _descriptor_publish_result = published;
-                _descriptor_publish_pending = false;
-            }
-            maintenance_lock.unlock ();
-            if (!reconcile_after_publish)
+            if (!reconcile_after_publish) {
+                {
+                    std::lock_guard lock (_server_progress_mutex);
+                    for (const auto &request : serving) {
+                        request->published = published;
+                        request->completed = true;
+                    }
+                }
+                serving.clear ();
                 _server_progress_changed.notify_all ();
+            }
             if (reconcile_after_publish && result && !_stop->load (std::memory_order_acquire)) {
                 pending_reconcile = std::make_shared<task_t<void>> (reconcile_task ());
                 detail::observe_task_terminal (
@@ -843,15 +857,16 @@ void client_server_location_runtime_t::run ()
         const auto now = std::chrono::steady_clock::now ();
         if (!_stop->load (std::memory_order_acquire) && !pending_maintenance && !pending_reconcile
             && !pending_worker_snapshot) {
-            maintenance_lock = std::unique_lock<std::mutex> (_server_progress_mutex);
-            if (_descriptor_publish_pending || now >= next_reconcile) {
+            {
+                std::lock_guard lock (_server_progress_mutex);
+                serving.swap (_publication_requests);
+            }
+            if (!serving.empty () || now >= next_reconcile) {
                 _client_pump_snapshot.clear ();
                 pending_maintenance = std::make_shared<task_t<bool>> (publish_servers_task ());
                 detail::observe_task_terminal (
                   *pending_maintenance,
                   [wake = _wake_timer] (const result_t<bool> &) { wake->signal (); });
-            } else {
-                maintenance_lock.unlock ();
             }
         }
         try {
@@ -893,14 +908,15 @@ void client_server_location_runtime_t::run ()
             catch (...) {
             }
         }
-        if (_stop->load (std::memory_order_acquire) && !pending_worker_snapshot
-            && !pending_maintenance && !pending_reconcile)
+        // The only exit. In-flight work references state that stop() releases after the
+        // join, so the worker leaves only once that work has completed.
+        const bool pending = pending_maintenance || pending_reconcile || pending_worker_snapshot;
+        if (_stop->load (std::memory_order_acquire) && !pending)
             break;
 
         const auto after_pump = std::chrono::steady_clock::now ();
         // In-flight work owns expired deadlines and signals when it completes.
         // Future deadlines still bound the wait even if the turn has no new input.
-        const bool pending = pending_maintenance || pending_reconcile || pending_worker_snapshot;
         auto wake_at = pending && next_reconcile <= after_pump
                          ? std::chrono::steady_clock::time_point::max ()
                          : next_reconcile;
@@ -925,17 +941,9 @@ void client_server_location_runtime_t::run ()
             }
         }
         catch (...) {
-            if (!_stop->load (std::memory_order_acquire))
-                continue;
-            break;
+            // A failed wait ends only this wait; the next iteration still owns pending work.
         }
     }
-}
-
-bool client_server_location_runtime_t::publish_servers ()
-{
-    std::lock_guard publish_lock (_server_progress_mutex);
-    return publish_servers_task ().result ().value ();
 }
 
 task_t<bool> client_server_location_runtime_t::publish_servers_task ()
@@ -1071,8 +1079,10 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_ch
                                                    std::move (expected)};
         options.transport_poller = _transport_poller.get ();
         options.transport_poller_slot = next_transport_poller_slot ();
+        options.transport_monitor_slot = next_transport_poller_slot ();
         options.application_jobs = _application_jobs;
         options.runtime_failures = _channel_runtime.runtime_failures ();
+        options.control_reply_parked = [wake = _wake_timer] { wake->signal (); };
         auto raw = std::make_shared<raw_client_server_client_t> (std::move (options),
                                                                  _channel_runtime.core_context ());
         co_await raw->start_task ();
@@ -1215,6 +1225,13 @@ task_t<void> client_server_location_runtime_t::pump ()
                   std::make_shared<task_t<bool>> (pump_client_transport (connection.owner, now));
                 connection.pump_task = state;
                 observe_pump (state);
+            } else {
+                // This turn's input (a parked control reply) may arrive after the busy pump
+                // read its queue. Like an in-flight worker turn, the busy pump then owns the
+                // next turn when it completes, so the input is not absorbed.
+                detail::observe_task_terminal (
+                  *connection.pump_task->task,
+                  [wake = _wake_timer] (const result_t<bool> &) { wake->signal (); });
             }
         }
         _client_pump_cursor = (start + 1) % _client_pump_snapshot.size ();
@@ -1790,8 +1807,9 @@ void client_server_location_runtime_t::stop ()
     const bool was_stopped = _stop->exchange (true, std::memory_order_acq_rel);
     {
         std::lock_guard lock (_server_progress_mutex);
-        _descriptor_publish_result = false;
-        _descriptor_publish_pending = false;
+        for (const auto &request : _publication_requests)
+            request->completed = true;
+        _publication_requests.clear ();
     }
     _server_progress_changed.notify_all ();
     _wake_timer->signal ();

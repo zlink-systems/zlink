@@ -1,3 +1,4 @@
+import { boundaryRoute } from './boundary-route';
 import * as fs from 'node:fs';
 import {
   ZlinkStreamDispatchMode,
@@ -61,7 +62,7 @@ async function main(): Promise<void> {
       pair.error === null,
       'ZW-B2 Ops did not find a cross-owner adjacent pair.'
     );
-    const boundary = boundaryRoute(pair.targetZoneId);
+    const boundary = boundaryRoute(pair.targetZoneId, pair.sourceZoneId);
     const joined = await joinAndWaitForOwnedState(gateway, 'player-a1');
     zlinkStreamAssert.ensure(joined.playerId === 'player-a1', 'ZW-A1 player id mismatch.');
     zlinkStreamAssert.ensure(joined.zoneId === ZoneIds.northWest, 'ZW-A1 spawn zone mismatch.');
@@ -263,7 +264,10 @@ async function main(): Promise<void> {
     const settledDiagonal = await second
       .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
       .where(
-        (message) => !message.payload.players.some((player) => player.playerId === joined.playerId)
+        (message) =>
+          message.payload.zoneId === boundary.diagonalZoneId &&
+          message.payload.players.some((player) => player.playerId === joinedSecond.playerId) &&
+          !message.payload.players.some((player) => player.playerId === joined.playerId)
       )
       .timeout(10_000)
       .submit();
@@ -271,7 +275,12 @@ async function main(): Promise<void> {
     for (let index = 0; index < 3; index += 1) {
       const diagonalView = await second
         .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-        .where((message) => message.payload.tick > lastTick)
+        .where(
+          (message) =>
+            message.payload.zoneId === boundary.diagonalZoneId &&
+            message.payload.players.some((player) => player.playerId === joinedSecond.playerId) &&
+            message.payload.tick > lastTick
+        )
         .submit();
       lastTick = diagonalView.payload.tick;
       zlinkStreamAssert.ensure(
@@ -436,7 +445,7 @@ async function runB8(
       .packetName(PacketNames.relocationPairReq)
       .submit<RelocationPairRes>();
     zlinkStreamAssert.ensure(pair.error === null, 'ZW-B8 requires a cross-owner adjacent pair.');
-    const boundary = boundaryRoute(pair.targetZoneId);
+    const boundary = boundaryRoute(pair.targetZoneId, pair.sourceZoneId);
     const joined = await joinAndWaitForOwnedState(player, playerId);
     await walkTo(
       player,
@@ -552,34 +561,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, failure: s
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
-}
-
-function boundaryRoute(targetZoneId: string) {
-  if (targetZoneId === ZoneIds.northEast) {
-    return {
-      sourceEdge: { x: 49, y: 25 },
-      targetInside: { x: 52, y: 25 },
-      targetContinue: { x: 55, y: 25 },
-      sourceReturn: { x: 48, y: 25 },
-      observer: { x: 45, y: 25 },
-      diagonalZoneId: ZoneIds.southWest,
-      diagonalBefore: { x: 25, y: 48 },
-      diagonalInside: { x: 25, y: 52 }
-    } as const;
-  }
-  if (targetZoneId === ZoneIds.southWest) {
-    return {
-      sourceEdge: { x: 25, y: 49 },
-      targetInside: { x: 25, y: 52 },
-      targetContinue: { x: 25, y: 55 },
-      sourceReturn: { x: 25, y: 48 },
-      observer: { x: 25, y: 45 },
-      diagonalZoneId: ZoneIds.northEast,
-      diagonalBefore: { x: 48, y: 25 },
-      diagonalInside: { x: 52, y: 25 }
-    } as const;
-  }
-  throw new Error(`ZW-B2 unsupported Ops-selected target zone '${targetZoneId}'.`);
 }
 
 main().catch((error: unknown) => {

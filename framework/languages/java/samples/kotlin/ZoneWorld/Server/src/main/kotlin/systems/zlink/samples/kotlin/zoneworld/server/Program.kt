@@ -157,7 +157,7 @@ class Program {
                     .server()
                     .addEntrySpot<ZoneEntrySpot>()
                     .addSpotFactory<ZoneSpot>(ZoneWorldNames.ZONE_SPOT_TYPE) {
-                        stableTypeLimit(2).disableRelocation()
+                        stableTypeLimit(topology.zoneCapacityValue()).disableRelocation()
                     }
                     .addActorFactory<PlayerActor, PlayerActorFactory>(
                         ZoneWorldNames.PLAYER_ACTOR_TYPE

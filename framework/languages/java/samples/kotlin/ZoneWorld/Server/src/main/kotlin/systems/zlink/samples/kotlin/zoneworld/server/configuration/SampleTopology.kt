@@ -15,7 +15,12 @@ data class SampleTopology(
     val allowEmptyZoneSet: Boolean? = null,
     val faultTickZone: String? = null,
     val meshAdvertiseHost: String? = null,
+    val zoneCapacity: Int? = null,
 ) {
+    fun zoneCapacityValue(): Int =
+        requireNotNull(zoneCapacity) { "sample.zone-capacity is required" }
+            .also { require(it > 0) { "sample.zone-capacity must be positive" } }
+
     fun isRole(expected: String) = role.equals(expected, ignoreCase = true)
 
     fun required(value: String?, name: String): String =

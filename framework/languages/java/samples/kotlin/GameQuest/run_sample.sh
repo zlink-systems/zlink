@@ -219,8 +219,16 @@ echo "topology=ready"
 "$(app_bin Client Client)" --config "$client_config" >"$LOG_DIR/client.log" 2>&1 &
 client_pid="$!"
 pids+=("$client_pid")
-wait_for_line "$LOG_DIR/client.log" "gamequest-owner-termination-ready player=player-alice"
+wait_for_line "$LOG_DIR/client.log" "gamequest-close-requested player=player-alice"
+wait_for_exact_total 1 "gamequest-mission closing player=player-alice generation=" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+closing_generation="$(sed -n 's/.*gamequest-mission closing player=player-alice generation=\([0-9][0-9]*\).*/\1/p' "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log")"
+touch "$control_dir/close-replay.release"
+wait_for_line "$LOG_DIR/client.log" "gamequest-close-replay=completed"
 owner_role="$(wait_for_replayed_owner)"
+replayed_generation="$(sed -n 's/.*gamequest-mission replayed player=player-alice generation=\([0-9][0-9]*\).*/\1/p' "$LOG_DIR/$owner_role.log")"
+[[ -n "$closing_generation" && -n "$replayed_generation" && "$closing_generation" != "$replayed_generation" ]]
+wait_for_line "$LOG_DIR/client.log" "gamequest-owner-termination-ready player=player-alice"
 owner_pid="${role_pids[$owner_role]}"
 kill -KILL "$owner_pid"
 wait "$owner_pid" || true

@@ -194,6 +194,7 @@ function Write-RoleConfig(
         redisEndpoint = $RedisEndpoint
         redisKeyPrefix = $RedisKeyPrefix
         nodeId = $NodeId
+        zoneCapacity = switch ($NodeId) { zone-node-1 { 1 } zone-node-2 { 3 } default { 0 } }
         meshEndpoint = $MeshEndpoint
         streamEndpoint = $StreamEndpoint
         broadcastEndpoint = $BroadcastEndpoint
@@ -440,7 +441,14 @@ try {
     foreach ($path in $mainNodeLogs) {
         $text = Get-Text $path
         $mainBotJoinFailures += ([regex]::Matches($text, 'zoneworld-join-failed player=bot-')).Count
-        if ($text -match 'zoneworld-actor-joined.*player=bot-.*initial=false') { $mainBotRelocation = $true }
+
+    }
+
+    $boundary = Select-String -LiteralPath ([string]$RoleStdout["client-main"]) -Pattern 'ops-bot-boundary bot=([^ ]+) source=([^ ]+) target=([^ ]+)' | Select-Object -First 1
+    if ($boundary) {
+        $bot = $boundary.Matches[0].Groups[1].Value
+        $target = $boundary.Matches[0].Groups[3].Value
+        $mainBotRelocation = (Get-Text ([string]$RoleStdout[$target])) -match "zoneworld-actor-joined.*player=$bot .*initial=false"
     }
 
     Start-ZoneNode "zone-node-3" "zone-node-3"
