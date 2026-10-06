@@ -1,6 +1,5 @@
 # zlink C++ Binding API Reference
 
-
 This reference is generated from the C++20 public contract headers in
 `bindings/cpp/include/zlink`.
 

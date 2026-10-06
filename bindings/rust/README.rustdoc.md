@@ -1,6 +1,5 @@
 # zlink Rust Binding API Reference
 
-
 This reference is generated from the Rust source in `bindings/rust/src/`.
 
 ## Generate

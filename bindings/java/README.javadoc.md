@@ -1,6 +1,5 @@
 # zlink Java Binding API Reference
 
-
 This reference is generated from the public Java API in
 `bindings/java/src/main/java/systems/zlink/contracts/`.
 

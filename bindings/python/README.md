@@ -1,6 +1,5 @@
 # Python Binding
 
-
 Python wrapper for the Core 0.17.0 raw messaging contract. The normative
 public surface is `bindings/doc/spec/python/README.ko.md`; repository policy
 and the socket capability matrix live in `bindings/README.md`, and the native

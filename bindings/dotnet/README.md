@@ -1,6 +1,5 @@
 # Zlink
 
-
 Zlink is the .NET binding package for zlink.
 
 The package exposes the public API under the `Systems.Zlink` namespace and
