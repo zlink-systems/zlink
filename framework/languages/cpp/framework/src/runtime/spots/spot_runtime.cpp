@@ -6089,7 +6089,8 @@ spot_node_runtime_t::commit_accepted_actor_join (const std::string &key,
             }
             if (previous_context)
                 decrement_actor_count_unlocked (*previous_context->_state);
-            erase_actor_route_unlocked (*_state, key);
+            // Replace the native projection without discarding the committed owner fence.
+            _state->native_actors.erase (key);
             _state->destroyed_actor_keys.erase (key);
             if (native_actor && !_state->native_actors.contains (key)
                 && !_state->mesh_runtime_owned_native_actor_ids.contains (
