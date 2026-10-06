@@ -119,52 +119,59 @@ public sealed class ActorNoBindSendSendEchoScenario(
     }
 
     public Task RunAsync() =>
-        Task.WhenAll(
-            Enumerable
-                .Range(0, config.workload.logicalStreams!.Value)
-                .SelectMany(stream =>
-                    Enumerable.Range(0, config.workload.inflight).Select(_ => LoopAsync(stream))
-                )
+        ServerDrivenStreams.RunAdmissionsAsync(
+            measurement,
+            config.workload.logicalStreams!.Value,
+            LoopAsync
         );
 
     private async Task LoopAsync(int stream)
     {
         var actorId = config.actorIds[stream];
-        while (measurement.CanIssue)
+        var request = measurement.Request(
+            stream,
+            checked((ulong)Interlocked.Increment(ref sequences[stream]))
+        ) with
         {
-            var request = measurement.Request(
-                stream,
-                checked((ulong)Interlocked.Increment(ref sequences[stream]))
-            ) with
-            {
-                returnChannel = config.channelName,
-            };
-            if (!measurement.BeginOperation(out var started, "send"))
-                break;
-            request = request with { sentTicks = DecimalText.Of(started) };
-            SendSendCorrelation.Entry entry;
-            try
-            {
-                entry = correlations.Register(request, started); // §13: register immediately before the first public send
-            }
-            catch (Exception error)
-            {
-                measurement.CompleteOperation(started, error);
-                continue;
-            }
-            try
-            {
-                await actorClient.SendToActor(actorId, request).Async();
-                var admitted = PerfClock.Now;
-                metrics.Record("sourceAdmissionMs", started, admitted);
-                correlations.FirstSendEnded(entry, null);
-            }
-            catch (Exception error)
-            {
-                correlations.FirstSendEnded(entry, error);
-            }
-            var (result, completed) = await correlations.CompleteAsync(entry); // the return Channel handler decides
+            returnChannel = config.channelName,
+        };
+        if (!measurement.BeginOperation(out var started, "send"))
+            return;
+        request = request with { sentTicks = DecimalText.Of(started) };
+        SendSendCorrelation.Entry entry;
+        try
+        {
+            entry = correlations.Register(request, started); // §13: register immediately before the first public send
+        }
+        catch (Exception error)
+        {
+            measurement.CompleteOperation(started, error);
+            return;
+        }
+        try
+        {
+            await actorClient.SendToActor(actorId, request).Async();
+            var admitted = PerfClock.Now;
+            metrics.Record("sourceAdmissionMs", started, admitted);
+            correlations.FirstSendEnded(entry, null);
+        }
+        catch (Exception error)
+        {
+            correlations.FirstSendEnded(entry, error);
+        }
+        _ = CompleteCorrelationAsync(entry, started);
+    }
+
+    private async Task CompleteCorrelationAsync(SendSendCorrelation.Entry entry, long started)
+    {
+        try
+        {
+            var (result, completed) = await correlations.CompleteAsync(entry).ConfigureAwait(false);
             measurement.CompleteOperation(started, result, completedTicks: completed);
+        }
+        catch (Exception error)
+        {
+            measurement.CompleteOperation(started, error);
         }
     }
 }

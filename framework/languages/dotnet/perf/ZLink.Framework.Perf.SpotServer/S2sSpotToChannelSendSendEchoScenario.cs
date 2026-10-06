@@ -92,7 +92,7 @@ public sealed class S2sSpotToChannelSendSendEchoScenario(
                 };
                 var driven = await spots
                     .RequestToSpot(config.spotIds[target], new PerfDriveRequest(echo))
-                    .Timeout(TimeSpan.FromMilliseconds(config.workload.driverTimeoutMs))
+                    .Timeout(measurement.CallTimeout(true))
                     .Async<PerfDriveReply>();
                 if (!driven.started)
                     throw new PerfValidationException(
@@ -128,69 +128,64 @@ public sealed class S2sSpotToChannelSendSendEchoScenario(
     }
 
     public Task RunAsync() =>
-        Task.WhenAll(
-            Enumerable
-                .Range(0, config.workload.logicalStreams!.Value)
-                .SelectMany(stream =>
-                    Enumerable.Range(0, config.workload.inflight).Select(_ => LoopAsync(stream))
-                )
+        ServerDrivenStreams.RunRequestsAsync(
+            measurement,
+            config.workload.logicalStreams!.Value,
+            LoopAsync
         );
 
     private async Task LoopAsync(int stream)
     {
         var spotId = config.spotIds[stream % config.spotIds.Length];
-        while (measurement.CanIssue)
+        var echo = measurement.Request(
+            stream,
+            checked((ulong)Interlocked.Increment(ref sequences[stream]))
+        ) with
         {
-            var echo = measurement.Request(
-                stream,
-                checked((ulong)Interlocked.Increment(ref sequences[stream]))
-            ) with
-            {
-                returnSpotId = spotId,
-            };
-            var drive = new PerfDriveRequest(echo);
-            var driverStarted = PerfClock.Now;
-            metrics.Count("driver.issued");
-            PerfDriveReply? driven = null;
-            try
-            {
-                driven = await spots
-                    .RequestToSpot(spotId, drive)
-                    .Timeout(TimeSpan.FromMilliseconds(config.workload.driverTimeoutMs))
-                    .Async<PerfDriveReply>();
-            }
-            catch (Exception error)
-            {
-                metrics.Count("driver.failed");
-                measurement.RecordDiagnostic(error);
-            }
-            var driverEnded = PerfClock.Now;
-            if (driven is { started: false })
-            {
-                metrics.Count("driver.notStarted");
-                continue;
-            }
-            // A driver error can race an already-started operation; only its correlation owner closes that operation.
-            if (correlations.Find(echo.correlationId) is not { } entry)
-            {
-                if (driven?.started == true)
-                    measurement.RecordDiagnostic(
-                        new PerfValidationException(
-                            "UnknownCorrelation",
-                            "The started drive registered no correlation."
-                        )
-                    );
-                continue;
-            }
-            var (result, completed) = await correlations.CompleteAsync(entry);
-            var operationSucceeded = measurement.CompleteOperation(
-                entry.StartedTicks,
-                result,
-                completedTicks: completed
-            );
-            if (driven?.started == true && operationSucceeded)
-                metrics.Record("driverLatencyMs", driverStarted, driverEnded);
+            returnSpotId = spotId,
+        };
+        var drive = new PerfDriveRequest(echo);
+        var driverStarted = PerfClock.Now;
+        metrics.Count("driver.issued");
+        PerfDriveReply? driven = null;
+        try
+        {
+            driven = await spots
+                .RequestToSpot(spotId, drive)
+                .Timeout(measurement.CallTimeout(true))
+                .Async<PerfDriveReply>();
         }
+        catch (Exception error)
+        {
+            metrics.Count("driver.failed");
+            measurement.RecordDiagnostic(error);
+        }
+        var driverEnded = PerfClock.Now;
+        if (driven is { started: false })
+        {
+            metrics.Count("driver.notStarted");
+            return;
+        }
+        // A driver error can race an already-started operation; only its correlation owner closes that operation.
+        if (correlations.Find(echo.correlationId) is not { } entry)
+        {
+            if (driven?.started == true)
+                measurement.RecordDiagnostic(
+                    new PerfValidationException(
+                        "UnknownCorrelation",
+                        "The started drive registered no correlation."
+                    )
+                );
+            return;
+        }
+        var (result, completed) = await correlations.CompleteAsync(entry);
+        var operationSucceeded = measurement.CompleteOperation(
+            entry.StartedTicks,
+            result,
+            completedTicks: completed
+        );
+        if (driven?.started == true && operationSucceeded)
+            metrics.Record("driverLatencyMs", driverStarted, driverEnded);
     }
 }
 

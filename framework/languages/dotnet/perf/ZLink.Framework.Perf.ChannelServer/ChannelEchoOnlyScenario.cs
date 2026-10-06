@@ -7,11 +7,17 @@ namespace ZLink.Framework.Perf;
 // §11.2: two Channel processes, manual RouteMesh or ClientServer, no Store/objects.
 // Source public request -> typed identity/full-byte validation is one operation.
 // JSON payloads: 1024/4096, request/ordinary. Connector/Actor/Spot/worker/fanout metrics do not apply.
-public sealed class ChannelEchoOnlyScenario(IZLinkRouteClient client, Measurement measurement,
-    IZLinkRouteMeshRuntime meshRuntime, IZLinkClientServerRuntime channelRuntime, ObjectsReadiness readiness)
+public sealed class ChannelEchoOnlyScenario(
+    IZLinkRouteClient client,
+    Measurement measurement,
+    IZLinkRouteMeshRuntime meshRuntime,
+    IZLinkClientServerRuntime channelRuntime,
+    ObjectsReadiness readiness
+)
 {
     private readonly RoleConfig config = measurement.Config;
     private long[] sequences = [];
+
     public async Task PrepareAsync(CancellationToken stopping)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stopping);
@@ -27,7 +33,9 @@ public sealed class ChannelEchoOnlyScenario(IZLinkRouteClient client, Measuremen
                 if (config.topology == "routemesh")
                 {
                     var status = meshRuntime.GetStatus(config.meshName!);
-                    var channel = status.Channels.FirstOrDefault(c => c.ChannelName == config.channelName);
+                    var channel = status.Channels.FirstOrDefault(c =>
+                        c.ChannelName == config.channelName
+                    );
                     if (status.IsReady && channel is { IsReady: true, ReadyTargetCount: > 0 })
                     {
                         channelTargetStatus = channel;
@@ -46,43 +54,95 @@ public sealed class ChannelEchoOnlyScenario(IZLinkRouteClient client, Measuremen
                 await Task.Yield();
             }
             sequences = new long[config.workload.logicalStreams!.Value];
-            var request = measurement.Request(0, (ulong)Interlocked.Increment(ref sequences[0]), probe: true);
-            var reply = await client.RequestToChannel(config.channelName!, request)
-                .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs)).Async<PerfEchoReply>(timeout.Token);
+            var request = measurement.Request(
+                0,
+                (ulong)Interlocked.Increment(ref sequences[0]),
+                probe: true
+            );
+            var reply = await client
+                .RequestToChannel(config.channelName!, request)
+                .Timeout(measurement.CallTimeout())
+                .Async<PerfEchoReply>(timeout.Token);
             PayloadPattern.ValidateIdentity(request, reply);
             measurement.Pattern.Validate(reply.payload);
-            measurement.SetupEvidence = [new { kind = "typedProbeEcho", source = "IZLinkRouteClient.RequestToChannel.Async<PerfEchoReply>",
-                observedValue = new { request.correlationId, reply.receivedTicks, reply.clockDomainId } }];
-            readiness.Set(true, "", [new { kind = "channelTarget",
-                source = config.topology == "routemesh" ? "IZLinkRouteMeshRuntime.GetStatus" : "IZLinkClientServerRuntime.GetStatus",
-                observedValue = channelTargetStatus }]);
+            measurement.SetupEvidence =
+            [
+                new
+                {
+                    kind = "typedProbeEcho",
+                    source = "IZLinkRouteClient.RequestToChannel.Async<PerfEchoReply>",
+                    observedValue = new
+                    {
+                        request.correlationId,
+                        reply.receivedTicks,
+                        reply.clockDomainId,
+                    },
+                },
+            ];
+            readiness.Set(
+                true,
+                "",
+                [
+                    new
+                    {
+                        kind = "channelTarget",
+                        source = config.topology == "routemesh"
+                            ? "IZLinkRouteMeshRuntime.GetStatus"
+                            : "IZLinkClientServerRuntime.GetStatus",
+                        observedValue = channelTargetStatus,
+                    },
+                ]
+            );
         }
-        catch (Exception error) { measurement.RecordDiagnostic(error); }
+        catch (Exception error)
+        {
+            measurement.RecordDiagnostic(error);
+        }
     }
-    public Task RunAsync() => Task.WhenAll(Enumerable.Range(0, config.workload.logicalStreams!.Value)
-        .SelectMany(stream => Enumerable.Range(0, config.workload.inflight).Select(_ => LoopAsync(stream))));
+
+    public Task RunAsync() =>
+        ServerDrivenStreams.RunRequestsAsync(
+            measurement,
+            config.workload.logicalStreams!.Value,
+            LoopAsync
+        );
+
     private async Task LoopAsync(int stream)
     {
-        while (measurement.CanIssue)
+        if (!measurement.BeginOperation(out var started))
+            return;
+        var request = measurement.Request(
+            stream,
+            checked((ulong)Interlocked.Increment(ref sequences[stream]))
+        ) with
         {
-            var request = measurement.Request(stream, checked((ulong)Interlocked.Increment(ref sequences[stream])));
-            if (!measurement.BeginOperation(out var started)) break;
-            request = request with { sentTicks = DecimalText.Of(started) };
-            try
-            {
-                var reply = await client.RequestToChannel(config.channelName!, request)
-                    .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs)).Async<PerfEchoReply>();
-                PayloadPattern.ValidateIdentity(request, reply);
-                measurement.Pattern.Validate(reply.payload);
-                measurement.CompleteOperation(started);
-            }
-            catch (Exception error) { measurement.CompleteOperation(started, error); }
+            sentTicks = DecimalText.Of(started),
+        };
+        try
+        {
+            var reply = await client
+                .RequestToChannel(config.channelName!, request)
+                .Timeout(measurement.CallTimeout())
+                .Async<PerfEchoReply>();
+            PayloadPattern.ValidateIdentity(request, reply);
+            measurement.Pattern.Validate(reply.payload);
+            measurement.CompleteOperation(started);
+        }
+        catch (Exception error)
+        {
+            measurement.CompleteOperation(started, error);
         }
     }
 }
-public sealed class ChannelEchoHandler(Measurement measurement) : IZLinkRequestHandler<PerfEchoRequest, PerfEchoReply>
+
+public sealed class ChannelEchoHandler(Measurement measurement)
+    : IZLinkRequestHandler<PerfEchoRequest, PerfEchoReply>
 {
-    public ValueTask<PerfEchoReply> HandleAsync(PerfEchoRequest request, IZLinkMessageContext context, CancellationToken cancellationToken)
+    public ValueTask<PerfEchoReply> HandleAsync(
+        PerfEchoRequest request,
+        IZLinkMessageContext context,
+        CancellationToken cancellationToken
+    )
     {
         var received = PerfClock.Now;
         measurement.HandlerEnter();
@@ -91,11 +151,26 @@ public sealed class ChannelEchoHandler(Measurement measurement) : IZLinkRequestH
             measurement.ValidateRequest(request);
             var reply = PayloadPattern.Reply(request, received);
             measurement.RecordReply(request);
-            if (measurement.Phase == "setup") measurement.SetupEvidence =
-                [new { kind = "typedProbeReply", source = "IZLinkRequestHandler<PerfEchoRequest,PerfEchoReply>", observedValue = request.correlationId }];
+            if (measurement.Phase == "setup")
+                measurement.SetupEvidence =
+                [
+                    new
+                    {
+                        kind = "typedProbeReply",
+                        source = "IZLinkRequestHandler<PerfEchoRequest,PerfEchoReply>",
+                        observedValue = request.correlationId,
+                    },
+                ];
             return ValueTask.FromResult(reply);
         }
-        catch (Exception error) { measurement.RecordDiagnostic(error); throw; }
-        finally { measurement.HandlerExit(); }
+        catch (Exception error)
+        {
+            measurement.RecordDiagnostic(error);
+            throw;
+        }
+        finally
+        {
+            measurement.HandlerExit();
+        }
     }
 }
