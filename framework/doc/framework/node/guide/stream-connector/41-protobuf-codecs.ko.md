@@ -44,6 +44,7 @@ application의 decoder가 정한다. 메시지 종류를 자동 등록하는 기
 
     위 타입 전달은 [#1503](https://github.com/zlink-systems/zlink/issues/1503)의 수정 동작이다.
     배포된 0.28.0의 두 factory는 handler 타입을 사용하지 않는다.
+    `submit(Pong)`과 `submitCallback`도 이 수정의 추가 API다.
 
 ## 2. 서버 packet 이름과 생성 클래스
 
@@ -59,8 +60,13 @@ packet 이름은 Protobuf schema의 field가 아니라 connector가 보내는 �
 ## 3. 요청 응답의 타입
 
 `request(new Ping(...))`의 생성자는 요청을 인코딩하고 요청 packet 이름을 정하는 데 사용된다.
-이 생성자가 응답 타입까지 정하지는 않는다. 또한 `submit<Pong>()`의 타입 인자는 실행 시점에
-존재하지 않는다. 현재 응답 처리 방식은 `submitEncoded()`와 `fromProto(encodedReply, Pong)`이다.
+응답 타입은 `submit(Pong)`에 전달한 생성 클래스가 정한다. request 빌더는
+기존 codec의 `decode(payload, Pong)`으로 응답을 읽는다. callback 형태인
+`submitCallback(Pong, callback)`도 같은 디코딩 경로를 사용한다.
+타입을 지정하지 않은 `submit()`과 `submit(signal)`은 기존 codec의 기본 디코딩을 사용하고,
+`submitCallback(callback)`은 encoded payload를 전달한다.
+기존 `submit(callback)`은 `submitCallback(callback)`으로 이름이 바뀌었다.
+저수준 대안은 `submitEncoded()`와 `fromProto(encodedReply, Pong)`이다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-reply.html" title="명시적 응답 타입 디코딩" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/stream-protobuf-reply.html" target="_blank">↗ 크게 보기</a></p>

@@ -5083,7 +5083,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <div class="pulse-dot"></div>
         <h1>Explicit Protobuf reply type</h1>
       </div>
-      <p class="subtitle">Decode reply bytes with the Pong class</p>
+      <p class="subtitle">Decode replies through the configured codec</p>
     </div>
 
     <script id="archify-guided-views-data" type="application/json">[]</script>
@@ -5133,7 +5133,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
       <svg viewBox="-88 72 1036 116" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
         <title id="archify-diagram-title">Explicit Protobuf reply type</title>
-        <desc id="archify-diagram-description">Decode reply bytes with the Pong class</desc>
+        <desc id="archify-diagram-description">Decode replies through the configured codec</desc>
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -5191,19 +5191,19 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="320" y="144" class="t-muted" font-size="9" text-anchor="middle">Pong bytes</text>
         </g>
 
-        <g id="node-encoded" data-node-id="encoded" data-node-label="submitEncoded()" tabindex="0" role="button" aria-label="Focus submitEncoded(), encoded reply, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="encoded reply" data-node-context="Architecture component">
-          <title>submitEncoded() · encoded reply · Architecture component</title>
+        <g id="node-encoded" data-node-id="encoded" data-node-label="request builder" tabindex="0" role="button" aria-label="Focus request builder, submit(Pong), Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="submit(Pong)" data-node-context="Architecture component">
+          <title>request builder · submit(Pong) · Architecture component</title>
           <rect x="480" y="100" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="480" y="100" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(486 106) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="540" y="128" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">submitEncoded()</text>
-        <text data-detail="context" x="540" y="144" class="t-muted" font-size="9" text-anchor="middle">encoded reply</text>
+          <text data-node-label="" data-detail-anchor="" x="540" y="128" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">request builder</text>
+        <text data-detail="context" x="540" y="144" class="t-muted" font-size="9" text-anchor="middle">submit(Pong)</text>
         </g>
 
-        <g id="node-decode" data-node-id="decode" data-node-label="fromProto()" tabindex="0" role="button" aria-label="Focus fromProto(), Pong instance, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="Pong instance" data-node-context="Architecture component">
-          <title>fromProto() · Pong instance · Architecture component</title>
+        <g id="node-decode" data-node-id="decode" data-node-label="codec.decode()" tabindex="0" role="button" aria-label="Focus codec.decode(), Pong instance, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="Pong instance" data-node-context="Architecture component">
+          <title>codec.decode() · Pong instance · Architecture component</title>
           <rect x="700" y="100" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="700" y="100" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(706 106) scale(0.6875)">
@@ -5212,7 +5212,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="760" y="128" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">fromProto()</text>
+          <text data-node-label="" data-detail-anchor="" x="760" y="128" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">codec.decode()</text>
         <text data-detail="context" x="760" y="144" class="t-muted" font-size="9" text-anchor="middle">Pong instance</text>
         </g>
 

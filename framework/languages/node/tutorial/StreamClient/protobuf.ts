@@ -1,5 +1,5 @@
 // --8<-- [start:protobuf-imports]
-import { createZlinkStreamProtobufCodec, fromProto } from '@zlink-systems/framework-codec-protobuf';
+import { createZlinkStreamProtobufCodec } from '@zlink-systems/framework-codec-protobuf';
 import {
   ZlinkStreamDispatchMode,
   zlinkStreamConnectorFactory,
@@ -67,11 +67,21 @@ export async function runProtobuf(endpoint: string): Promise<string> {
     await connector.send(new Pong({ rank: 3 })).submit();
     // --8<-- [end:protobuf-send]
     // --8<-- [start:protobuf-request]
-    // submit<Pong>() does not pass Pong to the codec at runtime.
-    const encodedReply = await connector.request(new Ping({ text: 'rank' })).submitEncoded();
-    const reply = fromProto(encodedReply, Pong);
+    // Pass the generated constructor to the existing codec's decode method.
+    const reply = await connector.request(new Ping({ text: 'rank' })).submit(Pong);
     // --8<-- [end:protobuf-request]
+    // --8<-- [start:protobuf-request-callback]
+    const callbackReply = await new Promise<messages.tutorial.Pong>((resolve, reject) => {
+      connector.request(new Ping({ text: 'rank' })).submitCallback(Pong, (result) => {
+        if (result.isSuccess) resolve(result.value!);
+        else reject(new Error(result.error!.message));
+      });
+    });
+    // --8<-- [end:protobuf-request-callback]
     if (
+      !(reply instanceof Pong) ||
+      !(callbackReply instanceof Pong) ||
+      callbackReply.rank !== 7 ||
       received.length !== 3 ||
       received.some((text) => text !== 'hello') ||
       pushRank !== 3 ||

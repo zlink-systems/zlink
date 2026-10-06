@@ -13,7 +13,7 @@
 !!! note "수정 버전"
 
     이 장은 [#1503](https://github.com/zlink-systems/zlink/issues/1503)의 codec 수정 동작을 설명한다.
-    배포된 0.28.0은 handler 타입을 사용하지 않는다. 배포 전 검증에는 수정한 로컬 package를 사용한다.
+    배포된 0.28.0은 handler 타입을 사용하지 않는다. `submit(Pong)`과 `submitCallback`도 이 수정의 추가 API다. 배포 전 검증에는 수정한 로컬 package를 사용한다.
 
 ## 1. 메시지 코드 생성
 
@@ -77,8 +77,9 @@ push를 받는다. 생성 클래스 이름과 wire 이름이 다르면 명시 �
 --8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-send"
 ```
 
-`Pong`으로 오는 응답에는 별도의 디코딩 타입이 필요하다. 응답 bytes를 받는 `submitEncoded()`를
-호출한 뒤, `fromProto()`에 응답의 생성 클래스를 전달한다.
+`Pong`으로 오는 응답은 `submit(Pong)`으로 받는다. request 빌더는 생성 클래스를
+기존 codec의 `decode(payload, Pong)`에 전달하고 `Pong` instance를 반환한다.
+취소 신호가 있으면 `submit(Pong, signal)`로 전달한다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-reply.html" title="Protobuf 요청 응답" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/stream-protobuf-reply.html" target="_blank">↗ 크게 보기</a></p>
@@ -87,8 +88,15 @@ push를 받는다. 생성 클래스 이름과 wire 이름이 다르면 명시 �
 --8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-request"
 ```
 
-`submit<Pong>()`의 `<Pong>`은 TypeScript 반환 타입만 지정한다. 실행 시점에는 `Pong` 생성자가
-codec으로 전달되지 않으므로, 위 예제처럼 응답 타입을 지정해야 한다.
+callback으로 받으려면 `submitCallback(Pong, callback)`을 사용한다. 기본 dispatch 모드에서는
+`dispatch()`를 호출할 때 callback이 실행된다. 이 tutorial은 `Immediate` 모드를 사용한다.
+
+```typescript title="StreamClient/protobuf.ts"
+--8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-request-callback"
+```
+
+`submit<Pong>()`의 타입 인자는 실행 시점에 없어지므로 생성 클래스를 전달하는 `submit(Pong)`을 사용한다.
+저수준 대안은 `submitEncoded()`로 받은 bytes를 `fromProto(encodedReply, Pong)`으로 읽는 것이다.
 
 ## 5. 실행 결과
 
@@ -99,11 +107,8 @@ codec으로 전달되지 않으므로, 위 예제처럼 응답 타입을 지정�
 ```bash
 cd framework/languages/node/tutorial/StreamClient
 npm ci
-# 수정 배포 전: 로컬 codec 소스를 빌드한다.
-npx --yes --package=esbuild@0.25.5 esbuild ../../packages/framework-codec-protobuf/src/index.ts \
-  --bundle --format=esm --platform=browser --target=es2022 \
-  --external:@zlink-systems/stream-wire \
-  --outfile=node_modules/@zlink-systems/framework-codec-protobuf/dist/browser/index.mjs
+# 수정 배포 전: 로컬 connector와 codec 소스를 빌드한다.
+npm run prepare:local
 npm run protobuf:check
 # protobuf: Ping=hello, Pong.rank=3, reply.rank=7
 ```

@@ -26,7 +26,7 @@ Receiving 255 message kinds does not require 255 codecs. Pass each generated cla
 !!! note "Fix Availability"
 
     This chapter describes the codec fix in [#1503](https://github.com/zlink-systems/zlink/issues/1503).
-    Released version 0.28.0 ignores handler types. Before release, verification uses the patched local package.
+    Released version 0.28.0 ignores handler types. `submit(Pong)` and `submitCallback` are new APIs in this change. Before release, verification uses the patched local package.
 
 ## 1. Generating Message Code
 
@@ -90,8 +90,9 @@ The connector derives the packet name from the constructor, and the codec calls 
 --8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-send"
 ```
 
-A reply carrying `Pong` needs a separate decoding type. Call `submitEncoded()` to receive the reply
-bytes, then pass the reply's generated class to `fromProto()`.
+Receive a `Pong` reply with `submit(Pong)`. The request builder passes the generated class to
+the existing codec's `decode(payload, Pong)` and returns a `Pong` instance.
+Pass a cancellation signal with `submit(Pong, signal)`.
 
 <iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-reply-en.html" title="Protobuf request and reply" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/stream-protobuf-reply-en.html" target="_blank">↗ Open larger</a></p>
@@ -100,8 +101,15 @@ bytes, then pass the reply's generated class to `fromProto()`.
 --8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-request"
 ```
 
-The `<Pong>` in `submit<Pong>()` specifies only the TypeScript return type. The `Pong` constructor is
-not passed to the codec at runtime, so the example specifies the reply type explicitly.
+For callback delivery, use `submitCallback(Pong, callback)`. In the default dispatch mode,
+the callback runs when `dispatch()` is called. This tutorial uses `Immediate` mode.
+
+```typescript title="StreamClient/protobuf.ts"
+--8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-request-callback"
+```
+
+The type argument in `submit<Pong>()` is erased at runtime, so use `submit(Pong)` to pass the generated class.
+The low-level alternative is to read the bytes from `submitEncoded()` with `fromProto(encodedReply, Pong)`.
 
 ## 5. Execution Result
 
@@ -111,11 +119,8 @@ the same tutorial function. A separate Server process is not needed. The peer se
 ```bash
 cd framework/languages/node/tutorial/StreamClient
 npm ci
-# Before release: build the patched local codec source.
-npx --yes --package=esbuild@0.25.5 esbuild ../../packages/framework-codec-protobuf/src/index.ts \
-  --bundle --format=esm --platform=browser --target=es2022 \
-  --external:@zlink-systems/stream-wire \
-  --outfile=node_modules/@zlink-systems/framework-codec-protobuf/dist/browser/index.mjs
+# Before release: build the local connector and codec sources.
+npm run prepare:local
 npm run protobuf:check
 # protobuf: Ping=hello, Pong.rank=3, reply.rank=7
 ```

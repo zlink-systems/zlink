@@ -1,10 +1,10 @@
 flowchart LR
     %% Explicit Protobuf reply type
-    %% Decode reply bytes with the Pong class
+    %% Decode replies through the configured codec
     request["client request<br/>Ping instance"]:::app
     server["server<br/>Pong bytes"]:::infra
-    encoded["submitEncoded()<br/>encoded reply"]:::spot
-    decode["fromProto()<br/>Pong instance"]:::app
+    encoded["request builder<br/>submit(Pong)"]:::spot
+    decode["codec.decode()<br/>Pong instance"]:::app
     request -->|"request: Ping"| server
     server -->|"response: Pong"| encoded
     encoded -->|"type: Pong"| decode

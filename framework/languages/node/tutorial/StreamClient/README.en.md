@@ -1,9 +1,9 @@
 # StreamClient Protobuf Tutorial
 
 One codec receives both generated `Ping` and `Pong` types through `on(Type, handler)`.
-Replies use `submitEncoded()` and `fromProto(..., Pong)`.
+Replies use `submit(Pong)`.
 The verification program runs the browser entry point with Node's WebSocket.
-Version 0.28.0 ignores handler types; before the fix is released, use the patched local codec package.
+Version 0.28.0 ignores handler types; before the fix is released, use the local connector and codec packages.
 
 ## Installation and Build
 
@@ -11,6 +11,7 @@ Use Node.js 22 or later and npm. Run from this directory.
 
 ```bash
 npm ci
+npm run prepare:local
 npm run build
 ```
 
@@ -22,10 +23,7 @@ copies them to `dist/StreamClient/generated/` alongside the compiled code. Gener
 To verify without a server, run the verification WebSocket peer and tutorial together.
 
 ```bash
-npx --yes --package=esbuild@0.25.5 esbuild ../../packages/framework-codec-protobuf/src/index.ts \
-  --bundle --format=esm --platform=browser --target=es2022 \
-  --external:@zlink-systems/stream-wire \
-  --outfile=node_modules/@zlink-systems/framework-codec-protobuf/dist/browser/index.mjs
+npm run prepare:local
 npm run protobuf:check
 # protobuf: Ping=hello, Pong.rank=3, reply.rank=7
 ```

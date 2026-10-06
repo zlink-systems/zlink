@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "Explicit Protobuf reply type",
-    "subtitle": "Decode reply bytes with the Pong class",
+    "subtitle": "Decode replies through the configured codec",
     "output": "stream-protobuf-reply-en.html",
     "legend": {
       "mode": "hidden"
@@ -11,10 +11,7 @@
   },
   "layout": {
     "mode": "grid",
-    "origin": [
-      40,
-      100
-    ],
+    "origin": [40, 100],
     "cols": 4,
     "gapX": 100,
     "gapY": 82,
@@ -41,15 +38,15 @@
     {
       "id": "encoded",
       "type": "backend",
-      "label": "submitEncoded()",
-      "sublabel": "encoded reply",
+      "label": "request builder",
+      "sublabel": "submit(Pong)",
       "row": 0,
       "col": 2
     },
     {
       "id": "decode",
       "type": "frontend",
-      "label": "fromProto()",
+      "label": "codec.decode()",
       "sublabel": "Pong instance",
       "row": 0,
       "col": 3

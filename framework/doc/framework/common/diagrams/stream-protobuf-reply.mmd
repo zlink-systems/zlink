@@ -1,10 +1,10 @@
 flowchart LR
     %% 명시적 Protobuf 응답 타입
-    %% 응답 bytes를 받은 뒤 Pong 클래스로 디코딩
+    %% 응답 생성자를 기존 codec에 전달한다
     request["client request<br/>Ping instance"]:::app
     server["server<br/>Pong bytes"]:::infra
-    encoded["submitEncoded()<br/>encoded reply"]:::spot
-    decode["fromProto()<br/>Pong instance"]:::app
+    encoded["request 빌더<br/>submit(Pong)"]:::spot
+    decode["codec.decode()<br/>Pong instance"]:::app
     request -->|"request: Ping"| server
     server -->|"response: Pong"| encoded
     encoded -->|"type: Pong"| decode

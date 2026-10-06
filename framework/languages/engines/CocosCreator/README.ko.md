@@ -49,11 +49,11 @@ scene serialization은 Cocos Creator Editor에서 확인해야 한다.
 
 생성 코드와 codec 등록은 [Node Protobuf 송수신 가이드](../../../doc/framework/node/guide/stream-connector/40-protobuf.ko.md)가
 설명한다. browser client는 `@zlink-systems/framework-codec-protobuf`의 package root를 사용하고,
-connector와 codec package의 버전을 맞춘다. 두 의존성은 `0.28.0`으로 고정하며, 검증에는 #1503의 로컬 codec 수정을 적용한다.
+connector와 codec package의 버전을 맞춘다. 두 의존성은 `0.28.0`으로 고정하며, 검증에는 #1503의 로컬 connector와 codec 수정을 적용한다.
 서버도 같은 schema와 packet 이름으로 Protobuf를 보내야 하므로, 현재 JSON 서버에 codec만 바꾸는
 구성은 예제의 대상이 아니다. Cocos scene의 Protobuf 실행을 검증한 결과는 아니다.
 
-요청 응답은 `submitEncoded()`로 받은 뒤 생성된 응답 클래스로 `fromProto()`를 호출한다.
+요청 응답은 생성된 응답 클래스를 `submit(Pong)`에 전달해 읽는다. callback 형태는 `submitCallback(Pong, callback)`이다.
 `submit<Pong>()`의 타입 인자만으로는 응답 클래스가 decoder에 전달되지 않는다.
 codec 하나로 여러 수신 타입을 선택하는 방법은
 [Protobuf codec과 타입](../../../doc/framework/node/guide/stream-connector/41-protobuf-codecs.ko.md)이 설명한다.

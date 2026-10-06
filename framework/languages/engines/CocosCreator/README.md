@@ -51,11 +51,11 @@ It receives generated `Ping` and `Pong` pushes through one codec and checks the 
 The [Node Protobuf messaging guide](../../../doc/framework/node/guide/stream-connector/40-protobuf.en.md)
 explains code generation and codec configuration. Browser clients use the package root of
 `@zlink-systems/framework-codec-protobuf`, with matching connector and codec package versions.
-Both dependencies are pinned to `0.28.0`; this verification uses the local codec fix from #1503. The server must also send Protobuf using the same schema and
+Both dependencies are pinned to `0.28.0`; this verification uses the local connector and codec fixes from #1503. The server must also send Protobuf using the same schema and
 packet names; changing only the client codec does not adapt the existing JSON server.
 This is not a verification result for Protobuf in the Cocos scene.
 
-Replies use `submitEncoded()` followed by `fromProto()` with the generated reply class.
+Pass the generated reply class to `submit(Pong)`. For callback delivery, use `submitCallback(Pong, callback)`.
 The type argument in `submit<Pong>()` alone does not pass a reply class to the decoder.
 [Protobuf codecs and types](../../../doc/framework/node/guide/stream-connector/41-protobuf-codecs.en.md)
 explains selecting multiple receiving types through handler constructors.

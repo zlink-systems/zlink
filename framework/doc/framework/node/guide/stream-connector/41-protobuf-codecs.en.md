@@ -43,7 +43,7 @@ controls how the inner message is read. The factory does not automatically regis
 !!! note "Fix Availability"
 
     Type forwarding above describes the fix in [#1503](https://github.com/zlink-systems/zlink/issues/1503).
-    Both factories in released version 0.28.0 ignore handler types.
+    Both factories in released version 0.28.0 ignore handler types. `submit(Pong)` and `submitCallback` are new APIs in this change.
 
 ## 2. Server Packet Names and Generated Classes
 
@@ -59,8 +59,13 @@ If bundling shortens constructor names, specify wire names explicitly or preserv
 ## 3. Request and Reply Types
 
 The constructor in `request(new Ping(...))` is used to encode the request and select its packet name.
-It does not select the reply type. The type argument in `submit<Pong>()` also does not exist at runtime.
-The current reply handling method is `submitEncoded()` followed by `fromProto(encodedReply, Pong)`.
+The generated class passed to `submit(Pong)` selects the reply type. The request builder reads
+the reply through the existing codec's `decode(payload, Pong)`. The callback form,
+`submitCallback(Pong, callback)`, uses the same decoding path.
+Without a type, `submit()` and `submit(signal)` keep the codec's default decoding,
+and `submitCallback(callback)` delivers the encoded payload.
+The former `submit(callback)` is renamed to `submitCallback(callback)`.
+The low-level alternative is `submitEncoded()` followed by `fromProto(encodedReply, Pong)`.
 
 <iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-reply-en.html" title="Explicit reply type decoding" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/stream-protobuf-reply-en.html" target="_blank">↗ Open larger</a></p>

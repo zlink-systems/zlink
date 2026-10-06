@@ -16,6 +16,10 @@ import {
   fromProto
 } from '@zlink-systems/framework-codec-protobuf';
 import messages from './generated/messages.cjs';
+import {
+  zlinkStreamConnectorFactory,
+  ZlinkStreamDispatchMode
+} from '@zlink-systems/stream-connector';
 import { runProtobuf } from './dist/StreamClient/protobuf.js';
 
 const { Ping, Pong } = messages.tutorial;
@@ -61,7 +65,7 @@ test('generated Protobuf push and explicitly typed reply over WebSocket', async 
   try {
     const result = await runProtobuf(`ws://127.0.0.1:${server.address().port}`);
     assert.equal(result, 'protobuf: Ping=hello, Pong.rank=3, reply.rank=7');
-    assert.deepEqual(sentNames, ['Ping', 'Pong', 'Ping']);
+    assert.deepEqual(sentNames, ['Ping', 'Pong', 'Ping', 'Ping']);
     console.log(result);
   } finally {
     for (const client of server.clients) client.terminate();
@@ -125,4 +129,46 @@ test('envelope codec forwards the optional runtime decoding type', () => {
   };
   assert.ok(codec.decode(ping, Ping) instanceof Ping);
   assert.equal(codec.decode(ping, Ping).text, 'hello');
+});
+
+test('submit accepts a generated Protobuf reply constructor', async () => {
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(server, 'listening');
+  server.on('connection', (socket) =>
+    socket.on('message', (bytes) => {
+      const frame = decodeStreamWireFrame(new Uint8Array(bytes));
+      const header = decodeStreamWireHeader(frame.header);
+      if (header.kind === ZlinkStreamMessageKind.Control) return;
+      socket.send(
+        encodeStreamWireFrame(
+          encodeStreamWireHeader({
+            ...header,
+            name: 'Pong',
+            kind: ZlinkStreamMessageKind.Response
+          }),
+          Pong.encode(new Pong({ rank: 7 })).finish()
+        )
+      );
+    })
+  );
+  const connector = zlinkStreamConnectorFactory.create({
+    endpoint: `ws://127.0.0.1:${server.address().port}`,
+    codec: createZlinkStreamProtobufCodec(Ping),
+    dispatchMode: ZlinkStreamDispatchMode.Immediate
+  });
+  try {
+    await connector.connect();
+    const pending = connector
+      .request(new Ping({ text: 'rank' }))
+      .submit(Pong, new AbortController().signal);
+    assert.ok(pending instanceof Promise);
+    const reply = await pending;
+    assert.ok(reply instanceof Pong);
+    assert.equal(reply.rank, 7);
+  } finally {
+    await connector.close();
+    for (const socket of server.clients) socket.terminate();
+    server.close();
+    await once(server, 'close');
+  }
 });

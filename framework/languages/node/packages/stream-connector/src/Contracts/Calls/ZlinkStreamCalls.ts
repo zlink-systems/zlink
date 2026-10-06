@@ -20,8 +20,16 @@ export interface ZlinkStreamRequestCall {
   timeout(timeoutMs: number): ZlinkStreamRequestCall;
   compress(): ZlinkStreamRequestCall;
   submit<TReply = unknown>(signal?: AbortSignal): Promise<TReply>;
+  submit<TReply>(
+    replyType: abstract new (...args: never[]) => TReply,
+    signal?: AbortSignal
+  ): Promise<TReply>;
   submitEncoded(signal?: AbortSignal): Promise<ZlinkStreamEncodedPayload>;
-  submit(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
+  submitCallback(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
+  submitCallback<TReply>(
+    replyType: abstract new (...args: never[]) => TReply,
+    callback: (result: ZlinkStreamResultOf<TReply>) => void
+  ): void;
 }
 
 export interface ZlinkStreamWaitCall<TPayload = ZlinkStreamEncodedPayload> {

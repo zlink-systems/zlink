@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "명시적 Protobuf 응답 타입",
-    "subtitle": "응답 bytes를 받은 뒤 Pong 클래스로 디코딩",
+    "subtitle": "응답 생성자를 기존 codec에 전달한다",
     "output": "stream-protobuf-reply.html",
     "legend": {
       "mode": "hidden"
@@ -11,10 +11,7 @@
   },
   "layout": {
     "mode": "grid",
-    "origin": [
-      40,
-      100
-    ],
+    "origin": [40, 100],
     "cols": 4,
     "gapX": 100,
     "gapY": 82,
@@ -41,15 +38,15 @@
     {
       "id": "encoded",
       "type": "backend",
-      "label": "submitEncoded()",
-      "sublabel": "encoded reply",
+      "label": "request 빌더",
+      "sublabel": "submit(Pong)",
       "row": 0,
       "col": 2
     },
     {
       "id": "decode",
       "type": "frontend",
-      "label": "fromProto()",
+      "label": "codec.decode()",
       "sublabel": "Pong instance",
       "row": 0,
       "col": 3
