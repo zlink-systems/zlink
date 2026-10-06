@@ -1062,13 +1062,6 @@ final class ZLinkSpotRetireControl {
         return value;
     }
 
-    private static long nonnegative(long value, String name) {
-        if (value < 0) {
-            throw new IllegalArgumentException(name + " must not be negative");
-        }
-        return value;
-    }
-
     private static int compareUtf8(String left, String right) {
         return Arrays.compareUnsigned(
                 left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
