@@ -974,10 +974,7 @@ export class ServiceStatefulRuntime {
     const committed = await authority.commit(target, reservation, spot);
     if (committed.kind !== 'committed') {
       this.registry.closeSpot(spot.ref);
-      throw new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.Unavailable,
-        'Instance cold activation authority was refused.'
-      );
+      throw activationRefused();
     }
     return this.finishRecoveredInstanceActivation(envelope, committed.route, expectedCurrentRoute);
   }
@@ -2917,10 +2914,7 @@ export class ServiceStatefulRuntime {
       return local;
     }
     if (current.kind === 'ready') {
-      throw new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.Unavailable,
-        'Instance cold activation authority was refused.'
-      );
+      throw activationRefused();
     }
 
     const reserved = authority.reserve(target, record.operation, record.deadlineUnixMs);
@@ -2940,10 +2934,7 @@ export class ServiceStatefulRuntime {
     const committed = authority.commit(target, reserved.reservation, activation.spot);
     if (committed.kind === 'lost') {
       if (activation.created) this.registry.closeSpot(activation.spot.ref);
-      throw new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.Unavailable,
-        'Instance cold activation authority was refused.'
-      );
+      throw activationRefused();
     }
     if (!routeMatchesLocal(committed.route, activation.spot, this.nodeRid, this.nodeGeneration)) {
       if (activation.created) this.registry.closeSpot(activation.spot.ref);
@@ -3023,10 +3014,7 @@ export class ServiceStatefulRuntime {
       };
     }
     if (current.kind === 'ready' && current.route.targetNodeRid !== this.nodeRid) {
-      throw new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.Unavailable,
-        'Instance cold activation authority was refused.'
-      );
+      throw activationRefused();
     }
     if (
       current.kind === 'ready' &&
@@ -3160,10 +3148,7 @@ export class ServiceStatefulRuntime {
     if (committed.kind === 'lost') {
       if (activation.created) this.registry.closeSpot(activation.spot.ref);
       await this.instanceApplicationLifecycle?.discard(target);
-      throw new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.Unavailable,
-        'Instance cold activation authority was refused.'
-      );
+      throw activationRefused();
     }
     if (!routeMatchesLocal(committed.route, activation.spot, this.nodeRid, this.nodeGeneration)) {
       if (activation.created) this.registry.closeSpot(activation.spot.ref);
@@ -3208,10 +3193,7 @@ export class ServiceStatefulRuntime {
     const confirmed = await authority.read(target);
     if (confirmed.kind !== 'ready' || !sameInstanceRoute(confirmed.route, route)) {
       if (confirmed.kind === 'ready' && confirmed.route.targetNodeRid !== this.nodeRid) {
-        throw new ZLinkFrameworkException(
-          ZLinkFrameworkErrorKind.Unavailable,
-          'Instance cold activation authority was refused.'
-        );
+        throw activationRefused();
       }
       throw new ServiceStaleGenerationError('spot', target.targetSpotId);
     }
@@ -5454,6 +5436,13 @@ function actorLocation(actor: ServiceActorState): ActorLocation {
     spotGeneration: actor.spot.generation,
     membershipEpoch: actor.membershipEpoch
   };
+}
+
+function activationRefused(): ZLinkFrameworkException {
+  return new ZLinkFrameworkException(
+    ZLinkFrameworkErrorKind.Unavailable,
+    'Instance cold activation authority was refused.'
+  );
 }
 
 function failure(error: unknown): ServiceStatefulResult {
