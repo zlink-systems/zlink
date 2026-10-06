@@ -9,7 +9,6 @@ const framework = require('../../packages/framework/dist');
 const integration = require('../../packages/framework/dist/internal');
 const nestjs = require('../../packages/nestjs/dist');
 const connector = require('../../packages/stream-connector/dist');
-const { reserveTcpEndpoint } = require('./helpers/nestjs-test-utils');
 
 test('Nest fresh Spot creation preserves constructor failure', async () => {
   const failure = new Error('fresh Spot constructor failed');
@@ -96,7 +95,6 @@ test('Nest fresh Spot creation uses its owning module private dependencies', asy
 });
 
 test('Nest static stream-only registration discovers session handlers by default', async () => {
-  const endpoint = (await reserveTcpEndpoint()).replace('tcp:', 'ws:');
   const roleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-1083-a3-node-nest-session-'));
   const frameworkPackage = path.resolve(__dirname, '../../packages/framework/dist');
   fs.writeFileSync(
@@ -131,7 +129,7 @@ module.exports = { PingHandler };
         nestjs
           .zlinkFramework()
           .addStreamNode('nest-audit-stream')
-          .bind(endpoint)
+          .bind('ws://127.0.0.1:*')
           .registerSession(SessionFactory)
           .build()
       )
@@ -142,6 +140,9 @@ module.exports = { PingHandler };
     logger: false,
     abortOnError: false
   });
+  const endpoint = app
+    .get(nestjs.ZLINK_FRAMEWORK_RUNTIME)
+    .getListenerStatus('stream', 'nest-audit-stream').endpoint;
   const client = connector.zlinkStreamConnectorFactory.create({
     endpoint,
     dispatchMode: connector.ZlinkStreamDispatchMode.Immediate
