@@ -17,6 +17,11 @@ public final class StreamClientProgram {
     private StreamClientProgram() {}
 
     public static void main(String[] args) throws Exception {
+        if (args.length > 0 && args[0].equals("--receiving")) {
+            ReceivingProgram.run(
+                    java.util.Objects.requireNonNull(System.getenv("STREAM_RECEIVING_ENDPOINT")));
+            return;
+        }
         // --8<-- [start:stream-client]
         // A game client outside the mesh. It references the connector only, never
         // the Framework, and speaks to the port the stream node opened.
@@ -77,6 +82,7 @@ public final class StreamClientProgram {
         // --8<-- [start:single-actor-send]
         CompletableFuture<ZLinkStreamMessage<Contracts.NicknameChanged>> singleChanged =
                 new CompletableFuture<>();
+        // --8<-- [start:typed-receive]
         AutoCloseable singleReceive =
                 connector.on(
                         Contracts.NicknameChanged.class,
@@ -84,6 +90,7 @@ public final class StreamClientProgram {
                             singleChanged.complete(message);
                             return CompletableFuture.completedFuture(null);
                         });
+        // --8<-- [end:typed-receive]
         connector
                 .send(new Contracts.ChangeNickname("speedy"))
                 .submit()

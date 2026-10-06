@@ -72,6 +72,149 @@ test('stream connector protobuf codec uses supplied protobuf type', () => {
   );
 });
 
+test('request submit receives a Protobuf reply constructor through the existing codec', async () => {
+  const type = createLengthPrefixedJsonType();
+  class Reply {
+    static decode(bytes) { return Object.assign(new Reply(), type.decode(bytes)); }
+  }
+  const transportFactory = new MemoryTransportFactory();
+  const instance = connector.zlinkStreamConnectorFactory.create({
+    endpoint: 'ws://browser.test/stream', transportFactory,
+    codec: protobuf.createZlinkStreamProtobufCodec(type)
+  });
+  try {
+    await instance.connect();
+    const pending = instance.request(new Join()).submit(Reply);
+    assert.ok(pending instanceof Promise);
+    const request = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+    const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(request.header);
+    transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Response, codec: connector.ZlinkStreamCodec.Protobuf,
+        flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq, requestSeq: header.requestSeq,
+        name: 'Reply', metadata: connector.ZlinkStreamMetadataMap.empty
+      }), protobuf.toProto({ rank: 7 }, type).payload
+    ));
+    await instance.dispatch();
+    const reply = await pending;
+    assert.ok(reply instanceof Reply);
+    assert.equal(reply.rank, 7);
+  } finally { await instance.close(); }
+});
+
+test('request submitCallback receives a Protobuf reply constructor through the existing codec', async () => {
+  const type = createLengthPrefixedJsonType();
+  class Reply {
+    static decode(bytes) { return Object.assign(new Reply(), type.decode(bytes)); }
+  }
+  const transportFactory = new MemoryTransportFactory();
+  const instance = connector.zlinkStreamConnectorFactory.create({
+    endpoint: 'ws://browser.test/stream', transportFactory,
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    codec: protobuf.createZlinkStreamProtobufCodec(type)
+  });
+  try {
+    await instance.connect();
+    let complete;
+    const pending = new Promise(resolve => { complete = resolve; });
+    instance.request(new Join()).submitCallback(Reply, complete);
+    assert.ok(pending instanceof Promise);
+    const request = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+    const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(request.header);
+    transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Response, codec: connector.ZlinkStreamCodec.Protobuf,
+        flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq, requestSeq: header.requestSeq,
+        name: 'Reply', metadata: connector.ZlinkStreamMetadataMap.empty
+      }), protobuf.toProto({ rank: 7 }, type).payload
+    ));
+    await instance.dispatch();
+    const result = await pending;
+    assert.equal(result.isSuccess, true);
+    const reply = result.value;
+    assert.ok(reply instanceof Reply);
+    assert.equal(reply.rank, 7);
+  } finally { await instance.close(); }
+});
+
+for (const mode of ['promise-default', 'promise-signal', 'callback-raw', 'callback-decode-error']) {
+  test(`request submission preserves ${mode} behavior through one codec path`, async () => {
+    const type = createLengthPrefixedJsonType();
+    class Reply {}
+    const codec = protobuf.createZlinkStreamProtobufCodec(type);
+    const decodedTypes = [];
+    const failure = { code: connector.ZlinkStreamErrorCode.ValidationFailed, message: 'invalid reply' };
+    const decode = codec.decode;
+    codec.decode = (payload, messageType) => {
+      decodedTypes.push(messageType);
+      if (mode === 'callback-decode-error') throw new connector.ZlinkStreamException(failure);
+      return decode(payload, messageType);
+    };
+    const transportFactory = new MemoryTransportFactory();
+    const instance = connector.zlinkStreamConnectorFactory.create({
+      endpoint: 'ws://browser.test/stream', transportFactory, codec
+    });
+    try {
+      await instance.connect();
+      const builder = instance.request(new Join());
+      let pending;
+      if (mode.startsWith('callback')) {
+        pending = new Promise(resolve => {
+          if (mode === 'callback-raw') builder.submitCallback(resolve);
+          else builder.submitCallback(Reply, resolve);
+        });
+      } else {
+        pending = mode === 'promise-signal'
+          ? builder.submit(new AbortController().signal)
+          : builder.submit();
+      }
+      const request = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+      const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(request.header);
+      const encoded = protobuf.toProto({ rank: 7 }, type);
+      transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
+        protocolCodecs.ZlinkStreamHeaderCodec.encode({
+          kind: connector.ZlinkStreamMessageKind.Response, codec: connector.ZlinkStreamCodec.Protobuf,
+          flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq, requestSeq: header.requestSeq,
+          name: 'Reply', metadata: connector.ZlinkStreamMetadataMap.empty
+        }), encoded.payload
+      ));
+      await instance.dispatch();
+      const result = await pending;
+      if (mode === 'callback-raw') {
+        assert.equal(result.isSuccess, true);
+        assert.equal(result.value.codec, encoded.codec);
+        assert.deepEqual(result.value.payload, encoded.payload);
+        assert.deepEqual(decodedTypes, []);
+      } else if (mode === 'callback-decode-error') {
+        assert.equal(result.isSuccess, false);
+        assert.strictEqual(result.error, failure);
+        assert.deepEqual(decodedTypes, [Reply]);
+      } else {
+        assert.deepEqual(result, { rank: 7 });
+        assert.deepEqual(decodedTypes, [undefined]);
+      }
+      assert.throws(() => builder.submit(), error => error.error.code === connector.ZlinkStreamErrorCode.ValidationFailed);
+    } finally { await instance.close(); }
+  });
+}
+
+test('request submit forwards the reply constructor and cancellation signal independently', async () => {
+  class Reply {}
+  const transportFactory = new MemoryTransportFactory();
+  const instance = connector.zlinkStreamConnectorFactory.create({
+    endpoint: 'ws://browser.test/stream', transportFactory,
+    codec: protobuf.createZlinkStreamProtobufCodec(createLengthPrefixedJsonType())
+  });
+  try {
+    await instance.connect();
+    const controller = new AbortController();
+    const pending = instance.request(new Join()).submit(Reply, controller.signal);
+    const rejected = assert.rejects(pending);
+    controller.abort();
+    await rejected;
+  } finally { await instance.close(); }
+});
+
 test('framework protobuf serializer preserves bytes bodies', () => {
   const serializer = protobufFramework.createProtobufMessageSerializer();
   const cases = [
