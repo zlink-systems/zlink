@@ -77,6 +77,139 @@ final class ZLinkCanonicalRelocationSettlementTest {
     private static final byte[] R2 = {22, 2, 2};
 
     @Test
+    void shutdownWaitsForStageInstallationBeforeAbort() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.endpoint.stageCompletion = new CompletableFuture<>();
+        var staging =
+                fixture.source
+                        .stage(fixture.targetRid, fixture.request, Duration.ofSeconds(2))
+                        .toCompletableFuture();
+        fixture.endpoint.stageEntered.get(3, TimeUnit.SECONDS);
+        var terminal = fixture.target.sealAcceptedTargetRelocations().toCompletableFuture();
+        assertEquals(0, fixture.endpoint.abortedBeforeInstalled.get());
+        assertEquals(0, fixture.endpoint.aborted.get());
+        assertFalse(terminal.isDone());
+        fixture.endpoint.stageCompletion.complete(null);
+        terminal.get(3, TimeUnit.SECONDS);
+        staging.handle((ignored, failure) -> null).get(3, TimeUnit.SECONDS);
+        assertEquals(1, fixture.endpoint.aborted.get());
+        assertEquals(1, fixture.failedReplies.get());
+        assertEquals(0, fixture.commits.get());
+        assertEquals(0, fixture.endpoint.published.get());
+    }
+
+    @Test
+    void reentrantShutdownAtStageEntryWaitsForInstallation() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.endpoint.stageCompletion = new CompletableFuture<>();
+        AtomicReference<CompletionStage<Void>> terminal = new AtomicReference<>();
+        fixture.endpoint.stageEntered.thenRun(
+                () -> terminal.set(fixture.target.sealAcceptedTargetRelocations()));
+        var staging =
+                fixture.source
+                        .stage(fixture.targetRid, fixture.request, Duration.ofSeconds(2))
+                        .toCompletableFuture();
+        assertNotNull(terminal.get());
+        assertFalse(terminal.get().toCompletableFuture().isDone());
+        assertEquals(0, fixture.endpoint.abortedBeforeInstalled.get());
+        fixture.endpoint.stageCompletion.complete(null);
+        terminal.get().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        staging.handle((ignored, failure) -> null).get(3, TimeUnit.SECONDS);
+        assertEquals(1, fixture.endpoint.aborted.get());
+        assertEquals(0, fixture.commits.get());
+    }
+
+    @Test
+    void shutdownWaitsForAcceptedStorePrepareBeforeDiscardingInstalledStage() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.prepareCompletion = new CompletableFuture<>();
+        var staging =
+                fixture.source
+                        .stage(fixture.targetRid, fixture.request, Duration.ofSeconds(2))
+                        .toCompletableFuture();
+        fixture.prepareEntered.get(3, TimeUnit.SECONDS);
+        var terminal = fixture.target.sealAcceptedTargetRelocations().toCompletableFuture();
+        assertFalse(terminal.isDone());
+        assertEquals(0, fixture.endpoint.aborted.get());
+        fixture.prepareCompletion.complete(null);
+        terminal.get(3, TimeUnit.SECONDS);
+        staging.handle((ignored, failure) -> null).get(3, TimeUnit.SECONDS);
+        assertEquals(1, fixture.endpoint.aborted.get());
+        assertEquals(0, fixture.commits.get());
+    }
+
+    @Test
+    void failedStageAfterShutdownDoesNotAbortMissingStage() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.endpoint.stageCompletion = new CompletableFuture<>();
+        var staging =
+                fixture.source
+                        .stage(fixture.targetRid, fixture.request, Duration.ofSeconds(2))
+                        .toCompletableFuture();
+        fixture.endpoint.stageEntered.get(3, TimeUnit.SECONDS);
+        var terminal = fixture.target.sealAcceptedTargetRelocations().toCompletableFuture();
+        fixture.endpoint.stageCompletion.completeExceptionally(
+                new IllegalStateException("restore failed"));
+        terminal.get(3, TimeUnit.SECONDS);
+        assertThrows(CompletionException.class, staging::join);
+        assertEquals(0, fixture.endpoint.abortedBeforeInstalled.get());
+        assertEquals(0, fixture.endpoint.aborted.get());
+        assertEquals(0, fixture.commits.get());
+    }
+
+    @Test
+    void failedStageWithoutShutdownSettlesThroughTheSameTerminalOwner() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.endpoint.stageCompletion =
+                CompletableFuture.failedFuture(new IllegalStateException("restore failed"));
+        assertThrows(CompletionException.class, fixture::stage);
+        fixture.target
+                .awaitAcceptedTargetRelocations()
+                .toCompletableFuture()
+                .get(3, TimeUnit.SECONDS);
+        assertEquals(0, fixture.endpoint.abortedBeforeInstalled.get());
+        assertEquals(0, fixture.endpoint.aborted.get());
+        assertEquals(0, fixture.commits.get());
+    }
+
+    @Test
+    void failedStorePrepareDiscardsTheInstalledStageOnce() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.prepareCompletion =
+                CompletableFuture.failedFuture(new IllegalStateException("Store prepare failed"));
+        assertThrows(CompletionException.class, fixture::stage);
+        fixture.target
+                .awaitAcceptedTargetRelocations()
+                .toCompletableFuture()
+                .get(3, TimeUnit.SECONDS);
+        assertEquals(1, fixture.endpoint.aborted.get());
+        assertEquals(0, fixture.endpoint.abortedBeforeInstalled.get());
+        assertFalse(fixture.endpoint.installed);
+        assertEquals(1, fixture.failedReplies.get());
+        assertEquals(0, fixture.commits.get());
+    }
+
+    @Test
+    void shutdownBeforePayloadAssemblyTerminatesWithoutInstallingAStage() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.stateDelivery = new CompletableFuture<>();
+        var staging =
+                fixture.source
+                        .stage(fixture.targetRid, fixture.request, Duration.ofSeconds(2))
+                        .toCompletableFuture();
+        fixture.stateEntered.get(3, TimeUnit.SECONDS);
+        fixture.target
+                .sealAcceptedTargetRelocations()
+                .toCompletableFuture()
+                .get(3, TimeUnit.SECONDS);
+        fixture.stateDelivery.complete(null);
+        assertThrows(CompletionException.class, staging::join);
+        assertFalse(fixture.endpoint.stageEntered.isDone());
+        assertEquals(0, fixture.endpoint.aborted.get());
+        assertEquals(0, fixture.commits.get());
+    }
+
+    @Test
     void shutdownAfterVerifiedCutoverWaitsForCasSettlement() throws Exception {
         Fixture fixture = new Fixture();
         fixture.endpoint.relayCompletion = new CompletableFuture<>();
@@ -306,6 +439,11 @@ final class ZLinkCanonicalRelocationSettlementTest {
         final AtomicBoolean ambiguousCommit = new AtomicBoolean();
         final CompletableFuture<Void> reconciliationEntered = new CompletableFuture<>();
         final CompletableFuture<Void> reconciliationRelease = new CompletableFuture<>();
+        CompletableFuture<Void> stateDelivery = CompletableFuture.completedFuture(null);
+        final CompletableFuture<Void> stateEntered = new CompletableFuture<>();
+        final AtomicInteger failedReplies = new AtomicInteger();
+        CompletableFuture<Void> prepareCompletion = CompletableFuture.completedFuture(null);
+        final CompletableFuture<Void> prepareEntered = new CompletableFuture<>();
 
         Fixture() {
             String actorId = "actor-settlement";
@@ -373,6 +511,21 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                     ZLinkLocationRepository.class.getClassLoader(),
                                     new Class<?>[] {ZLinkLocationRepository.class},
                                     (proxy, method, args) -> {
+                                        if (method.getName().equals("prepareAggregate")) {
+                                            prepareEntered.complete(null);
+                                            return prepareCompletion.thenCompose(
+                                                    ignored -> {
+                                                        try {
+                                                            return (CompletionStage<?>)
+                                                                    method.invoke(locations, args);
+                                                        } catch (
+                                                                ReflectiveOperationException
+                                                                        failure) {
+                                                            return CompletableFuture.failedFuture(
+                                                                    failure);
+                                                        }
+                                                    });
+                                        }
                                         if (method.getName().equals("commitAggregate")) {
                                             commits.incrementAndGet();
                                             if (ambiguousCommit.get()) {
@@ -590,6 +743,24 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                         case "sendCanonicalRelocationControl" -> {
                                             byte[] encoded = ((byte[]) args[1]).clone();
                                             int command = Byte.toUnsignedInt(encoded[3]);
+                                            if (!sourceSide
+                                                    && command
+                                                            == ServiceWireConstants
+                                                                    .COMMAND_RELOCATION_FAILED) {
+                                                failedReplies.incrementAndGet();
+                                            }
+                                            if (sourceSide
+                                                    && command
+                                                            == ServiceWireConstants
+                                                                    .COMMAND_RELOCATION_STATE) {
+                                                stateEntered.complete(null);
+                                                yield stateDelivery.thenCompose(
+                                                        ignored ->
+                                                                peer.get()
+                                                                        .apply(
+                                                                                localRid, command,
+                                                                                encoded));
+                                            }
                                             if (sourceSide
                                                     && command
                                                             == ServiceWireConstants
@@ -662,6 +833,10 @@ final class ZLinkCanonicalRelocationSettlementTest {
 
     private static final class RecordingEndpoint implements ZLinkSpotRetireControl.TargetEndpoint {
         final AtomicInteger aborted = new AtomicInteger();
+        final AtomicInteger abortedBeforeInstalled = new AtomicInteger();
+        final CompletableFuture<Void> stageEntered = new CompletableFuture<>();
+        CompletableFuture<Void> stageCompletion = CompletableFuture.completedFuture(null);
+        boolean installed;
         final AtomicInteger published = new AtomicInteger();
         final CompletableFuture<Void> abortedEvent = new CompletableFuture<>();
         final CompletableFuture<Void> publishedEvent = new CompletableFuture<>();
@@ -674,7 +849,8 @@ final class ZLinkCanonicalRelocationSettlementTest {
 
         @Override
         public CompletionStage<Void> stage(ZLinkSpotRetireControl.StageRequest request) {
-            return CompletableFuture.completedFuture(null);
+            stageEntered.complete(null);
+            return stageCompletion.thenRun(() -> installed = true);
         }
 
         @Override
@@ -693,6 +869,12 @@ final class ZLinkCanonicalRelocationSettlementTest {
 
         @Override
         public CompletionStage<Void> abort(ZLinkSpotRetireControl.StageRequest request) {
+            if (!installed) {
+                abortedBeforeInstalled.incrementAndGet();
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException("target stage is unavailable"));
+            }
+            installed = false;
             aborted.incrementAndGet();
             abortedEvent.complete(null);
             return CompletableFuture.completedFuture(null);
