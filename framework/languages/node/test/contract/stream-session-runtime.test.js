@@ -898,6 +898,88 @@ test('stream request dispatch emits exactly one replied terminal record (spec 26
   await runtime.dispose();
 });
 
+for (const [controlName, controlPayload] of [
+  ['$zlink.unknown', ''],
+  ['$zlink.heartbeat.ping', 'invalid-payload']
+]) {
+  test(`stream rejects ${controlName} protocol errors before application handler terminal`, async () => {
+    const socket = new FakeStreamSocket();
+    let entered;
+    let release;
+    const started = new Promise(resolve => { entered = resolve; });
+    const terminal = new Promise(resolve => { release = resolve; });
+    let disconnected = false;
+    const runtime = createStreamRuntime({
+      socket,
+      sessionFactory(context) {
+        return {
+          context,
+          async onDispatch() { entered(); await terminal; },
+          async onDisconnected() { disconnected = true; }
+        };
+      }
+    });
+    runtime.start();
+    socket.emitPacket('blocked-control', fakeHeader({ name: 'SlowWork' }), fakeMessage(''));
+    await started;
+    try {
+      socket.emitPacket('blocked-control', fakeHeader({
+        kind: connector.ZlinkStreamMessageKind.Control,
+        codec: connector.ZlinkStreamCodec.Raw,
+        flags: connector.ZlinkStreamHeaderFlags.None,
+        name: controlName
+      }), fakeMessage(controlPayload));
+      await waitForReceive(socket);
+      assert.deepEqual(socket.disconnects, ['blocked-control']);
+      assert.equal(disconnected, false);
+      assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1],
+        streamProtocol.ZLinkStreamCloseReasonCode.ProtocolError);
+    } finally {
+      release();
+      await runtime.dispose();
+    }
+    assert.equal(disconnected, true);
+  });
+}
+
+test('scheduled heartbeat and transport timeout progress before handler terminal', async () => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  let entered;
+  let release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const terminal = new Promise(resolve => { release = resolve; });
+  let disconnected = false;
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    sessionFactory(context) {
+      return {
+        context,
+        async onDispatch() { entered(); await terminal; },
+        async onDisconnected() { disconnected = true; }
+      };
+    }
+  });
+  runtime.start();
+  runtime.markConnected('blocked-liveness');
+  await clock.flush();
+  socket.emitPacket('blocked-liveness', fakeHeader({ name: 'SlowWork' }), fakeMessage(''));
+  await started;
+  try {
+    await clock.advance(1000);
+    assert.equal(socket.sent.length, 1);
+    assert.equal(controlHeader(socket.sent[0]).name, '$zlink.heartbeat.ping');
+    await clock.advance(4000);
+    assert.deepEqual(socket.disconnects, ['blocked-liveness']);
+    assert.equal(disconnected, false);
+  } finally {
+    release();
+    await runtime.dispose();
+  }
+  assert.equal(disconnected, true);
+});
+
 test('stream heartbeat control bypasses a blocked application handler', async (t) => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
@@ -954,7 +1036,6 @@ test('stream heartbeat control bypasses a blocked application handler', async (t
   assert.deepEqual(socket.disconnects, []);
   assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.ping');
   await clock.advance(1);
-  await runtime.findSession('heartbeat-blocked-handler').runLivenessCheck();
   assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1], streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
   assert.deepEqual(socket.disconnects, ['heartbeat-blocked-handler']);
   await runtime.dispose();

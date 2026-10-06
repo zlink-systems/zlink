@@ -255,39 +255,15 @@ export class ZLinkStreamSessionRuntime {
       terminalOwner?.close();
     };
     if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
-      if (
-        messageToBytes(payload).length === 0 &&
-        (decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PONG ||
-          decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PING)
-      ) {
-        void this.handleControl(decodedHeader, payload)
-          .catch((error) => {
-            this.options.onError?.(error);
-          })
-          .finally(() => {
-            applicationJobPermit?.releaseAfterInternalProcessing();
-            payload.close();
-            releaseTerminal();
-          });
-        return;
-      }
-      this.enqueueControl(
-        async () => {
-          try {
-            const dispatch = () => this.dispatchPacket(payload, decodedHeader);
-            if (applicationJobPermit === undefined) await dispatch();
-            else await runWithApplicationJobPermit(applicationJobPermit, dispatch);
-          } finally {
-            releaseTerminal();
-          }
-        },
-        () => {
+      void this.handleControl(decodedHeader, payload)
+        .catch((error) => {
+          this.options.onError?.(error);
+        })
+        .finally(() => {
           applicationJobPermit?.releaseAfterInternalProcessing();
           payload.close();
           releaseTerminal();
-        },
-        () => this.traceShutdownDrop(decodedHeader)
-      );
+        });
       return;
     }
     if (
@@ -475,10 +451,6 @@ export class ZLinkStreamSessionRuntime {
     let dispatchPayload = payload;
     let enteredDispatch = false;
     try {
-      if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
-        await this.handleControl(decodedHeader, payload);
-        return;
-      }
       this.lastApplicationActivityAt = this.livenessClock.now();
       dispatchPayload = this.context.payloadForHeader(decodedHeader, payload);
       if (this.context.tryCompleteResponse(decodedHeader, dispatchPayload)) {
@@ -676,11 +648,7 @@ export class ZLinkStreamSessionRuntime {
     }
     this.livenessTimer = this.livenessClock.setTimer(() => {
       this.livenessTimer = undefined;
-      this.serial.executeInfrastructure(
-        async () => this.runLivenessCheck(),
-        {},
-        (error) => this.options.onError?.(error)
-      );
+      void this.runLivenessCheck().catch((error) => this.options.onError?.(error));
     }, ZLINK_STREAM_HEARTBEAT_INTERVAL_MS);
   }
 
@@ -722,7 +690,9 @@ export class ZLinkStreamSessionRuntime {
     this.closeReason = closeReason;
     this.stopLivenessChecks();
     await this.stream.closeForReason(reason, diagnostic);
-    await this.complete(undefined, true);
+    void this.serial
+      .executeFinal(async () => this.complete(undefined, true))
+      .catch((error) => this.options.onError?.(error));
   }
 
   private stopLivenessChecks(): void {
@@ -814,12 +784,12 @@ export class ZLinkStreamSessionRuntime {
   private queueDisconnect(error: unknown): void {
     if (this.disconnected || this.disconnectQueued) return;
     this.disconnectQueued = true;
+    this.stream.markTransportClosed();
     this.stopLivenessChecks();
     void this.serial
       .executeFinal(async () => {
         this.disconnectQueued = false;
         if (this.disconnected) return;
-        this.stream.markTransportClosed();
         this.disconnected = true;
         await this.complete(error, true);
       })
