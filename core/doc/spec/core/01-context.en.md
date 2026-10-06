@@ -251,7 +251,7 @@ automatic recalculation, and clears the snapshot planning-active flag.
 `ZLINK_CTX_OPT_AUTO_HWM_PROFILE` changes the profile used by the next automatic
 HWM calculation and may be adjusted safely at runtime. The profile selects the
 memory percentage and per-role byte bounds. `SNDBUF` / `RCVBUF` default to
-`-1`, and Auto HWM profiles do not change these values automatically. The three
+`-1`, and Auto HWM profiles do not change these values automatically.
 Auto HWM byte options cannot be set with `zlink_ctx_set`; attempting to do so
 fails with `EINVAL`. See [Auto HWM](systems/06-auto-hwm.en.md) for the contract.
 

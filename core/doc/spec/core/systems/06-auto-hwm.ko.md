@@ -622,7 +622,7 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 - Core가 finite hard limit을 감지한 상태에서 그보다 큰 memory limit이나 수동 Core budget을 설정하면 `EINVAL`이다.
 - 유효한 memory limit이나 수동 Core budget은 현재 수동 HWM과 자동 하한의 합보다 작아도 저장되고 재계산이 예약된다. 재계산된 snapshot은 자동 하한을 유지하고 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다.
 - Physical memory와 hard limit은 context 시작 시 한 번만 감지한다. 실행 중 값을 바꿔도 현재 context는 재감지하지 않는다.
-- 모든 방향이 자동인 구성에서 새 pipe pair의 하한 예약 합계가 budget을 넘어도 resolved memory limit 이하이면 attach가 성공하고, 재계산된 snapshot은 자동 하한을 유지하며 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다.
+- 모든 방향이 자동인 구성에서, 새 pair를 포함한 기록된 하한 예약 합계가 resolved memory limit 이하이면 attach가 성공한다. 현재 profile로 계산한 자동 하한 합계가 budget을 넘으면 재계산된 snapshot은 자동 하한을 유지하며 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다.
 - 하한 예약 합계가 resolved memory limit을 넘는 새 pair는 등록되지 않는다. 동기 inproc attach는 `ENOBUFS`로 실패하고, network 연결 시도는 publish 없이 종료된다.
 - Auto HWM byte 옵션을 정확히 `sizeof(uint64_t)`가 아닌 크기로 `zlink_ctx_set_data`/`zlink_ctx_get_data` 호출하면 `EINVAL`이고 값이 바뀌지 않는다.
 - 같은 연결 구성과 입력에서 snapshot의 `effective_core_budget_bytes`는 항상 같다(결정적).
