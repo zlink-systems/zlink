@@ -272,12 +272,6 @@ public final class ZLinkStreamHeaderCodec {
         return buffer.array();
     }
 
-    private static boolean isKnownKind(byte value) {
-        int kind = Byte.toUnsignedInt(value);
-        return kind >= ZLinkStreamMessageKind.SEND.value()
-                && kind <= ZLinkStreamMessageKind.CONTROL.value();
-    }
-
     private static boolean isReply(int kind) {
         return kind == ZLinkStreamMessageKind.RESPONSE.value()
                 || kind == ZLinkStreamMessageKind.ERROR.value();
