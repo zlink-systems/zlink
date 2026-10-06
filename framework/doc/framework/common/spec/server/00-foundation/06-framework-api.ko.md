@@ -91,9 +91,7 @@ configuration error로 실패한다 — 이 오류는 언어별 configuration ex
 이 문서 전체에서 나오는
 `configuration error`와 `startup configuration error`도 같은 방식으로 전달된다.
 
-명시 값이 없으면
-managed binding은 GC, JVM 또는 V8의 원본 runtime
-memory hint를 Core에 전달하고, native binding은 Core의 container·process·OS 감지를 사용한다.
+명시 값이 없으면 모든 binding이 Core의 container·OS 감지를 사용한다.
 
 Framework와
 binding은 profile 비율을 적용하거나 budget을 connection 수로 나누지 않는다.

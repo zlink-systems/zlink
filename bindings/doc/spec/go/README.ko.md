@@ -93,9 +93,7 @@ modify, remove와 wait 호출은 호출자가 직렬화한다.
 Context memory limit·Core budget의 byte 값과 profile option을 Core에 전달한다.
 계산·수동 override·admission은 [Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
 
-입력 우선순위는 수동 Core budget, 명시 memory limit, Go runtime에 설정된 유한한
-memory limit hint, Core fallback 순서다. 앞의 두 값을 지정하면 runtime hint를 자동
-감지하지 않는다. Binding은 hint와 Core hard limit을 직접 결합하지 않는다. 명시 입력이
+입력 우선순위는 수동 Core budget, 명시 memory limit, Core fallback 순서다. 명시 입력이
 Core가 감지한 finite hard limit보다 크면 `EINVAL`에 대응하는 기존 config error를 그대로
 전달하고 clamp하지 않는다.
 
@@ -183,7 +181,7 @@ event를 선택하고 여러 mask는 OR로 합친다. `MonitorHwmBytes(0)`은 Co
 지정하면 호출 순서상 마지막 값이 적용된다.
 
 `MonitorStatus`는 pending message count와 별도로 `SndPendingBytes`와 `RcvPendingBytes`를
-노출한다. `CoreHwmBudgetSnapshot`은 ABI version/size, configured/runtime/resolved memory
+노출한다. `CoreHwmBudgetSnapshot`은 ABI version/size, configured/resolved memory
 limit, configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/
 current/peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
 monitor/instance aggregate, application/completion queue count,

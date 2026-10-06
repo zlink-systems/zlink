@@ -360,8 +360,7 @@ Core owns HWM calculation and queue admission.
 Context options pass the byte-valued Core memory limit and budget, and the profile, unchanged to Core.
 Planning, manual overrides, and admission follow [Core HWM calculation and admission](../README.en.md#hwm-calculation-and-admission).
 Context provides `core_hwm_budget_snapshot()` and
-`reset_core_hwm_budget_metrics()`. The Rust binding supplies no runtime memory
-hint. Input precedence is manual Core budget, explicit memory limit, then Core
+`reset_core_hwm_budget_metrics()`. Input precedence is manual Core budget, explicit memory limit, then Core
 fallback. If an explicit input exceeds a finite hard limit Core detected, the
 binding preserves the existing configuration error corresponding to `EINVAL`
 and does not clamp the value.
@@ -377,7 +376,7 @@ Pending-message counts remain display diagnostics; no slot, message-unit,
 size-cap, or connection-bucket property is exposed. `snd_pending_bytes` and
 `rcv_pending_bytes` are separate `u64` byte values.
 
-The Core budget snapshot projects ABI version/size, configured/runtime/resolved
+The Core budget snapshot projects ABI version/size, configured/resolved
 memory limits, configured/effective budgets, planned/applied/manual-reserved
 HWM, Core-queue/application/current/peak/provisional accounted bytes,
 completion current/peak/pending and total-messaging values, monitor/instance

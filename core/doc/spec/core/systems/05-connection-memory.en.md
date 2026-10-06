@@ -80,7 +80,7 @@ for TCP, TLS, WS, and WSS.
 
 The monitor that reports runtime memory state separately exposes current bytes for application
 queues and completion lanes, as well as oversize-admission history. The ABI-reserved fields
-`application_accounted_bytes`, `outstanding_application_lease_count`,
+`runtime_memory_limit_bytes`, `application_accounted_bytes`, `outstanding_application_lease_count`,
 `deferred_origin_credit_bytes`, and `retired_queue_count` are always zero. The
 [Core budget](../glossary.en.md#auto-hwm-budget) — the total number of bytes that Core uses as the
 basis for distributing HWM among application queues after calculating it from memory inputs — is

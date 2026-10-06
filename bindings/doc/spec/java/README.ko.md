@@ -698,9 +698,8 @@ public class CommonSocketOptions {
 }
 ```
 
-입력 우선순위는 수동 Core budget, 명시 memory limit, JVM 최대 heap hint, Core fallback
-순서다. 앞의 두 값을 지정하면 JVM hint를 자동 감지하지 않는다. Binding은 hint와 Core
-hard limit을 직접 결합하지 않는다. 명시 입력이 Core가 감지한 finite hard limit보다 크면
+입력 우선순위는 수동 Core budget, 명시 memory limit, Core fallback 순서다. 명시 입력이
+Core가 감지한 finite hard limit보다 크면
 `EINVAL`에 대응하는 기존 config exception을 그대로 전달하고 clamp하지 않는다.
 
 HWM 계산·수동 override·admission과 값 투영은 [Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
@@ -719,7 +718,7 @@ Java와 Kotlin 모두 message-count overload나 alias를 노출하지 않는다.
 - `abiVersion()`·`structSize()`가 [현재 Core monitor layout](../../../../core/doc/spec/core/06-monitoring.ko.md#61-abi-version과-layout)과
   맞지 않으면 `UnsupportedOperationException`을 발생시킨다.
 
-`CoreHwmBudgetSnapshot`은 ABI version/size, configured/runtime/resolved memory limit,
+`CoreHwmBudgetSnapshot`은 ABI version/size, configured/resolved memory limit,
 configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/current/
 peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
 monitor/instance aggregate, application/completion queue count,

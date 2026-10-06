@@ -267,7 +267,7 @@ exact interface for each language's precise spelling.
 
 | Setting | Purpose |
 | --- | --- |
-| `coreHwmMemoryLimitBytes` | A finite process/runtime memory-limit hint forwarded for Core budget calculation |
+| `coreHwmMemoryLimitBytes` | Memory limit (bytes) used for Core budget calculation and the connection admission check. `0` uses the container limit or physical memory Core detects |
 | `coreHwmBudgetBytes` | A positive manual Core budget that takes precedence over profile calculation |
 | `CoreHwmProfile` | The Core Auto-budget profile. The default is `Balanced` |
 

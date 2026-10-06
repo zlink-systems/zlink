@@ -41,9 +41,11 @@ Core는 다음 입력을 우선순위 순으로 검사해 처음 사용할 수 �
 
 1. 양수 `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`
 2. 양수 `ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`
-3. 양수 runtime memory hint. Core가 finite hard limit도 감지했으면 두 값의 최솟값
-4. Core가 감지한 finite hard limit
-5. Core가 감지한 physical memory
+3. Core가 감지한 finite hard limit(cgroup v2 `memory.max`, v1 `memory.limit_in_bytes`)
+4. Core가 감지한 physical memory
+
+2~4 중 처음 사용할 수 있는 값이 **resolved memory limit**이다. 수동 Core budget을 설정해도
+resolved memory limit은 2~4에서 구하며, 아래 **연결 수용** 판정이 이 값을 쓴다.
 
 수동 Core budget은 profile 비율과 effective cap을 적용하지 않고 그대로 사용한다.
 그 밖의 memory 입력에는 선택한 profile 비율을 한 번 적용한 뒤 아래의 effective cap으로
@@ -96,8 +98,7 @@ direction을 전부 확정한 뒤에야 알 수 있으므로, budget은 그 시�
 확정된다. 수동 Core budget을 설정하면 이 계산 전체를 건너뛴다.
 
 Core가 finite hard limit을 감지한 경우, 그보다 큰 명시적 memory limit이나 수동 Core
-budget 설정은 `EINVAL`로 실패한다. Runtime memory hint는 설정할 수 있으며 실제
-계산에서는 finite hard limit과의 최솟값을 사용한다. Physical memory와 finite hard limit은
+budget 설정은 `EINVAL`로 실패한다. Physical memory와 finite hard limit은
 context를 시작할 때 한 번만 감지하며, 실행 중에는 다시 감지하지 않는다.
 
 Auto HWM option setter가 성공하면 설정값을 저장하고 기본 debounce 경로로 새 계산을
@@ -119,13 +120,8 @@ DEALER-ROUTER single connection은 Application pipepair 하나, 즉 Application 
 두 개로 등록한다. 별도 Completion pipe가 없으므로 completion directional queue는 추가하지 않는다.
 
 - application 방향: 역할별 하한을 원자적으로 예약한다. 두 방향을 모두 예약할 수 없으면 attach를 공개하기 전에 전체 예약을 거절하고 일부 방향만 등록하지 않는다.
-  이 admission이 쓰는 budget은 **지금 예약하려는 위상**으로 계산한다 — 명시적 Core budget이
-  있으면 그 값을, 없으면 이미 예약된 application 방향 수에 이번 쌍의 두 방향을 더한 수로
-  effective cap을 구해 그 budget을 쓴다. 이미 기록한 plan의 budget이나 방향 수가 0인 seed
-  budget으로 판정하지 않는다. plan snapshot은 pipe 생성보다 늦을 수 있고, 고정 cap만으로
-  판정하면 같은 planner가 나중에 정상적으로 배분할 연결을 `ENOBUFS`로 거절하게 된다.
-  registry는 이를 위해 예약된 byte 합계와 예약된 방향 수를 함께 들고 있으며, 방향이 은퇴해
-  drain을 마치면 두 값을 함께 되돌린다.
+  예약 가능 여부는 아래 **연결 수용** 규칙이 정한다. registry는 이를 위해 예약된 byte
+  합계를 들고 있으며, 방향이 은퇴해 drain을 마치면 그 방향의 예약을 되돌린다.
 - 수동 방향도 attach 전에는 역할별 하한을 예약한다. 유한한 수동 HWM은 admission에 즉시
   적용하고, 다음 plan의 수동 예약 합계와 aggregate HWM 통계에 반영한다.
 - 수동 HWM이 `0`인 방향: admission은 계속 무제한이되, 다음 plan의 계산용 예약에는 역할별
@@ -144,6 +140,12 @@ endpoint의 값을 더하지 않고 다음 규칙으로 최종 cap 하나를 계
 | 유한 manual 값은 없고 auto가 하나라도 있다 | Water-filling 결과(auto plan) |
 | 둘 다 unlimited manual이다 | Admission은 unlimited, 역할별 상한을 계산용 reservation으로 한 번 사용 |
 
+**연결 수용.** 새 pipe pair는 지금까지 예약된 byte 합계에 이번 쌍의 방향별 하한을 더한 값이
+resolved memory limit 이하일 때만 예약에 성공한다. 이 판정은 budget과 무관하다. Budget은
+queue별 HWM을 나누는 기준이고, 예약 합계가 budget을 넘으면 아래 규칙대로 하한을 유지하고
+budget 부족 flag를 설정한다. 따라서 모든 queue가 자기 하한까지 차도 그 합계는 resolved
+memory limit을 넘지 않는다.
+
 수동 예약을 뺀 budget이 모든 자동 방향의 하한 합계보다 작으면 하한을 낮추지 않고
 budget 부족 flag를 설정한다. 충분하면 아직 상한에 도달하지 않은 고유 physical queue
 수로 남은 budget을 나누고 각 queue를 상한까지 반복해서 증가시킨다. 나눗셈 remainder는
@@ -155,10 +157,9 @@ stable queue ID 순서로 1 byte씩 배정한다. 따라서 같은 registry snap
 | 상황 | Core 동작 |
 |---|---|
 | 새 explicit memory limit 또는 수동 Core budget이 현재 수동 HWM과 자동 하한을 함께 수용하지 못함 | 값을 저장하고 재계산을 예약한다. planner는 자동 하한을 낮추지 않고 budget 부족 flag를 설정한다. |
-| 새 동기 inproc attach가 필요한 하한을 예약하지 못함 | `ENOBUFS`로 실패 |
-| Runtime memory hint가 실행 중 감소 | 기존 pipe와 message를 제거하지 않고 새 값을 기록한다. 재계산 결과가 부족하면 budget 부족 flag를 설정한다. |
+| 새 동기 inproc attach의 하한 예약이 연결 수용 한도를 넘음 | `ENOBUFS`로 실패 |
 | Physical memory 또는 hard limit이 실행 중 감소 | context 시작 뒤에는 재감지하지 않으므로 현재 context의 입력과 plan을 바꾸지 않는다. |
-| 새 비동기 network attach가 필요한 reservation을 얻기 전 | publish하지 않고 실패한 연결 시도를 종료 |
+| 새 비동기 network attach의 하한 예약이 연결 수용 한도를 넘음 | publish하지 않고 연결 시도를 종료 |
 
 연결 수가 바뀌어 queue별 목표가 변할 때는 다음과 같이 적용한다.
 
@@ -184,7 +185,7 @@ originQueueUsedBytes(queue) = physicalQueueAccountedBytes(queue)
 `total_applied_hwm_bytes`는 live application 방향에 실제 적용된 HWM 합계이다.
 `core_queue_accounted_bytes`는 Core queue가 현재 보관하는 byte이고
 `current_accounted_bytes`는 그 값과 같다. ABI-reserved field인
-`application_accounted_bytes`·`outstanding_application_lease_count`·
+`runtime_memory_limit_bytes`·`application_accounted_bytes`·`outstanding_application_lease_count`·
 `deferred_origin_credit_bytes`·`retired_queue_count`는 항상 0이다.
 
 ROUTER-ROUTER의 [completion progress lane](../glossary.ko.md#completion-progress-lane)에는 byte
@@ -250,7 +251,7 @@ typedef struct zlink_auto_hwm_budget_snapshot_t {
   uint64_t budget_generation;                   // 새 plan 기록마다 증가 (새 context=0)
   uint64_t measurement_epoch;                   // metrics reset마다 증가 (새 context=1)
   uint64_t configured_memory_limit_bytes;       // 설정한 명시적 memory limit
-  uint64_t runtime_memory_limit_bytes;          // runtime memory hint
+  uint64_t runtime_memory_limit_bytes;          // 예약 (항상 0)
   uint64_t resolved_memory_limit_bytes;         // 실제 계산에 쓴 limit
   uint64_t configured_core_budget_bytes;        // 설정한 수동 Core budget
   uint64_t effective_core_budget_bytes;         // effective cap 적용 후 최종 budget
@@ -614,7 +615,9 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 **옵션과 budget**
 - Core가 finite hard limit을 감지한 상태에서 그보다 큰 memory limit이나 수동 Core budget을 설정하면 `EINVAL`이다.
 - 유효한 memory limit이나 수동 Core budget은 현재 수동 HWM과 자동 하한의 합보다 작아도 저장되고 재계산이 예약된다. 재계산된 snapshot은 자동 하한을 유지하고 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다.
-- Physical memory와 hard limit은 context 시작 시 한 번만 감지한다. 실행 중 값을 바꿔도 현재 context는 재감지하지 않으며, 감소한 runtime memory hint만 새 입력으로 저장하고 부족할 때 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다.
+- Physical memory와 hard limit은 context 시작 시 한 번만 감지한다. 실행 중 값을 바꿔도 현재 context는 재감지하지 않는다.
+- 새 pipe pair의 하한 예약 합계가 budget을 넘어도 resolved memory limit 이하이면 attach가 성공하고, 재계산된 snapshot은 자동 하한을 유지하며 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다.
+- 하한 예약 합계가 resolved memory limit을 넘는 새 pair는 등록되지 않는다. 동기 inproc attach는 `ENOBUFS`로 실패하고, network 연결 시도는 publish 없이 종료된다.
 - Auto HWM byte 옵션을 정확히 `sizeof(uint64_t)`가 아닌 크기로 `zlink_ctx_set_data`/`zlink_ctx_get_data` 호출하면 `EINVAL`이고 값이 바뀌지 않는다.
 - 같은 연결 구성과 입력에서 snapshot의 `effective_core_budget_bytes`는 항상 같다(결정적).
 - 새 pipe pair는 수동 HWM 크기와 관계없이 방향별 역할 하한을 먼저 예약한다. 유한한 수동 HWM은 admission에 즉시 적용되고 다음 snapshot의 `manual_reserved_hwm_bytes`와 aggregate HWM 통계에 반영된다.

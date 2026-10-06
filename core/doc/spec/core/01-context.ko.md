@@ -100,7 +100,6 @@ sequenceDiagram
 | `CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS` | `14`; `int`, set/get | `3000` ms | 저장한 debounce로 재계산을 예약함 |
 | `CTX_OPT_AUTO_HWM_PROFILE` | `17`; `int`, set/get | `BALANCED` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
 | `CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES` | `19`; `uint64_t`, set_data/get_data | `0` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
-| `CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES` | `20`; `uint64_t`, set_data/get_data | `0` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
 | `CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES` | `21`; `uint64_t`, set_data/get_data | `0` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
 
 ```c
@@ -116,8 +115,7 @@ typedef enum zlink_auto_hwm_profile_t
 각 profile의 정확한 memory 비율, 고정 cap과 역할별 하한·상한은
 [Auto HWM §2](systems/06-auto-hwm.ko.md#2-auto-hwm-budget-계산)가 소유한다.
 
-Auto HWM byte 옵션 세 개(`MEMORY_LIMIT_BYTES`, `RUNTIME_MEMORY_LIMIT_BYTES`,
-`CORE_BUDGET_BYTES`)가 어떤 budget을 계산하고 어떻게 admission에 쓰이는지는
+Auto HWM byte 옵션 두 개(`MEMORY_LIMIT_BYTES`, `CORE_BUDGET_BYTES`)가 어떤 budget을 계산하고 어떻게 admission에 쓰이는지는
 [Auto HWM](systems/06-auto-hwm.ko.md)이 소유한다.
 
 ### 4.1 기본값
@@ -131,7 +129,6 @@ Auto HWM byte 옵션 세 개(`MEMORY_LIMIT_BYTES`, `RUNTIME_MEMORY_LIMIT_BYTES`,
 #define ZLINK_CTX_AUTO_HWM_RECALC_DEBOUNCE_MS_DFLT 3000  // 재계산 기본 debounce (ms)
 #define ZLINK_CTX_AUTO_HWM_PROFILE_DFLT ZLINK_AUTO_HWM_PROFILE_BALANCED  // 기본 profile
 #define ZLINK_CTX_AUTO_HWM_MEMORY_LIMIT_BYTES_DFLT ((uint64_t) 0)  // 명시적 limit 미설정
-#define ZLINK_CTX_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES_DFLT ((uint64_t) 0)  // runtime hint 없음
 #define ZLINK_CTX_AUTO_HWM_CORE_BUDGET_BYTES_DFLT ((uint64_t) 0)  // 수동 Core budget 미설정
 ```
 

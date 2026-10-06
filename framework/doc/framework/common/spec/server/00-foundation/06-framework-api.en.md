@@ -104,8 +104,7 @@ Every
 delivered the same way.
 
 Without an
-explicit value, a managed binding forwards the raw runtime memory hint from the GC, JVM, or
-V8 to Core, and a native binding uses Core's container/process/OS detection.
+explicit value, every binding uses Core's container/OS detection.
 
 Framework and
 the binding don't apply a profile ratio or divide the budget by connection count.

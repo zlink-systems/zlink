@@ -112,7 +112,6 @@ Set/get means `zlink_ctx_set`/`zlink_ctx_get`; set_data/get_data means the corre
 | `CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS` | `14`; `int`, set/get | `3000` ms | Stores the value and schedules recalculation with that debounce |
 | `CTX_OPT_AUTO_HWM_PROFILE` | `17`; `int`, set/get | `BALANCED` | Stores the value and schedules recalculation, including existing sockets |
 | `CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES` | `19`; `uint64_t`, set_data/get_data | `0` | Stores the value and schedules recalculation, including existing sockets |
-| `CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES` | `20`; `uint64_t`, set_data/get_data | `0` | Stores the value and schedules recalculation, including existing sockets |
 | `CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES` | `21`; `uint64_t`, set_data/get_data | `0` | Stores the value and schedules recalculation, including existing sockets |
 
 ```c
@@ -128,8 +127,8 @@ typedef enum zlink_auto_hwm_profile_t
 The exact memory share, fixed cap, and per-role bounds of each profile are
 owned by [Auto HWM §2](systems/06-auto-hwm.en.md#2-auto-hwm-budget-calculation).
 
-What budget the three Auto HWM byte options (`MEMORY_LIMIT_BYTES`,
-`RUNTIME_MEMORY_LIMIT_BYTES`, and `CORE_BUDGET_BYTES`) compute and how it is
+What budget the two Auto HWM byte options (`MEMORY_LIMIT_BYTES` and
+`CORE_BUDGET_BYTES`) compute and how it is
 used in admission is owned by [Auto HWM](systems/06-auto-hwm.en.md).
 
 ### 4.1 Default values
@@ -143,7 +142,6 @@ used in admission is owned by [Auto HWM](systems/06-auto-hwm.en.md).
 #define ZLINK_CTX_AUTO_HWM_RECALC_DEBOUNCE_MS_DFLT 3000  // Default recalculation debounce (ms)
 #define ZLINK_CTX_AUTO_HWM_PROFILE_DFLT ZLINK_AUTO_HWM_PROFILE_BALANCED  // Default profile
 #define ZLINK_CTX_AUTO_HWM_MEMORY_LIMIT_BYTES_DFLT ((uint64_t) 0)  // No explicit limit set
-#define ZLINK_CTX_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES_DFLT ((uint64_t) 0)  // No runtime hint
 #define ZLINK_CTX_AUTO_HWM_CORE_BUDGET_BYTES_DFLT ((uint64_t) 0)  // No manual Core budget set
 ```
 

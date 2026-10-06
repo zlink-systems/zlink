@@ -711,10 +711,8 @@ public class CommonSocketOptions {
 }
 ```
 
-Input precedence is manual Core budget, explicit memory limit, maximum JVM heap
-hint, then Core fallback. Setting either of the first two values disables
-automatic JVM-hint detection. The binding does not combine the hint with Core's
-hard limit. If an explicit input exceeds a finite hard limit Core detected, the
+Input precedence is manual Core budget, explicit memory limit, then Core
+fallback. If an explicit input exceeds a finite hard limit Core detected, the
 binding preserves the existing configuration exception corresponding to
 `EINVAL` and does not clamp the value.
 
@@ -735,7 +733,7 @@ or alias.
 - If `abiVersion()` or `structSize()` is incompatible with the [current Core monitor layout](../../../../core/doc/spec/core/06-monitoring.en.md#61-abi-version-and-layout),
   raise `UnsupportedOperationException`.
 
-`CoreHwmBudgetSnapshot` projects ABI version/size, configured/runtime/resolved
+`CoreHwmBudgetSnapshot` projects ABI version/size, configured/resolved
 memory limits, configured/effective budgets, planned/applied/manual-reserved
 HWM, Core-queue/application/current/peak/provisional accounted bytes,
 completion current/peak/pending and total-messaging values, monitor/instance
