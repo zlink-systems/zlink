@@ -806,7 +806,7 @@ bool verify_suspended_lifecycle_cancellation_releases_fifo ()
             return false;
         }
     }
-    const auto outcome = queue.cancel_submission (submission.value ());
+    const auto outcome = queue.cancel_submission (submission.value ()).result ().value ();
     queue.drain ();
     if (outcome != serial_cancel_submission_outcome_t::active_cancel_requested
         || cancelled.load () != 1 || later_runs.load () != 1 || queue.pending_count () != 0)
@@ -1841,8 +1841,12 @@ bool verify_spot_wide_consumer_waits_for_shared_gate ()
     const auto observed = marked && marker.wait_for ();
     std::size_t waiting_messages = 0;
     for (const auto *actor : {"actor-a", "actor-b"})
-        waiting_messages +=
-          fixture.serial.actor_executor (actor)->queue ()->pending_messages ().size ();
+        waiting_messages += fixture.serial.actor_executor (actor)
+                              ->queue ()
+                              ->pending_messages ()
+                              .result ()
+                              .value ()
+                              .size ();
     bool retained = waiting_messages == 2;
     const auto started_while_held = started.load (std::memory_order_acquire);
     owner.release ();
@@ -1850,7 +1854,7 @@ bool verify_spot_wide_consumer_waits_for_shared_gate ()
     for (const auto *actor : {"actor-a", "actor-b"}) {
         const auto queue = fixture.serial.actor_executor (actor)->queue ();
         queue->drain ();
-        retained = queue->pending_messages ().empty () && retained;
+        retained = queue->pending_messages ().result ().value ().empty () && retained;
     }
     const auto started_after_release = started.load (std::memory_order_acquire);
     std::cout << "SpotWide consumer probe: accepted=" << accepted << " marker=" << observed
@@ -1884,12 +1888,67 @@ bool verify_spot_wide_cancel_removes_unclaimed_actor_head ()
         owner.release ();
         return false;
     }
-    const auto outcome = submitted.value ().queue->cancel_submission (submitted.value ().id);
+    const auto outcome =
+      submitted.value ().queue->cancel_submission (submitted.value ().id).result ().value ();
     owner.release ();
     fixture.spot_queue->drain ();
     submitted.value ().queue->drain ();
     return outcome == serial_cancel_submission_outcome_t::queued_cancelled && started.load () == 0
            && cancelled.load () == 1 && submitted.value ().queue->pending_count () == 0;
+}
+
+bool verify_spot_wide_control_returns_without_waiting_for_gate ()
+{
+    using namespace zlink::framework::runtime;
+    serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered = false;
+    bool release = false;
+    if (!fixture.spot_queue->try_post ("held-physical-gate", [&] {
+            std::unique_lock lock (mutex);
+            entered = true;
+            changed.notify_all ();
+            changed.wait (lock, [&] { return release; });
+        }))
+        return false;
+    {
+        std::unique_lock lock (mutex);
+        if (!changed.wait_for (lock, std::chrono::seconds (1), [&] { return entered; })) {
+            release = true;
+            changed.notify_all ();
+            return false;
+        }
+    }
+    auto actor = fixture.serial.actor_executor ("actor-a");
+    auto submitted = actor->queue ()->try_post_cancellable_async (
+      "control-cancel-target", [] (auto complete) { complete ([] {}); }, [] {});
+    std::atomic_bool returned{false};
+    std::atomic_bool cancelled{false};
+    std::atomic_bool queried{false};
+    std::thread caller ([&] {
+        auto outcome = actor->queue ()->cancel_submission (submitted.value ());
+        auto pending = actor->queue ()->pending_messages ();
+        returned.store (true);
+        [&]<typename T> (T value) {
+            if constexpr (requires { value.result (); })
+                cancelled.store (value.result ().value ()
+                                 == serial_cancel_submission_outcome_t::queued_cancelled);
+            else
+                cancelled.store (value == serial_cancel_submission_outcome_t::queued_cancelled);
+        }(std::move (outcome));
+        const auto messages = pending.result ();
+        queried.store (messages && messages.value ().empty ());
+    });
+    const bool nonblocking = wait_until ([&] { return returned.load (); });
+    {
+        std::lock_guard lock (mutex);
+        release = true;
+    }
+    changed.notify_all ();
+    caller.join ();
+    std::cout << "control returned while physical gate held=" << nonblocking << '\n';
+    return nonblocking && cancelled.load () && queried.load ();
 }
 
 bool verify_spot_wide_stop_settles_queued_actor_rejection ()
@@ -1939,7 +1998,7 @@ bool verify_spot_wide_rejects_actor_when_gate_scheduler_stops ()
     actor->attach_spot_gate (gate);
     const bool accepted =
       actor->try_post_async ("stopped-before-claim", [] (auto complete) { complete ([] {}); });
-    const auto outcome = actor->cancel_submission (1);
+    const auto outcome = actor->cancel_submission (1).result ().value ();
     actor->cancel_pending ();
     gate->cancel_pending ();
     actor->drain ();
@@ -2688,8 +2747,9 @@ bool verify_cancellable_serial_submission_lifecycle ()
           },
           [&] { ++cancelled; });
         const bool accepted = submission.has_value ();
-        const auto outcome = accepted ? queue.cancel_submission (submission.value ())
-                                      : serial_cancel_submission_outcome_t::already_terminal;
+        const auto outcome = accepted
+                               ? queue.cancel_submission (submission.value ()).result ().value ()
+                               : serial_cancel_submission_outcome_t::already_terminal;
         const bool replacement_accepted =
           queue.try_post ("replacement-after-unlink", [&] { ++replacement_runs; });
 
@@ -2755,8 +2815,9 @@ bool verify_cancellable_serial_submission_lifecycle ()
             return false;
         }
 
-        const auto first_cancel = queue.cancel_submission (submission.value ());
-        const auto repeated_cancel = queue.cancel_submission (submission.value ());
+        const auto first_cancel = queue.cancel_submission (submission.value ()).result ().value ();
+        const auto repeated_cancel =
+          queue.cancel_submission (submission.value ()).result ().value ();
         bool follower_ran_before_ack = false;
         {
             std::unique_lock lock (gate);
@@ -2773,7 +2834,7 @@ bool verify_cancellable_serial_submission_lifecycle ()
         if (first_cancel != serial_cancel_submission_outcome_t::active_cancel_requested
             || repeated_cancel != serial_cancel_submission_outcome_t::active_cancel_requested
             || follower_ran_before_ack || !follower_ran || stop_requests.load () != 1
-            || queue.cancel_submission (submission.value ())
+            || queue.cancel_submission (submission.value ()).result ().value ()
                  != serial_cancel_submission_outcome_t::already_terminal) {
             return false;
         }
@@ -2876,7 +2937,7 @@ bool verify_cancellable_serial_submission_lifecycle ()
             return false;
         }
         queue.cancel_pending ();
-        const auto terminal = queue.cancel_submission (submission.value ());
+        const auto terminal = queue.cancel_submission (submission.value ()).result ().value ();
         const bool rejected_after_close = !queue.try_post ("closed", [] {});
         {
             std::lock_guard lock (worker_gate);
@@ -7596,6 +7657,9 @@ int main (int argc, char **argv)
         std::cout << "SpotWide consumer waits for shared gate=" << passed << '\n';
         return passed ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+    if (argc == 2 && std::string_view (argv[1]) == "--spotwide-control-nonblocking")
+        return verify_spot_wide_control_returns_without_waiting_for_gate () ? EXIT_SUCCESS
+                                                                            : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--spotwide-cancel")
         return verify_spot_wide_cancel_removes_unclaimed_actor_head () ? EXIT_SUCCESS
                                                                        : EXIT_FAILURE;
@@ -9045,6 +9109,9 @@ int main (int argc, char **argv)
         return EXIT_FAILURE;
     }
     if (!verify_spot_wide_terminal_retains_gate_lifetime ()) {
+        return EXIT_FAILURE;
+    }
+    if (!verify_spot_wide_control_returns_without_waiting_for_gate ()) {
         return EXIT_FAILURE;
     }
     return 0;

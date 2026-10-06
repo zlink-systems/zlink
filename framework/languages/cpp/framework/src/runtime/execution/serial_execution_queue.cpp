@@ -8,7 +8,6 @@
 #include <stdexcept>
 #include <utility>
 #include <memory>
-#include <future>
 #include <vector>
 
 namespace zlink::framework::runtime
@@ -367,37 +366,47 @@ class serial_turn_handle_impl_t final
     {
         return [self = shared_from_this ()] (std::function<void ()> work) mutable {
             auto continuation = std::move (work);
-            if (self->_lane == serial_work_lane_t::lifecycle
-                && self->_queue.try_resume_suspended (self, continuation))
-                return;
-            if (self->_queue.try_post_continuation (
-                  self->_name + "-await-resume",
-                  [work = continuation] (auto complete) mutable {
-                      work ();
-                      complete ([] {});
-                  },
-                  self->_lane, self->chain ())) {
-                return;
-            }
-            // The continuation cannot reach the queue: the handler ends here.
-            self->end_chain (false);
-            if (continuation) {
-                auto continuation_state =
-                  std::make_shared<std::function<void ()>> (std::move (continuation));
-                if (!self->_queue._executor.try_submit_internal (
-                      [work = continuation_state] () mutable {
-                          detail::set_serial_resume_failure (
-                            framework_error_kind_t::shutting_down,
-                            "serial execution queue executor is stopping");
-                          (*work) ();
-                          (void) detail::take_serial_resume_failure ();
-                      })) {
-                    detail::set_serial_resume_failure (
-                      framework_error_kind_t::shutting_down,
-                      "serial execution queue executor is stopping");
-                    (*continuation_state) ();
-                    (void) detail::take_serial_resume_failure ();
+            auto resume = [self, continuation] (const result_t<bool> &resumed) mutable {
+                if (resumed && resumed.value ())
+                    return;
+                if (self->_queue.try_post_continuation (
+                      self->_name + "-await-resume",
+                      [work = continuation] (auto complete) mutable {
+                          work ();
+                          complete ([] {});
+                      },
+                      self->_lane, self->chain ())) {
+                    return;
                 }
+                // The continuation cannot reach the queue: the handler ends here.
+                self->end_chain (false);
+                if (continuation) {
+                    auto continuation_state =
+                      std::make_shared<std::function<void ()>> (std::move (continuation));
+                    if (!self->_queue._executor.try_submit_internal (
+                          [work = continuation_state] () mutable {
+                              detail::set_serial_resume_failure (
+                                framework_error_kind_t::shutting_down,
+                                "serial execution queue executor is stopping");
+                              (*work) ();
+                              (void) detail::take_serial_resume_failure ();
+                          })) {
+                        detail::set_serial_resume_failure (
+                          framework_error_kind_t::shutting_down,
+                          "serial execution queue executor is stopping");
+                        (*continuation_state) ();
+                        (void) detail::take_serial_resume_failure ();
+                    }
+                }
+            };
+            if (self->_lane == serial_work_lane_t::lifecycle) {
+                auto pending = std::make_shared<task_t<bool>> (
+                  self->_queue.try_resume_suspended (self, continuation));
+                detail::observe_task_terminal (
+                  *pending, [pending, resume = std::move (resume)] (
+                              const result_t<bool> &result) mutable { resume (result); });
+            } else {
+                resume (result_t<bool>::success (false));
             }
         };
     }
@@ -500,6 +509,13 @@ class serial_turn_handle_impl_t final
      * lane position a Yield kept. */
     void end_chain (bool succeeded) noexcept
     {
+        _queue.notify_control ("handler-terminal", [self = shared_from_this (), succeeded] {
+            self->end_chain_owned (succeeded);
+        });
+    }
+
+    void end_chain_owned (bool succeeded) noexcept
+    {
         std::shared_ptr<serial_turn_chain_t> owner;
         {
             std::lock_guard lock (_mutex);
@@ -507,13 +523,20 @@ class serial_turn_handle_impl_t final
         }
         if (!owner)
             return;
-        settle (succeeded);
-        _queue.release_lifecycle_hold (owner.get ());
+        settle_owned (succeeded);
+        _queue.release_lifecycle_hold (std::move (owner));
     }
 
     /* Fill each accepted slot with its work, or drop it and run the
      * cancellation. A closed queue admits no activation. */
     void settle (bool succeeded) noexcept
+    {
+        _queue.notify_control ("deferred-settle", [self = shared_from_this (), succeeded] {
+            self->settle_owned (succeeded);
+        });
+    }
+
+    void settle_owned (bool succeeded) noexcept
     {
         std::shared_ptr<serial_turn_chain_t> owner;
         {
@@ -706,25 +729,37 @@ result_t<serial_submission_id_t> serial_execution_queue_t::try_post_cancellable_
     return result_t<serial_submission_id_t>::success (submission_id);
 }
 
+task_t<serial_cancel_submission_outcome_t>
+serial_execution_queue_t::cancel_submission (serial_submission_id_t submission_id)
+{
+    auto pending = std::make_shared<task_t<serial_cancel_submission_outcome_t>> (
+      control_async<serial_cancel_submission_outcome_t> ([this, submission_id] {
+          if (owns_shared_gate ())
+              import_publications ();
+          return cancel_submission_owned (submission_id);
+      }));
+    auto completion =
+      std::make_shared<task_completion_source_t<serial_cancel_submission_outcome_t>> ();
+    auto result = completion->task ();
+    detail::observe_task_terminal (
+      *pending, [this, retained = weak_from_this ().lock (), pending,
+                 completion] (const result_t<serial_cancel_submission_outcome_t> &outcome) {
+          if (outcome) {
+              completion->complete (outcome);
+          } else {
+              report_deferred_error ("cancel-submission", outcome.exception ());
+              completion->complete (result_t<serial_cancel_submission_outcome_t>::success (
+                serial_cancel_submission_outcome_t::already_terminal));
+          }
+      });
+    return result;
+}
+
 serial_cancel_submission_outcome_t
-serial_execution_queue_t::cancel_submission (serial_submission_id_t submission_id) noexcept
+serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submission_id) noexcept
 {
     if (submission_id == 0)
         return serial_cancel_submission_outcome_t::already_terminal;
-    if (owns_shared_gate () && current_shared_gate != (_spot_gate ? _spot_gate.get () : this)) {
-        auto outcome = serial_cancel_submission_outcome_t::already_terminal;
-        try {
-            wait_for_control ([this, submission_id, &outcome] {
-                import_publications ();
-                outcome = cancel_submission (submission_id);
-            });
-        }
-        catch (const std::runtime_error &) {
-            report_deferred_error ("cancel-submission", std::current_exception ());
-        }
-        return outcome;
-    }
-
     std::optional<work_item_t> cancelled_item;
     std::function<void ()> active_cancel;
     serial_cancel_submission_outcome_t outcome =
@@ -890,11 +925,13 @@ bool serial_execution_queue_t::try_post_continuation (std::string name,
 
 void serial_execution_queue_t::hold_lifecycle (std::shared_ptr<serial_turn_chain_t> chain)
 {
-    if (owns_shared_gate () && current_shared_gate != (_spot_gate ? _spot_gate.get () : this)) {
-        wait_for_control (
-          [this, chain = std::move (chain)] () mutable { hold_lifecycle (std::move (chain)); });
-        return;
-    }
+    notify_control ("hold-lifecycle", [this, chain = std::move (chain)] () mutable {
+        hold_lifecycle_owned (std::move (chain));
+    });
+}
+
+void serial_execution_queue_t::hold_lifecycle_owned (std::shared_ptr<serial_turn_chain_t> chain)
+{
     std::unique_lock lock (_mutex, std::defer_lock);
     if (!owns_shared_gate ())
         lock.lock ();
@@ -903,12 +940,15 @@ void serial_execution_queue_t::hold_lifecycle (std::shared_ptr<serial_turn_chain
         _spot_gate->connect_actor_head (shared_from_this ());
 }
 
-void serial_execution_queue_t::release_lifecycle_hold (const serial_turn_chain_t *chain)
+void serial_execution_queue_t::release_lifecycle_hold (std::shared_ptr<serial_turn_chain_t> chain)
 {
-    if (owns_shared_gate () && current_shared_gate != (_spot_gate ? _spot_gate.get () : this)) {
-        wait_for_control ([this, chain] { release_lifecycle_hold (chain); });
-        return;
-    }
+    notify_control ("release-lifecycle", [this, chain = std::move (chain)] {
+        release_lifecycle_hold_owned (chain.get ());
+    });
+}
+
+void serial_execution_queue_t::release_lifecycle_hold_owned (const serial_turn_chain_t *chain)
+{
     std::unique_lock lock (_mutex, std::defer_lock);
     if (!owns_shared_gate ())
         lock.lock ();
@@ -920,10 +960,11 @@ void serial_execution_queue_t::release_lifecycle_hold (const serial_turn_chain_t
 
 void serial_execution_queue_t::schedule_after_settle ()
 {
-    if (owns_shared_gate () && current_shared_gate != (_spot_gate ? _spot_gate.get () : this)) {
-        wait_for_control ([this] { schedule_after_settle (); });
-        return;
-    }
+    notify_control ("settle", [this] { schedule_after_settle_owned (); });
+}
+
+void serial_execution_queue_t::schedule_after_settle_owned ()
+{
     std::unique_lock lock (_mutex, std::defer_lock);
     if (!owns_shared_gate ())
         lock.lock ();
@@ -1056,13 +1097,14 @@ void serial_execution_queue_t::drain ()
     });
 }
 
-std::shared_ptr<const void> serial_execution_queue_t::first_pending_message_or_close ()
+task_t<std::shared_ptr<const void>> serial_execution_queue_t::first_pending_message_or_close ()
 {
-    if (owns_shared_gate () && current_shared_gate != (_spot_gate ? _spot_gate.get () : this)) {
-        std::shared_ptr<const void> result;
-        wait_for_control ([this, &result] { result = first_pending_message_or_close (); });
-        return result;
-    }
+    return control_async<std::shared_ptr<const void>> (
+      [this] { return first_pending_message_or_close_owned (); });
+}
+
+std::shared_ptr<const void> serial_execution_queue_t::first_pending_message_or_close_owned ()
+{
     if (owns_shared_gate ()) {
         for (;;) {
             publication_node_t *cut;
@@ -1089,14 +1131,15 @@ std::shared_ptr<const void> serial_execution_queue_t::first_pending_message_or_c
     return {};
 }
 
-std::vector<std::shared_ptr<const void>> serial_execution_queue_t::pending_messages () const
+task_t<std::vector<std::shared_ptr<const void>>> serial_execution_queue_t::pending_messages () const
 {
-    if (owns_shared_gate () && current_shared_gate != (_spot_gate ? _spot_gate.get () : this)) {
-        std::vector<std::shared_ptr<const void>> result;
-        const_cast<serial_execution_queue_t *> (this)->wait_for_control (
-          [this, &result] { result = pending_messages (); });
-        return result;
-    }
+    return const_cast<serial_execution_queue_t *> (this)
+      ->control_async<std::vector<std::shared_ptr<const void>>> (
+        [this] { return pending_messages_owned (); });
+}
+
+std::vector<std::shared_ptr<const void>> serial_execution_queue_t::pending_messages_owned () const
+{
     publication_node_t *cut = nullptr;
     if (owns_shared_gate ()) {
         std::lock_guard producer (_mutex);
@@ -1132,15 +1175,11 @@ void serial_execution_queue_t::close_locked ()
 
 void serial_execution_queue_t::cancel_waits () noexcept
 {
-    if (owns_shared_gate () && current_shared_gate != (_spot_gate ? _spot_gate.get () : this)) {
-        try {
-            wait_for_control ([this] { cancel_waits (); });
-        }
-        catch (const std::runtime_error &) {
-            report_deferred_error ("cancel-waits", std::current_exception ());
-        }
-        return;
-    }
+    notify_control ("cancel-waits", [this] { cancel_waits_owned (); });
+}
+
+void serial_execution_queue_t::cancel_waits_owned () noexcept
+{
     std::vector<std::shared_ptr<detail::serial_turn_t>> turns;
     {
         std::unique_lock lock (_mutex, std::defer_lock);
@@ -1158,19 +1197,16 @@ void serial_execution_queue_t::cancel_waits () noexcept
 
 void serial_execution_queue_t::cancel_pending () noexcept
 {
-    if (owns_shared_gate () && current_shared_gate != (_spot_gate ? _spot_gate.get () : this)) {
-        close ();
-        try {
-            wait_for_control ([this] {
-                import_publications ();
-                cancel_pending ();
-            });
-        }
-        catch (const std::runtime_error &) {
-            report_deferred_error ("cancel-pending", std::current_exception ());
-        }
-        return;
-    }
+    close ();
+    notify_control ("cancel-pending", [this] {
+        if (owns_shared_gate ())
+            import_publications ();
+        cancel_pending_owned ();
+    });
+}
+
+void serial_execution_queue_t::cancel_pending_owned () noexcept
+{
     std::vector<work_item_t> cancelled_items;
     std::vector<std::function<void ()>> active_cancellations;
     {
@@ -1346,6 +1382,10 @@ void serial_execution_queue_t::import_publications_until (publication_node_t *cu
 
 bool serial_execution_queue_t::submit_control (std::function<void ()> control)
 {
+    if (!owns_shared_gate ()) {
+        control ();
+        return true;
+    }
     auto *gate = _spot_gate ? _spot_gate.get () : this;
     if (current_shared_gate == gate) {
         control ();
@@ -1359,18 +1399,20 @@ bool serial_execution_queue_t::submit_control (std::function<void ()> control)
     return publish_locked (std::move (node));
 }
 
-void serial_execution_queue_t::wait_for_control (std::function<void ()> control)
+void serial_execution_queue_t::notify_control (std::string name, std::function<void ()> control)
 {
-    auto *gate = _spot_gate ? _spot_gate.get () : this;
-    if (current_shared_gate == gate) {
-        control ();
-        return;
-    }
-    auto task = std::make_shared<std::packaged_task<void ()>> (std::move (control));
-    auto result = task->get_future ();
-    if (!gate->submit_control ([task] { (*task) (); }))
-        throw std::runtime_error ("shared Spot gate executor is stopping");
-    result.get ();
+    if (!submit_control (
+          [this, retained = weak_from_this ().lock (), name, control = std::move (control)] {
+              try {
+                  control ();
+              }
+              catch (const std::exception &) {
+                  report_deferred_error (name, std::current_exception ());
+              }
+          }))
+        report_deferred_error (
+          name, std::make_exception_ptr (framework_exception_t (
+                  framework_error_kind_t::shutting_down, "shared Spot gate executor is stopping")));
 }
 
 void serial_execution_queue_t::run_shared_gate ()
@@ -1819,16 +1861,17 @@ void serial_execution_queue_t::suspend_lifecycle (work_item_t item)
     (void) schedule_drain_locked ();
 }
 
-bool serial_execution_queue_t::try_resume_suspended (
+task_t<bool> serial_execution_queue_t::try_resume_suspended (
   const std::shared_ptr<serial_turn_handle_impl_t> &turn, std::function<void ()> work)
 {
-    if (owns_shared_gate () && current_shared_gate != (_spot_gate ? _spot_gate.get () : this)) {
-        bool resumed = false;
-        wait_for_control ([this, turn, &work, &resumed] {
-            resumed = try_resume_suspended (turn, std::move (work));
-        });
-        return resumed;
-    }
+    return control_async<bool> ([this, turn, work = std::move (work)] () mutable {
+        return resume_suspended_owned (turn, std::move (work));
+    });
+}
+
+bool serial_execution_queue_t::resume_suspended_owned (
+  const std::shared_ptr<serial_turn_handle_impl_t> &turn, std::function<void ()> work)
+{
     std::unique_lock lock (_mutex, std::defer_lock);
     if (!owns_shared_gate ())
         lock.lock ();

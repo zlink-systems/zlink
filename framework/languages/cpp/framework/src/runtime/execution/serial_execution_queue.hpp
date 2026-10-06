@@ -17,6 +17,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -188,8 +189,8 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                                 async_work_t work,
                                 std::function<void ()> cancel,
                                 serial_work_options_t options = {});
-    serial_cancel_submission_outcome_t
-    cancel_submission (serial_submission_id_t submission_id) noexcept;
+    task_t<serial_cancel_submission_outcome_t>
+    cancel_submission (serial_submission_id_t submission_id);
     bool post_async_wait (std::string name,
                           async_work_t work,
                           std::function<bool ()> stop_requested = {});
@@ -219,8 +220,8 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     /* Spot address messaging §7 step 3 under this queue's mutex: the first
      * retained message waiting behind a Close, or none, in which case the
      * queue closes in the same decision and refuses later work. */
-    std::shared_ptr<const void> first_pending_message_or_close ();
-    std::vector<std::shared_ptr<const void>> pending_messages () const;
+    task_t<std::shared_ptr<const void>> first_pending_message_or_close ();
+    task_t<std::vector<std::shared_ptr<const void>>> pending_messages () const;
     bool allows_yield () const noexcept { return _lane_policy.allows_turn_yield (); }
     // Installs the SpotWide owner before an Actor mailbox accepts work.
     void attach_spot_gate (std::shared_ptr<serial_execution_queue_t> gate);
@@ -284,7 +285,44 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     void run_shared_gate ();
     void release_shared_gate ();
     bool submit_control (std::function<void ()> control);
-    void wait_for_control (std::function<void ()> control);
+    template <typename T, typename TControl> task_t<T> control_async (TControl control)
+    {
+        auto completion = std::make_shared<task_completion_source_t<T>> ();
+        auto task = completion->task ();
+        if (!submit_control ([retained = weak_from_this ().lock (), completion,
+                              control = std::move (control)] () mutable {
+                try {
+                    if constexpr (std::is_void_v<T>) {
+                        control ();
+                        completion->complete (result_t<void>::success ());
+                    } else {
+                        completion->complete (result_t<T>::success (control ()));
+                    }
+                }
+                catch (const framework_exception_t &error) {
+                    completion->complete (detail::result_access_t::failure<T> (error));
+                }
+                catch (const std::exception &error) {
+                    completion->complete (result_t<T>::failure (
+                      framework_error_kind_t::internal_failure, error.what ()));
+                }
+            }))
+            completion->complete (result_t<T>::failure (framework_error_kind_t::shutting_down,
+                                                        "shared Spot gate executor is stopping"));
+        return task;
+    }
+    void notify_control (std::string name, std::function<void ()> control);
+    serial_cancel_submission_outcome_t
+    cancel_submission_owned (serial_submission_id_t submission_id) noexcept;
+    std::shared_ptr<const void> first_pending_message_or_close_owned ();
+    std::vector<std::shared_ptr<const void>> pending_messages_owned () const;
+    void cancel_waits_owned () noexcept;
+    void cancel_pending_owned () noexcept;
+    void hold_lifecycle_owned (std::shared_ptr<serial_turn_chain_t> chain);
+    void release_lifecycle_hold_owned (const serial_turn_chain_t *chain);
+    void schedule_after_settle_owned ();
+    bool resume_suspended_owned (const std::shared_ptr<serial_turn_handle_impl_t> &turn,
+                                 std::function<void ()> work);
     void connect_actor_head (const std::shared_ptr<serial_execution_queue_t> &actor);
     void disconnect_actor_head (const std::shared_ptr<serial_execution_queue_t> &actor);
     void execute_actor_head (work_item_t spot_item);
@@ -300,8 +338,8 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                         const std::shared_ptr<serial_turn_handle_impl_t> &turn,
                         bool allow_inline_claim);
     void suspend_lifecycle (work_item_t item);
-    bool try_resume_suspended (const std::shared_ptr<serial_turn_handle_impl_t> &turn,
-                               std::function<void ()> work);
+    task_t<bool> try_resume_suspended (const std::shared_ptr<serial_turn_handle_impl_t> &turn,
+                                       std::function<void ()> work);
     lane_state_t &lane_locked (serial_work_lane_t lane) noexcept;
     const lane_state_t &lane_locked (serial_work_lane_t lane) const noexcept;
     bool enqueue_locked (std::string name,
@@ -322,7 +360,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                                 serial_work_lane_t lane,
                                 std::shared_ptr<serial_turn_chain_t> chain);
     void hold_lifecycle (std::shared_ptr<serial_turn_chain_t> chain);
-    void release_lifecycle_hold (const serial_turn_chain_t *chain);
+    void release_lifecycle_hold (std::shared_ptr<serial_turn_chain_t> chain);
     void schedule_after_settle ();
     std::shared_ptr<serial_turn_handle_impl_t>
     create_turn (const std::string &name, serial_work_lane_t lane, item_origin_t origin);
