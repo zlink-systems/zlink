@@ -690,15 +690,17 @@ final class EntrySpotActorDispatchTests {
                             .toCompletableFuture()
                             .join()
                             .trySealRelocation()
+                            .toCompletableFuture()
+                            .join()
                             .orElseThrow();
             var commit =
                     actors.retainActorRelocationCommitAsync("actor-a", seal)
                             .toCompletableFuture()
                             .join()
                             .orElseThrow();
-            var cut = commit.cut();
-            while (!commit.tryEstablishAndFinishCapture(cut)) {
-                cut = commit.cut();
+            var cut = commit.cut().toCompletableFuture().join();
+            while (!commit.tryEstablishAndFinishCapture(cut).toCompletableFuture().join()) {
+                cut = commit.cut().toCompletableFuture().join();
             }
 
             AtomicInteger redirects = new AtomicInteger();
@@ -743,15 +745,17 @@ final class EntrySpotActorDispatchTests {
                             .toCompletableFuture()
                             .join()
                             .trySealRelocation()
+                            .toCompletableFuture()
+                            .join()
                             .orElseThrow();
             var commit =
                     actors.retainActorRelocationCommitAsync("actor-a", seal)
                             .toCompletableFuture()
                             .join()
                             .orElseThrow();
-            var cut = commit.cut();
-            while (!commit.tryEstablishAndFinishCapture(cut)) {
-                cut = commit.cut();
+            var cut = commit.cut().toCompletableFuture().join();
+            while (!commit.tryEstablishAndFinishCapture(cut).toCompletableFuture().join()) {
+                cut = commit.cut().toCompletableFuture().join();
             }
 
             AtomicInteger redirects = new AtomicInteger();
@@ -791,15 +795,17 @@ final class EntrySpotActorDispatchTests {
                             .toCompletableFuture()
                             .join()
                             .trySealRelocation()
+                            .toCompletableFuture()
+                            .join()
                             .orElseThrow();
             var commit =
                     actors.retainActorRelocationCommitAsync("actor-a", seal)
                             .toCompletableFuture()
                             .join()
                             .orElseThrow();
-            var cut = commit.cut();
-            while (!commit.tryEstablishAndFinishCapture(cut)) {
-                cut = commit.cut();
+            var cut = commit.cut().toCompletableFuture().join();
+            while (!commit.tryEstablishAndFinishCapture(cut).toCompletableFuture().join()) {
+                cut = commit.cut().toCompletableFuture().join();
             }
 
             //  The mesh ingress installs no re-route hook for a shape the

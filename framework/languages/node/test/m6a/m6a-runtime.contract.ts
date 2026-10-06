@@ -554,7 +554,8 @@ test('object placement checks capacity before applying a zero placement weight',
     placementWeight: 0,
     protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY, 'object-type:quest']
   });
-  assert.equal(filtered.objectPlacementStatus('quest'), 'unsupported');
+  // Spot address §4.1 steps 5–7: weight does not remove the registered type.
+  assert.equal(filtered.objectPlacementStatus('quest'), 'unavailable');
 });
 
 test('topology admission fences expected identity, immutable revisions, duplicate pipes, and late disconnect', () => {

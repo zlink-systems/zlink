@@ -134,7 +134,10 @@ export class ZLinkSpotSerialExecutor {
     this.throwIfClosing();
     let executor = this.actorExecutors.get(actorId);
     if (executor === undefined) {
-      executor = new ZLinkActorSerialExecutor(actorId, this.sourceSpotId, this.actorOptions);
+      executor =
+        this.executionMode === ZLinkUserSpotExecutionMode.SpotWide
+          ? this.spotSerial.createActorExecutor(actorId, this.sourceSpotId, this.actorOptions)
+          : new ZLinkActorSerialExecutor(actorId, this.sourceSpotId, this.actorOptions);
       this.actorExecutors.set(actorId, executor);
     }
     return executor;

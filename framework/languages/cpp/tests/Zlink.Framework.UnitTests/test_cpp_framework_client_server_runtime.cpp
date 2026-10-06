@@ -595,6 +595,36 @@ void verify_invalid_metadata_is_a_protocol_error ()
 // #1383: one server receive turn reads the queued records until the Application Job Queue
 // supply or the receive batch budget stops it. Reading one record per turn made N concurrent
 // requests wait N worker turns. The turn starts after the server socket reports POLLIN.
+void verify_empty_server_receive_turn_has_no_progress ()
+{
+    using zlink::framework::runtime::application_job_queue_configuration_t;
+    using zlink::framework::runtime::application_job_queue_t;
+    protocol::client_server_server_admission_t descriptor{
+      "empty-turn",
+      bytes ("empty-turn-server"),
+      1,
+      1,
+      100,
+      zlink::framework::runtime::mesh::service_node_state_t::serving,
+      "default",
+      16 * 1024 * 1024,
+      {}};
+    client_server::raw_client_server_server_options_t options{descriptor};
+    options.runtime_failures =
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+    auto server = std::make_shared<client_server::raw_client_server_server_t> (
+      options, std::make_shared<zlink::context_t> ());
+    auto jobs = std::make_shared<application_job_queue_t> (application_job_queue_configuration_t{});
+    auto permit = jobs->try_reserve_supply ();
+    assert (permit);
+    assert (!client_server::pump_server_transport (
+               server, std::chrono::steady_clock::now (), jobs,
+               std::make_shared<application_job_queue_t::permit_t> (std::move (*permit)))
+               .result ()
+               .value ());
+    assert (jobs->snapshot ().permits_in_use == 0);
+    server->close ();
+}
 std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
                                          std::size_t budget_messages,
                                          std::size_t queued_records)
@@ -677,11 +707,13 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
     receive_batch_budget_t budget;
     budget.max_messages = budget_messages;
     budget.max_elapsed = std::chrono::hours (1);
-    client_server::pump_server_transport (
-      server, std::chrono::steady_clock::now (), jobs,
-      std::make_shared<application_job_queue_t::permit_t> (std::move (*first)), budget)
-      .result ()
-      .value ();
+    const auto progressed =
+      client_server::pump_server_transport (
+        server, std::chrono::steady_clock::now (), jobs,
+        std::make_shared<application_job_queue_t::permit_t> (std::move (*first)), budget)
+        .result ()
+        .value ();
+    assert (progressed);
     const auto records =
       server->mailbox ().pending_messages (service_mailbox_domain_t::application);
     assert (jobs->snapshot ().queued_application_jobs == records);
@@ -1646,6 +1678,7 @@ int main ()
     verify_client_server_send_does_not_wait_on_infrastructure_worker ();
     verify_client_server_owner_gate_and_budget ();
     verify_client_server_stop_drains_budget_remainder ();
+    verify_empty_server_receive_turn_has_no_progress ();
     verify_server_receive_turn_reads_queued_records ();
     verify_client_server_readiness_counts_local_ready_servers ();
     verify_network_defaults_are_deferred_until_apply ();
