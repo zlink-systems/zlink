@@ -420,7 +420,8 @@ operation을 따라 짓는다. `router_socket.ts`, `poller.ts`, `timer.ts`를 �
 인터페이스는 동작을 정의하고, 생성은 패키지 루트 팩토리와 공개 계약 메서드가
 제공한다.
 
-- `createContext()`는 런타임 컨텍스트 구현을 생성한다.
+- `createContext()`는 런타임 컨텍스트 구현을 생성한다. 이 컨텍스트는 만든 thread에서만 쓴다.
+- `sharedContext()`는 thread 사이에 공유하는 process 전역 컨텍스트를 돌려준다(아래 "공유 컨텍스트" 절).
 - `Context.createPairSocket()`, `createDealerSocket()`,
   `createRouterSocket()`, `createPubSocket()`, `createSubSocket()`,
   `createXPubSocket()`, `createXSubSocket()`, `createStreamSocket()`는 런타임 소켓
@@ -440,6 +441,35 @@ operation을 따라 짓는다. `router_socket.ts`, `poller.ts`, `timer.ts`를 �
 
 네이티브 기반 런타임 클래스를 직접 생성하는 것은 정렬된 계약의 일부가 아니다.
 팩토리가 안정적인 생성 표면이다.
+
+## 공유 컨텍스트
+
+Core 컨텍스트는 thread-safe라서 다른 바인딩은 컨텍스트 하나를 여러 thread가 함께 쓰고,
+그 thread들의 socket이 같은 `inproc://` 공간에서 연결된다. Node에서 thread는
+`worker_threads` Worker이고 Worker마다 JS isolate가 따로 있어, isolate 안의 컨텍스트
+객체를 다른 Worker로 넘길 수 없다. 그래서 Node 바인딩은 process 전역 공유 컨텍스트 하나를
+둔다(zeromq.js의 global context와 같은 방식).
+
+```ts
+export interface SharedContext extends Omit<Context, 'close' | 'shutdown'> {}
+
+export function sharedContext(): SharedContext;
+```
+
+- **process에 공유 Core 컨텍스트는 하나다.** 패키지를 불러온 thread(main과 각 Worker)는
+  `sharedContext()`로 같은 Core 컨텍스트를 가리키는 자기 thread의 wrapper를 얻는다. 같은
+  thread에서 다시 부르면 같은 wrapper를 돌려준다. thread 사이에 넘기는 값은 없다.
+- **Worker 사이 `inproc://` 통신은 이 컨텍스트로 한다.** `createContext()`가 만든 컨텍스트는
+  만든 thread에서만 쓴다.
+- **수명은 바인딩이 소유한다.** 패키지를 불러온 thread가 하나라도 남아 있는 동안 공유 Core
+  컨텍스트를 유지하고, 마지막 thread의 바인딩이 내려갈 때 한 번 종료한다. 종료는 Core 컨텍스트
+  종료 계약(linger에 따른 대기 포함)을 따른다.
+- **`SharedContext`에는 `close()`와 `shutdown()`이 없다.** 한 thread가 다른 thread들이 쓰는
+  컨텍스트를 끝낼 수 없기 때문이다. 종료 판정은 위의 thread 참조 하나다.
+- **처음 부를 때 Core 기본 옵션으로 만든다.** 컨텍스트 옵션은 어느 thread에서 바꿔도 하나의
+  Core 컨텍스트에 적용된다. 언제 바꿀 수 있는지는 Core 컨텍스트 옵션 계약이 정한다.
+- socket 규칙은 바뀌지 않는다. 공유 컨텍스트에서 만든 socket도 만든 thread에서만 쓰고, 그
+  thread가 닫는다.
 
 ## 수신 readiness
 
@@ -867,6 +897,13 @@ Public TypeScript declaration, JavaScript result·error와 poller event만으로
 - 같은 owner·value token만 같으며 다른 owner token의 reply는 native 호출 전에 실패한다.
 - `StreamPacket`은 recv 성공 뒤 payload를 보유하고 no-data·오류 때 empty이며 `close()` 뒤 재사용할
   수 있다.
+
+**공유 컨텍스트**
+
+- Worker 둘이 각자 `sharedContext()`에서 PAIR를 만들어 `inproc://`로 bind·connect하면
+  메시지가 양방향으로 전달된다.
+- 같은 thread에서 `sharedContext()`를 두 번 부르면 같은 객체이고, 선언에 `close`·`shutdown`이 없다.
+- 모든 Worker가 끝나고 main이 socket을 닫으면 process가 정상 종료한다.
 
 **Pull eventing**
 

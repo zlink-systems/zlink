@@ -451,7 +451,8 @@ The following shapes are explicit alignment failures.
 Interfaces define behavior; construction is provided by package-root
 factories and public contract methods.
 
-- `createContext()` creates a runtime context implementation.
+- `createContext()` creates a runtime context implementation. That context is used only on the thread that created it.
+- `sharedContext()` returns the process-wide context shared across threads (see "Shared Context" below).
 - `Context.createPairSocket()`, `createDealerSocket()`,
   `createRouterSocket()`, `createPubSocket()`, `createSubSocket()`,
   `createXPubSocket()`, `createXSubSocket()`, and `createStreamSocket()`
@@ -472,6 +473,37 @@ Public Spot and Actor creation, including service-owned timers, is specified by 
 
 Direct construction of a native-backed runtime class is not part of the
 aligned contract. Factories are the stable construction surface.
+
+## Shared Context
+
+A Core context is thread-safe, so other bindings let several threads share one context, and those
+threads' sockets connect in the same `inproc://` space. In Node a thread is a `worker_threads`
+Worker, and each Worker has its own JS isolate, so a context object in one isolate cannot be passed
+to another Worker. The Node binding therefore keeps one process-wide shared context (the same
+approach as the zeromq.js global context).
+
+```ts
+export interface SharedContext extends Omit<Context, 'close' | 'shutdown'> {}
+
+export function sharedContext(): SharedContext;
+```
+
+- **A process has one shared Core context.** Each thread that loads the package (the main thread
+  and each Worker) calls `sharedContext()` to get its own thread's wrapper for the same Core
+  context. Calling it again on the same thread returns the same wrapper. No value is passed
+  between threads.
+- **Worker-to-Worker `inproc://` communication uses this context.** A context created by
+  `createContext()` is used only on the thread that created it.
+- **The binding owns the lifetime.** It keeps the shared Core context while any thread that loaded
+  the package remains, and terminates it once when the last thread's binding is torn down.
+  Termination follows the Core context termination contract, including waiting according to linger.
+- **`SharedContext` has no `close()` or `shutdown()`.** One thread cannot end a context other
+  threads use. The only termination decision is the thread reference above.
+- **It is created with Core default options on the first call.** A context option changed from
+  any thread applies to the one Core context. When an option can be changed is defined by the Core
+  context option contract.
+- Socket rules do not change. A socket created from the shared context is also used only on the
+  thread that created it, and that thread closes it.
 
 ## Receive Readiness
 
@@ -930,6 +962,14 @@ poller events. Each item maps to one contract test.
   before the native call.
 - `StreamPacket` holds a payload after recv success, is empty on no-data or error, and can be reused after
   `close()`.
+
+**Shared context**
+
+- When two Workers each create a PAIR from `sharedContext()` and bind/connect over `inproc://`,
+  messages are delivered in both directions.
+- Calling `sharedContext()` twice on the same thread returns the same object, and its declaration
+  has no `close` or `shutdown`.
+- After every Worker ends and the main thread closes its sockets, the process exits normally.
 
 **Pull eventing**
 
