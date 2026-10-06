@@ -14,8 +14,19 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [1.16.0]
 
+### Changed
+
+- Auto HWM no longer accepts runtime memory hint option 20. The snapshot keeps
+  its ABI field and reports zero. Core resolves the memory limit from the
+  explicit input or detected process and cgroup limits, including parent
+  cgroups. Connection admission uses that resolved limit even when a manual
+  Core budget is set; the budget still governs HWM planning (#1476).
+
 ### Fixed
 
+- Monitor ready counts now remove only the matching connection. Closing a
+  monitor while a poller waits reports socket close rather than context
+  termination (#1476, #1083).
 - `zlink_socket()` returns `NULL` with the preserved errno (for example
   `EMFILE`) when the socket mailbox cannot create its signaler because the
   process file-descriptor limit is reached. It used to return a socket whose

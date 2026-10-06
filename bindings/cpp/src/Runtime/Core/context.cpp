@@ -123,7 +123,6 @@ core_hwm_budget_snapshot_t context_t::core_hwm_budget_snapshot () const
     snapshot._budget_generation = native.budget_generation;
     snapshot._measurement_epoch = native.measurement_epoch;
     snapshot._configured_memory_limit_bytes = native.configured_memory_limit_bytes;
-    snapshot._runtime_memory_limit_bytes = native.runtime_memory_limit_bytes;
     snapshot._resolved_memory_limit_bytes = native.resolved_memory_limit_bytes;
     snapshot._configured_core_budget_bytes = native.configured_core_budget_bytes;
     snapshot._effective_core_budget_bytes = native.effective_core_budget_bytes;

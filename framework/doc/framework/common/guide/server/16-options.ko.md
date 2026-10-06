@@ -90,7 +90,7 @@ Core HWM은 ordinary queue가 보유한 byte를, Application job queue는 handle
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `CoreHwmMemoryLimitBytes` | Core budget 계산에 전달할 memory limit hint | 지정 안 함 |
+| `CoreHwmMemoryLimitBytes` | Core budget 계산과 연결 수용 판정에 쓰는 양수 memory limit | 지정 안 함 |
 | `CoreHwmBudgetBytes` | profile 계산보다 우선하는 manual Core budget | 지정 안 함 |
 | `CoreHwmProfile` | Core Auto-budget profile | `Balanced` |
 | `ApplicationJobQueueProfile` | job 상한을 계산할 profile | `Balanced` |

@@ -12,3 +12,4 @@ Uses Core 1.16.0.
 
 - Follows Core 1.16.0: `ZLINK_OPT_BINDTODEVICE` is applied to `tcp`, `tls`, `ws` and `wss` sockets before bind or connect; unsupported platforms reject a non-empty value with `ZLINK_CONFIG_NOT_SUPPORTED` (#1469).
 - Follows Core 1.16.0: `zlink_socket()` returns `NULL` with the preserved system errno if socket mailbox signaler creation fails, including at the process fd limit (#1481).
+- Core Auto HWM no longer accepts a runtime memory hint. The binding snapshot omits that hint; Core detects parent cgroup limits and admits connections against the resolved memory limit, independently of a manual HWM budget. Monitor ready counts now follow disconnects, and monitor close during a poller wait reports socket close (#1476, #1083).
