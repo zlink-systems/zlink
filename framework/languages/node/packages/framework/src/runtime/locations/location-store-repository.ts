@@ -17,6 +17,8 @@ import {
   type ZLinkStoreScanCursor,
   type ZLinkStoreVersion,
   type ZLinkStoreWriteRequest,
+  ZLinkFrameworkException,
+  ZLinkFrameworkErrorKind,
   ZLinkFrameworkRuntimeState,
   ZLinkObjectRole
 } from '../../contracts';
@@ -204,7 +206,30 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     private readonly nowProvider: () => Date = () => new Date()
   ) {
     super(nowProvider);
-    this.provider = provider;
+    // Classify only failures of the opaque SPI, before interpreting its records.
+    this.provider = {
+      async read(key, signal) {
+        try {
+          return await provider.read(key, signal);
+        } catch (error) {
+          throw locationStoreProviderFailure(error, signal);
+        }
+      },
+      async write(request, signal) {
+        try {
+          return await provider.write(request, signal);
+        } catch (error) {
+          throw locationStoreProviderFailure(error, signal);
+        }
+      },
+      async scan(request, signal) {
+        try {
+          return await provider.scan(request, signal);
+        } catch (error) {
+          throw locationStoreProviderFailure(error, signal);
+        }
+      }
+    };
     this.aggregateInventory = new ZLinkAggregateInventoryStore(this.provider);
   }
 
@@ -4440,4 +4465,20 @@ function throwIfOperationExpired(signal?: AbortSignal, deadlineUnixMs?: bigint):
   if (deadlineUnixMs !== undefined && Date.now() >= Number(deadlineUnixMs)) {
     throw new DOMException('Operation deadline exceeded.', 'TimeoutError');
   }
+}
+
+// Store SPI §6: preserve caller failures and classify provider failures once.
+function locationStoreProviderFailure(error: unknown, signal?: AbortSignal): unknown {
+  if (
+    error instanceof ZLinkFrameworkException ||
+    error instanceof TypeError ||
+    error instanceof RangeError ||
+    signal?.aborted === true
+  )
+    return error;
+  return new ZLinkFrameworkException(
+    ZLinkFrameworkErrorKind.Unavailable,
+    'Location Store provider is unavailable.',
+    error
+  );
 }
