@@ -238,7 +238,7 @@ export class ZLinkStreamSessionRuntime {
   }
 
   enqueueConnected(localAddr?: string, remoteAddr?: string): void {
-    this.serial.executeInfrastructure(async () => this.markConnected(localAddr, remoteAddr));
+    this.serial.executeControl(async () => this.markConnected(localAddr, remoteAddr));
   }
 
   enqueuePacket(
@@ -255,46 +255,22 @@ export class ZLinkStreamSessionRuntime {
       terminalOwner?.close();
     };
     if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
-      if (
-        messageToBytes(payload).length === 0 &&
-        (decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PONG ||
-          decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PING)
-      ) {
-        void this.handleControl(decodedHeader, payload)
-          .catch((error) => {
-            this.options.onError?.(error);
-          })
-          .finally(() => {
-            applicationJobPermit?.releaseAfterInternalProcessing();
-            payload.close();
-            releaseTerminal();
-          });
-        return;
-      }
-      this.enqueueControl(
-        async () => {
-          try {
-            const dispatch = () => this.dispatchPacket(payload, decodedHeader);
-            if (applicationJobPermit === undefined) await dispatch();
-            else await runWithApplicationJobPermit(applicationJobPermit, dispatch);
-          } finally {
-            releaseTerminal();
-          }
-        },
-        () => {
+      void this.handleControl(decodedHeader, payload)
+        .catch((error) => {
+          this.options.onError?.(error);
+        })
+        .finally(() => {
           applicationJobPermit?.releaseAfterInternalProcessing();
           payload.close();
           releaseTerminal();
-        },
-        () => this.traceShutdownDrop(decodedHeader)
-      );
+        });
       return;
     }
     if (
       decodedHeader.kind === ZLinkStreamMessageKind.Response ||
       decodedHeader.kind === ZLinkStreamMessageKind.Error
     ) {
-      this.enqueueInfrastructure(
+      this.enqueueControl(
         async () => {
           try {
             await this.dispatchPacket(payload, decodedHeader);
@@ -340,8 +316,7 @@ export class ZLinkStreamSessionRuntime {
   }
 
   /**
-   * Starts the callback on the session lane and observes its terminal result
-   * without retaining that lane while application code awaits unrelated work.
+   * Retains the session turn through the callback's terminal result.
    */
   enqueueActorBindingReplaced(
     actor: ServiceActorRef,
@@ -352,7 +327,6 @@ export class ZLinkStreamSessionRuntime {
       if (!this.context.beginActorBindingReplacement(actor, retiredSession)) return;
       const session = await this.requireSession();
       let callbackDeadlineTimer: unknown;
-      let callbackTerminal = false;
       let forcedClose = false;
       const scheduleClose = (): void => {
         if (forcedClose) return;
@@ -367,23 +341,6 @@ export class ZLinkStreamSessionRuntime {
           void this.close().catch((error) => this.options.onError?.(error));
         }, ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CLOSE_DELAY_MS);
       };
-      const completeCallback = (): void => {
-        if (callbackTerminal) return;
-        callbackTerminal = true;
-        if (callbackDeadlineTimer !== undefined) {
-          this.livenessClock.clearTimer(callbackDeadlineTimer);
-          callbackDeadlineTimer = undefined;
-        }
-        scheduleClose();
-      };
-      const reportCallbackFailure = (error: unknown): void => {
-        try {
-          this.options.onError?.(error);
-        } catch {
-          // Diagnostics must not prevent the lifecycle terminal transition.
-        }
-        completeCallback();
-      };
       callbackDeadlineTimer = this.livenessClock.setTimer(() => {
         if (
           this.disposed ||
@@ -396,18 +353,15 @@ export class ZLinkStreamSessionRuntime {
         void this.close().catch((error) => this.options.onError?.(error));
       }, this.options.replacementCallbackTimeoutMs ?? DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS);
 
-      const callback = session.onActorBindingReplaced;
-      if (callback === undefined) {
-        completeCallback();
-        return;
-      }
       try {
-        // Start the callback on this lifecycle turn, but do not retain the
-        // serial lane while application code awaits an unrelated operation.
-        const result = callback.call(session, this.context, actor.actorId);
-        void Promise.resolve(result).then(() => completeCallback(), reportCallbackFailure);
+        await session.onActorBindingReplaced?.(this.context, actor.actorId);
       } catch (error) {
-        reportCallbackFailure(error);
+        this.options.onError?.(error);
+      } finally {
+        if (callbackDeadlineTimer !== undefined) {
+          this.livenessClock.clearTimer(callbackDeadlineTimer);
+        }
+        scheduleClose();
       }
     });
   }
@@ -475,15 +429,8 @@ export class ZLinkStreamSessionRuntime {
     let dispatchPayload = payload;
     let enteredDispatch = false;
     try {
-      if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
-        await this.handleControl(decodedHeader, payload);
-        return;
-      }
       this.lastApplicationActivityAt = this.livenessClock.now();
       dispatchPayload = this.context.payloadForHeader(decodedHeader, payload);
-      if (this.context.tryCompleteResponse(decodedHeader, dispatchPayload)) {
-        return;
-      }
       const dispatchActor = this.context.actorForSlot(decodedHeader.actorSlot);
       if (decodedHeader.actorSlot !== undefined && dispatchActor === undefined) {
         const staleFlowEnabled = this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true;
@@ -676,11 +623,7 @@ export class ZLinkStreamSessionRuntime {
     }
     this.livenessTimer = this.livenessClock.setTimer(() => {
       this.livenessTimer = undefined;
-      this.serial.executeInfrastructure(
-        async () => this.runLivenessCheck(),
-        {},
-        (error) => this.options.onError?.(error)
-      );
+      void this.runLivenessCheck().catch((error) => this.options.onError?.(error));
     }, ZLINK_STREAM_HEARTBEAT_INTERVAL_MS);
   }
 
@@ -722,7 +665,9 @@ export class ZLinkStreamSessionRuntime {
     this.closeReason = closeReason;
     this.stopLivenessChecks();
     await this.stream.closeForReason(reason, diagnostic);
-    await this.complete(undefined, true);
+    void this.serial
+      .executeFinal(async () => this.complete(undefined, true))
+      .catch((error) => this.options.onError?.(error));
   }
 
   private stopLivenessChecks(): void {
@@ -847,18 +792,6 @@ export class ZLinkStreamSessionRuntime {
     onShutdownRejected?: () => void
   ): void {
     if (!this.serial.executeControl(work, {}, onRejected)) {
-      // The serial lane only refuses new work after dispose() closed it.
-      onShutdownRejected?.();
-      onRejected?.();
-    }
-  }
-
-  private enqueueInfrastructure(
-    work: () => Promise<void>,
-    onRejected?: () => void,
-    onShutdownRejected?: () => void
-  ): void {
-    if (!this.serial.executeInfrastructure(work, {}, onRejected)) {
       // The serial lane only refuses new work after dispose() closed it.
       onShutdownRejected?.();
       onRejected?.();

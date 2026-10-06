@@ -12,6 +12,22 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.16.0]
+
+### Fixed
+
+- `zlink_socket()` returns `NULL` with the preserved errno (for example
+  `EMFILE`) when the socket mailbox cannot create its signaler because the
+  process file-descriptor limit is reached. It used to return a socket whose
+  mailbox fd was `-1`, and the first `zlink_connect()` aborted with
+  `Bad file descriptor` in `signaler.cpp`. The rejected socket's cleanup no
+  longer starts the context control runtime (#1481).
+- `ZLINK_OPT_BINDTODEVICE` is applied to the OS socket of `tcp`, `tls`, `ws`
+  and `wss` transports: before bind on a listener and before connect on a
+  connecter. It was stored but never applied since before 1.10.0. On a platform
+  without interface binding, setting a non-empty value fails with
+  `ZLINK_CONFIG_NOT_SUPPORTED` (#1469).
+
 ## [1.15.0]
 
 ### Changed
@@ -29,8 +45,9 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
   `-Wextra`, `-pedantic` (and MSVC `/W4`, `/WX`) and `LIBZLINK_WERROR` are
   applied; the warnings they report are fixed in source (#1420).
 - Platform feature-test macros are defined before feature probes, so Linux
-  builds detect `SO_BINDTODEVICE` and `ZLINK_OPT_BINDTODEVICE` takes effect
-  (#1420).
+  builds detect `SO_BINDTODEVICE` (#1420). Correction: this release does not
+  apply `ZLINK_OPT_BINDTODEVICE` to sockets; the option is stored only. The fix
+  is #1469.
 
 ### Removed
 

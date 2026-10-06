@@ -103,3 +103,6 @@ export interface Context {
   /** Close the context and release its resources, terminating anything still open under it. */
   close(): void;
 }
+
+/** The process-wide context shared by Node Worker threads. */
+export interface SharedContext extends Omit<Context, 'close' | 'shutdown'> {}

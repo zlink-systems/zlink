@@ -523,25 +523,28 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             throw ZLinkStreamException.validationFailed(
                     "outbound stream frame is invalid: " + invalid.getMessage(), invalid);
         }
-        trace(
-                () ->
-                        "connector write-start endpoint="
-                                + configuration.endpoint()
-                                + " kind="
-                                + header.kind()
-                                + " name="
-                                + header.name()
-                                + " requestSeq="
-                                + header.requestSeq()
-                                + " bytes="
-                                + payload.length
-                                + " correlation="
-                                + header.correlationId());
+        if (STREAM_TRACE) {
+            trace(
+                    () ->
+                            "connector write-start endpoint="
+                                    + configuration.endpoint()
+                                    + " kind="
+                                    + header.kind()
+                                    + " name="
+                                    + header.name()
+                                    + " requestSeq="
+                                    + header.requestSeq()
+                                    + " bytes="
+                                    + payload.length
+                                    + " correlation="
+                                    + header.correlationId());
+        }
         return lifecycle.enqueueFrame(sendChain, frame, enqueue);
     }
 
     private CompletionStage<Void> traceWrite(
             ZLinkStreamWireProtocol.Header header, CompletionStage<Void> publication) {
+        if (!STREAM_TRACE) return publication;
         publication.whenComplete(
                 (ignored, ex) -> {
                     if (ex == null) {
@@ -751,6 +754,10 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             thread.setDaemon(true);
             return thread;
         }
+    }
+
+    static boolean traceEnabled() {
+        return STREAM_TRACE;
     }
 
     static void trace(Supplier<String> message) {

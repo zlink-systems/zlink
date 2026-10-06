@@ -871,11 +871,6 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         }
     }
 
-    private String actorTypeOrEmpty(String actorId) {
-        String actorType = services.actorTypes().apply(actorId);
-        return actorType == null ? "" : actorType;
-    }
-
     private CompletionStage<SpotTransportAddress> resolveRemoteAddress(String spotId) {
         if (services.remoteAddressResolver() == null) {
             return CompletableFuture.failedFuture(

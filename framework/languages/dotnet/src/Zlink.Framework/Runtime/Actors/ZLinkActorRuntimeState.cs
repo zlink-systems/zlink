@@ -39,7 +39,6 @@ internal sealed class ZLinkActorRuntimeState(
     private int _actorMetricActive;
     private string? _actorMetricMeshName;
     private ZLinkActorBoundSession? _boundSession;
-    private SessionBindingReplacement? _sessionReplacement;
     private ZLinkPendingActorSessionRoute? _pendingSessionRoute;
     private ZLinkSourceSessionRelocation? _sourceSessionRelocation;
     private TaskCompletionSource<Exception?>? _teardownAttempt;
@@ -240,8 +239,6 @@ internal sealed class ZLinkActorRuntimeState(
             .ConfigureAwait(false);
         await DisposeHandlerActivationAsync().ConfigureAwait(false);
     }
-
-    private void CloseHandlerActivation() => RunState(CloseHandlerActivationCore);
 
     private void CloseHandlerActivationCore()
     {
@@ -486,8 +483,6 @@ internal sealed class ZLinkActorRuntimeState(
         {
             PurgeExpiredSessionBindingTombstones();
             EnsureBindingTokenCanBeUsed(replacement);
-            if (_sessionReplacement is not null)
-                throw ReplacementInProgress();
             if (_boundSession is { } current)
             {
                 if (SameBindingToken(current, replacement))
@@ -502,7 +497,7 @@ internal sealed class ZLinkActorRuntimeState(
         });
     }
 
-    public ZLinkActorSessionReplacementAttempt BeginSessionReplacement(
+    public ZLinkActorSessionBindingTransition ReplaceSessionBinding(
         RoutingId? sessionNodeRid,
         RoutingId sessionRid,
         string bindingToken,
@@ -516,130 +511,41 @@ internal sealed class ZLinkActorRuntimeState(
         ulong acceptedHighWater,
         string sessionOwnerId = "",
         ulong sessionOwnerLeaseGeneration = 0,
-        ZLinkActorPreviousBindingFence? previousFence = null
+        Action<ZLinkActorRuntimeState>? acceptAuthority = null
     )
     {
-        var replacement = CreateSessionBinding(
-            sessionNodeRid,
-            sessionRid,
-            bindingToken,
-            bindingGeneration,
-            objectGeneration,
-            authorityOwnerGeneration,
-            meshName,
-            targetNodeGeneration,
-            ownerLeaseGeneration,
-            sessionOwnerNodeGeneration,
-            acceptedHighWater,
-            sessionOwnerId,
-            sessionOwnerLeaseGeneration
-        );
         return RunState(() =>
         {
+            acceptAuthority?.Invoke(this);
+            var replacement = CreateSessionBinding(
+                sessionNodeRid,
+                sessionRid,
+                bindingToken,
+                bindingGeneration,
+                objectGeneration,
+                authorityOwnerGeneration,
+                meshName,
+                targetNodeGeneration,
+                ownerLeaseGeneration,
+                sessionOwnerNodeGeneration,
+                acceptedHighWater,
+                sessionOwnerId,
+                sessionOwnerLeaseGeneration
+            );
+
             PurgeExpiredSessionBindingTombstones();
             EnsureBindingTokenCanBeUsed(replacement);
-            if (_sessionReplacement is { } currentReplacement)
-            {
-                var pendingBinding = currentReplacement.Replacement;
-                if (SameBindingToken(pendingBinding, replacement))
-                {
-                    EnsureExactBindingIdentity(pendingBinding, replacement);
-                    if (currentReplacement.PreviousFence != previousFence)
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.InvalidOperation,
-                            $"Actor '{ActorId}' received conflicting previous binding fields for one replacement token.",
-                            ZLinkRetryAdvice.DoNotRetry
-                        );
-                    if (!currentReplacement.ExecutionActive)
-                    {
-                        currentReplacement.ExecutionActive = true;
-                        currentReplacement.Completion = new TaskCompletionSource<Exception?>(
-                            TaskCreationOptions.RunContinuationsAsynchronously
-                        );
-                        return currentReplacement.CreateAttempt(ownsExecution: true);
-                    }
-                    return currentReplacement.CreateAttempt(ownsExecution: false);
-                }
-                throw ReplacementInProgress();
-            }
             if (_boundSession is { } current && SameBindingToken(current, replacement))
             {
                 EnsureExactBindingIdentity(current, replacement);
-                return new ZLinkActorSessionReplacementAttempt(
-                    replacement,
-                    Previous: null,
-                    Task.FromResult<Exception?>(null),
-                    OwnsExecution: false
-                );
+                return new ZLinkActorSessionBindingTransition(replacement, null, Changed: false);
             }
-
-            _sessionReplacement = new SessionBindingReplacement(
-                replacement,
-                _boundSession,
-                previousFence
-            );
-            return _sessionReplacement.CreateAttempt(ownsExecution: true);
+            var previous = _boundSession;
+            if (previous is { } retired)
+                RememberRetiredSessionBinding(retired);
+            _boundSession = replacement;
+            return new ZLinkActorSessionBindingTransition(replacement, previous, Changed: true);
         });
-    }
-
-    public void PublishSessionReplacement(ZLinkActorSessionReplacementAttempt attempt)
-    {
-        if (!attempt.OwnsExecution)
-            throw ReplacementWasInvalidated();
-        RunState(() =>
-        {
-            var replacement = GetCurrentReplacement(attempt);
-            if (replacement.Phase >= ZLinkActorSessionReplacementPhase.Published)
-                return;
-            if (replacement.Previous is { } previous)
-                RememberRetiredSessionBinding(previous);
-            _boundSession = replacement.Replacement;
-            replacement.Phase = ZLinkActorSessionReplacementPhase.Published;
-        });
-    }
-
-    public void CompleteSessionReplacement(ZLinkActorSessionReplacementAttempt attempt)
-    {
-        if (!attempt.OwnsExecution)
-            throw ReplacementWasInvalidated();
-        var completion = RunState(() =>
-        {
-            var replacement = GetCurrentReplacement(attempt);
-            if (replacement.Phase != ZLinkActorSessionReplacementPhase.Published)
-                throw ReplacementWasInvalidated();
-            replacement.Phase = ZLinkActorSessionReplacementPhase.Completed;
-            replacement.ExecutionActive = false;
-            var completion = replacement.Completion;
-            _sessionReplacement = null;
-            return completion;
-        });
-        completion.TrySetResult(null);
-    }
-
-    public void AbortSessionReplacement(
-        ZLinkActorSessionReplacementAttempt attempt,
-        Exception failure
-    )
-    {
-        ArgumentNullException.ThrowIfNull(failure);
-        if (!attempt.OwnsExecution)
-            return;
-        var completion = RunState(() =>
-        {
-            if (
-                !IsCurrentReplacement(attempt.Replacement)
-                || _sessionReplacement is not { ExecutionActive: true } replacement
-            )
-                return null;
-            var completion = replacement.Completion;
-            replacement.ExecutionActive = false;
-            // The new binding is the only durable transition. Before it is
-            // published, the prepared replacement can be retried safely.
-            if (replacement.Phase == ZLinkActorSessionReplacementPhase.Prepared)
-                _sessionReplacement = null;
-            return completion;
-        });
-        completion?.TrySetResult(failure);
     }
 
     internal int SessionBindingTombstoneCount
@@ -742,35 +648,6 @@ internal sealed class ZLinkActorRuntimeState(
             ZLinkRetryAdvice.DoNotRetry
         );
     }
-
-    private bool IsCurrentReplacement(ZLinkActorBoundSession replacement) =>
-        _sessionReplacement is { } current && current.Replacement == replacement;
-
-    private SessionBindingReplacement GetCurrentReplacement(
-        ZLinkActorSessionReplacementAttempt attempt
-    )
-    {
-        if (
-            _sessionReplacement is not { ExecutionActive: true } replacement
-            || replacement.Replacement != attempt.Replacement
-        )
-            throw ReplacementWasInvalidated();
-        return replacement;
-    }
-
-    private ZLinkFrameworkException ReplacementInProgress() =>
-        new(
-            ZLinkFrameworkErrorKind.Unavailable,
-            $"Actor '{ActorId}' is completing another session binding replacement.",
-            ZLinkRetryAdvice.RetryAfterBackoff
-        );
-
-    private ZLinkFrameworkException ReplacementWasInvalidated() =>
-        new(
-            ZLinkFrameworkErrorKind.Unavailable,
-            $"Actor '{ActorId}' session binding replacement lost its exact local authority before publication.",
-            ZLinkRetryAdvice.RetryAfterBackoff
-        );
 
     private void RememberRetiredSessionBinding(ZLinkActorBoundSession binding)
     {
@@ -1114,18 +991,9 @@ internal sealed class ZLinkActorRuntimeState(
         if (bindingToken.Length == 0)
             return;
 
-        var completion = RunState(() =>
+        RunState(() =>
         {
             if (
-                _sessionReplacement is { Replacement.BindingToken: var pending }
-                && string.Equals(pending, bindingToken, StringComparison.Ordinal)
-            )
-            {
-                var completion = _sessionReplacement.Completion;
-                _sessionReplacement = null;
-                return completion;
-            }
-            else if (
                 _boundSession is { BindingToken: var current }
                 && string.Equals(current, bindingToken, StringComparison.Ordinal)
             )
@@ -1137,22 +1005,10 @@ internal sealed class ZLinkActorRuntimeState(
                 && string.Equals(pendingToken, bindingToken, StringComparison.Ordinal)
             )
             {
-                // A physical disconnect can be replayed while the target
-                // route is staged but before the session-owner commit. The
-                // exact token invalidates that pending route as well; keeping
-                // it would make completion retry a binding the session owner
-                // has already removed.
+                // Exact disconnect also retires a staged relocation route.
                 _pendingSessionRoute = null;
             }
-            return null;
         });
-        completion?.TrySetResult(
-            new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"Actor '{ActorId}' session binding replacement was unbound before commit.",
-                ZLinkRetryAdvice.RetryAfterBackoff
-            )
-        );
     }
 
     public void TombstoneSession(ZLinkActorBoundSession expected)
@@ -1337,31 +1193,12 @@ internal sealed class ZLinkActorRuntimeState(
     {
         CloseHandlerActivationCore();
         ZLinkActorBoundSession? releasedBoundSession = null;
-        TaskCompletionSource<Exception?>? replacementCompletion = null;
-        if (
-            transition
-            is ZLinkActorTerminalTransition.Destroyed
-                or ZLinkActorTerminalTransition.Migrated
-        )
+        if (transition == ZLinkActorTerminalTransition.Destroyed)
         {
-            if (transition == ZLinkActorTerminalTransition.Destroyed)
-            {
-                releasedBoundSession = _boundSession;
-                _boundSession = null;
-            }
-            replacementCompletion = _sessionReplacement?.Completion;
-            _sessionReplacement = null;
-            if (transition == ZLinkActorTerminalTransition.Destroyed)
-                _sessionBindingTombstones.Clear();
+            releasedBoundSession = _boundSession;
+            _boundSession = null;
+            _sessionBindingTombstones.Clear();
         }
-        replacementCompletion?.TrySetResult(
-            new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"Actor '{ActorId}' changed local authority during session binding replacement.",
-                ZLinkRetryAdvice.RetryAfterBackoff
-            )
-        );
-
         SessionId = null;
         Stream = null;
         Activation = null;
@@ -1968,30 +1805,6 @@ internal sealed class ZLinkActorRuntimeState(
         }
     }
 
-    private sealed class SessionBindingReplacement(
-        ZLinkActorBoundSession replacement,
-        ZLinkActorBoundSession? previous,
-        ZLinkActorPreviousBindingFence? previousFence
-    )
-    {
-        public ZLinkActorBoundSession Replacement { get; } = replacement;
-
-        public ZLinkActorBoundSession? Previous { get; } = previous;
-
-        public ZLinkActorPreviousBindingFence? PreviousFence { get; } = previousFence;
-
-        public TaskCompletionSource<Exception?> Completion { get; set; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public ZLinkActorSessionReplacementPhase Phase { get; set; } =
-            ZLinkActorSessionReplacementPhase.Prepared;
-
-        public bool ExecutionActive { get; set; } = true;
-
-        public ZLinkActorSessionReplacementAttempt CreateAttempt(bool ownsExecution) =>
-            new(Replacement, Previous, Completion.Task, ownsExecution);
-    }
-
     internal sealed class DispatchOwnership(ZLinkActorRuntimeState state)
     {
         private int _active = 1;
@@ -2010,13 +1823,6 @@ internal enum ZLinkActorDestroyPhase
     DestroyingNative,
     NativeDestroyed,
     ReleasingOwnership,
-}
-
-internal enum ZLinkActorSessionReplacementPhase
-{
-    Prepared,
-    Published,
-    Completed,
 }
 
 internal readonly record struct ZLinkActorTeardownOperation(
@@ -2073,28 +1879,10 @@ internal readonly record struct ZLinkActorBoundSession(
     }
 }
 
-internal readonly record struct ZLinkActorSessionReplacementAttempt(
+internal readonly record struct ZLinkActorSessionBindingTransition(
     ZLinkActorBoundSession Replacement,
     ZLinkActorBoundSession? Previous,
-    Task<Exception?> Completion,
-    bool OwnsExecution
-);
-
-internal readonly record struct ZLinkActorPreviousBindingFence(
-    RoutingId TargetNodeRid,
-    RoutingId SessionNodeRid,
-    RoutingId SessionRid,
-    string BindingToken,
-    ulong BindingGeneration,
-    ulong ObjectGeneration,
-    ZLinkMeshName MeshName,
-    ulong TargetNodeGeneration,
-    ulong AuthorityOwnerGeneration,
-    ulong OwnerLeaseGeneration,
-    ulong SessionOwnerNodeGeneration,
-    ulong AcceptedHighWater,
-    string SessionOwnerId = "",
-    ulong SessionOwnerLeaseGeneration = 0
+    bool Changed
 );
 
 internal readonly record struct ZLinkActorSessionBindingTombstone(

@@ -1614,15 +1614,6 @@ public final class ZLinkChannelRuntime
         }
     }
 
-    private ZLinkBackendDealerSocket requireClient(String channelName) {
-        ZLinkBackendDealerSocket client = sockets.client(channelName);
-        if (client == null) {
-            throw new ZLinkConfigurationException(
-                    "channel client is not configured: " + channelName);
-        }
-        return client;
-    }
-
     private ZLinkBackendSpotRouteBridge requireSpotRouteBridge(String channelName) {
         ZLinkBackendSpotRouteBridge existing = sockets.spotRouteBridge(channelName);
         if (existing != null) {
@@ -1723,10 +1714,6 @@ public final class ZLinkChannelRuntime
 
     static boolean isFrameworkErrorReply(List<Message> parts) {
         return ZLinkFrameworkErrorReply.isReply(parts);
-    }
-
-    private static boolean isFrameworkErrorPacket(String packetName) {
-        return ZLinkFrameworkErrorReply.isPacketName(packetName);
     }
 
     static String frameworkErrorReplyMessage(List<Message> parts) {

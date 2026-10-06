@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.internal.service;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -19,6 +21,7 @@ public final class ZLinkServiceLivenessRegistry {
     public static final Duration DEFAULT_PEER_TIMEOUT = Duration.ofSeconds(15);
     private final long probeIntervalNanos;
     private final long peerTimeoutNanos;
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<RoutingId, PeerState> peers = new HashMap<>();
     private long nextProbeId = 1;
 
@@ -39,8 +42,8 @@ public final class ZLinkServiceLivenessRegistry {
         peerTimeoutNanos = peerTimeout.toNanos();
     }
 
-    private synchronized <T> T inStateLane(Supplier<T> work) {
-        return work.get();
+    private <T> T inStateLane(Supplier<T> work) {
+        return ZLinkCompletionBridge.await(stateLane.runNowOrQueue(work));
     }
 
     public void admit(RoutingId nodeRoutingId, String connectionId, long nowNanos) {

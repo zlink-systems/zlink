@@ -1730,11 +1730,6 @@ public final class ZLinkSerialExecutionQueue {
         return ready;
     }
 
-    private void completeQuiescenceWaitersIfReady() {
-        List<CompletableFuture<Void>> ready = takeQuiescenceWaitersIfReady();
-        ready.forEach(waiter -> waiter.complete(null));
-    }
-
     public static Executor propagateCurrent(Executor executor) {
         Objects.requireNonNull(executor, "executor");
         return command -> {

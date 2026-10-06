@@ -1620,7 +1620,7 @@ void zlink::socket_base_t::stop_inproc_reconnect_scheduler ()
         task_id = runtime.task_id;
     }
 
-    control_runtime_t *const control = get_ctx ()->control_runtime ();
+    control_runtime_t *const control = get_ctx ()->control_runtime_if_started ();
     if (control && task_id != 0)
         (void) control->remove_task (task_id);
 

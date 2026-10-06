@@ -7,12 +7,7 @@ import {
 } from '../../Contracts';
 import { ZlinkStreamHeaderFlags } from '../../Contracts/ZlinkStreamEnums';
 import type { ZlinkStreamHeader } from '../../Contracts/ZlinkStreamModels';
-import {
-  decodeStreamWireHeader,
-  encodeStreamWireHeader,
-  isStreamWireMessageKind,
-  isStreamWireCodec
-} from '@zlink-systems/stream-wire';
+import { decodeStreamWireHeader, encodeStreamWireHeader } from '@zlink-systems/stream-wire';
 import { connectorError } from '../ZlinkStreamSupport';
 import { validateName } from './ZlinkStreamPacketNameValidator';
 import { ZlinkStreamMetadataCodec } from './ZlinkStreamMetadataCodec';
@@ -122,11 +117,8 @@ export function buildHeader(
 }
 
 function validateHeaderSemantics(header: ZlinkStreamHeader): void {
-  validateEnum(header.kind, header.codec);
   const hasRequestSeq =
     header.requestSeq !== undefined || (header.flags & ZlinkStreamHeaderFlags.HasRequestSeq) !== 0;
-  const hasMetadata =
-    header.metadata.count > 0 || (header.flags & ZlinkStreamHeaderFlags.HasMetadata) !== 0;
   if (header.kind === ZlinkStreamMessageKind.Send && hasRequestSeq) {
     throw connectorError(
       ZlinkStreamErrorCode.FrameDecodeFailed,
@@ -148,37 +140,6 @@ function validateHeaderSemantics(header: ZlinkStreamHeader): void {
       ZlinkStreamErrorCode.FrameDecodeFailed,
       'Error packet must use the JSON codec.'
     );
-  }
-  if (header.kind === ZlinkStreamMessageKind.Control) {
-    const hasCorrelation =
-      (header.correlationId !== undefined && header.correlationId.length > 0) ||
-      (header.flags & ZlinkStreamHeaderFlags.HasCorrelationId) !== 0;
-    const hasFlow = (header.flags & ZlinkStreamHeaderFlags.HasFlowId) !== 0;
-    const hasActorSlot =
-      header.actorSlot !== undefined || (header.flags & ZlinkStreamHeaderFlags.HasActorSlot) !== 0;
-    if (
-      header.flags !== ZlinkStreamHeaderFlags.None ||
-      hasRequestSeq ||
-      hasMetadata ||
-      hasCorrelation ||
-      hasFlow ||
-      hasActorSlot ||
-      header.codec !== ZlinkStreamCodec.Raw
-    ) {
-      throw connectorError(
-        ZlinkStreamErrorCode.FrameDecodeFailed,
-        'Control packet must use raw codec and must not contain flags.'
-      );
-    }
-  }
-}
-
-function validateEnum(kind: ZlinkStreamMessageKind, codec: ZlinkStreamCodec): void {
-  if (!isStreamWireMessageKind(kind)) {
-    throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Unknown stream message kind.');
-  }
-  if (!isStreamWireCodec(codec)) {
-    throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Unknown stream codec.');
   }
 }
 

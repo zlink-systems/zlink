@@ -66,6 +66,21 @@ export function isStreamWireCodec(value: number): boolean {
   return validCodecs.has(value);
 }
 
+function validateHeaderKindAndControl(kind: number, codec: number, flags: number): void {
+  if (!isStreamWireMessageKind(kind)) {
+    throw new Error('Unknown stream message kind.');
+  }
+  if (!isStreamWireCodec(codec)) {
+    throw new Error('Unknown stream codec.');
+  }
+  if (
+    kind === ZlinkStreamMessageKind.Control &&
+    (codec !== ZlinkStreamCodec.Raw || flags !== ZlinkStreamHeaderFlags.None)
+  ) {
+    throw new Error('Control packet must use raw codec and must not contain flags.');
+  }
+}
+
 const UTF8_TWO_BYTE_MIN = 0x80;
 const UTF8_THREE_BYTE_MIN = 0x800;
 const UTF16_HIGH_SURROGATE_MIN = 0xd800;
@@ -375,6 +390,8 @@ export function encodeStreamWireHeader(
   headerFlags = hasFlow ? headerFlags | flags.hasFlowId : headerFlags & ~flags.hasFlowId;
   headerFlags = hasActorSlot ? headerFlags | flags.hasActorSlot : headerFlags & ~flags.hasActorSlot;
 
+  validateHeaderKindAndControl(header.kind, header.codec, header.flags | headerFlags);
+
   const metadataBytes = hasMetadata ? encodeStreamWireMetadata(header.metadata) : new Uint8Array();
   const size =
     4 +
@@ -439,6 +456,7 @@ export function decodeStreamWireHeader(
   const kind = header[offset++];
   const codec = header[offset++];
   const headerFlags = header[offset++];
+  validateHeaderKindAndControl(kind, codec, headerFlags);
   const hasRequestSeq = (headerFlags & flags.hasRequestSeq) !== 0;
   const hasMetadata = (headerFlags & flags.hasMetadata) !== 0;
   const hasCorrelation = (headerFlags & flags.hasCorrelationId) !== 0;

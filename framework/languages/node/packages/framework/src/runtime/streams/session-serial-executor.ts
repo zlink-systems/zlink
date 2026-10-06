@@ -36,14 +36,6 @@ export class ZLinkSessionSerialExecutor {
     return this.submit(work, 'lifecycle', options, onRejected);
   }
 
-  executeInfrastructure(
-    work: () => Promise<void>,
-    options: Omit<ZLinkSerialWorkOptions, 'lane'> = {},
-    onRejected?: (error?: unknown) => void
-  ): boolean {
-    return this.submit(work, 'lifecycle', options, onRejected);
-  }
-
   executeFinal(work: () => Promise<void>): Promise<void> {
     if (this.closed) {
       return Promise.reject(

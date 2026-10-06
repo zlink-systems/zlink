@@ -3,19 +3,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForMonitorConnectionReady, waitForWorkerStatus, } = require('./perf_single_common');
+const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, spawnSenderWorker, waitForMonitorConnectionReady, waitForWorkerStatus, } = require('./perf_single_common');
 async function runDealerDealerBenchmark(msgSize, options) {
-    if (options.transport === 'inproc') {
-        return runLocalSocketOneWayBenchmark({
-            pattern: 'DEALER_DEALER',
-            msgSize,
-            options,
-            endpointToken: 'dealer-dealer',
-            createReceiver: (ctx) => zlink.createDealerSocket(ctx),
-            createSender: (ctx) => zlink.createDealerSocket(ctx),
-        });
-    }
-    const ctx = zlink.createContext();
+    const ctx = options.transport === 'inproc' ? zlink.sharedContext() : zlink.createContext();
     applyContextPolicy(ctx);
     const server = zlink.createDealerSocket(ctx);
     const serverMonitor = server.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
@@ -74,7 +64,8 @@ async function runDealerDealerBenchmark(msgSize, options) {
         await closeSenderWorker(worker);
         serverMonitor.close();
         server.close();
-        ctx.close();
+        if (options.transport !== 'inproc')
+            ctx.close();
     }
 }
 module.exports = { runDealerDealerBenchmark };
@@ -82,10 +73,6 @@ if (require.main === module) {
     (async () => {
         const options = parseSingleBinaryArgs(process.argv.slice(2));
         const result = await runDealerDealerBenchmark(options.msgSize, options);
-        if (result.unsupported) {
-            console.log(`UNSUPPORTED,${options.libName},DEALER_DEALER,${options.transport}`);
-            return;
-        }
         for (const line of summarizeMetrics('DEALER_DEALER', options.transport, options.msgSize, result.latenciesNs, options.duration, options.libName, result.accepted, result.latencyMeanNs)) {
             console.log(line);
         }

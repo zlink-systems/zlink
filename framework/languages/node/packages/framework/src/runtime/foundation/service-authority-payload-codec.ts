@@ -62,52 +62,6 @@ export interface ServiceUserSpotAuthorityPayload {
   readonly ownerNodeGeneration: bigint;
 }
 
-/** Replaces only authority-relocation-state and preserves the canonical owner payload. */
-export function replaceServiceAuthorityRelocationState(
-  payload: Uint8Array,
-  relocationState: Uint8Array
-): Buffer {
-  const bytes = Buffer.from(payload);
-  const reader = new AuthorityReader(bytes);
-  reader.expect(AUTHORITY_MAGIC);
-  if (reader.u8() !== AUTHORITY_FORMAT_VERSION || reader.u16() !== AUTHORITY_FLAGS) {
-    throw new TypeError('Authority payload header is invalid.');
-  }
-  const bodyLength = reader.u32();
-  const body = reader.takeReader(bodyLength);
-  const checksumOffset = reader.offset;
-  const checksum = reader.u32();
-  if (!reader.done || crc32c(bytes.subarray(0, checksumOffset)) !== checksum) {
-    throw new TypeError('Authority payload checksum is invalid.');
-  }
-  body.u8();
-  body.u8();
-  body.skip(body.u16());
-  body.text8();
-  body.nonZeroU64();
-  body.text8();
-  body.rid();
-  body.nonZeroU64();
-  const relocationOffset = body.offset;
-  body.bool8();
-  body.skip(body.u32());
-  const relocationEnd = body.offset;
-  const currentBody = bytes.subarray(11, 11 + bodyLength);
-  const nextBody = Buffer.concat([
-    currentBody.subarray(0, relocationOffset),
-    Buffer.from(relocationState),
-    currentBody.subarray(relocationEnd)
-  ]);
-  const envelope = Buffer.concat([
-    AUTHORITY_MAGIC,
-    Buffer.of(AUTHORITY_FORMAT_VERSION),
-    u16(AUTHORITY_FLAGS),
-    u32(nextBody.byteLength),
-    nextBody
-  ]);
-  return Buffer.concat([envelope, u32(crc32c(envelope))]);
-}
-
 export function encodeServiceUserSpotAuthorityPayload(
   value: ServiceUserSpotAuthorityPayload
 ): Buffer {

@@ -307,7 +307,7 @@ function main() {
   const topic = typeof workerData.topic === 'string' && workerData.topic.length > 0
     ? workerData.topic
     : DEFAULT_TOPIC;
-  const ctx = zlink.createContext();
+  const ctx = transport === 'inproc' ? zlink.sharedContext() : zlink.createContext();
   applyContextPolicy(ctx);
   const payload = createPayload(msgSize);
   let socket = null;
@@ -468,7 +468,7 @@ function main() {
       console.error(`[perf] close failed: ${err}`);
     }
     try {
-      ctx.close();
+      if (transport !== 'inproc') ctx.close();
     } catch (err) {
       console.error(`[perf] close failed: ${err}`);
     }

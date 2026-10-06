@@ -84,7 +84,15 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
     }
 
     public CompletionStage<Void> start() {
-        return reconcile()
+        return scan(Optional.empty(), new HashMap<>())
+                .thenCompose(this::recoverActivations)
+                .thenCompose(
+                        next ->
+                                stateLane.runAsync(
+                                        () -> {
+                                            applyCore(next);
+                                            return null;
+                                        }))
                 .thenRun(
                         () -> {
                             started = true;
@@ -98,7 +106,6 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
 
     public CompletionStage<Void> reconcile() {
         return scan(Optional.empty(), new HashMap<>())
-                .thenCompose(this::recoverActivations)
                 .thenCompose(
                         next ->
                                 stateLane.runAsync(
@@ -197,7 +204,22 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                                                             ready,
                                                             route,
                                                             instance,
-                                                            value.activationRecoveryState()))
+                                                            value.activationRecoveryState()
+                                                                    .or(
+                                                                            () ->
+                                                                                    snapshot.pendingCreation()
+                                                                                            .map(
+                                                                                                    pending ->
+                                                                                                            new ZLinkServiceAuthorityPayloadCodec
+                                                                                                                    .ActivationRecoveryState(
+                                                                                                                    pending
+                                                                                                                            .requestContentReference(),
+                                                                                                                    pending
+                                                                                                                            .requestSha256(),
+                                                                                                                    pending
+                                                                                                                            .requestEncodedSize(),
+                                                                                                                    1,
+                                                                                                                    0)))))
                                     .orElseGet(
                                             () ->
                                                     new UserApplied(
@@ -241,131 +263,129 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                     new IllegalStateException(
                             "Instance activation recovery requires a Relocation Store"));
         }
-        CompletionStage<String> completedVersion;
-        if (Long.compareUnsigned(recovery.replayCursor(), recovery.inboxSequence()) < 0) {
-            completedVersion =
-                    relocationStore
-                            .get(recovery.reference(), OPEN)
-                            .thenCompose(
-                                    read -> {
-                                        if (!(read instanceof ZLinkRelocationFound found)) {
-                                            return CompletableFuture.failedFuture(
-                                                    new IllegalStateException(
-                                                            "Instance activation recovery root is"
-                                                                    + " missing"));
-                                        }
-                                        byte[] payload = found.payload();
-                                        if (payload.length != recovery.encodedSize()
-                                                || !Arrays.equals(
-                                                        sha256(payload), recovery.sha256())) {
-                                            return CompletableFuture.failedFuture(
-                                                    new IllegalStateException(
-                                                            "Instance activation recovery root"
-                                                                    + " failed integrity validation"));
-                                        }
-                                        var envelope =
-                                                new systems.zlink.framework.runtime.internal.service
-                                                                .ZLinkInstanceActivationRecoveryCodec()
-                                                        .decode(payload);
-                                        if (!envelope.targetSpotId()
-                                                        .equals(applied.instance().targetSpotId())
-                                                || !envelope.stableType()
-                                                        .equals(applied.stableType())
-                                                || !envelope.targetMeshName()
-                                                        .equals(applied.meshName())
-                                                || !envelope.targetNodeRid()
-                                                        .equals(applied.instance().targetNodeRid())
-                                                || envelope.targetNodeGeneration()
-                                                        != applied.instance().targetNodeGeneration()
-                                                || !envelope.descriptorVersion()
-                                                        .equals(
-                                                                Long.toString(
-                                                                        node.status()
-                                                                                .descriptorRevision()))) {
-                                            return CompletableFuture.failedFuture(
-                                                    new IllegalStateException(
-                                                            "Instance activation recovery root does"
-                                                                    + " not match authority"));
-                                        }
-                                        return node.recoverInstanceActivation(
-                                                        envelope, applied.instance())
-                                                .thenCompose(
-                                                        ignored ->
-                                                                store.compareExchange(
-                                                                        key,
-                                                                        new ZLinkAuthorityExpectFound(
-                                                                                applied.instance()
-                                                                                        .storeVersion()),
-                                                                        new ZLinkAuthorityPut(
-                                                                                encodeReady(
-                                                                                        applied,
-                                                                                        Optional.of(
-                                                                                                new ZLinkServiceAuthorityPayloadCodec
-                                                                                                        .ActivationRecoveryState(
-                                                                                                        recovery
-                                                                                                                .reference(),
-                                                                                                        recovery
-                                                                                                                .sha256(),
-                                                                                                        recovery
-                                                                                                                .encodedSize(),
-                                                                                                        recovery
-                                                                                                                .inboxSequence(),
-                                                                                                        recovery
-                                                                                                                .inboxSequence())))),
-                                                                        OPEN))
-                                                .thenApply(
-                                                        result ->
-                                                                requireStored(
-                                                                                result,
-                                                                                "Instance"
-                                                                                        + " activation"
-                                                                                        + " terminal"
-                                                                                        + " completion"
-                                                                                        + " record")
-                                                                        .storeVersion());
-                                    });
-        } else {
-            completedVersion = CompletableFuture.completedFuture(applied.instance().storeVersion());
-        }
-        return completedVersion
+        CompletionStage<Void> replay =
+                Long.compareUnsigned(recovery.replayCursor(), recovery.inboxSequence()) < 0
+                        ? relocationStore
+                                .get(recovery.reference(), OPEN)
+                                .thenCompose(
+                                        read -> {
+                                            if (!(read instanceof ZLinkRelocationFound found))
+                                                return CompletableFuture.failedFuture(
+                                                        new IllegalStateException(
+                                                                "Instance activation recovery root is missing"));
+                                            byte[] payload = found.payload();
+                                            if (payload.length != recovery.encodedSize()
+                                                    || !Arrays.equals(
+                                                            sha256(payload), recovery.sha256())) {
+                                                return CompletableFuture.failedFuture(
+                                                        new IllegalStateException(
+                                                                "Instance activation recovery root"
+                                                                        + " failed integrity validation"));
+                                            }
+                                            var envelope =
+                                                    new systems.zlink.framework.runtime.internal
+                                                                    .service
+                                                                    .ZLinkInstanceActivationRecoveryCodec()
+                                                            .decode(payload);
+                                            if (!envelope.targetSpotId()
+                                                            .equals(
+                                                                    applied.instance()
+                                                                            .targetSpotId())
+                                                    || !envelope.stableType()
+                                                            .equals(applied.stableType())
+                                                    || !envelope.targetMeshName()
+                                                            .equals(applied.meshName())
+                                                    || !envelope.targetNodeRid()
+                                                            .equals(
+                                                                    applied.instance()
+                                                                            .targetNodeRid())
+                                                    || envelope.targetNodeGeneration()
+                                                            != applied.instance()
+                                                                    .targetNodeGeneration()) {
+                                                return CompletableFuture.failedFuture(
+                                                        new IllegalStateException(
+                                                                "Instance activation recovery root does"
+                                                                        + " not match authority"));
+                                            }
+                                            return node.recoverInstanceActivation(
+                                                    envelope, applied.instance());
+                                        })
+                        : CompletableFuture.completedFuture(null);
+        return replay.thenCompose(ignored -> store.read(key, OPEN))
                 .thenCompose(
-                        storeVersion ->
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot current))
+                                return CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "Recovered Instance authority is missing"));
+                            return completeActivationRecovery(store, relocationStore, key, current)
+                                    .thenApply(released -> withoutRecovery(applied, released));
+                        });
+    }
+
+    /** Records handler completion before releasing its immutable activation root. */
+    public static CompletionStage<ZLinkAuthorityStored> completeActivationRecovery(
+            ZLinkLocationRepository store,
+            ZLinkRelocationStore relocationStore,
+            String key,
+            ZLinkAuthoritySnapshot snapshot) {
+        var codec = new ZLinkServiceAuthorityPayloadCodec();
+        var authority = codec.decode(snapshot.payload()).orElseThrow();
+        var recovery = authority.activationRecoveryState().orElseThrow();
+        java.util.function.Function<
+                        Optional<ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState>, byte[]>
+                encode =
+                        pointer ->
+                                codec.encodeInstance(
+                                        ZLinkServiceAuthorityPayloadCodec.State.READY,
+                                        authority.stableType(),
+                                        authority.spotId(),
+                                        snapshot.ownerId(),
+                                        snapshot.ownerLeaseGeneration(),
+                                        authority.meshName(),
+                                        authority.nodeRid(),
+                                        authority.nodeGeneration(),
+                                        pointer);
+        CompletionStage<String> cursor =
+                Long.compareUnsigned(recovery.replayCursor(), recovery.inboxSequence()) < 0
+                        ? store.compareExchange(
+                                        key,
+                                        new ZLinkAuthorityExpectFound(snapshot.storeVersion()),
+                                        new ZLinkAuthorityPut(
+                                                encode.apply(
+                                                        Optional.of(
+                                                                new ZLinkServiceAuthorityPayloadCodec
+                                                                        .ActivationRecoveryState(
+                                                                        recovery.reference(),
+                                                                        recovery.sha256(),
+                                                                        recovery.encodedSize(),
+                                                                        recovery.inboxSequence(),
+                                                                        recovery
+                                                                                .inboxSequence())))),
+                                        OPEN)
+                                .thenApply(
+                                        result ->
+                                                requireStored(
+                                                                result,
+                                                                "Instance activation handler completion record")
+                                                        .storeVersion())
+                        : CompletableFuture.completedFuture(snapshot.storeVersion());
+        return cursor.thenCompose(
+                        version ->
                                 store.compareExchange(
                                         key,
-                                        new ZLinkAuthorityExpectFound(storeVersion),
-                                        new ZLinkAuthorityPut(
-                                                encodeReady(applied, Optional.empty())),
+                                        new ZLinkAuthorityExpectFound(version),
+                                        new ZLinkAuthorityPut(encode.apply(Optional.empty())),
                                         OPEN))
                 .thenCompose(
                         result -> {
-                            ZLinkAuthorityStored released =
+                            var released =
                                     requireStored(
                                             result, "Instance activation recovery pointer release");
                             return relocationStore
                                     .delete(recovery.reference(), OPEN)
-                                    .handle(
-                                            (ignored, failure) -> {
-                                                if (failure != null) {
-                                                    reportFailure.accept(unwrap(failure));
-                                                }
-                                                return withoutRecovery(applied, released);
-                                            });
+                                    .thenApply(ignored -> released);
                         });
-    }
-
-    private byte[] encodeReady(
-            InstanceApplied applied,
-            Optional<ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState> recovery) {
-        return payloadCodec.encodeInstance(
-                ZLinkServiceAuthorityPayloadCodec.State.READY,
-                applied.stableType(),
-                applied.instance().targetSpotId(),
-                applied.route().ownerId(),
-                applied.instance().leaseGeneration(),
-                applied.meshName(),
-                applied.instance().targetNodeRid(),
-                applied.instance().targetNodeGeneration(),
-                recovery);
     }
 
     private static ZLinkAuthorityStored requireStored(

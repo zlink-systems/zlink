@@ -18,6 +18,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace
@@ -25,6 +26,40 @@ namespace
 
 static std::atomic<uint64_t> g_completion_close_count (0);
 static const size_t k_inline_message_part_count = 8;
+
+// The addon has one instance per Node environment. Only environments that
+// request the shared context hold a reference to the process-wide Core handle.
+struct shared_context_env_t
+{
+    bool attached = false;
+    std::unordered_set<void *> sockets;
+};
+
+static std::mutex g_shared_context_mutex;
+static void *g_shared_context = NULL;
+static size_t g_shared_context_refs = 0;
+
+void release_shared_context_env (napi_env, void *data, void *)
+{
+    shared_context_env_t *instance = static_cast<shared_context_env_t *> (data);
+    if (instance->attached) {
+        for (void *socket : instance->sockets)
+            zlink_close (socket);
+        void *retiring_context = NULL;
+        {
+            std::lock_guard<std::mutex> lock (g_shared_context_mutex);
+            if (--g_shared_context_refs == 0) {
+                retiring_context = g_shared_context;
+                g_shared_context = NULL;
+            }
+        }
+        if (retiring_context) {
+            zlink_ctx_shutdown (retiring_context);
+            zlink_ctx_term (retiring_context);
+        }
+    }
+    delete instance;
+}
 
 // Inline slots cover common records. Receive calls reuse this storage on the
 // owning JS thread; close() releases frames while retaining the array capacity.
@@ -1357,6 +1392,45 @@ napi_value ctx_new (napi_env env, napi_callback_info info)
     return ext;
 }
 
+bool init_shared_context_env (napi_env env)
+{
+    shared_context_env_t *instance = new (std::nothrow) shared_context_env_t ();
+    if (!instance) {
+        napi_throw_error (env, NULL, "shared context instance allocation failed");
+        return false;
+    }
+    if (napi_set_instance_data (env, instance, release_shared_context_env, NULL)
+        != napi_ok) {
+        delete instance;
+        napi_throw_error (env, NULL, "shared context instance registration failed");
+        return false;
+    }
+    return true;
+}
+
+napi_value ctx_shared (napi_env env, napi_callback_info)
+{
+    shared_context_env_t *instance = NULL;
+    if (napi_get_instance_data (env, reinterpret_cast<void **> (&instance)) != napi_ok
+        || !instance) {
+        napi_throw_error (env, NULL, "shared context instance unavailable");
+        return NULL;
+    }
+    std::lock_guard<std::mutex> lock (g_shared_context_mutex);
+    if (!g_shared_context) {
+        g_shared_context = zlink_ctx_new ();
+        if (!g_shared_context)
+            return throw_last_error (env, "shared context creation failed");
+    }
+    if (!instance->attached) {
+        instance->attached = true;
+        ++g_shared_context_refs;
+    }
+    napi_value ext;
+    napi_create_external (env, g_shared_context, NULL, NULL, &ext);
+    return ext;
+}
+
 napi_value ctx_shutdown (napi_env env, napi_callback_info info)
 {
     napi_value argv[1];
@@ -1448,6 +1522,17 @@ napi_value ctx_getopt_data (napi_env env, napi_callback_info info)
     napi_get_value_external (env, argv[0], &ctx);
     int32_t opt = 0;
     napi_get_value_int32 (env, argv[1], &opt);
+    if (opt == ZLINK_THREAD_NAME_PREFIX) {
+        char prefix[16] = {};
+        size_t size = sizeof (prefix);
+        const zlink_config_result_t rc = zlink_ctx_get_data (
+          ctx, static_cast<zlink_ctx_option_t> (opt), prefix, &size);
+        if (rc != ZLINK_CONFIG_OK)
+            return throw_result_error (env, "ctx_getopt_data failed", rc);
+        napi_value out;
+        napi_create_buffer_copy (env, size, prefix, NULL, &out);
+        return out;
+    }
     uint64_t value = 0;
     size_t size = sizeof (value);
     const zlink_config_result_t rc = zlink_ctx_get_data (
@@ -1600,6 +1685,13 @@ napi_value socket_new (napi_env env, napi_callback_info info)
     void *sock = zlink_socket (ctx, translate_socket_type (type));
     if (!sock)
         return throw_last_error (env, "socket failed");
+    shared_context_env_t *instance = NULL;
+    napi_get_instance_data (env, reinterpret_cast<void **> (&instance));
+    {
+        std::lock_guard<std::mutex> lock (g_shared_context_mutex);
+        if (instance && instance->attached && ctx == g_shared_context)
+            instance->sockets.insert (sock);
+    }
     napi_value ext;
     napi_create_external (env, sock, NULL, NULL, &ext);
     return ext;
@@ -1615,6 +1707,12 @@ napi_value socket_close (napi_env env, napi_callback_info info)
     int rc = zlink_close (sock);
     if (rc != 0)
         return throw_result_error (env, "close failed", rc);
+    shared_context_env_t *instance = NULL;
+    napi_get_instance_data (env, reinterpret_cast<void **> (&instance));
+    if (instance && instance->attached) {
+        std::lock_guard<std::mutex> lock (g_shared_context_mutex);
+        instance->sockets.erase (sock);
+    }
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;

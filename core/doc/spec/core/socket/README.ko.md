@@ -475,6 +475,21 @@ Core는 보통 이 low water mark에서 credit을 묶어서 반환한다. sender
 cross-thread command를 만들지 않는다. 기다리는 writer가 없는 pipe를 receiver가 비워도
 wakeup을 보내지 않는다. 이 pipe 기준은 Framework의 receive 재개 기준과 별개다.
 
+#### Network interface binding
+
+`ZLINK_OPT_BINDTODEVICE`는 TCP 계열 transport(`tcp`, `tls`, `ws`, `wss`)의 OS socket을 지정한
+network interface에 묶는다. 기본값은 interface binding이 없는 상태이며, `zlink_set_option()`에
+`optval_ == NULL`, `optvallen_ == 0`을 넘기면 그 상태로 되돌린다. IPC와 inproc에는 적용하지 않는다.
+
+- **적용 시점:** listener는 bind 전에, connecter는 connect 전에 적용한다. accept한 socket은
+  listener의 binding을 이어받는다.
+- **플랫폼 미지원:** 플랫폼이 interface binding을 지원하지 않으면 `zlink_set_option()`이 비어 있지
+  않은 값을 `ZLINK_CONFIG_NOT_SUPPORTED`, `errno == ENOTSUP`로 거절하고 기존 값을 바꾸지 않는다.
+- **OS 거부:** OS가 적용을 거부하면(없는 interface, 권한 부족 등) listener의 `zlink_bind()`는
+  OS errno를 보존해 실패하고, bind result는 [오류 §6](../03-errors.ko.md#6-bind와-connect-result)의
+  errno 매핑을 따른다. connecter는 그 연결 시도를 실패로 처리하고, 재연결 간격이 양수이면 그 간격 뒤에
+  다시 시도한다.
+
 #### 송신 재시도
 
 submit retry는 `ENOTCONN`, `EHOSTUNREACH` 또는 `ECONNREFUSED`로 분류되는 local

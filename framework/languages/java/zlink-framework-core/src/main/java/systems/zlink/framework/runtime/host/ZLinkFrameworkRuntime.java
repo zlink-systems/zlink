@@ -1531,10 +1531,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return independentWaiter(candidate);
     }
 
-    private CompletionStage<Void> beginEmptyRelocation() {
-        return CompletableFuture.completedFuture(null);
-    }
-
     private void startTermination(
             CompletableFuture<ZLinkTerminationResult> completion, Duration deadline) {
         startTermination(completion, deadline, null);

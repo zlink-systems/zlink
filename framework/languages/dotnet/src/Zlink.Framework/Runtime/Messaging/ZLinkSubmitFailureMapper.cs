@@ -4,6 +4,31 @@ namespace Zlink.Framework.Runtime.Messaging;
 // the public error kind; async admission waits remain binding-owned.
 internal static class ZLinkSubmitFailureMapper
 {
+    public static ZLinkOneWaySubmitResult ToOneWayResult(
+        ZlinkSubmitException failure,
+        string operationName,
+        bool selectOne = false
+    ) =>
+        failure.Result switch
+        {
+            ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.RouteNotConnected
+            ),
+            // Select-one NotFound means no eligible member; a named target is absent.
+            ZlinkSubmitException.ErrorCode.NotFound => new ZLinkOneWaySubmitResult(
+                selectOne
+                    ? ZLinkOneWaySubmitStatus.RouteNotConnected
+                    : ZLinkOneWaySubmitStatus.TargetNotFound
+            ),
+            ZlinkSubmitException.ErrorCode.Terminated => new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.Shutdown
+            ),
+            ZlinkSubmitException.ErrorCode.Backpressured => new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.Backpressured
+            ),
+            _ => throw ZLinkRequestFailureMapper.CreateSubmitException(failure, operationName),
+        };
+
     public static ZLinkFrameworkException CreateChannelException(
         SubmitResult result,
         string targetDescription

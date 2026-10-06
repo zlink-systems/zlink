@@ -10,7 +10,6 @@ namespace Zlink.Framework.Runtime.Locations;
 
 internal sealed partial class ZLinkProviderLocationRepository
 {
-    private const string AuthorityPrefix = Prefix + "authority:";
     private const string AggregatePrefix = Prefix + "aggregate:";
     private static readonly TimeSpan AmbiguousReconciliationTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan CounterRetryWindow = TimeSpan.FromSeconds(5);
@@ -4228,17 +4227,6 @@ internal sealed partial class ZLinkProviderLocationRepository
     {
         using var deadline = new CancellationTokenSource(AmbiguousReconciliationTimeout);
         return await ReadRecordAsync<T>(key, deadline.Token)
-            .AsTask()
-            .WaitAsync(deadline.Token)
-            .ConfigureAwait(false);
-    }
-
-    private async ValueTask<ZLinkAuthorityReadResult> ReadAuthorityForReconciliationAsync(
-        ZLinkAuthorityKey key
-    )
-    {
-        using var deadline = new CancellationTokenSource(AmbiguousReconciliationTimeout);
-        return await ReadAuthorityAsync(key, deadline.Token)
             .AsTask()
             .WaitAsync(deadline.Token)
             .ConfigureAwait(false);

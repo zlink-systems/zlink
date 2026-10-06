@@ -175,19 +175,6 @@ export function decodeStreamHeader(header: Uint8Array, flowEnabled = true): ZLin
   const decoded = decodeStreamWireHeader(header, undefined, flowEnabled);
   const kind = decoded.kind as ZLinkStreamMessageKind;
   const flags = decoded.flags as ZLinkStreamHeaderFlags;
-  const hasRequestSeq = (flags & ZLinkStreamHeaderFlags.HasRequestSeq) !== 0;
-  const hasMetadata = (flags & ZLinkStreamHeaderFlags.HasMetadata) !== 0;
-  const hasCorrelation = (flags & ZLinkStreamHeaderFlags.HasCorrelationId) !== 0;
-  const hasFlow = (flags & ZLinkStreamHeaderFlags.HasFlowId) !== 0;
-  const hasActorSlot = (flags & ZLinkStreamHeaderFlags.HasActorSlot) !== 0;
-  if (
-    kind === ZLinkStreamMessageKind.Control &&
-    (hasCorrelation || hasRequestSeq || hasMetadata || hasFlow || hasActorSlot)
-  ) {
-    throw new Error(
-      'Control packet must not contain a request sequence, metadata, correlation id, or flow id.'
-    );
-  }
   const metadata = publicStreamMetadata(decoded.metadata);
   return {
     kind,

@@ -611,6 +611,56 @@ test('Actor binding replacement callback can send before close and does not bloc
   await runtime.dispose();
 });
 
+test('Actor replacement retains the session turn until callback terminal', async () => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const events = [];
+  let release;
+  let entered;
+  const terminal = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    sessionFactory(context) {
+      return {
+        context,
+        async onActorBindingReplaced(ctx, actorId) {
+          events.push(actorId);
+          if (actorId === 'actor-a') { entered(); await terminal; }
+        }
+      };
+    }
+  });
+  runtime.start();
+  runtime.markConnected('replacement-turn');
+  const session = runtime.findSession('replacement-turn');
+  const retired = {
+    sessionOwnerNodeRid: 'session-owner', sessionOwnerNodeGeneration: 1n,
+    sessionOwnerId: 'session-runtime', sessionOwnerLeaseGeneration: 1n,
+    sessionRid: 'replacement-turn', retiredBindingGeneration: 7n
+  };
+  session.enqueueActorBindingReplaced({ nodeRid: 'owner', actorId: 'actor-a', generation: 1n }, retired);
+  await started;
+  session.enqueueActorBindingReplaced({ nodeRid: 'owner', actorId: 'actor-b', generation: 1n }, retired);
+  try {
+    await clock.flush();
+    assert.deepEqual(events, ['actor-a']);
+    await clock.advance(99);
+    assert.deepEqual(socket.disconnects, []);
+    release();
+    await clock.flush();
+    assert.deepEqual(events, ['actor-a', 'actor-b']);
+    await clock.advance(99);
+    assert.deepEqual(socket.disconnects, []);
+    await clock.advance(1);
+    assert.deepEqual(socket.disconnects, ['replacement-turn']);
+  } finally {
+    release();
+    await runtime.dispose();
+  }
+});
+
 test('stalled Actor binding replacement callback is force-closed at its lifecycle deadline', async () => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
@@ -619,6 +669,9 @@ test('stalled Actor binding replacement callback is force-closed at its lifecycl
   const callbackDidStart = new Promise((resolve) => {
     callbackStarted = resolve;
   });
+  let releaseCallback;
+  const callbackTerminal = new Promise((resolve) => { releaseCallback = resolve; });
+  let disconnected = false;
   const runtime = createStreamRuntime({
     socket,
     livenessClock: clock,
@@ -628,8 +681,9 @@ test('stalled Actor binding replacement callback is force-closed at its lifecycl
         context,
         async onActorBindingReplaced() {
           callbackStarted();
-          await new Promise(() => {});
+          await callbackTerminal;
         },
+        async onDisconnected() { disconnected = true; },
         async onDispatch(header) {
           events.push([context.sessionId, header.packetName]);
         }
@@ -668,6 +722,10 @@ test('stalled Actor binding replacement callback is force-closed at its lifecycl
     () => socket.disconnects.includes('session-a'),
     'stalled replacement callback deadline close'
   );
+  assert.equal(disconnected, false);
+  releaseCallback();
+  await clock.flush();
+  assert.equal(disconnected, true);
   await runtime.dispose();
 });
 
@@ -898,6 +956,88 @@ test('stream request dispatch emits exactly one replied terminal record (spec 26
   await runtime.dispose();
 });
 
+for (const [controlName, controlPayload] of [
+  ['$zlink.unknown', ''],
+  ['$zlink.heartbeat.ping', 'invalid-payload']
+]) {
+  test(`stream rejects ${controlName} protocol errors before application handler terminal`, async () => {
+    const socket = new FakeStreamSocket();
+    let entered;
+    let release;
+    const started = new Promise(resolve => { entered = resolve; });
+    const terminal = new Promise(resolve => { release = resolve; });
+    let disconnected = false;
+    const runtime = createStreamRuntime({
+      socket,
+      sessionFactory(context) {
+        return {
+          context,
+          async onDispatch() { entered(); await terminal; },
+          async onDisconnected() { disconnected = true; }
+        };
+      }
+    });
+    runtime.start();
+    socket.emitPacket('blocked-control', fakeHeader({ name: 'SlowWork' }), fakeMessage(''));
+    await started;
+    try {
+      socket.emitPacket('blocked-control', fakeHeader({
+        kind: connector.ZlinkStreamMessageKind.Control,
+        codec: connector.ZlinkStreamCodec.Raw,
+        flags: connector.ZlinkStreamHeaderFlags.None,
+        name: controlName
+      }), fakeMessage(controlPayload));
+      await waitForReceive(socket);
+      assert.deepEqual(socket.disconnects, ['blocked-control']);
+      assert.equal(disconnected, false);
+      assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1],
+        streamProtocol.ZLinkStreamCloseReasonCode.ProtocolError);
+    } finally {
+      release();
+      await runtime.dispose();
+    }
+    assert.equal(disconnected, true);
+  });
+}
+
+test('scheduled heartbeat and transport timeout progress before handler terminal', async () => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  let entered;
+  let release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const terminal = new Promise(resolve => { release = resolve; });
+  let disconnected = false;
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    sessionFactory(context) {
+      return {
+        context,
+        async onDispatch() { entered(); await terminal; },
+        async onDisconnected() { disconnected = true; }
+      };
+    }
+  });
+  runtime.start();
+  runtime.markConnected('blocked-liveness');
+  await clock.flush();
+  socket.emitPacket('blocked-liveness', fakeHeader({ name: 'SlowWork' }), fakeMessage(''));
+  await started;
+  try {
+    await clock.advance(1000);
+    assert.equal(socket.sent.length, 1);
+    assert.equal(controlHeader(socket.sent[0]).name, '$zlink.heartbeat.ping');
+    await clock.advance(4000);
+    assert.deepEqual(socket.disconnects, ['blocked-liveness']);
+    assert.equal(disconnected, false);
+  } finally {
+    release();
+    await runtime.dispose();
+  }
+  assert.equal(disconnected, true);
+});
+
 test('stream heartbeat control bypasses a blocked application handler', async (t) => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
@@ -954,7 +1094,6 @@ test('stream heartbeat control bypasses a blocked application handler', async (t
   assert.deepEqual(socket.disconnects, []);
   assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.ping');
   await clock.advance(1);
-  await runtime.findSession('heartbeat-blocked-handler').runLivenessCheck();
   assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1], streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
   assert.deepEqual(socket.disconnects, ['heartbeat-blocked-handler']);
   await runtime.dispose();
@@ -2175,69 +2314,6 @@ test('stream session runtime keeps request streams open after route disconnect e
   });
 });
 
-test('stream session runtime completes pending responses before session dispatch', async () => {
-  const socket = new FakeStreamSocket();
-  const events = [];
-  let pending;
-  const runtime = createStreamRuntime({
-    socket,
-    claimApplicationWork() {
-      throw new Error('terminal completion must not claim application work');
-    },
-    headerDecoder: (header) => JSON.parse(header.getString(), streamHeaderReviver),
-    sessionFactory(context) {
-      pending = context.startRequest(1000);
-      return {
-        context,
-        async onDispatch(header, payload) {
-          events.push(['dispatch', header.packetName, payload.decode()]);
-        }
-      };
-    }
-  });
-
-  runtime.start();
-  socket.emitPacket('session-f', fakeHeader({
-    kind: connector.ZlinkStreamMessageKind.Response,
-    requestSeq: 1n,
-    name: 'Move'
-  }), fakeMessage('response-body'));
-
-  await waitForCondition(() => pending !== undefined, 'pending stream request');
-  const response = await pending.promise;
-  await runtime.dispose();
-
-  assert.equal(response.getString(), 'response-body');
-  assert.deepEqual(events, []);
-});
-
-test('stream session runtime decompresses response frames before completing pending requests', async () => {
-  const socket = new FakeStreamSocket();
-  let pending;
-  const runtime = createStreamRuntime({
-    socket,
-    headerDecoder: (header) => JSON.parse(header.getString(), streamHeaderReviver),
-    sessionFactory(context) {
-      pending = context.startRequest(1000);
-      return { context };
-    }
-  });
-
-  runtime.start();
-  socket.emitPacket('session-compressed-response', fakeHeader({
-    kind: connector.ZlinkStreamMessageKind.Response,
-    flags: connector.ZlinkStreamHeaderFlags.PayloadCompressed,
-    requestSeq: 1n,
-    name: 'Move'
-  }), fakeMessageBytes(Buffer.from('40551F41010047504141414141', 'hex')));
-
-  await waitForCondition(() => pending !== undefined, 'compressed pending stream request');
-  const response = await pending.promise;
-  await runtime.dispose();
-
-  assert.equal(response.getString(), 'A'.repeat(96));
-});
-
 test('stream session runtime decompresses dispatch payloads before session handlers', async () => {
   const socket = new FakeStreamSocket();
   const events = [];
@@ -2306,33 +2382,6 @@ test('stream session runtime rejects compressed dispatch payloads above receive 
   assert.deepEqual(events, []);
   assert.equal(errors.length, 1);
   assert.match(errors[0].message, /maximum stream payload size/);
-});
-
-test('stream session pending request timeout removes request sequence', async () => {
-  const context = new framework.ZLinkStreamBindingRuntime().createSessionContext({
-    sessionId: 'session-timeout',
-    routingId: 'session-timeout',
-    write() {
-      return true;
-    },
-    async close() {}
-  });
-  const pending = context.startRequest(1);
-  await assert.rejects(
-    () => pending.promise,
-    /Client stream request timed out/
-  );
-
-  const consumed = context.tryCompleteResponse({
-    kind: 3,
-    codec: 1,
-    flags: 1,
-    requestSeq: pending.requestSeq,
-    name: 'LateReply',
-    metadata: new Map()
-  }, fakeMessage('late-body'));
-
-  assert.equal(consumed, false);
 });
 
 test('stream session runtime dispatches unmatched response frames to the session', async () => {

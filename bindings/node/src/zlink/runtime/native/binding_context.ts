@@ -14,6 +14,7 @@ export interface ContextNativeBinding {
   ctxGetOptData: (ctx: NativeHandle, option: number) => NativeBuffer;
   ctxGetAutoHwmBudgetSnapshot: (ctx: NativeHandle) => CoreHwmBudgetSnapshotRaw;
   ctxNew: () => NativeHandle;
+  ctxShared: () => NativeHandle;
   ctxRecalculateAutoHwm: (ctx: NativeHandle) => void;
   ctxResetAutoHwmBudgetMetrics: (ctx: NativeHandle) => void;
   ctxSetOpt: (ctx: NativeHandle, option: number, value: number | NativeBuffer) => void;

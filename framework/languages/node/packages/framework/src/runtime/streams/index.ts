@@ -87,7 +87,6 @@ import {
   type ZLinkStreamSessionRuntimeOptions as ZLinkStreamSessionRuntimeCoreOptions
 } from './stream-session-runtime';
 const DEFAULT_STREAM_SERVICE_SHUTDOWN_TIMEOUT_MS = 1000;
-export { ZLinkPendingSessionRequest } from './session-requests';
 export { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 export { ZLinkActorSessionBindingRegistry } from './actor-session-binding-registry';
 export { zlinkStreamLz4CompressionCodec } from './stream-frame-factory';

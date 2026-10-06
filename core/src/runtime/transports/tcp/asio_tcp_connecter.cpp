@@ -190,6 +190,12 @@ void zlink::asio_tcp_connecter_t::start_connecting ()
         return;
     }
 
+    if (!tune_socket (_socket.native_handle ())) {
+        close ();
+        add_reconnect_timer ();
+        return;
+    }
+
     //  Bind to source address if specified
     if (tcp_addr->has_src_addr ()) {
         //  Allow reusing of the address
@@ -261,18 +267,6 @@ void zlink::asio_tcp_connecter_t::on_connect (const boost::system::error_code &e
 
     //  Release socket from ASIO management (we'll manage it via stream_engine)
     _socket.release ();
-
-    //  Tune the socket
-    if (!tune_socket (fd)) {
-        CONNECTER_DBG ("on_connect: tune_socket failed");
-#ifdef ZLINK_HAVE_WINDOWS
-        closesocket (fd);
-#else
-        ::close (fd);
-#endif
-        add_reconnect_timer ();
-        return;
-    }
 
     //  Get local address for engine
     std::string local_address = get_socket_name<tcp_address_t> (fd, socket_end_local);

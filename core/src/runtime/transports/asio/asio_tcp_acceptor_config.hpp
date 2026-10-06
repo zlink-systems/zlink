@@ -4,6 +4,7 @@
 #define ZLINK_ASIO_TCP_ACCEPTOR_CONFIG_HPP_INCLUDED
 
 #include "core/options.hpp"
+#include "transports/asio/asio_tcp_tuning.hpp"
 #include "utils/config.hpp"
 #include "utils/err.hpp"
 
@@ -54,6 +55,13 @@ inline int configure_asio_tcp_acceptor (acceptor_t &acceptor_,
     if (ec) {
         trace_fn_ ("open acceptor", ec, true);
         errno = acceptor_error_to_errno (ec);
+        return -1;
+    }
+
+    if (tune_asio_tcp_socket (acceptor_.native_handle (), options_, true) != 0) {
+        const int tune_errno = errno;
+        acceptor_.close ();
+        errno = tune_errno;
         return -1;
     }
 

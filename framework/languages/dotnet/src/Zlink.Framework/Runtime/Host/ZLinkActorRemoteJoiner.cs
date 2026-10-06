@@ -1369,55 +1369,6 @@ internal sealed class ZLinkActorRemoteJoiner(
             .ConfigureAwait(false);
     }
 
-    private async ValueTask<ZLinkRemoteActorJoinReply> ReconcileTargetJoinCommitAsync(
-        string actorId,
-        string handoffId,
-        RoutingId targetNodeRid,
-        string targetSpotId,
-        ulong targetSpotGeneration,
-        ulong targetNodeGeneration,
-        ulong authorityOwnerGeneration,
-        ulong ownerLeaseGeneration,
-        string routerChannelId,
-        (DateTimeOffset Utc, TimeSpan Monotonic) deadline,
-        CancellationToken cancellationToken,
-        Func<IReadOnlyList<Message>> createParts
-    )
-    {
-        return await ZLinkReconciliationRunner
-            .RunAsync(
-                async token =>
-                {
-                    var replyParts = await runtime
-                        .RequestToSpotViaRouterChannelAsync(
-                            routerChannelId,
-                            targetNodeRid,
-                            targetSpotId,
-                            targetSpotGeneration,
-                            targetNodeGeneration,
-                            authorityOwnerGeneration,
-                            ownerLeaseGeneration,
-                            createParts(),
-                            RemainingTimeout(deadline.Monotonic),
-                            token
-                        )
-                        .ConfigureAwait(false);
-                    return ZLinkRemoteActorJoinPackets.DecodeJoinReplyAndDispose(
-                        replyParts,
-                        actorId,
-                        targetSpotId
-                    );
-                },
-                exception =>
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"handoff commit retry actor={actorId} id={handoffId}: {exception.Message}"
-                    ),
-                cancellationToken,
-                static exception => exception is ZLinkActorHandoffRejectedException
-            )
-            .ConfigureAwait(false);
-    }
-
     private async ValueTask ReplayAbortedSourceHandoffAsync(ZLinkActorRuntimeState actorState)
     {
         var frames = actorState.Handoff.AbortCapture();
@@ -1448,12 +1399,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                 CancellationToken.None
             )
             .ConfigureAwait(false);
-    }
-
-    private void ReportCommittedHandoffFailure(string operation, Exception exception)
-    {
-        ZLinkFrameworkDebugLog.TaskFailure(operation, exception);
-        runtime.ErrorSink.ReportUnhandledCallbackException(exception);
     }
 
     private async ValueTask AbortTargetReservationBestEffortAsync(

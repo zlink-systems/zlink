@@ -2767,7 +2767,7 @@ final class ZLinkJavaRawMeshNode
     }
 
     CompletionStage<Void> sendInstanceSpot(
-            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
             String stableType,
             String sourceSpotId,
             byte[] metadata,
@@ -2783,6 +2783,10 @@ final class ZLinkJavaRawMeshNode
         }
         int flags =
                 metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA;
+        java.util.UUID identity =
+                route instanceof ZLinkServiceM6BWireCodec.InstanceColdActivation
+                        ? java.util.UUID.randomUUID()
+                        : null;
         List<byte[]> frames = new ArrayList<>();
         frames.add(
                 statefulWire.encodeInstanceSpotHeader(
@@ -2794,8 +2798,8 @@ final class ZLinkJavaRawMeshNode
                                 routingId,
                                 sourceSpotId,
                                 false,
-                                0,
-                                0,
+                                identity == null ? 0 : identity.getMostSignificantBits(),
+                                identity == null ? 0 : identity.getLeastSignificantBits(),
                                 null)));
         if (flags != 0) {
             frames.add(metadata.clone());
@@ -2806,7 +2810,7 @@ final class ZLinkJavaRawMeshNode
 
     @Override
     public CompletionStage<Void> submitInstanceSpotSend(
-            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
             String stableType,
             String sourceSpotId,
             byte[] metadata,
@@ -2823,7 +2827,7 @@ final class ZLinkJavaRawMeshNode
 
     @Override
     public CompletionStage<List<Message>> requestInstanceSpot(
-            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
             String stableType,
             String sourceSpotId,
             byte[] metadata,
@@ -2838,7 +2842,7 @@ final class ZLinkJavaRawMeshNode
     }
 
     private CompletionStage<List<Message>> dispatchInstanceSpotRequest(
-            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
             String stableType,
             String sourceSpotId,
             byte[] metadata,
@@ -2870,8 +2874,11 @@ final class ZLinkJavaRawMeshNode
         }
         Duration remainingTimeout = Duration.ofNanos(remainingNanos);
         long correlation = allocateCorrelation();
+        boolean cold = route instanceof ZLinkServiceM6BWireCodec.InstanceColdActivation;
         ZLinkServiceOperationRegistry.Operation<List<Message>> operation =
-                operations.register(remainingTimeout);
+                cold
+                        ? operations.register(new UUID(0, correlation), remainingTimeout)
+                        : operations.register(remainingTimeout);
         UUID operationId = operation.id();
         CompletionStage<List<byte[]>> submitted;
         try {
@@ -2900,8 +2907,13 @@ final class ZLinkJavaRawMeshNode
             remainingNanos = deadlineNanos - System.nanoTime();
             submitted =
                     remainingNanos > 0
-                            ? requestApplication(
-                                    route.targetNodeRid(), frames, Duration.ofNanos(remainingNanos))
+                            ? cold
+                                    ? sendApplication(route.targetNodeRid(), frames)
+                                            .thenApply(ignored -> List.of())
+                                    : requestApplication(
+                                            route.targetNodeRid(),
+                                            frames,
+                                            Duration.ofNanos(remainingNanos))
                             : CompletableFuture.failedFuture(
                                     new ZlinkRequestException(RequestResult.TIMED_OUT));
         } catch (RuntimeException | Error failure) {
@@ -2909,6 +2921,11 @@ final class ZLinkJavaRawMeshNode
         }
         submitted.whenComplete(
                 (replyFrames, failure) -> {
+                    if (cold) {
+                        if (failure != null)
+                            operations.completeExceptionally(operation.id(), unwrap(failure));
+                        return;
+                    }
                     RequestResult result = requestTerminal(failure, false);
                     List<byte[]> replies = replyFrames == null ? List.of() : replyFrames;
                     if (result != RequestResult.OK || replies.isEmpty()) {
@@ -2991,7 +3008,7 @@ final class ZLinkJavaRawMeshNode
      * completes with its reply.
      */
     private CompletionStage<List<Message>> dispatchLocalInstanceSpot(
-            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
             String stableType,
             String sourceSpotId,
             byte[] metadata,
@@ -3029,6 +3046,12 @@ final class ZLinkJavaRawMeshNode
             messages.forEach(Message::close);
             throw failure;
         }
+        java.util.UUID identity =
+                operation != null
+                        ? operation.id()
+                        : route instanceof ZLinkServiceM6BWireCodec.InstanceColdActivation
+                                ? java.util.UUID.randomUUID()
+                                : null;
         var header =
                 new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
                         flags,
@@ -3038,11 +3061,9 @@ final class ZLinkJavaRawMeshNode
                         routingId,
                         sourceSpotId,
                         request,
-                        operation == null ? 0 : operation.id().getMostSignificantBits(),
-                        operation == null ? correlation : operation.id().getLeastSignificantBits(),
+                        identity == null ? 0 : identity.getMostSignificantBits(),
+                        identity == null ? 0 : identity.getLeastSignificantBits(),
                         request ? correlation : null);
-        CompletableFuture<List<Message>> completion =
-                operation == null ? new CompletableFuture<>() : operation.completion();
         boolean accepted;
         try {
             accepted =
@@ -3055,9 +3076,8 @@ final class ZLinkJavaRawMeshNode
                                     contentType,
                                     replyParts -> {
                                         boolean completed =
-                                                operation == null
-                                                        ? completion.complete(replyParts)
-                                                        : operations.complete(
+                                                operation != null
+                                                        && operations.complete(
                                                                 operation.id(), replyParts);
                                         if (!completed) {
                                             replyParts.forEach(Message::close);
@@ -3073,9 +3093,7 @@ final class ZLinkJavaRawMeshNode
                                                 request
                                                         ? ZLinkDispatchErrorAction.FAIL_CALLER
                                                         : ZLinkDispatchErrorAction.DROP);
-                                        if (operation == null)
-                                            completion.completeExceptionally(unwrap(failure));
-                                        else
+                                        if (operation != null)
                                             operations.completeExceptionally(
                                                     operation.id(), unwrap(failure));
                                     });
@@ -3100,7 +3118,7 @@ final class ZLinkJavaRawMeshNode
             if (operation != null) operations.completeExceptionally(operation.id(), failure);
             return CompletableFuture.failedFuture(failure);
         }
-        return request ? completion : CompletableFuture.completedFuture(List.of());
+        return request ? operation.completion() : CompletableFuture.completedFuture(List.of());
     }
 
     private long addDeadlineNanos(Duration timeout) {
@@ -3971,20 +3989,30 @@ final class ZLinkJavaRawMeshNode
         CompletionStage<Void> recovery =
                 ((ZLinkJavaRawSpotNode) spotNode()).recoverInstanceSpot(envelope, route);
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
-        if ((envelope.request() || !ZLinkRuntimeMetrics.enabled())
+        if ((!envelope.request() && !ZLinkRuntimeMetrics.enabled())
                 && (reporter == null || !reporter.captureEnabled())) return recovery;
         return recovery.whenComplete(
                 (ignored, failure) -> {
-                    if (failure != null)
-                        recordInstanceActivationFailure(
-                                envelope.targetSpotId(),
-                                envelope.sourceNodeRid(),
-                                failure,
-                                envelope.request(),
-                                envelope.replyRouteId(),
-                                envelope.request()
-                                        ? ZLinkDispatchErrorAction.FAIL_CALLER
-                                        : ZLinkDispatchErrorAction.DROP);
+                    if (failure != null) {
+                        int[] pair =
+                                recordInstanceActivationFailure(
+                                        envelope.targetSpotId(),
+                                        envelope.sourceNodeRid(),
+                                        failure,
+                                        envelope.request(),
+                                        envelope.replyRouteId(),
+                                        envelope.request()
+                                                ? ZLinkDispatchErrorAction.FAIL_CALLER
+                                                : ZLinkDispatchErrorAction.DROP);
+                        if (envelope.request()
+                                && currentPeerGeneration(
+                                        envelope.sourceNodeRid(), envelope.sourceNodeGeneration()))
+                            sendApplication(
+                                    envelope.sourceNodeRid(),
+                                    List.of(
+                                            wire.encodeReplyHeader(
+                                                    envelope.replyRouteId(), pair[0], pair[1])));
+                    }
                 });
     }
 
@@ -4741,6 +4769,10 @@ final class ZLinkJavaRawMeshNode
             if (topology.peer(inbound.source()).isEmpty()) {
                 return;
             }
+            if (command == ServiceWireConstants.COMMAND_REPLY) {
+                dispatchInstanceActivationReply(inbound);
+                return;
+            }
             if (command == ServiceWireConstants.COMMAND_MESSAGE_FOLLOW) {
                 dispatchMessageFollow(inbound);
                 return;
@@ -5051,7 +5083,7 @@ final class ZLinkJavaRawMeshNode
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
         boolean captureEnabled = reporter != null && reporter.captureEnabled();
         boolean metricsEnabled = !request && ZLinkRuntimeMetrics.enabled();
-        if (action != ZLinkDispatchErrorAction.REPLY_ERROR && !metricsEnabled && !captureEnabled) {
+        if (action == ZLinkDispatchErrorAction.DROP && !metricsEnabled && !captureEnabled) {
             return null;
         }
         int[] pair = relayedFailurePair(cause);
@@ -5696,7 +5728,9 @@ final class ZLinkJavaRawMeshNode
         Optional<ZLinkServiceTopologyRegistry.Peer> source =
                 topology == null ? Optional.empty() : topology.peer(inbound.source());
         boolean validFence =
-                header.request() == (inbound.requestSequence() != null)
+                (header.route() instanceof ZLinkServiceM6BWireCodec.InstanceColdActivation
+                                ? inbound.requestSequence() == null
+                                : header.request() == (inbound.requestSequence() != null))
                         && header.sourceNodeRid().equals(inbound.source())
                         && source.isPresent()
                         && source.orElseThrow().descriptor().lifecycleGeneration()
@@ -5742,15 +5776,25 @@ final class ZLinkJavaRawMeshNode
                                         return;
                                     }
                                     try {
-                                        port.replyMessages(
-                                                requireStarted(),
-                                                inbound.source(),
-                                                inbound.requestSequence(),
-                                                encodeApplicationFrames(
-                                                        wire.encodeReplyHeader(
-                                                                header.replyRouteId(), 0, 0),
-                                                        null,
-                                                        replyParts));
+                                        if (header.route()
+                                                instanceof
+                                                ZLinkServiceM6BWireCodec.InstanceColdActivation) {
+                                            replyRecoveredInstance(
+                                                    header.sourceNodeRid(),
+                                                    header.sourceNodeGeneration(),
+                                                    header.replyRouteId(),
+                                                    replyParts);
+                                        } else {
+                                            port.replyMessages(
+                                                    requireStarted(),
+                                                    inbound.source(),
+                                                    inbound.requestSequence(),
+                                                    encodeApplicationFrames(
+                                                            wire.encodeReplyHeader(
+                                                                    header.replyRouteId(), 0, 0),
+                                                            null,
+                                                            replyParts));
+                                        }
                                     } finally {
                                         replyParts.forEach(Message::close);
                                     }
@@ -6234,6 +6278,15 @@ final class ZLinkJavaRawMeshNode
                     terminalResult,
                     failureCode,
                     OneWayFailureContext.WIRE_TERMINAL);
+            return;
+        }
+        if (header.route() instanceof ZLinkServiceM6BWireCodec.InstanceColdActivation) {
+            if (currentPeerGeneration(header.sourceNodeRid(), header.sourceNodeGeneration()))
+                sendApplication(
+                        header.sourceNodeRid(),
+                        List.of(
+                                wire.encodeReplyHeader(
+                                        header.replyRouteId(), terminalResult, failureCode)));
             return;
         }
         if (inbound.requestSequence() == null) {
@@ -7319,6 +7372,78 @@ final class ZLinkJavaRawMeshNode
 
     private CompletionStage<Void> sendApplication(RoutingId target, List<byte[]> frames) {
         return port.send(requireStarted(), target, frames);
+    }
+
+    void replyRecoveredInstance(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            long replyRouteId,
+            List<Message> parts) {
+        if (!currentPeerGeneration(sourceNodeRid, sourceNodeGeneration)) return;
+        sendApplication(
+                sourceNodeRid,
+                List.of(
+                        wire.encodeReplyHeader(replyRouteId, 0, 0),
+                        wire.encodeFrameworkMultipartFrame(parts)));
+    }
+
+    private boolean currentPeerGeneration(RoutingId sourceNodeRid, long sourceNodeGeneration) {
+        return topology != null
+                && topology.peer(sourceNodeRid)
+                                .map(peer -> peer.descriptor().lifecycleGeneration())
+                                .orElse(0L)
+                        == sourceNodeGeneration;
+    }
+
+    private void dispatchInstanceActivationReply(ZLinkJavaRawServicePort.Inbound inbound) {
+        List<byte[]> frames = inbound.frames();
+        ZLinkServiceM6AWireCodec.Reply reply;
+        try {
+            reply = wire.decodeReplyHeader(frames.getFirst());
+        } catch (IllegalArgumentException invalid) {
+            return;
+        }
+        UUID operationId = new UUID(0, reply.correlation());
+        if (reply.terminalResult() != 0 || reply.failureCode() != 0) {
+            if (frames.size() != 1) {
+                operations.completeExceptionally(
+                        operationId,
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                "invalid Instance Spot activation failure reply frame count"));
+                return;
+            }
+            operations.completeExceptionally(
+                    operationId,
+                    ZLinkRequestFailureMapping.receivedFailure(
+                            ZLinkBackendRequestResult.fromWireTerminal(reply.terminalResult())
+                                    .toFrameworkErrorKind(reply.failureCode()),
+                            "Instance Spot activation request failed",
+                            reply.failureCode(),
+                            java.util.Map.of()));
+            return;
+        }
+        if (frames.size() != 2) {
+            operations.completeExceptionally(
+                    operationId,
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "invalid Instance Spot activation reply frame count"));
+            return;
+        }
+        try {
+            List<Message> parts = decodeApplicationMessages(frames.get(1));
+            if (!operations.complete(operationId, parts)) parts.forEach(Message::close);
+        } catch (ZLinkFrameworkException invalid) {
+            operations.completeExceptionally(operationId, invalid);
+        } catch (IllegalArgumentException invalid) {
+            operations.completeExceptionally(
+                    operationId,
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "invalid Instance Spot activation reply payload",
+                            invalid));
+        }
     }
 
     private CompletionStage<List<byte[]>> requestDurable(

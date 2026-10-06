@@ -12,7 +12,6 @@ exports.drainRouterRecvInto = drainRouterRecvInto;
 exports.drainRecvSocket = drainRecvSocket;
 exports.parseSingleBinaryArgs = parseSingleBinaryArgs;
 exports.measurementPayload = measurementPayload;
-exports.runLocalSocketOneWayBenchmark = runLocalSocketOneWayBenchmark;
 exports.releaseSenderWorker = releaseSenderWorker;
 exports.sendSocketRequired = sendSocketRequired;
 exports.spawnSenderWorker = spawnSenderWorker;
@@ -458,12 +457,6 @@ function drainRecvSocketNoWaitUntilIdle(socket, collector, payloadSize, viaSubsc
         collector.recordPayload(data, currentEpochNs());
     }
 }
-function runLocalSocketOneWayBenchmark({ pattern }) {
-    // inproc is context-local, while Node Workers cannot share a Context.
-    // A single JavaScript loop that alternates send and recv imposes a hidden
-    // window and does not represent C's concurrent sender/receiver workload.
-    return { unsupported: true, pattern };
-}
 function parseSingleBinaryArgs(argv) {
     if (argv.length < 3) {
         throw new Error('usage: <binary> <lib_name> <transport> <size>');
@@ -573,7 +566,6 @@ module.exports = {
     drainRecvSocket,
     parseSingleBinaryArgs,
     measurementPayload,
-    runLocalSocketOneWayBenchmark,
     releaseSenderWorker,
     sendSocketRequired,
     spawnSenderWorker,

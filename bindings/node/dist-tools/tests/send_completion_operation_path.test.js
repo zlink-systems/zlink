@@ -6,8 +6,7 @@ const assert = require('node:assert/strict');
 const { constants } = require('node:os');
 const { CompletionEntry, CompletionOwner, } = require('../../dist/zlink/runtime/messaging/completion_owner');
 const { RequestError, RequestResult, SubmitResult, } = require('../../dist/zlink/contracts/errors/errors');
-const { mapNativeErrno, } = require('../../dist/zlink/runtime/errors/error_mapping');
-function requestCompletion(completionId, userContext) {
+function requestCompletion(completionId, userContext, requestResult = RequestResult.Ok) {
     return {
         kind: 2,
         completionId,
@@ -15,7 +14,7 @@ function requestCompletion(completionId, userContext) {
         peerRoutingId: null,
         sendResult: 0,
         terminalErrno: 0,
-        requestResult: 0,
+        requestResult,
         parts: [],
     };
 }
@@ -28,12 +27,10 @@ test('successful send settles without publishing a SEND completion id', async ()
     assert.equal(entry.captured, true);
     assert.equal(entry.settled, true);
 });
-test('native context termination maps to a terminated send result', () => {
-    assert.equal(mapNativeErrno('submit', 156384765), SubmitResult.Terminated);
-});
 for (const [sendResult, terminalErrno, expected] of [
     [801, 2, SubmitResult.NotFound],
     [802, 107, SubmitResult.NotConnected],
+    [803, 11, SubmitResult.InternalError],
     [999, 2, SubmitResult.InternalError],
 ]) {
     for (const operation of ['send', 'request']) {
@@ -48,7 +45,7 @@ for (const [sendResult, terminalErrno, expected] of [
             });
             await assert.rejects(entry.promise, (error) => error.result === expected
                 && error.nativeErrno
-                    === (sendResult === 999 ? constants.errno.EPROTO : terminalErrno));
+                    === (expected === SubmitResult.InternalError ? constants.errno.EPROTO : terminalErrno));
             owner.close();
         });
     }
@@ -74,6 +71,34 @@ test('async request rejects a completion whose known token has a different id', 
     assert.equal(entry.settled, true);
     owner.close();
 });
+for (const [requestResult, expectedErrno] of [
+    [RequestResult.TimedOut, constants.errno.ETIMEDOUT],
+    [RequestResult.NotFound, constants.errno.ENOENT],
+    [RequestResult.Terminated, 156384765],
+    [RequestResult.ProtocolError, constants.errno.EPROTO],
+    [RequestResult.InternalError, constants.errno.EIO],
+    [RequestResult.Rejected, constants.errno.EACCES],
+    [RequestResult.Conflict, constants.errno.EEXIST],
+    [RequestResult.Busy, constants.errno.EBUSY],
+    [RequestResult.NotConnected, constants.errno.ENOTCONN],
+    [RequestResult.InvalidArgument, constants.errno.EINVAL],
+    [RequestResult.InvalidState, 156384763],
+    [RequestResult.NotSupported, constants.errno.ENOTSUP],
+    [RequestResult.Backpressured, constants.errno.EAGAIN],
+]) {
+    test(`REQUEST result ${requestResult} projects its Core representative errno`, async () => {
+        assert.equal(new RequestError(requestResult).nativeErrno, expectedErrno);
+        const entry = new CompletionEntry(602n, 'request');
+        entry.publish(602n);
+        entry.capture(requestCompletion(602n, entry.token, requestResult));
+        await assert.rejects(entry.promise, (error) => {
+            const requestError = error;
+            return error instanceof RequestError
+                && requestError.result === requestResult
+                && requestError.nativeErrno === expectedErrno;
+        });
+    });
+}
 test('zero-context synchronous request completion still correlates by id', async () => {
     const owner = new CompletionOwner(null);
     const entry = owner.register('request', false, false);

@@ -308,7 +308,10 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                             .InstanceSpotMessage
                     message,
             ZLinkBackendReceived received) {
-        var route = message.route();
+        var route =
+                (systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                                .InstanceRouteFence)
+                        message.route();
         if (!context.nodeRid().equals(route.targetNodeRid())
                 || !authorityFenceMatches(
                         route.ownerId(), route.leaseGeneration(), route.authorityOwnerGeneration())

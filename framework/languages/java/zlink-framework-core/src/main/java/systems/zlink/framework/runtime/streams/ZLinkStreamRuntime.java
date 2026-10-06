@@ -679,20 +679,17 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                         } catch (RuntimeException failure) {
                                             callback = CompletableFuture.failedFuture(failure);
                                         }
-                                        ScheduledFuture<?> callbackDeadline = deadline;
-                                        callback.whenComplete(
+                                        return callback.handle(
                                                 (ignored, failure) -> {
-                                                    if (callbackDeadline != null) {
-                                                        callbackDeadline.cancel(false);
+                                                    if (deadline != null) {
+                                                        deadline.cancel(false);
                                                     }
                                                     scheduleReplacementClose(
                                                             state,
                                                             identity,
                                                             BOUND_SESSION_REPLACEMENT_CLOSE_DELAY);
+                                                    return null;
                                                 });
-                                        // Do not return callback. The callback's terminal result is
-                                        // observed above and the Session queue turn is free now.
-                                        return CompletableFuture.completedFuture(null);
                                     });
             queued.whenComplete(
                     (ignored, failure) -> {

@@ -131,6 +131,26 @@ public sealed class SourceLayoutContracts
         );
     }
 
+    [Theory]
+    [InlineData("Spots/ZLinkSpotNodeRuntime.cs")]
+    [InlineData("Spots/ZLinkSpotOutboundTransport.cs")]
+    [InlineData("Host/ZLinkActorBoundSessionCoordinator.cs")]
+    public void One_way_submit_callers_delegate_binding_result_projection_to_Messaging(
+        string relativePath
+    )
+    {
+        var source = File.ReadAllText(
+            Path.Combine(
+                FindRepositoryRoot(),
+                "framework/languages/dotnet/src/Zlink.Framework/Runtime",
+                relativePath
+            )
+        );
+
+        Assert.Contains("ZLinkSubmitFailureMapper.ToOneWayResult(", source);
+        Assert.DoesNotContain("ZlinkSubmitException.ErrorCode.", source);
+    }
+
     private static bool IsBuildOutput(string path)
     {
         var normalized = path.Replace('\\', '/');
