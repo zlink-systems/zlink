@@ -250,6 +250,12 @@ void zlink::asio_ws_connecter_t::start_connecting ()
         return;
     }
 
+    if (!tune_socket (_socket.native_handle ())) {
+        close ();
+        add_reconnect_timer ();
+        return;
+    }
+
     WS_CONNECTER_DBG ("start_connecting: initiating async_connect to %s:%d",
                       _endpoint.address ().to_string ().c_str (), _endpoint.port ());
 
@@ -297,18 +303,6 @@ void zlink::asio_ws_connecter_t::on_connect (const boost::system::error_code &ec
 
     //  Release socket from ASIO management
     _socket.release ();
-
-    //  Tune the socket
-    if (!tune_socket (fd)) {
-        WS_CONNECTER_DBG ("on_connect: tune_socket failed");
-#ifdef ZLINK_HAVE_WINDOWS
-        closesocket (fd);
-#else
-        ::close (fd);
-#endif
-        add_reconnect_timer ();
-        return;
-    }
 
     //  Get local address for engine
     std::string local_address = get_socket_name<tcp_address_t> (fd, socket_end_local);

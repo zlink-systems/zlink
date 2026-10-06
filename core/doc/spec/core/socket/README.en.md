@@ -510,6 +510,24 @@ cross-thread command for every normal low-depth message. A receiver that
 drains a pipe no writer is waiting on sends no wakeup. This pipe threshold is
 independent of a Framework receive-resume threshold.
 
+#### Network interface binding
+
+`ZLINK_OPT_BINDTODEVICE` binds the OS socket of a TCP-family transport (`tcp`, `tls`, `ws`, `wss`)
+to the named network interface. The default has no interface binding; passing `optval_ == NULL`
+and `optvallen_ == 0` to `zlink_set_option()` restores that state. It does not apply to IPC or
+inproc.
+
+- **When it applies:** a listener applies it before bind, and a connecter applies it before
+  connect. An accepted socket inherits the listener's binding.
+- **Unsupported platform:** if the platform does not support interface binding,
+  `zlink_set_option()` rejects a non-empty value with `ZLINK_CONFIG_NOT_SUPPORTED` and
+  `errno == ENOTSUP` and leaves the previous value unchanged.
+- **OS refusal:** if the OS refuses to apply it (unknown interface, missing permission, and so on),
+  the listener's `zlink_bind()` fails with the OS errno preserved, and the bind result follows the
+  errno mapping in [Errors §6](../03-errors.en.md#6-bind-and-connect-result). A connecter treats the
+  attempt as a connection failure and retries after the reconnect interval when that interval is
+  positive.
+
 #### Send retry
 
 Submit retry only retries local submit failures classified as `ENOTCONN`,
