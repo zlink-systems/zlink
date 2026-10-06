@@ -4086,7 +4086,10 @@ export class ServiceStatefulRuntime {
       encodeStatefulReply(correlation, terminalResult, failureCode, tail),
       ...(payload === undefined ? [] : [encodeApplicationPayload(payload)])
     ];
-    if (ingress.command === M6bServiceWireCommand.instanceSpot) {
+    if (
+      ingress.requestSequence === undefined &&
+      ingress.command === M6bServiceWireCommand.instanceSpot
+    ) {
       const record = decodeStatefulHeader(ingress.parts[0]!);
       if (record.kind === 'instanceSpot' && record.activation === 'missing') {
         if (this.tryPeerGeneration(record.sourceNodeRid) !== record.sourceNodeGeneration) {

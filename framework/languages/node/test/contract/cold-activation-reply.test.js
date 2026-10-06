@@ -8,6 +8,10 @@ const {
 const {
   ApplicationIngressRecordOwner
 } = require('../../packages/framework/dist/runtime/application-jobs/application-ingress-record-owner');
+const {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} = require('../../packages/framework/dist/runtime/host/application-job-queue');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const {
   encodeApplicationPayload,
@@ -27,6 +31,8 @@ const { logs } = require('@opentelemetry/api-logs');
 const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 const fs = require('node:fs');
 const flowRecords = [];
+const TEST_APPLICATION_JOB_CAPACITY = 1n;
+const TEST_NATIVE_REQUEST_SEQUENCE = 1n;
 const loggerProvider = new LoggerProvider({
   processors: [
     {
@@ -60,12 +66,20 @@ function ingressOwner() {
   });
 }
 
-function pair() {
+// nativeReplyIngress models a Core Request record carrying its live reply capability.
+function pair({ nativeReplyIngress = false } = {}) {
   const nodes = new Map();
   const events = [];
   function node(rid, generation) {
     const queued = [];
     const sent = [];
+    const replyDeliveries = [];
+    const applicationJobQueue = new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration(
+        { maxQueuedApplicationJobs: TEST_APPLICATION_JOB_CAPACITY },
+        () => TEST_APPLICATION_JOB_CAPACITY
+      )
+    );
     let ingress;
     let connected = true;
     const disconnect = new Set();
@@ -93,14 +107,42 @@ function pair() {
       async sendService(target, parts) {
         sent.push({ target, parts });
         events.push(`send:${rid}:${parts[0][SERVICE_WIRE_COMMAND_OFFSET]}`);
-        await nodes.get(target).receive({ sourceRoutingId: rid, parts });
-        return true;
+        const destination = nodes.get(target);
+        const received = { sourceRoutingId: rid, parts };
+        if (
+          nativeReplyIngress &&
+          parts[0][SERVICE_WIRE_COMMAND_OFFSET] === wire.M6bServiceWireCommand.instanceSpot
+        ) {
+          const request = wire.decodeStatefulHeader(parts[0]);
+          if (
+            request.kind === 'instanceSpot' &&
+            request.operationKind === 'request' &&
+            request.replyRouteId !== undefined
+          ) {
+            received.requestSequence = TEST_NATIVE_REQUEST_SEQUENCE;
+            received.reply = (replyParts) => {
+              replyDeliveries.push(
+                nodes.get(rid).receive({ sourceRoutingId: target, parts: replyParts })
+              );
+            };
+          }
+        }
+        const permit = await destination.applicationJobQueue.acquire();
+        try {
+          await destination.receive(received);
+          return true;
+        } finally {
+          permit.releaseAfterInternalProcessing();
+        }
       },
       requestService() {
         throw new Error('Cold request must use send admission and its source pending operation.');
       },
-      replyService() {
-        throw new Error('Recovered cold request has no native reply capability.');
+      replyService(record, parts) {
+        if (record.requestSequence === undefined || record.reply === undefined)
+          throw new Error('Native reply requires the original request capability.');
+        events.push(`reply:${rid}:${parts[0][SERVICE_WIRE_COMMAND_OFFSET]}`);
+        record.reply(parts);
       }
     };
     const runtime = new ServiceStatefulRuntime(raw, rid, generation);
@@ -120,6 +162,8 @@ function pair() {
       runtime,
       queued,
       sent,
+      replyDeliveries,
+      applicationJobQueue,
       raw,
       reporter,
       receive: (record) =>
@@ -136,6 +180,17 @@ function pair() {
       observerCount: () => disconnect.size,
       hidePeer() {
         connected = false;
+      },
+      async occupyAllApplicationPermits() {
+        const permits = [];
+        const limit = applicationJobQueue.snapshot().effectiveMaxQueuedApplicationJobs;
+        while (BigInt(permits.length) < limit) permits.push(await applicationJobQueue.acquire());
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          for (const permit of permits) permit.releaseAfterInternalProcessing();
+        };
       }
     };
     nodes.set(rid, value);
@@ -265,6 +320,49 @@ for (const recovery of [false, true]) {
     });
   }
 }
+
+test('normal cold reply uses the original reply capability when source application permits are full', async (t) => {
+  const p = pair({ nativeReplyIngress: true });
+  let releasePermits;
+  t.after(async () => {
+    releasePermits?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    p.close();
+  });
+  const pending = p.source.runtime.requestToMissingInstanceSpot(p.placement, p.payload, 10000);
+  pending.promise.catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(p.source.sent.length, 1);
+  assert.equal(p.target.queued.length, 1);
+  releasePermits = await p.source.occupyAllApplicationPermits();
+  const full = p.source.applicationJobQueue.snapshot();
+  assert.equal(full.permitsInUse, full.effectiveMaxQueuedApplicationJobs);
+
+  try {
+    const mailbox = p.target.queued.shift();
+    mailbox.stateful.reply(RequestResult.Ok, 0, p.payload);
+    await mailbox.stateful.onTerminalCompletion();
+    mailbox.applicationJob.close();
+    await Promise.all(p.source.replyDeliveries);
+
+    const outcome = await Promise.race([
+      pending.promise.then((result) => ({ kind: 'completed', result })),
+      new Promise((resolve) => setImmediate(() => resolve({ kind: 'blocked' })))
+    ]);
+    assert.equal(outcome.kind, 'completed');
+    assert.equal(outcome.result.terminalResult, RequestResult.Ok);
+    assert.equal(p.source.runtime.pendingOperationCount, 0);
+    assert.equal(p.source.applicationJobQueue.snapshot().permitsInUse, full.permitsInUse);
+    assert.equal(p.target.sent.length, 0);
+    assert.ok(
+      p.events.indexOf('durable:complete') <
+        p.events.indexOf(`reply:target:${M6aServiceWireCommand.reply}`)
+    );
+  } finally {
+    releasePermits();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+});
 
 test('cold reply without a current source peer is not sent; original source deadline wins', async (t) => {
   const p = pair();
