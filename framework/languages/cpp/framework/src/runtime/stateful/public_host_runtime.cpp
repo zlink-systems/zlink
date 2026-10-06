@@ -2331,9 +2331,6 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
                 if (!stored)
                     continue;
                 completed = stored->snapshot;
-                (void) _transport->reply_instance_spot_activation (
-                  recovery.activation, dispatched.terminal_result, dispatched.failure_code,
-                  std::move (dispatched.application_reply));
             }
             const auto completed_state = decode_instance_spot_authority_payload (completed.payload);
             if (!completed_state || !completed_state->activation_recovery

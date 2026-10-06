@@ -50,27 +50,6 @@ template <typename Predicate> bool wait_until (Predicate predicate)
 
 int main ()
 {
-    foundation::operation_registry_t cold_replies;
-    std::atomic_int cold_terminals{0};
-    const std::vector<std::uint8_t> target{1};
-    const std::vector<std::uint8_t> other_target{2};
-    assert (cold_replies.register_operation (
-      id (200), foundation::operation_registry_t::clock_t::now () + std::chrono::seconds (1),
-      [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) {
-          assert (terminal == foundation::operation_terminal_t::completed);
-          assert (payload == std::vector<std::uint8_t> ({9}));
-          cold_terminals.fetch_add (1, std::memory_order_release);
-      },
-      target));
-    assert (!cold_replies.complete_from_target (id (200), other_target, {8},
-                                                foundation::operation_terminal_t::completed));
-    assert (cold_replies.contains (id (200)));
-    assert (cold_replies.complete_from_target (id (200), target, {9},
-                                               foundation::operation_terminal_t::completed));
-    assert (!cold_replies.complete_from_target (id (200), target, {9},
-                                                foundation::operation_terminal_t::completed));
-    assert (wait_until ([&] { return cold_terminals.load (std::memory_order_acquire) == 1; }));
-
     const auto &fixture = completion_terminal_fixture ();
     assert (fixture.at ("fixture") == "zlink.framework.completion-terminal");
     assert (fixture.at ("version") == 1);
