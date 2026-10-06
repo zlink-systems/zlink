@@ -23,8 +23,6 @@ public sealed class CoreHwmBudgetSnapshot
     public ulong MeasurementEpoch { get; internal init; }
     /// <summary>Gets the configured memory limit in bytes.</summary>
     public ulong ConfiguredMemoryLimitBytes { get; internal init; }
-    /// <summary>Gets the managed runtime memory hint in bytes.</summary>
-    public ulong RuntimeMemoryLimitBytes { get; internal init; }
     /// <summary>Gets the resolved memory limit in bytes.</summary>
     public ulong ResolvedMemoryLimitBytes { get; internal init; }
     /// <summary>Gets the configured manual Core budget in bytes.</summary>

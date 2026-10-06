@@ -639,6 +639,8 @@ final class ZLinkCanonicalRelocationStateMachine
                             ZLinkFrameworkErrorKind.SHUTTING_DOWN,
                             "canonical relocation target is shutting down");
             created.ready().completeExceptionally(rejected);
+            created.request().completeExceptionally(rejected);
+            created.prepared().completeExceptionally(rejected);
             return request
                     ? replyReady(fence, created)
                     : publishFailure(fence, created, transportSource, rejected, true)
@@ -667,13 +669,35 @@ final class ZLinkCanonicalRelocationStateMachine
             return CompletableFuture.completedFuture(null);
         }
 
+        if (!request) {
+            attempt.ready()
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null) {
+                                    publishFailure(
+                                                    fence,
+                                                    attempt,
+                                                    transportSource,
+                                                    unwrap(failure),
+                                                    true)
+                                            .exceptionally(
+                                                    publicationFailure -> {
+                                                        LOGGER.warning(
+                                                                "Canonical relocation failure reply could not be sent: "
+                                                                        + unwrap(
+                                                                                publicationFailure));
+                                                        return null;
+                                                    });
+                                }
+                            });
+        }
         attempt.assembler()
                 .assembled()
                 .thenCompose(payload -> reconstruct(prepare, payload))
                 .thenCompose(
                         restore -> {
-                            attempt.request().complete(restore.request());
                             return target.stage(restore.request())
+                                    .thenRun(() -> attempt.request().complete(restore.request()))
                                     .thenCompose(
                                             ignored ->
                                                     coordinator.prepare(restore.authority(), OPEN))
@@ -684,44 +708,18 @@ final class ZLinkCanonicalRelocationStateMachine
                             if (failure == null) {
                                 attempt.ready().complete(null);
                             } else {
-                                inStateLane(() -> targets.remove(fence, attempt));
                                 Throwable cause = unwrap(failure);
+                                attempt.request().completeExceptionally(cause);
+                                attempt.prepared().completeExceptionally(cause);
                                 if (request) {
                                     publishFailure(fence, attempt, transportSource, cause, false)
                                             .whenComplete(
                                                     (cleanup, cleanupFailure) -> {
-                                                        if (cleanupFailure != null) {
-                                                            cause.addSuppressed(
-                                                                    unwrap(cleanupFailure));
-                                                        }
                                                         attempt.ready()
                                                                 .completeExceptionally(cause);
-                                                        if (cleanupFailure == null) {
-                                                            attempt.terminal().complete(null);
-                                                        } else {
-                                                            attempt.terminal()
-                                                                    .completeExceptionally(
-                                                                            unwrap(cleanupFailure));
-                                                        }
                                                     });
                                 } else {
-                                    attempt.ready().completeExceptionally(cause);
-                                    publishFailure(fence, attempt, transportSource, cause, true)
-                                            .whenComplete(
-                                                    (ignoredPublication, publicationFailure) -> {
-                                                        if (publicationFailure == null) {
-                                                            attempt.terminal().complete(null);
-                                                            return;
-                                                        }
-                                                        LOGGER.warning(
-                                                                "Canonical relocation failure reply"
-                                                                        + " could not be sent: "
-                                                                        + unwrap(
-                                                                                publicationFailure));
-                                                        attempt.terminal()
-                                                                .completeExceptionally(
-                                                                        unwrap(publicationFailure));
-                                                    });
+                                    discardTarget(fence, attempt, cause);
                                 }
                             }
                         });
@@ -765,7 +763,7 @@ final class ZLinkCanonicalRelocationStateMachine
         attempt.ready()
                 .thenCompose(ignored -> sendReady(source, attempt.prepare()))
                 .thenRun(() -> acceptRelayReady(fence, attempt))
-                .exceptionallyCompose(failure -> rollbackReadySubmission(attempt, unwrap(failure)))
+                .exceptionallyCompose(failure -> failed(unwrap(failure)))
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure == null) {
@@ -775,17 +773,6 @@ final class ZLinkCanonicalRelocationStateMachine
                             }
                         });
         return publication;
-    }
-
-    private CompletionStage<Void> rollbackReadySubmission(
-            TargetAttempt attempt, Throwable readyFailure) {
-        if (attempt.relayReadyAccepted()) {
-            return failed(readyFailure);
-        }
-        //  Do not abort here.  This is a retryable READY submission failure,
-        //  not an explicit pre-relay-ready abort: target.abort removes the
-        //  Actor target stage that the exact retry must publish.
-        return failed(readyFailure);
     }
 
     private static <T> T completedValue(CompletableFuture<T> future) {
@@ -872,40 +859,35 @@ final class ZLinkCanonicalRelocationStateMachine
             RoutingId source,
             Throwable failure,
             boolean sendFailure) {
-        ZLinkSpotRetireControl.StageRequest request = completedValue(attempt.request());
-        CompletionStage<Void> cleanup;
-        try {
-            cleanup =
-                    request == null
-                            ? CompletableFuture.completedFuture(null)
-                            : target.abort(request);
-        } catch (RuntimeException cleanupFailure) {
-            cleanup = CompletableFuture.failedFuture(cleanupFailure);
-        }
-        AtomicReference<Throwable> discardFailure = new AtomicReference<>();
-        return cleanup.handle(
+        discardTarget(fence, attempt, failure);
+        return attempt.terminal()
+                .handle(
                         (ignored, cleanupFailure) -> {
                             if (cleanupFailure != null) {
                                 Throwable cause = unwrap(cleanupFailure);
-                                discardFailure.set(cause);
                                 failure.addSuppressed(cause);
                                 LOGGER.warning(
                                         "Canonical relocation failed-stage cleanup "
                                                 + "could not complete; sending FAILED reply: "
                                                 + cause);
+                                return cause;
                             }
                             return null;
                         })
                 .thenCompose(
-                        ignored ->
-                                sendFailure
-                                        ? send(source, encodeFailed(attempt.prepare(), failure))
-                                        : CompletableFuture.completedFuture(null))
-                .thenCompose(
-                        ignored ->
-                                discardFailure.get() == null
-                                        ? CompletableFuture.completedFuture(null)
-                                        : CompletableFuture.failedFuture(discardFailure.get()));
+                        discardFailure ->
+                                (sendFailure
+                                                ? send(
+                                                        source,
+                                                        encodeFailed(attempt.prepare(), failure))
+                                                : CompletableFuture.<Void>completedFuture(null))
+                                        .thenCompose(
+                                                ignored ->
+                                                        discardFailure == null
+                                                                ? CompletableFuture.completedFuture(
+                                                                        null)
+                                                                : CompletableFuture.failedFuture(
+                                                                        discardFailure)));
     }
 
     /** Uses the same failure-code mapping as other Framework replies. */
@@ -1099,6 +1081,10 @@ final class ZLinkCanonicalRelocationStateMachine
         }
         settleTargetTerminal(fence, attempt, created);
         created.completeExceptionally(cause);
+        // End an incomplete payload at the same terminal claim. An accepted restore
+        // already running still owns installation and must settle before cleanup.
+        attempt.assembler().assembled().toCompletableFuture().completeExceptionally(cause);
+        attempt.ready().completeExceptionally(cause);
     }
 
     private void settleTargetTerminal(
@@ -1106,8 +1092,17 @@ final class ZLinkCanonicalRelocationStateMachine
         publication.whenComplete(
                 (ignored, failure) -> {
                     if (failure != null && !attempt.committed()) {
-                        attempt.request()
-                                .thenCompose(target::abort)
+                        attempt.prepared()
+                                .handle((prepared, prepareFailure) -> null)
+                                .thenCompose(
+                                        ignoredPrepare ->
+                                                attempt.request()
+                                                        .handle((request, stageFailure) -> request))
+                                .thenCompose(
+                                        request ->
+                                                request == null
+                                                        ? CompletableFuture.completedFuture(null)
+                                                        : target.abort(request))
                                 .whenComplete(
                                         (discarded, discardFailure) -> {
                                             if (discardFailure == null) {
@@ -2171,6 +2166,8 @@ final class ZLinkCanonicalRelocationStateMachine
         private final ZLinkCanonicalRelocationProtocol.Prepare prepare;
         private final ZLinkRelocationPayloadTransfer.Assembler assembler;
         private final RelayBoundary boundary = new RelayBoundary();
+        // Completes with the request only after endpoint stage installation succeeds.
+        // An exceptional completion means that this attempt installed no endpoint stage.
         private final CompletableFuture<ZLinkSpotRetireControl.StageRequest> request =
                 new CompletableFuture<>();
         private final CompletableFuture<ZLinkAggregateRelocationCoordinator.Prepared> prepared =

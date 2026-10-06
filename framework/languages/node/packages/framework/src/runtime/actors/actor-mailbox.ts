@@ -17,9 +17,14 @@ export class ZLinkActorSerialExecutor {
   constructor(
     private readonly actorId: string,
     private readonly sourceSpotId: unknown,
-    options?: ZLinkSerialSchedulerOptions
+    options?: ZLinkSerialSchedulerOptions,
+    sharedOwner?: ZLinkSerialExecutionQueue
   ) {
-    this.scheduler = new ZLinkSerialExecutionQueue((record) => this.runRecord(record), options);
+    this.scheduler = new ZLinkSerialExecutionQueue(
+      (record) => this.runRecord(record),
+      options,
+      sharedOwner
+    );
   }
 
   execute<T>(operation: () => Promise<T> | T, workOptions?: ZLinkSerialWorkOptions): Promise<T> {

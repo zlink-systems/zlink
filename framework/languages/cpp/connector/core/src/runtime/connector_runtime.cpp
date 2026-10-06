@@ -829,7 +829,9 @@ bool change_state (std::shared_ptr<connector_state_t> state,
             const auto connected_at = std::chrono::steady_clock::now ();
             state->last_heartbeat_sent = connected_at;
             state->last_inbound_received = connected_at;
-            // §10: a new connection owns a fresh receive queue and counts.
+            // §10: a new connection owns fresh read state, receive queue and counts.
+            state->read_in_progress = false;
+            state->inbound_buffer.clear ();
             state->dispatch_queue.clear ();
             ++state->dispatch_queue_generation;
             state->received_counts.clear ();
@@ -1574,11 +1576,6 @@ void run_close_work (const std::shared_ptr<detail::connector_state_t> &state,
         // Outside transport_mutex so pending completion handlers can still
         // finish their state transition without a lock inversion.
         close_error = connection->shutdown_and_close ();
-    }
-    {
-        std::lock_guard<std::mutex> lock (state->transport_mutex);
-        state->read_in_progress = false;
-        state->inbound_buffer.clear ();
     }
     detail::close_bound_actors (state);
     detail::change_state (state, connection_state_t::closed);

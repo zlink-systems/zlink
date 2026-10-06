@@ -346,6 +346,14 @@ public final class PerfUtil {
             timeout, label);
     }
 
+    public static Runnable beginMonitorEventWait(SocketMonitor monitor,
+            systems.zlink.contracts.eventing.MonitorEventType expectedEvent,
+            int expectedCount, Duration timeout, String label) {
+        var wait = PerfTransport.beginMonitorEventWait(monitor, expectedEvent,
+            expectedCount);
+        return () -> wait.await(timeout, label);
+    }
+
     public static void waitForMonitorEventWithActivity(
         SocketMonitor monitor, Socket activitySocket,
         systems.zlink.contracts.eventing.MonitorEventType expectedEvent,

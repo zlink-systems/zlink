@@ -178,7 +178,6 @@ impl ContextStorage {
             budget_generation: native.budget_generation,
             measurement_epoch: native.measurement_epoch,
             configured_memory_limit_bytes: native.configured_memory_limit_bytes,
-            runtime_memory_limit_bytes: native.runtime_memory_limit_bytes,
             resolved_memory_limit_bytes: native.resolved_memory_limit_bytes,
             configured_core_budget_bytes: native.configured_core_budget_bytes,
             effective_core_budget_bytes: native.effective_core_budget_bytes,

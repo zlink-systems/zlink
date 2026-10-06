@@ -426,14 +426,13 @@ context.reset_core_hwm_budget_metrics ();
 `core_hwm_memory_limit_bytes(...)`와 `core_hwm_budget_bytes(...)`의 `0`은 각각
 명시 입력과 수동 Core budget이 없다는 뜻이다. Binding은 profile 비율, connection 수 또는
 queue별 HWM을 계산하지 않고 exact `uint64_t` 값을 Core context option으로 전달한다.
-C++ binding은 runtime memory hint를 만들지 않는다. 입력 우선순위는 수동 Core budget,
-명시 memory limit, Core fallback 순서다. Core가 감지한 finite hard limit보다 명시 입력이
+Core가 감지한 finite hard limit보다 명시 입력이
 크면 `EINVAL`을 그대로 전달하고 clamp하지 않는다.
 `core_hwm_budget_snapshot_t`는 Core ABI v1 필드와 flag를 단위 변환 없이 투영하며
 `core_hwm_budget_snapshot()`이 ABI version과 struct size 초기화를 소유한다. 사용자가
 `send_hwm(...)` 또는 `recv_hwm(...)`을 호출한 방향은 기존처럼 수동 override다.
 
-Snapshot은 configured/runtime/resolved memory limit, configured/effective budget,
+Snapshot은 configured/resolved memory limit, configured/effective budget,
 planned/applied/manual-reserved HWM, Core queue/application/current/peak/provisional accounted
 byte, completion current/peak/pending과 total messaging byte, monitor/instance aggregate,
 application/completion queue count, `outstanding_application_lease_count`, `retired_queue_count`,

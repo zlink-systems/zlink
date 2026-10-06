@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.spots;
 
-import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 
@@ -45,9 +44,7 @@ final class ZLinkUserSpotRetireScheduler {
             case TARGET_COMMITTED -> {
                 yield ZLinkRelocationHandOff.completeSourceCleanup(
                                 List.of(
-                                        () ->
-                                                ZLinkHandlerStages.fromRunnable(
-                                                        source::completeSourceBarrierCommit),
+                                        source::completeSourceBarrierCommit,
                                         () -> request.sourceCleanup().cleanup(),
                                         source::discardInitialAfterCommit))
                         .thenRun(() -> recordActorHandoffs(stage));

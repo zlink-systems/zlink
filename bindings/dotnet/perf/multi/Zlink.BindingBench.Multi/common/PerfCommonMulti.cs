@@ -86,7 +86,7 @@ internal static partial class PerfRunner
     }
 
     internal static bool WaitConnectReadyCount(MonitorSocket monitor,
-        int expectedReady, int timeoutMs)
+        int expectedReady, int timeoutMs, Func<int>? startState = null)
     {
         if (expectedReady <= 0)
             return true;
@@ -96,16 +96,27 @@ internal static partial class PerfRunner
             return true;
 
         using var readyPoller = new MonitorReadyPoller();
-        long deadlineTicks = DeadlineTicksFromMilliseconds(timeoutMs);
+        long deadlineTicks = startState == null
+            ? DeadlineTicksFromMilliseconds(timeoutMs) : 0;
         while (true)
         {
             long nowTicks = Stopwatch.GetTimestamp();
-            if (nowTicks >= deadlineTicks)
+            if (deadlineTicks == 0)
+            {
+                int state = startState!();
+                if (state < 0)
+                    return false;
+                if (state > 0)
+                    deadlineTicks = DeadlineTicksFromMilliseconds(timeoutMs);
+            }
+            if (deadlineTicks != 0 && nowTicks >= deadlineTicks)
                 return false;
 
             int rc = readyPoller.Poll(
                 new System.Collections.Generic.List<MonitorSocket> { monitor },
-                new[] { 0 }, 1, deadlineTicks, nowTicks);
+                new[] { 0 }, 1,
+                deadlineTicks != 0 ? deadlineTicks
+                    : DeadlineTicksFromMilliseconds(50), nowTicks);
             if (rc < 0)
                 return false;
             if (rc == 0)
@@ -113,7 +124,7 @@ internal static partial class PerfRunner
 
             try
             {
-                readyCount += DrainReadyEvents(monitor);
+                readyCount = DrainReadyEvents(monitor, readyCount);
                 if (readyCount >= expectedReady)
                     return true;
             }

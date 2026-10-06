@@ -98,12 +98,6 @@ final class NativeContext implements Context {
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         }
         this.options = new ContextOptions(this);
-        long runtimeMemoryLimit = Runtime.getRuntime().maxMemory();
-        if (runtimeMemoryLimit > 0) {
-            setUInt64Option(
-                ContextOption.AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES,
-                runtimeMemoryLimit);
-        }
     }
 
     @Override
@@ -205,7 +199,6 @@ final class NativeContext implements Context {
                 readBudgetValue(snapshot, 0, "budgetGeneration"),
                 readBudgetValue(snapshot, 1, "measurementEpoch"),
                 readBudgetValue(snapshot, 2, "configuredMemoryLimitBytes"),
-                readBudgetValue(snapshot, 3, "runtimeMemoryLimitBytes"),
                 readBudgetValue(snapshot, 4, "resolvedMemoryLimitBytes"),
                 readBudgetValue(snapshot, 5, "configuredCoreBudgetBytes"),
                 readBudgetValue(snapshot, 6, "effectiveCoreBudgetBytes"),

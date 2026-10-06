@@ -59,9 +59,9 @@ option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.15.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.16.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.15.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.16.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 # The binding and Core package prefixes have three sources, in this order: the
 # two ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_*_PREFIX options, the repository's local
@@ -2253,6 +2253,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp
     "connector-unit;connector-contract;connector-timeout;connector-protocol"
     contract)
+  foreach(_codec_case reentrant order close reconnect)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_stream_codec_${_codec_case}
+      COMMAND test_cpp_stream_connector codec-${_codec_case}
+      LABELS "connector-unit;connector-contract;connector-regression"
+      TIER unit
+      TIMEOUT 10)
+  endforeach()
   target_compile_definitions(test_cpp_stream_revision PRIVATE
     ZLINK_STREAM_PACKET_NAME_FIXTURE_PATH="${CMAKE_CURRENT_LIST_DIR}/../../test/fixtures/stream-packet-name-whitespace.tsv")
   add_executable(test_cpp_stream_connector_no_exceptions
