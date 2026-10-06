@@ -12,6 +12,7 @@
 #include <limits>
 #include <atomic>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <optional>
 #include <string>
@@ -209,8 +210,9 @@ class message_flow_tracer_t
     void emit (message_flow_event_t event, message_flow_log_mode_t effective_mode) const noexcept
     {
         traced_count ().fetch_add (1, std::memory_order_relaxed);
-        if (dispatch_options_access_t::logger (*_options))
-            log_default (event, effective_mode);
+        if (dispatch_options_access_t::logger (*_options) && !log_default (event, effective_mode)) {
+            observer_failure_count ().fetch_add (1, std::memory_order_relaxed);
+        }
         try {
             dispatch_options_access_t::observe (*_options, event);
         }
@@ -343,7 +345,7 @@ class message_flow_tracer_t
                < rate;
     }
 
-    void log_default (const message_flow_event_t &event,
+    bool log_default (const message_flow_event_t &event,
                       message_flow_log_mode_t effective_mode) const noexcept
     {
         try {
@@ -433,12 +435,12 @@ class message_flow_tracer_t
             }
             // Emit structured fields only through an explicitly configured
             // framework logger; observer-only and no-sink paths stay silent.
-            diagnostic_event_sink_t::log_if_configured (
+            return diagnostic_event_sink_t::log_if_configured (
               dispatch_options_access_t::logger (*_options), log_level_t::info, "message flow",
               std::move (fields));
         }
-        catch (...) {
-            observer_failure_count ().fetch_add (1, std::memory_order_relaxed);
+        catch (const std::exception &) {
+            return false;
         }
     }
 

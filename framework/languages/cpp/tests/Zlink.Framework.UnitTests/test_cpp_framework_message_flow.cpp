@@ -11,9 +11,11 @@
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
+#include <zlink/framework/contracts/configuration/app.hpp>
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -21,6 +23,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -119,6 +122,50 @@ bool wait_until (const std::function<bool ()> &predicate)
         std::this_thread::sleep_for (std::chrono::milliseconds (10));
     }
     return predicate ();
+}
+
+bool file_provider_failure_does_not_change_message_result ()
+{
+    namespace fs = std::filesystem;
+    const auto failed_log_path =
+      fs::temp_directory_path ()
+      / ("zlink-message-flow-provider-failure-"
+         + std::to_string (std::chrono::steady_clock::now ().time_since_epoch ().count ()));
+    std::error_code create_error;
+    if (!fs::create_directory (failed_log_path, create_error) || create_error) {
+        return false;
+    }
+
+    app_t app;
+    app.logging ().use_file (failed_log_path.string ());
+    dispatch_options_t options;
+    options.message_flow (message_flow_log_mode_t::normal);
+    zlink::framework::detail::dispatch_options_access_t::set_logger (
+      options, app.logging ().factory ().create ("message-flow-test"));
+    std::atomic_bool observed_success{false};
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      options, [&] (const message_flow_event_t &event) {
+          if (event.outcome == message_flow_outcome_t::completed
+              && event.result == message_flow_result_t::succeeded) {
+              observed_success.store (true, std::memory_order_release);
+          }
+      });
+
+    const auto failures_before = message_flow_tracer_t::observer_failures ();
+    const auto message_result = [&] {
+        auto event = flow_event (message_flow_outcome_t::completed);
+        event.result = message_flow_result_t::succeeded;
+        message_flow_tracer_t (options).trace (std::move (event));
+        return message_flow_result_t::succeeded;
+    }();
+    const bool observer_received_success =
+      wait_until ([&] { return observed_success.load (std::memory_order_acquire); });
+    const auto failures_after = message_flow_tracer_t::observer_failures ();
+    std::error_code cleanup_error;
+    fs::remove_all (failed_log_path, cleanup_error);
+
+    return message_result == message_flow_result_t::succeeded && observer_received_success
+           && failures_after == failures_before + 1 && !cleanup_error;
 }
 
 } // namespace
@@ -703,6 +750,11 @@ int main ()
             || zlink::framework::detail::diagnostic_decoded_value != "<decoded>") {
             return 39;
         }
+    }
+
+    if (!file_provider_failure_does_not_change_message_result ()) {
+        std::cerr << "message-flow file provider failure changed message observation\n";
+        return 70;
     }
 
     return 0;
