@@ -618,6 +618,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 b1Accepted.toCompletableFuture().get(4, TimeUnit.SECONDS);
                 assertEquals(1, EVENTS.stream().filter("command44.abort"::equals).count());
                 assertEquals(1, EVENTS.stream().filter("source.replay:B1"::equals).count());
+                assertTrue(
+                        EVENTS.indexOf("source.replay:B1") < EVENTS.indexOf("command44.abort"),
+                        "source queue must replay before command 44 abort: " + EVENTS);
                 assertEquals(0, targetCommits.get());
                 assertFalse(EVENTS.contains("target.open"));
                 assertEquals(0, sourceAttemptCount(sourceJoin));
