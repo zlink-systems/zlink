@@ -23,7 +23,8 @@ class actor_serial_executor_t
     using queue_ptr_t = std::shared_ptr<queue_t>;
 
     explicit actor_serial_executor_t (std::shared_ptr<offload_executor_t> worker_executor,
-                                      queue_ptr_t queue = {}) :
+                                      queue_ptr_t queue = {},
+                                      queue_ptr_t spot_gate = {}) :
         _worker_executor (std::move (worker_executor)),
         _state_lane (*_worker_executor),
         _queue (std::move (queue))
@@ -33,6 +34,8 @@ class actor_serial_executor_t
               *_worker_executor, serial_execution_queue_options_t{}, queue_t::error_handler_t{},
               serial_lane_policy_t::actor_delivery ());
         }
+        if (spot_gate)
+            _queue->attach_spot_gate (std::move (spot_gate));
     }
 
     actor_serial_executor_t (const actor_serial_executor_t &) = delete;
