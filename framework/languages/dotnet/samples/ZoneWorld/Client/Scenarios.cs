@@ -60,6 +60,7 @@ public static class Scenarios
             StringComparer.OrdinalIgnoreCase
         )
         {
+            ["LAYOUT"] = Layout,
             ["ZW-B4"] = B4BorderSnapshotExpiry,
             ["ZW-B8"] = B8SessionRouteSealTimeoutReconnect,
             ["ZW-C2"] = C2NodeDisconnected,
@@ -965,6 +966,39 @@ public static class Scenarios
     }
 
     // --- Track C: observing the nodes ----------------------------------------
+
+    private static async ValueTask Layout(ClientOptions options, CancellationToken ct)
+    {
+        await using var ops = await OpsClient.ConnectAsync(options.OpsEndpoint, ct);
+        var observed = await ops.WatchNodesAsync(ct);
+        var zones = observed.Nodes.SelectMany(node => node.Zones).ToArray();
+        ZlinkStreamAssert.Ensure(
+            observed.Nodes.Count == 2
+                && zones.Length == ZoneTopology.Zones.Count()
+                && zones.ToHashSet(StringComparer.Ordinal).SetEquals(ZoneTopology.Zones),
+            "Ops must report every ZoneId exactly once"
+        );
+        foreach (var node in observed.Nodes)
+            Console.WriteLine(
+                $"ops-zone-owner node={node.NodeId} zones={string.Join(',', node.Zones)}"
+            );
+        foreach (
+            var pair in AdjacentZonePairs.Where(pair =>
+                CrossingCoordinates(pair.Source, pair.Target).Source.Y
+                == CrossingCoordinates(pair.Source, pair.Target).Target.Y
+            )
+        )
+        {
+            var source = observed.Nodes.Single(node => node.Zones.Contains(pair.Source)).NodeId;
+            var target = observed.Nodes.Single(node => node.Zones.Contains(pair.Target)).NodeId;
+            if (source == target)
+                continue;
+            var bot = pair.Source == ZoneIds.NorthWest ? BotIds.NorthWestX : BotIds.SouthWestX;
+            Console.WriteLine($"ops-bot-boundary bot={bot} source={source} target={target}");
+            return;
+        }
+        throw new ScenarioFailure("Ops layout has no cross-owner X boundary");
+    }
 
     private static async ValueTask C1WatchNodes(ClientOptions options, CancellationToken ct)
     {
@@ -1881,28 +1915,52 @@ public static class Scenarios
         var targetNodeId = NodeIds.East;
         try
         {
-            // Status payloads have no incarnation token, so accept ready only after this
-            // connection observes the old node leave.
+            // Consume status in arrival order so readiness before the stop cannot be reused.
+            var observationTimeout = TimeSpan.FromSeconds(20);
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
             var targetStopped = ops
                 .Connector.WaitFor<NodeStatusNotify>()
-                .Where(message =>
-                    message.Payload.NodeId == targetNodeId && !message.Payload.Connected
-                )
-                .Timeout(TimeSpan.FromSeconds(20))
+                .Timeout(observationTimeout)
                 .Async(ct);
             Console.WriteLine("scenario ZW-E5 restore armed");
-            await targetStopped;
+            for (; ; )
+            {
+                var node = (await targetStopped).Payload;
+                if (node.NodeId == targetNodeId && !node.Connected)
+                    break;
+                var remaining =
+                    observationTimeout - System.Diagnostics.Stopwatch.GetElapsedTime(started);
+                ZlinkStreamAssert.Ensure(
+                    remaining > TimeSpan.Zero,
+                    "E5 stopped status observation timed out"
+                );
+                targetStopped = ops
+                    .Connector.WaitFor<NodeStatusNotify>()
+                    .Timeout(remaining)
+                    .Async(ct);
+            }
+            started = System.Diagnostics.Stopwatch.GetTimestamp();
             var replacementReady = ops
                 .Connector.WaitFor<NodeStatusNotify>()
-                .Where(message =>
-                    message.Payload.NodeId == targetNodeId
-                    && message.Payload.Registered
-                    && message.Payload.Connected
-                )
-                .Timeout(TimeSpan.FromSeconds(20))
+                .Timeout(observationTimeout)
                 .Async(ct);
             Console.WriteLine("scenario ZW-E5 replacement waiting");
-            await replacementReady;
+            for (; ; )
+            {
+                var node = (await replacementReady).Payload;
+                if (node.NodeId == targetNodeId && node.Registered && node.Connected)
+                    break;
+                var remaining =
+                    observationTimeout - System.Diagnostics.Stopwatch.GetElapsedTime(started);
+                ZlinkStreamAssert.Ensure(
+                    remaining > TimeSpan.Zero,
+                    "E5 replacement status observation timed out"
+                );
+                replacementReady = ops
+                    .Connector.WaitFor<NodeStatusNotify>()
+                    .Timeout(remaining)
+                    .Async(ct);
+            }
             var diagnostics = await ops.DiagnoseAsync(targetNodeId, ct);
             ZlinkStreamAssert.Ensure(
                 diagnostics.Error is null,

@@ -11,6 +11,7 @@ import {
   ZLINK_ROUTE_MESH_RUNTIME_OPTIONS,
   ZLINK_SPOT_MANAGER
 } from '@zlink-systems/nestjs';
+import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import type {
   ZLinkActorClient,
   ZLinkActorManager,
@@ -29,10 +30,8 @@ import { EnterWorldReq, EnterWorldRes } from '../../Shared/contracts';
 import { MaintenanceStore } from '../Configuration/maintenance-store';
 import { NodeRuntimeState } from './Domain/node-runtime-state';
 import { botRoutes } from './Domain/bot-patrol';
-import { adjacentZones } from './Domain/world';
 import { ZoneSpot } from './Infrastructure/ZLink/Spots/zone-spot';
 import { OpsReportAdapter } from './Infrastructure/ZLink/Monitoring/ops-report-adapter';
-import type { ZoneId } from '../../Shared/spec';
 
 let statusTimer: NodeJS.Timeout | undefined;
 const zoneClaimRetryDelayMs = 250;
@@ -48,6 +47,8 @@ async function bootstrap(): Promise<void> {
   const config = app.get<ZoneWorldConfiguration>(ZONEWORLD_CONFIG);
   const node = config.zoneNode;
   if (node === undefined) throw new Error('ZoneNode configuration is required.');
+  const botStartAbort = new AbortController();
+  let botStartTask: Promise<void> | undefined;
   if (node.zoneCapacity > 0) {
     const state = app.get(NodeRuntimeState);
     const maintenance = app.get(MaintenanceStore);
@@ -62,12 +63,7 @@ async function bootstrap(): Promise<void> {
     if (node.allowEmptyZoneSet === true) {
       await waitForEmptyZoneSet(state, node.nodeId);
     } else {
-      await ensureZones(
-        app,
-        state,
-        node.zoneCapacity,
-        node.bootstrapZones ?? Object.values(ZoneIds)
-      );
+      await ensureZones(app, state, node.zoneCapacity);
     }
     const zones = state.zones();
     if (node.disableBots !== true) {
@@ -83,7 +79,10 @@ async function bootstrap(): Promise<void> {
       console.log(`bot-start=ready node=${node.nodeId}`);
       // Keep topology and Ops reporting available while bot ticks remain
       // paused. The runner releases the tick gate after normal checks.
-      void waitForBotStart(node.botStartSignalPath).then(() => state.enableBotTicks());
+      botStartTask = waitForBotStart(node.botStartSignalPath, botStartAbort.signal).then(() => {
+        botStartAbort.signal.throwIfAborted();
+        state.enableBotTicks();
+      });
     } else {
       state.enableBotTicks();
     }
@@ -111,7 +110,14 @@ async function bootstrap(): Promise<void> {
     await waitForShutdown();
   } finally {
     if (statusTimer !== undefined) clearInterval(statusTimer);
-    await closeRuntime(app);
+    botStartAbort.abort();
+    try {
+      await botStartTask;
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'AbortError')) throw error;
+    } finally {
+      await closeRuntime(app);
+    }
   }
 }
 
@@ -149,9 +155,11 @@ bootstrap().catch((error: unknown) => {
 
 export {};
 
-async function waitForBotStart(signalPath: string | undefined): Promise<void> {
+async function waitForBotStart(signalPath: string | undefined, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
   if (signalPath === undefined) return;
-  while (!fs.existsSync(signalPath)) await delay(50);
+  while (!fs.existsSync(signalPath)) await delay(50, undefined, { signal });
+  signal.throwIfAborted();
 }
 
 async function waitForPlacementPeer(
@@ -221,26 +229,12 @@ async function spawnBots(
 async function ensureZones(
   app: { get<T>(token: unknown, options?: { strict: boolean }): T },
   state: NodeRuntimeState,
-  expectedLocalCapacity: number,
-  candidates: readonly string[]
+  expectedLocalCapacity: number
 ): Promise<void> {
   const spots = app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER, { strict: false });
-  for (let attempt = 0; state.zones().length < expectedLocalCapacity; attempt += 1) {
+  for (let attempt = 0; state.zones().length !== expectedLocalCapacity; attempt += 1) {
     const claimed = state.zones();
-    const claimOrder: string[] = [];
-    for (const zoneId of claimed) {
-      for (const adjacent of adjacentZones(zoneId as ZoneId)) {
-        if (
-          candidates.includes(adjacent) &&
-          !claimed.includes(adjacent) &&
-          !claimOrder.includes(adjacent)
-        ) {
-          claimOrder.push(adjacent);
-        }
-      }
-    }
-    claimOrder.push(...candidates.filter((zoneId) => !claimOrder.includes(zoneId)));
-    for (const zoneId of claimOrder) {
+    for (const zoneId of Object.values(ZoneIds)) {
       try {
         const result = await spots
           .getOrCreate(zoneId, ZoneSpot.name)
@@ -249,8 +243,9 @@ async function ensureZones(
         console.log(`zone spot create zone=${zoneId} state=${result.state}`);
       } catch (error) {
         if (
-          !(error instanceof Error) ||
-          !/capacity|eligible User Spot placement target/i.test(error.message)
+          !(error instanceof ZLinkFrameworkException) ||
+          (error.kind !== ZLinkFrameworkErrorKind.Unavailable &&
+            error.kind !== ZLinkFrameworkErrorKind.DeadlineExceeded)
         ) {
           throw error;
         }
@@ -273,7 +268,11 @@ async function ensureZones(
 }
 
 async function waitForEmptyZoneSet(state: NodeRuntimeState, nodeId: string): Promise<void> {
-  for (let attempt = 0; state.zones().length !== 2; attempt += 1) {
+  for (
+    let attempt = 0;
+    state.zones().length !== 0 || attempt < allowEmptyZoneSetReadyAttempt;
+    attempt += 1
+  ) {
     if (state.zones().length === 0 && attempt >= allowEmptyZoneSetReadyAttempt) return;
     if (attempt + 1 >= zoneClaimRetryAttempts) {
       throw new Error(

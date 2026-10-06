@@ -6,8 +6,9 @@ import org.springframework.boot.ApplicationRunner;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.spots.ZLinkSpotCreateState;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.samples.zoneworld.server.configuration.MaintenanceStore;
 import systems.zlink.samples.zoneworld.server.configuration.NodeCensus;
@@ -21,6 +22,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 public final class ZoneBootstrap implements ApplicationRunner {
+    private static final int STARTUP_RETRY_ATTEMPTS = 120;
+    private static final int REPLACEMENT_READY_ATTEMPTS = 8;
+    private static final int STARTUP_RETRY_DELAY_MS = 250;
     private final SampleTopology topology;
     private final ZLinkSpotManager spots;
     private final ZLinkActorManager actors;
@@ -79,79 +83,48 @@ public final class ZoneBootstrap implements ApplicationRunner {
         }
         // A replacement keeps the NodeId and claims nothing. A stopped owner's zone objects stay
         // with the incarnation that owned them, so claiming here could settle on one zone — which
-        // is neither the two a cold start needs nor the none a replacement announces, and a state
+        // violates the empty zone set a replacement announces, and is a state
         // the loop below could never leave. Only a cold start claims.
         if (topology.allowsEmptyZoneSet()) {
+            for (int attempt = 0; attempt < REPLACEMENT_READY_ATTEMPTS; attempt++)
+                CompletableFuture.runAsync(
+                                () -> {},
+                                CompletableFuture.delayedExecutor(
+                                        STARTUP_RETRY_DELAY_MS, TimeUnit.MILLISECONDS))
+                        .join();
+            if (!census.zoneIds().isEmpty())
+                throw new IllegalStateException("A replacement must reach ready with no Zone");
             ready();
             return;
         }
-        for (int attempt = 0; census.zoneIds().size() != 2; attempt++) {
+        for (int attempt = 0; census.zoneIds().size() != topology.zoneCapacityValue(); attempt++) {
             java.util.List<String> claimed = census.zoneIds();
-            java.util.List<String> adjacentOrder = new java.util.ArrayList<>();
-            for (String zone : claimed) {
-                for (String adjacent : ZoneWorldSpec.adjacentZones(zone)) {
-                    if (!claimed.contains(adjacent) && !adjacentOrder.contains(adjacent)) {
-                        adjacentOrder.add(adjacent);
-                    }
-                }
-            }
-            java.util.List<String> fallbackOrder =
-                    ZoneWorldSpec.zones().stream()
-                            .filter(
-                                    zone ->
-                                            !claimed.contains(zone)
-                                                    && !adjacentOrder.contains(zone))
-                            .toList();
-            boolean claimedChanged = false;
-            boolean adjacentSettling = false;
-            for (String zone : adjacentOrder) {
-                if (!census.zoneIds().equals(claimed)) {
-                    claimedChanged = true;
-                    break;
-                }
+            for (String zone : ZoneWorldSpec.zones()) {
+                if (!census.zoneIds().equals(claimed)) break;
                 try {
-                    var result =
-                            spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
-                                    .inMesh(ZoneWorldNames.MESH)
-                                    .submit()
-                                    .toCompletableFuture()
-                                    .join();
-                    if (census.zoneIds().equals(claimed)
-                            && result.state() == ZLinkSpotCreateState.CREATED) {
-                        adjacentSettling = true;
-                    }
-                } catch (RuntimeException ignored) {
-                    // The other eligible process may still be entering the mesh.
-                    adjacentSettling = true;
-                }
-                if (!census.zoneIds().equals(claimed)) {
-                    claimedChanged = true;
-                    break;
+                    spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
+                            .inMesh(ZoneWorldNames.MESH)
+                            .submit()
+                            .toCompletableFuture()
+                            .join();
+                } catch (java.util.concurrent.CompletionException error) {
+                    if (!(error.getCause() instanceof ZLinkFrameworkException failure)
+                            || (failure.kind() != ZLinkFrameworkErrorKind.UNAVAILABLE
+                                    && failure.kind() != ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED))
+                        throw error;
+                    System.err.println("Zone Spot claim failed zone=" + zone + " error=" + failure);
                 }
             }
-            if (!claimedChanged && !adjacentSettling) {
-                for (String zone : fallbackOrder) {
-                    if (!census.zoneIds().equals(claimed)) break;
-                    try {
-                        spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
-                                .inMesh(ZoneWorldNames.MESH)
-                                .submit()
-                                .toCompletableFuture()
-                                .join();
-                    } catch (RuntimeException ignored) {
-                        // The other eligible process may still be entering the mesh.
-                    }
-                    if (!census.zoneIds().equals(claimed)) break;
-                }
-            }
-            if (attempt >= 119)
+            if (attempt + 1 >= STARTUP_RETRY_ATTEMPTS)
                 throw new IllegalStateException(
                         "Zone Spot capacity did not settle. node="
                                 + topology.nodeId()
                                 + " zones="
                                 + census.zoneIds());
             CompletableFuture.runAsync(
-                            () -> {}, CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS))
+                            () -> {},
+                            CompletableFuture.delayedExecutor(
+                                    STARTUP_RETRY_DELAY_MS, TimeUnit.MILLISECONDS))
                     .join();
         }
         if (!topology.botsDisabled()) {

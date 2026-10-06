@@ -501,7 +501,12 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal
         );
         Assert.Contains("var zones = census.ZoneIds", fanout, StringComparison.Ordinal);
-        Assert.Contains(".StableTypeLimit(2)", program, StringComparison.Ordinal);
+        Assert.Contains(".StableTypeLimit(node.ZoneCapacity)", program, StringComparison.Ordinal);
+        Assert.Contains(
+            "census.ZoneIds.Count != settings.ZoneCapacity",
+            bootstrap,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]

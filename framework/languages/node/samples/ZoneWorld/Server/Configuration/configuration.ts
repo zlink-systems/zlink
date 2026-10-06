@@ -14,7 +14,6 @@ type ZoneNodeSettings = {
   spotRouterEndpoint: string;
   spotRouterAdvertiseHost?: string;
   zoneCapacity: number;
-  bootstrapZones?: readonly string[];
   allowEmptyZoneSet?: boolean;
   faultTickZone?: string | null;
   faultTickSignalPath?: string;
@@ -126,17 +125,7 @@ function validateConfiguration(
   if (expectedRole === 'zoneNode' && role.faultTickSignalPath !== undefined) {
     requireString(role, 'faultTickSignalPath', expectedRole);
   }
-  if (expectedRole === 'zoneNode' && role.bootstrapZones !== undefined) {
-    if (
-      !Array.isArray(role.bootstrapZones) ||
-      role.bootstrapZones.some((zoneId) => typeof zoneId !== 'string' || zoneId.length === 0) ||
-      new Set(role.bootstrapZones).size !== role.bootstrapZones.length
-    ) {
-      throw new Error(
-        `Configuration value '${expectedRole}.bootstrapZones' must contain distinct zone ids.`
-      );
-    }
-  }
+
   if (
     expectedRole === 'zoneNode' &&
     role.allowEmptyZoneSet !== undefined &&

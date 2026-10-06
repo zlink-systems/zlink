@@ -79,7 +79,8 @@ final class ZoneStatusReporterLifecycleTest {
                         false,
                         false,
                         "",
-                        ""),
+                        "",
+                        1),
                 runtime,
                 new NodeCensus(),
                 new NodeMaintenanceState());
