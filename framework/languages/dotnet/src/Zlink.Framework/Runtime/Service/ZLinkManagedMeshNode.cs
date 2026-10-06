@@ -10922,26 +10922,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private SubmitResult SendTerminalReply(
-        RoutingId targetRid,
-        ulong correlation,
-        RequestResult result,
-        uint failureCode,
-        IReadOnlyList<Message> parts,
-        SendFlags flags
-    )
-    {
-        var wireParts = new List<ReadOnlyMemory<byte>>(parts.Count == 0 ? 1 : 2)
-        {
-            ZLinkServiceWireCodec.EncodeReply(correlation, (int)result, failureCode),
-        };
-        if (parts.Count != 0)
-            wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
-        return TryScheduleRoutedSend(targetRid, wireParts)
-            ? SubmitResult.Ok
-            : SubmitResult.Backpressured;
-    }
-
     private void CompleteOperation(
         ZLinkServiceWireCodec.ReplyRecord reply,
         IReadOnlyList<Message> receivedParts
@@ -12360,16 +12340,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             _peersByRid.TryGetValue(sourceRid, out var peer) ? peer.LifecycleGeneration : 0
         );
     }
-
-    private bool HasAdmittedPeer(RoutingId peerRid, ulong lifecycleGeneration) =>
-        lifecycleGeneration != 0
-        && RunState(() =>
-            _peersByRid.TryGetValue(peerRid, out var peer)
-            && peer.Admitted
-            && peer.State == MeshPeerState.Admitted
-            && peer.Admission is not null
-            && peer.LifecycleGeneration == lifecycleGeneration
-        );
 
     private void RemovePeer(Peer peer)
     {
