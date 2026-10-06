@@ -42,6 +42,41 @@ final class ZLinkCompositeRelocationBarrierTest {
     }
 
     @Test
+    void sharedSpotBoundaryAllowsYieldedContinuationToFinishBeforeCapture() throws Exception {
+        ZLinkSerialExecutionQueue spot =
+                new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.spot());
+        ZLinkSerialExecutionQueue actor =
+                new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.actorDelivery());
+        var gate = new ZLinkSerialExecutionQueue.SharedSpotGate(spot);
+        actor.bindSharedSpotGate(gate);
+        ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
+        CompletableFuture<Void> remote = new CompletableFuture<>();
+        CompletableFuture<Void> yielded = new CompletableFuture<>();
+
+        CompletableFuture<Void> dispatch =
+                actor.enqueue(
+                                () -> {
+                                    CompletionStage<Void> continuation =
+                                            ZLinkSerialExecutionQueue.yieldCurrent(remote);
+                                    yielded.complete(null);
+                                    return continuation;
+                                },
+                                null)
+                        .toCompletableFuture();
+        yielded.get(3, TimeUnit.SECONDS);
+        var sealing =
+                barrier.sealAtTurnBoundary(
+                                java.util.Map.of("spot", spot, "actor:a", actor), () -> false)
+                        .toCompletableFuture();
+        assertFalse(sealing.isDone());
+
+        remote.complete(null);
+        dispatch.get(3, TimeUnit.SECONDS);
+        var seal = sealing.get(3, TimeUnit.SECONDS).orElseThrow();
+        assertTrue(barrier.abort(seal).toCompletableFuture().get(3, TimeUnit.SECONDS));
+    }
+
+    @Test
     void sealAndAbortCompleteAfterTransitionStateClears() throws Exception {
         ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
         var transition = ZLinkCompositeRelocationBarrier.class.getDeclaredField("transition");

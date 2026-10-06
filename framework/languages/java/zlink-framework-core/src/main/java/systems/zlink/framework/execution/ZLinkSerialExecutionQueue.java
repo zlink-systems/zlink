@@ -93,8 +93,8 @@ public final class ZLinkSerialExecutionQueue {
     private volatile Entry active;
     private Entry suspendedLifecycle;
     private boolean drainScheduled;
-    private int suspendedApplicationContinuations;
-    private int suspendedLifecycleContinuations;
+    private volatile int suspendedApplicationContinuations;
+    private volatile int suspendedLifecycleContinuations;
     private long turnClaimedAtNanos;
     private RelocationState relocation;
     private boolean closingAdmissionSealed;
@@ -174,6 +174,7 @@ public final class ZLinkSerialExecutionQueue {
                 mailbox.materializePublished();
                 if (mailbox.active != null
                         || mailbox.suspendedLifecycle != null
+                        || mailbox.suspendedContinuations() != 0
                         || !mailbox.continuationPending.isEmpty()
                         || mailbox.lifecyclePending.peekFirst() == null
                         || mailbox.lifecyclePending.peekFirst().relocationBoundary
@@ -359,7 +360,8 @@ public final class ZLinkSerialExecutionQueue {
         if (sharedBoundary != null && sharedBoundary.members().containsKey(this)) {
             CompletionStage<Void> reached = sharedSpotGate.reachBoundaryIfReady();
             if (reached != null) return reached;
-            if (!lifecyclePending.isEmpty()
+            if (continuationPending.isEmpty()
+                    && !lifecyclePending.isEmpty()
                     && lifecyclePending.peekFirst().relocationBoundary
                             == sharedBoundary.members().get(this)) {
                 return CompletableFuture.completedFuture(null);
@@ -2126,16 +2128,15 @@ public final class ZLinkSerialExecutionQueue {
         CompletionStage<Void> result;
         boolean scheduleDrain = false;
         synchronized (this) {
-            if (isLifecycleTurn(origin)) {
+            boolean lifecycleContinuation = isLifecycleTurn(origin);
+            if (lifecycleContinuation) {
                 if (suspendedLifecycleContinuations <= 0) {
                     throw new IllegalStateException("suspended continuation count is inconsistent");
                 }
-                suspendedLifecycleContinuations--;
             } else {
                 if (suspendedApplicationContinuations <= 0) {
                     throw new IllegalStateException("suspended continuation count is inconsistent");
                 }
-                suspendedApplicationContinuations--;
             }
             if (nextSequence == Long.MAX_VALUE) {
                 throw new IllegalStateException("queue sequence exhausted");
@@ -2160,6 +2161,8 @@ public final class ZLinkSerialExecutionQueue {
                 else publish(continuation);
                 scheduleDrain = requestDrainLocked(continuation);
             }
+            if (lifecycleContinuation) suspendedLifecycleContinuations--;
+            else suspendedApplicationContinuations--;
             result = continuation.result;
             ownership = continuation.applicationJobOwnership;
         }

@@ -153,23 +153,22 @@ public final class ZLinkRetainedSerialQueueCommit {
          * been accepted.
          */
         public boolean abort() {
-            if (completed.get()) {
-                return false;
-            }
             return abortRetained(List.of(this));
         }
 
         public void complete() {
-            if (completed.compareAndSet(false, true)) {
-                if (owner.gate() == null) owner.complete();
-                else
-                    owner.gate()
-                            .control(
-                                    () -> {
-                                        owner.complete();
-                                        return null;
-                                    });
-            }
+            if (owner.gate() == null) completeDirect();
+            else
+                owner.gate()
+                        .control(
+                                () -> {
+                                    completeDirect();
+                                    return null;
+                                });
+        }
+
+        private void completeDirect() {
+            if (completed.compareAndSet(false, true)) owner.complete();
         }
     }
 
@@ -211,10 +210,12 @@ public final class ZLinkRetainedSerialQueueCommit {
 
     public static boolean abortRetained(List<Commit> commits) {
         List<Commit> owners = List.copyOf(commits);
-        if (owners.isEmpty() || owners.stream().anyMatch(commit -> commit.completed.get())) {
-            return false;
-        }
-        return underGate(owners, () -> withAbortLocks(owners, 0));
+        if (owners.isEmpty()) return false;
+        return underGate(
+                owners,
+                () ->
+                        owners.stream().noneMatch(commit -> commit.completed.get())
+                                && withAbortLocks(owners, 0));
     }
 
     private static boolean underGate(
