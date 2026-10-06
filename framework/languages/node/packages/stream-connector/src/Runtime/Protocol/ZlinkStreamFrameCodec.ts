@@ -8,12 +8,8 @@ import { ZLINK_STREAM_DEFAULT_PAYLOAD_SIZE } from '../ZlinkStreamConnectorOption
 import { connectorError } from '../ZlinkStreamSupport';
 
 export class ZlinkStreamFrameCodec {
-  static encode(
-    header: Uint8Array,
-    payload: Uint8Array,
-    maxPayloadSize = ZLINK_STREAM_DEFAULT_PAYLOAD_SIZE
-  ): Uint8Array {
-    validatePayload(payload.length, maxPayloadSize);
+  static encode(header: Uint8Array, payload: Uint8Array, maxPayloadSize?: number): Uint8Array {
+    validatePayload(payload.length, maxPayloadSize ?? ZLINK_STREAM_DEFAULT_PAYLOAD_SIZE);
     try {
       return encodeStreamWireFrame(header, payload);
     } catch (cause) {

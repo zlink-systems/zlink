@@ -1496,8 +1496,8 @@ var ZlinkStreamConnectorBundle = (() => {
 
   // packages/stream-connector/src/Runtime/Protocol/ZlinkStreamFrameCodec.ts
   var ZlinkStreamFrameCodec = class {
-    static encode(header, payload, maxPayloadSize = ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES) {
-      validatePayload(payload.length, maxPayloadSize);
+    static encode(header, payload, maxPayloadSize) {
+      validatePayload(payload.length, maxPayloadSize != null ? maxPayloadSize : ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES);
       try {
         return encodeStreamWireFrame(header, payload);
       } catch (cause) {
@@ -3058,14 +3058,14 @@ var ZlinkStreamConnectorBundle = (() => {
      *   server `session-closing` and the heartbeat timeout. Every other ending
      *   takes it from {@link closeReasonFor}.
      */
-    async disconnectForTransportFailure(error, origin, generation, reason = closeReasonFor(error)) {
+    async disconnectForTransportFailure(error, origin, generation, reason) {
       if (this.closeRequested || this.currentState === "closed" /* Closed */) {
         return;
       }
       if (origin !== void 0 && !this.isCurrentConnection(origin, generation)) {
         return;
       }
-      this.closeReasonValue = reason;
+      this.closeReasonValue = reason != null ? reason : closeReasonFor(error);
       if (this.disconnectTask !== void 0) {
         return await this.disconnectTask;
       }
