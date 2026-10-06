@@ -18,6 +18,8 @@
 | 8 | [Unity](08-unity.ko.md) | 네이티브 빌드 Unity에서의 사용 |
 | 9 | [Godot C#](09-godot-csharp.ko.md) | Godot C# 프로젝트에서의 사용 |
 | 10 | [게임 엔진 통합](12-engine-integration.ko.md) | 엔진별 connector 선택과 Engine Lobby sample |
+| 11 | [Node Protobuf 송수신](../../../node/guide/stream-connector/40-protobuf.ko.md) | protobufjs 코드 생성, 고정 타입 push와 명시 응답 타입 |
+| 12 | [Node Protobuf codec과 타입](../../../node/guide/stream-connector/41-protobuf-codecs.ko.md) | codec 선택, 여러 메시지 제약, 서버 packet 이름 |
 
 파일 번호는 언어에 상관없이 같은 장을 가리키는 식별자다. 1~7장은 다섯 언어가 공유한다.
 

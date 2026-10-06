@@ -124,6 +124,9 @@ def language_switch(current: str, name: str, suffix: str, section: str) -> str:
     탭에서는 한 번 눌러 언어를 바꿀 수 있었다. 생성판은 언어별 파일이라 그 경로가
     사라진다. 장마다 이 줄을 붙여 되살린다. 저장소에서 읽을 때도 그대로 동작한다.
     """
+    #  40~49는 한 언어에만 있는 장이므로 대응하는 다른 언어 장이 없다.
+    if name[:2].isdigit() and 40 <= int(name[:2]) <= 49:
+        return ""
     parts = []
     for label, lang in LANGUAGES.items():
         if lang == current:
@@ -339,7 +342,9 @@ def generate_locale(suffix: str, check_only: bool,
         order: list[str] = []
         for entry in raw_order:
             name = Path(entry).name
-            if (target_dir / name).exists() or (COMMON / name).exists():
+            #  다른 언어의 장은 공통 소스와 파일명이 같아도 그 언어에 남긴다.
+            if (("/" not in entry or entry.startswith(f"../../../common/guide/{section}/"))
+                    and ((target_dir / name).exists() or (COMMON / name).exists())):
                 order.append(name)
             else:
                 order.append(entry)

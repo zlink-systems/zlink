@@ -17,6 +17,8 @@ public sealed partial class EntrySpotActorDispatchTests
     private static readonly TimeSpan JoinDecisionRequestTimeout = TimeSpan.FromSeconds(5);
 
     private static readonly TimeSpan JoinDecisionBudget = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan OwnerLeaseObservationTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ShutdownSchedulingWindow = TimeSpan.FromMilliseconds(100);
 
     [Fact]
     public async Task ColdActivation_ExcludesExpiredDescriptorAndSelectsLiveOwner()
@@ -60,14 +62,24 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task ColdActivation_SelectsLiveOwnerDescriptor()
+    public Task ColdActivation_SelectsLiveOwnerDescriptor() =>
+        SelectLiveOwnerDescriptorAsync(asynchronousStore: false);
+
+    private static async Task SelectLiveOwnerDescriptorAsync(bool asynchronousStore)
     {
+        using var flow = CreateOwnerLeaseFlowListener();
         var time = new ManualTimeProvider();
         var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(
             node,
+            messageFlowMode: flow is null
+                ? null
+                : Zlink.Framework.Contracts.Dispatch.ZLinkDiagnosticsLevel.Normal,
             includeActorFactory: false,
             includeInstanceSpotRoute: true,
+            locationStoreWrapper: asynchronousStore
+                ? inner => new AsynchronousLocationStore(inner)
+                : null,
             relocationStore: new InMemoryRelocationStore(),
             locationTimeProvider: time
         );
@@ -89,6 +101,70 @@ public sealed partial class EntrySpotActorDispatchTests
         finally
         {
             await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ColdActivation_ConcurrentRuntimesReleaseLiveOwnerAuthority()
+    {
+        const int iterations = 25;
+        const int concurrentRuntimes = 8;
+        for (var iteration = 0; iteration < iterations; iteration++)
+            await Task.WhenAll(
+                Enumerable
+                    .Range(0, concurrentRuntimes)
+                    .Select(_ => SelectLiveOwnerDescriptorAsync(asynchronousStore: true))
+            );
+    }
+
+    [Fact]
+    public async Task Stop_WaitsForFirstTerminalStoreWriteBeforeAuthorityRelease()
+    {
+        const string spotId = "held-terminal-owner";
+        using var flow = CreateOwnerLeaseFlowListener();
+        AsynchronousLocationStore? store = null;
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            messageFlowMode: flow is null
+                ? null
+                : Zlink.Framework.Contracts.Dispatch.ZLinkDiagnosticsLevel.Normal,
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            locationStoreWrapper: inner =>
+                store = new AsynchronousLocationStore(
+                    inner,
+                    ZLinkProviderLocationRepository.AuthorityMetaKey(
+                        ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId)
+                    )
+                ),
+            relocationStore: new InMemoryRelocationStore()
+        );
+        Task? stop = null;
+        try
+        {
+            await SendInstanceIntentAsync(runtime, spotId);
+            await store!.TerminalWriteEntered.Task.WaitAsync(OwnerLeaseObservationTimeout);
+            var activation = Assert.Single(
+                runtime.GetSpotNodeRuntime(RoutingId.From("entry-node")).Spots
+            );
+            var cancelled = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            using var registration = activation.StopToken.Register(() => cancelled.TrySetResult());
+            stop = runtime.StopAsync(CancellationToken.None).AsTask();
+            await cancelled.Task.WaitAsync(OwnerLeaseObservationTimeout);
+            // Give shutdown a scheduling boundary while the Store completion is held.
+            await Task.WhenAny(
+                store.AuthorityDeleteEntered.Task,
+                Task.Delay(ShutdownSchedulingWindow)
+            );
+            Assert.False(store.AuthorityDeleteEntered.Task.IsCompleted);
+            Assert.False(stop.IsCompleted);
+        }
+        finally
+        {
+            store!.ReleaseTerminalWrite.TrySetResult();
+            await (stop ?? runtime.StopAsync(CancellationToken.None).AsTask());
         }
     }
 
@@ -896,6 +972,76 @@ public sealed partial class EntrySpotActorDispatchTests
             if (CorruptStore is not null)
                 CorruptStore.Enabled = false;
             await Runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private static TestHostMessageFlowListener? CreateOwnerLeaseFlowListener()
+    {
+        var flowPath = Environment.GetEnvironmentVariable("ZLINK_OWNER_LEASE_TEST_FLOW_PATH");
+        return flowPath is null
+            ? null
+            : new TestHostMessageFlowListener($"{flowPath}.{Guid.NewGuid():N}");
+    }
+
+    private sealed class AsynchronousLocationStore(
+        IZLinkLocationStore inner,
+        ZLinkStoreKey? heldAuthority = null
+    ) : IZLinkLocationStore
+    {
+        private const int TerminalCursorWriteOrdinal = 3; // Reserve, Ready commit, terminal cursor.
+        private int _authorityWrites;
+        public TaskCompletionSource TerminalWriteEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseTerminalWrite { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource AuthorityDeleteEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        )
+        {
+            await Task.Yield();
+            return await inner.ReadAsync(key, cancellationToken);
+        }
+
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            await Task.Yield();
+            if (
+                heldAuthority is { } key
+                && request.Mutations.Any(m =>
+                    m is ZLinkStoreMutation.Delete delete && delete.Key == key
+                )
+            )
+                AuthorityDeleteEntered.TrySetResult();
+            var result = await inner.WriteAsync(request, cancellationToken);
+            if (
+                heldAuthority is { } authority
+                && result is ZLinkStoreWriteResult.Applied
+                && request.Mutations.Any(m =>
+                    m is ZLinkStoreMutation.Put put && put.Key == authority
+                )
+                && Interlocked.Increment(ref _authorityWrites) == TerminalCursorWriteOrdinal
+            )
+            {
+                TerminalWriteEntered.TrySetResult();
+                await ReleaseTerminalWrite.Task;
+            }
+            return result;
+        }
+
+        public async ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            await Task.Yield();
+            return await inner.ScanAsync(request, cancellationToken);
         }
     }
 

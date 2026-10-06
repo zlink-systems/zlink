@@ -14,6 +14,7 @@ const requiredScenarioIds = [
   'ZW-F1', 'ZW-F2', 'ZW-F3', 'ZW-F4',
   'ZW-G1', 'ZW-G2', 'ZW-G3', 'ZW-G4', 'ZW-G5'
 ];
+const zoneNodeCapacities = new Map([['zone-node-1', 1], ['zone-node-2', 3]]);
 const logicalZoneIds = ['zone-nw', 'zone-ne', 'zone-sw', 'zone-se'];
 
 export async function runSample(ctx) {
@@ -76,12 +77,11 @@ async function runFullLane(ctx) {
   await firstLayoutProbe.complete();
   const initiallyHosted = parseOpsLayout(firstLayoutProbe.output()).flatMap((node) => node.zones);
   const remainingZones = logicalZoneIds.filter((zoneId) => !initiallyHosted.includes(zoneId));
-  if (initiallyHosted.length !== 2 || remainingZones.length !== 2) {
+  if (initiallyHosted.length !== west.value.zoneNode.zoneCapacity || remainingZones.length !== logicalZoneIds.length - west.value.zoneNode.zoneCapacity) {
     throw new Error(`First ZoneNode did not fill its capacity before peer bootstrap: ${initiallyHosted.join(',')}.`);
   }
   const east = await zoneNodeConfig(ctx, shared, 'zone-node-2', 'east', {
     botStartSignalPath,
-    bootstrapZones: remainingZones,
     faultTickZone: 'zone-nw',
     faultTickSignalPath,
     waitForPlacementPeer: true
@@ -414,13 +414,12 @@ async function runB8Lane(ctx) {
     await layoutProbe.complete();
     const initiallyHosted = parseOpsLayout(layoutProbe.output()).flatMap((node) => node.zones);
     const remainingZones = logicalZoneIds.filter((zoneId) => !initiallyHosted.includes(zoneId));
-    if (initiallyHosted.length !== 2 || remainingZones.length !== 2) {
+    if (initiallyHosted.length !== west.value.zoneNode.zoneCapacity || remainingZones.length !== logicalZoneIds.length - west.value.zoneNode.zoneCapacity) {
       throw new Error(`ZW-B8 first ZoneNode did not fill its capacity: ${initiallyHosted.join(',')}.`);
     }
 
     const east = await zoneNodeConfig(ctx, shared, 'zone-node-2', 'east', {
       disableBots: true,
-      bootstrapZones: remainingZones,
       waitForPlacementPeer: true,
       spotRouterEndpoint: eastRouter.bindEndpoint,
       spotRouterAdvertiseHost: '127.0.0.1'
@@ -541,7 +540,7 @@ async function zoneNodeConfig(ctx, shared, nodeId, name, overrides = {}) {
     zoneNode: {
       nodeId,
       spotRouterEndpoint: `tcp://127.0.0.1:${await ctx.port()}`,
-      zoneCapacity: 2,
+      zoneCapacity: zoneNodeCapacities.get(nodeId) ?? 0,
       ...overrides
     }
   };
@@ -661,8 +660,8 @@ function assertZoneLayout(layout) {
     throw new Error('Ops probe must report exactly two ZoneNodes.');
   }
   const zones = layout.nodes.flatMap((node) => node.zones);
-  if (layout.nodes.some((node) => node.zones.length !== 2) || new Set(zones).size !== 4) {
-    throw new Error(`Zone Spot capacity 2 did not produce a 2/2 layout: ${JSON.stringify(layout.nodes)}.`);
+  if (layout.nodes.some((node) => node.zones.length !== zoneNodeCapacities.get(node.nodeId)) || zones.length !== logicalZoneIds.length || new Set(zones).size !== logicalZoneIds.length || logicalZoneIds.some((zone) => !zones.includes(zone))) {
+    throw new Error(`Zone Spot capacity 1/3 did not produce the declared layout: ${JSON.stringify(layout.nodes)}.`);
   }
   if (layout.pair?.error !== null || layout.pair.sourceZoneId === layout.pair.targetZoneId) {
     throw new Error(`Ops probe did not return a valid cross-owner boundary: ${JSON.stringify(layout.pair)}.`);
@@ -679,15 +678,22 @@ function assertGeneratedRoutingIds(source, target) {
 
 async function waitForCrossOwnerBot(ctx, nodes) {
   const ownerByZone = new Map(nodes.flatMap((node) => node.zones.map((zoneId) => [zoneId, node.nodeId])));
+  const { botRoutes } = await import('../dist/Server/ZoneNode/Domain/bot-patrol.js');
+  const { zoneOf, ZoneWorldSpec } = await import('../dist/Shared/spec.js');
+  const route = botRoutes.find((bot) => {
+    if (bot.dirX === 0) return false;
+    const targetZone = zoneOf(bot.dirX > 0 ? ZoneWorldSpec.zoneSplit : ZoneWorldSpec.zoneSplit - 1, bot.y);
+    return ownerByZone.get(bot.zoneId) !== ownerByZone.get(targetZone);
+  });
+  if (route === undefined) throw new Error('Ops layout has no cross-owner X boundary.');
+  const targetZone = zoneOf(route.dirX > 0 ? ZoneWorldSpec.zoneSplit : ZoneWorldSpec.zoneSplit - 1, route.y);
+  const targetNode = ownerByZone.get(targetZone);
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
-    const logs = nodes.map((node) => {
-      const target = path.join(ctx.logDir, `${node.nodeId}.log`);
-      return fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
-    }).join('\n');
-    for (const match of logs.matchAll(/zone change scheduled player=(bot-[^ ]+) from=([^ ]+) to=([^\s]+)/g)) {
-      if (ownerByZone.get(match[2]) !== ownerByZone.get(match[3])) return;
-    }
+    const log = path.join(ctx.logDir, `${targetNode}.log`);
+    if (fs.existsSync(log) && fs.readFileSync(log, 'utf8').includes(
+      `zone player entered zone=${targetZone} player=${route.playerId} initial=false`
+    )) return;
     await delay(50);
   }
   throw new Error('ZW-F2 did not observe a bot crossing an Ops-discovered owner boundary.');

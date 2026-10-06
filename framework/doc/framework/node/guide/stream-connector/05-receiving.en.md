@@ -28,24 +28,40 @@ consumes it. This chapter covers how packets leave that queue. Answers and heart
 through it — an answer goes straight to the request waiting for it, and a heartbeat serves the
 connection itself.
 
-## 1. Registering a Handler
+## 1. Typed Receiving and Decoding
 
-A handler receives a **message**, not a payload alone. The message carries the packet name, the
-decoded payload, and the metadata. Which packets it receives is decided by the payload type or by
-an explicit name.
+The connector finds a handler by the incoming packet name, decodes its payload, and places it in a
+message. A message carries the packet name, payload, metadata, and Actor ID. A codec converts
+payload bytes into an application type. One codec is configured when the connector is created.
 
-Pass a name or payload type to `on<T>(nameOrType, handler)`.
+### 1.1 Receiving — Registering a Typed Handler
 
-The example below registers a handler by payload type.
+These registrations come from the tutorial. The .NET, Java, Kotlin, and C++ examples receive
+`NicknameChanged` in the existing JSON flow. The Node example receives the generated Protobuf
+class `Ping`. Each tutorial README provides the execution procedure.
+
+<iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push-en.html" title="Node typed Protobuf receiving example" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/stream-protobuf-push-en.html" target="_blank">↗ Open larger</a></p>
 
 ```typescript
-// A TypeScript type does not survive to run time, so the name and the constructor are given.
-const subscription = connector.on<LeaderboardUpdate>(
-  'leaderboard.update',
-  message => { updateBoard(message.name, message.payload.rank); },
-  LeaderboardUpdate
-);
+--8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:typed-receive"
 ```
+
+### 1.2 How the Type Reaches the Codec
+
+`on(Type, handler)` derives the packet name from the type and decodes the payload as that type.
+The named form selects packets by an explicit wire name while specifying the decoding type
+separately. This is useful when the type name differs from the server's packet name.
+
+`on(Type, handler)` and `on(name, handler, Type)` call `codec.decode(payload, Type)`.
+`on(name, handler)` supplies no type. Writing `<T>` alone supplies no runtime type information.
+When only a name is supplied, the decoding result depends on the configured codec.
+
+!!! note "Node Protobuf Codec"
+
+    The patched codec decodes with the constructor supplied by `on(Type, handler)` and uses the factory fallback when no type is supplied.
+    The envelope codec also forwards the handler type. [Node Protobuf Messaging](../../../node/guide/stream-connector/40-protobuf.en.md)
+    describes the difference from released 0.28.0 and the execution steps.
 
 ## 2. Releasing a Registration
 
@@ -55,7 +71,7 @@ closes. A released handler does not run afterwards, and releasing the same value
 error.
 
 ```typescript
-subscription.dispose();
+--8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-unsubscribe"
 ```
 
 **Whether the value's lifetime is the registration's lifetime is decided by the language.** In a
@@ -77,10 +93,7 @@ Switching to immediate execution runs handlers on the receive path with no pump.
 blocks that path and delays the receive work behind it.
 
 ```typescript
-while (running) {
-  await connector.dispatch();
-  renderFrame();
-}
+--8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-pump"
 ```
 
 The wait surfaces below observe the receive queue directly rather than running registered handlers,
@@ -100,11 +113,7 @@ Pass a name or payload type to `waitFor<T>(nameOrType)`.
 The example below waits for one packet by payload type.
 
 ```typescript
-const found = await connector
-  .waitFor<MatchFound>('match.found')
-  .where(message => message.payload.matchId === 'match-7f3a')
-  .timeout(30_000)
-  .submit();
+--8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-wait"
 ```
 
 **Predicates and returns deal in messages, not payloads.** A predicate given the payload alone
@@ -119,14 +128,7 @@ not arrive during it. The second applies predicates in order, confirms packets o
 arrived in that order, and returns the list of messages.
 
 ```typescript
-await connector.expectNone<OrderChanged>('order.changed').within(100).run();
-
-const steps = await connector
-  .waitForSequence<OrderChanged>('order.changed')
-  .expect(message => message.payload.status === 'paid')
-  .expect(message => message.payload.status === 'shipped')
-  .timeout(2_000)
-  .run();
+--8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-sequence"
 ```
 
 A failed observation — nothing arrived in time, something arrived that should not have, the order
@@ -141,7 +143,7 @@ it, so the count still answers how many arrived under that name after a handler 
 pump. The count also rises when the packet arrives, whatever the setting for when handlers run.
 
 ```typescript
-const count = connector.receivedCount('leaderboard.update');
+--8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-count"
 ```
 
 The reference point is the moment the connection is established. The count starts at zero then, and
@@ -214,7 +216,25 @@ An unbound handle is closed. Sending through a closed handle doesn't send and en
 the server doesn't hand it to another Actor — a request ends with an `InvalidOperation` error reply,
 and a one-way send is dropped.
 
-## 9. Next Chapters
+## 9. Tutorial Execution Result
+
+The unsubscribe, pump, predicate wait, sequence, and count examples run in each language's StreamClient `--receiving` mode.
+`STREAM_RECEIVING_ENDPOINT` is the address of a server sending JSON packets. Node uses WebSocket; the other examples use TCP.
+The verification peer sends `LeaderboardUpdate` twice, followed by `MatchFound` and ordered `OrderChanged` messages.
+All five language programs produced the same result.
+
+```text
+receiving: handler=1, frames=1, match=match-7f3a, sequence=paid,shipped, count=2
+```
+
+The pump runs the handler once. After unsubscribe, the second packet still increases the received count without invoking the handler.
+The program checks the matching message, the paid/shipped sequence, and the absence of OrderChanged before the sequence starts.
+
+## 10. Next Chapters
 
 - Connection state, reconnection, close reasons — [Connection Lifecycle](06-lifecycle.en.md)
 - Errors raised on the receive path — [Error Handling](07-error-handling.en.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

@@ -5233,6 +5233,82 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task SpotWidePublicIngressMailboxWaitsForSharedConsumer()
+    {
+        using var services = new ServiceCollection().BuildServiceProvider();
+        var registration = new ZLinkFrameworkRegistration();
+        var runtime = new ZLinkFrameworkRuntime(
+            services,
+            new ThrowingBackendAdapterFactory(),
+            registration,
+            new ZLinkHandlerRegistry([]),
+            new ZLinkHandlerDispatcher(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                registration
+            )
+        );
+        await using var activation = new ZLinkUserSpotActivation(
+            runtime,
+            services.CreateAsyncScope(),
+            new CapturingSpot(),
+            "ingress-spot",
+            RoutingId.From("node"),
+            "node",
+            "channel",
+            TimeSpan.FromSeconds(1)
+        );
+        activation.AttachSpot(new EmptyUserSpot(activation));
+        var member = new ZLinkActorRuntimeState("member");
+        member.JoinSpot(activation);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ingressClaimed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var blocker = activation
+            ._serial.ExecuteAsync(
+                async (_, _) =>
+                {
+                    entered.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Send,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            "ingress",
+            ZlinkStreamMetadata.Empty
+        );
+        var ingress = member
+            .ExecuteDispatchAsync(
+                header,
+                _ =>
+                {
+                    ingressClaimed.TrySetResult();
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            await Assert.ThrowsAsync<TimeoutException>(() =>
+                ingressClaimed.Task.WaitAsync(TimeSpan.FromMilliseconds(100))
+            );
+        }
+        finally
+        {
+            release.TrySetResult();
+            await Task.WhenAll(blocker, ingress).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
     public async Task UserSpotMemberActorIsExcludedFromStandaloneRetireInventory()
     {
         var services = new ServiceCollection().BuildServiceProvider();
@@ -5393,9 +5469,11 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         var shellSeal = await activation.TrySealPerActorShellRelocationAsync();
         Assert.NotNull(shellSeal);
-        Assert.True(
-            activation.CommitRelocation(shellSeal, out var held, preserveActorExecution: true)
+        var (heldSucceeded, held) = await activation.CommitRelocationAsync(
+            shellSeal,
+            preserveActorExecution: true
         );
+        Assert.True(heldSucceeded);
         Assert.Empty(held);
         var messageFollowDrained = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -6018,6 +6096,44 @@ public sealed partial class EntrySpotActorDispatchTests
         finally
         {
             probe.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task LeaveActorFromContextAsync_SharedGateProgressesActorIngressBeforeResumingLeave()
+    {
+        var probe = new BlockingActorJoinProbe();
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            userSpotType: typeof(BlockingActorJoinSpot),
+            blockingActorJoinProbe: probe,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var created = await runtime.CreateAsync<BlockingActorJoinSpot>();
+            var activation = Assert.Single(
+                runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                candidate => candidate.SpotId == created.Spot.SpotId
+            );
+            probe.Release.TrySetResult();
+            Assert.True(
+                (
+                    await activation.JoinActorAsync(actor, ZLinkMessage.Empty, cancellation.Token)
+                ).Accepted
+            );
+            await activation.LeaveActorFromContextAsync(actor, cancellation.Token);
+            Assert.Equal(0, activation.JoinedActorCount);
+            Assert.Null(runtime.GetOrCreateActorState(actorRef.ActorId).LiveActivation);
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            cancellation.Cancel();
             await runtime.StopAsync(CancellationToken.None);
         }
     }

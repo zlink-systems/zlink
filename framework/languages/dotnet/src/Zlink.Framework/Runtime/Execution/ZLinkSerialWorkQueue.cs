@@ -10,6 +10,74 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
     private ZLinkSerialWorkItem? _head;
     private ZLinkSerialWorkItem? _tail;
     private int _version;
+    private ZLinkSerialWorkItem? _publicationCursor;
+    private ZLinkSerialWorkItem? _publicationTail;
+    private ZLinkSerialWorkItem? _publicationHead;
+
+    // The caller serializes publishers. Neither publication nor its tail
+    // changes the mutable prefix, its Count or its enumeration version.
+    internal void Publish(ZLinkSerialWorkItem item)
+    {
+        if (_publicationTail is null)
+        {
+            var sentinel = new ZLinkSerialWorkItem(mailbox: null);
+            Volatile.Write(ref _publicationCursor, sentinel);
+            Volatile.Write(ref _publicationHead, sentinel);
+            _publicationTail = sentinel;
+        }
+        Volatile.Write(ref _publicationTail.PublicationNext, item);
+        _publicationTail = item;
+    }
+
+    internal void ImportPublished(Action<ZLinkSerialWorkItem>? import = null)
+    {
+        if (_publicationCursor is null)
+            return;
+        while (Volatile.Read(ref _publicationCursor.PublicationNext) is { } item)
+        {
+            Volatile.Write(ref _publicationCursor, item);
+            if (import is null)
+                Enqueue(item);
+            else
+                import(item);
+        }
+        // Managed readers retain their own immutable publication links. Only
+        // the gate advances this cursor; a publisher never edits old links.
+        while (
+            _publicationHead is { } head
+            && !ReferenceEquals(head, _publicationCursor)
+            && head.PublicationNext is { } next
+            && next.Next is null
+        )
+            Volatile.Write(ref _publicationHead, next);
+    }
+
+    internal bool AnyPublishedOrQueued(Func<ZLinkSerialWorkItem, bool> predicate)
+    {
+        var head = Volatile.Read(ref _publicationHead);
+        var imported = Volatile.Read(ref _publicationCursor);
+        var unpublishedPrefix = ReferenceEquals(head, imported);
+        var item = head is null ? null : Volatile.Read(ref head.PublicationNext);
+        while (item is not null)
+        {
+            if ((unpublishedPrefix || item.Next is not null) && predicate(item))
+                return true;
+            if (ReferenceEquals(item, imported))
+                unpublishedPrefix = true;
+            item = Volatile.Read(ref item.PublicationNext);
+        }
+        return false;
+    }
+
+    // A sealed publisher has stopped. The gate can adopt its nodes into this
+    // mailbox, including the publication cursor used by admission readers.
+    internal void Adopt(ZLinkSerialWorkItem item)
+    {
+        item.PublicationNext = null;
+        Publish(item);
+        Volatile.Write(ref _publicationCursor, item);
+        Enqueue(item);
+    }
 
     public int Count { get; private set; }
     internal ZLinkSerialWorkItem? Head => _head;
@@ -71,7 +139,10 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
     }
 
     public bool TryDequeueContinuation(out ZLinkSerialWorkItem item) =>
-        TryDequeueMatching(static candidate => !candidate.ReservationHeld, out item);
+        TryDequeueMatching(
+            static candidate => !candidate.ReservationHeld && candidate.Mailbox is null,
+            out item
+        );
 
     internal bool TryDequeueMatching(
         Func<ZLinkSerialWorkItem, bool> predicate,

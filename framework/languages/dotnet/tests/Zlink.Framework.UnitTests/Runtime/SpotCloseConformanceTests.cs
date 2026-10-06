@@ -1042,6 +1042,13 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
     [Fact]
     public async Task Spot_close_fixture_scenarios_hold_on_the_dotnet_runtime()
     {
+        var flowPath = Path.Combine(
+            Path.GetTempPath(),
+            "zlink-close-dotnet",
+            $"fixture-{Guid.NewGuid():N}.flow"
+        );
+        using var flow = new TestHostMessageFlowListener(flowPath);
+        output.WriteLine($"Message flow file: {flowPath}");
         using var fixture = JsonDocument.Parse(
             await File.ReadAllTextAsync(
                 Path.Combine(

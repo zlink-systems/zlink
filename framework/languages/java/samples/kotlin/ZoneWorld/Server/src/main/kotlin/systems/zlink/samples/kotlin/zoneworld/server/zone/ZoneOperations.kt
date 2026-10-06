@@ -12,13 +12,14 @@ import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.channels.ZLinkRouteMessageContext
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.kotlin.ZLinkSuspendingRouteSendHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSendHandler
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.requestToActor
 import systems.zlink.framework.messaging.ZLinkMessage
-import systems.zlink.framework.spots.ZLinkSpotCreateState
 import systems.zlink.framework.spots.ZLinkSpotManager
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.MaintenanceStore
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.NodeCensus
@@ -39,6 +40,12 @@ class ZoneBootstrap(
     private val census: NodeCensus,
     private val reporter: ZoneStatusReporter,
 ) : ApplicationRunner {
+    private companion object {
+        const val STARTUP_RETRY_ATTEMPTS = 120
+        const val REPLACEMENT_READY_ATTEMPTS = 8
+        const val STARTUP_RETRY_DELAY_MS = 250L
+    }
+
     private val kotlinSpots = spots.kotlin()
     private val kotlinActors = actors.kotlin()
     private val kotlinActorClient = actorClient.kotlin()
@@ -69,64 +76,37 @@ class ZoneBootstrap(
         }
         // A replacement keeps the NodeId and claims nothing. A stopped owner's zone objects stay
         // with the incarnation that owned them, so claiming here could settle on one zone — which
-        // is neither the two a cold start needs nor the none a replacement announces, and a state
+        // violates the empty zone set a replacement announces, and is a state
         // the loop below could never leave. Only a cold start claims.
         if (topology.allowsEmptyZoneSet()) {
+            repeat(REPLACEMENT_READY_ATTEMPTS) { delay(STARTUP_RETRY_DELAY_MS) }
+            check(census.zoneIds().isEmpty()) { "A replacement must reach ready with no Zone" }
             ready()
             return@runBlocking
         }
         var attempt = 0
-        while (census.zoneIds().size != 2) {
+        while (census.zoneIds().size != topology.zoneCapacityValue()) {
             val claimed = census.zoneIds()
-            val adjacentOrder = mutableListOf<String>()
-            claimed.forEach { zone ->
-                ZoneWorldSpec.adjacentZones(zone).forEach { adjacent ->
-                    if (adjacent !in claimed && adjacent !in adjacentOrder)
-                        adjacentOrder += adjacent
-                }
-            }
-            val fallbackOrder =
-                ZoneWorldSpec.zones().filter { it !in claimed && it !in adjacentOrder }
-            var claimedChanged = false
-            var adjacentSettling = false
-            for (zone in adjacentOrder) {
-                if (census.zoneIds() != claimed) {
-                    claimedChanged = true
-                    break
-                }
-                val result = runCatching {
+            for (zone in ZoneWorldSpec.zones()) {
+                if (census.zoneIds() != claimed) break
+                try {
                     kotlinSpots
                         .getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
                         .inMesh(ZoneWorldNames.MESH)
                         .await()
-                }
-                if (
-                    result.isFailure ||
-                        census.zoneIds() == claimed &&
-                            result.getOrNull()?.state() == ZLinkSpotCreateState.CREATED
-                )
-                    adjacentSettling = true
-                if (census.zoneIds() != claimed) {
-                    claimedChanged = true
-                    break
+                } catch (error: ZLinkFrameworkException) {
+                    if (
+                        error.kind() != ZLinkFrameworkErrorKind.UNAVAILABLE &&
+                            error.kind() != ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED
+                    )
+                        throw error
+                    System.err.println("Zone Spot claim failed zone=$zone error=$error")
                 }
             }
-            if (!claimedChanged && !adjacentSettling) {
-                for (zone in fallbackOrder) {
-                    if (census.zoneIds() != claimed) break
-                    runCatching {
-                        kotlinSpots
-                            .getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
-                            .inMesh(ZoneWorldNames.MESH)
-                            .await()
-                    }
-                    if (census.zoneIds() != claimed) break
-                }
-            }
-            check(attempt++ < 119) {
+            check(++attempt < STARTUP_RETRY_ATTEMPTS) {
                 "Zone Spot capacity did not settle. node=${topology.nodeValue()} zones=${census.zoneIds()}"
             }
-            delay(250)
+            delay(STARTUP_RETRY_DELAY_MS)
         }
         if (!topology.botsDisabled()) {
             ZoneWorldSpec.bots()

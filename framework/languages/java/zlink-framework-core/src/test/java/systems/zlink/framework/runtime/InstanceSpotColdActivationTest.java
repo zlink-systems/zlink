@@ -19,6 +19,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class InstanceSpotColdActivationTest {
     private static CompletableFuture<Void> entered;
     private static CompletableFuture<Void> release;
+    private static CompletableFuture<Void> echoHandled;
+    private static CompletableFuture<Void> echoRelease;
     private static AtomicInteger initialized;
     private static AtomicInteger handled;
     private static java.util.logging.FileHandler flowLog;
@@ -45,6 +47,8 @@ final class InstanceSpotColdActivationTest {
     @SuppressWarnings("unchecked")
     void remoteTargetCreatesAndRepliesWhileSourceNeverReserves() throws Exception {
         initialized = new AtomicInteger();
+        echoHandled = new CompletableFuture<>();
+        echoRelease = new CompletableFuture<>();
         var store = new ZLinkInMemoryLocationStore();
         var recovery = new InMemoryRelocationStore();
         var targetOptions = new DefaultZLinkFrameworkOptions();
@@ -61,6 +65,7 @@ final class InstanceSpotColdActivationTest {
                 .addInstanceSpotFactory(
                         "cold", Instance.class, factory -> factory.disableRelocation());
         var sourceOptions = new DefaultZLinkFrameworkOptions();
+        sourceOptions.configureInboundDispatch().setMaxQueuedApplicationJobs(1);
         sourceOptions
                 .configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
@@ -101,6 +106,11 @@ final class InstanceSpotColdActivationTest {
             var repositoryField = sourceHost.getClass().getDeclaredField("userSpotLocationStore");
             repositoryField.setAccessible(true);
             var original = repositoryField.get(sourceHost);
+            var queueField = sourceHost.getClass().getDeclaredField("applicationJobQueue");
+            queueField.setAccessible(true);
+            var applicationJobQueue =
+                    (systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue)
+                            queueField.get(sourceHost);
             var observer =
                     (ZLinkLocationRepository)
                             java.lang.reflect.Proxy.newProxyInstance(
@@ -126,11 +136,23 @@ final class InstanceSpotColdActivationTest {
                                 .instanceSpot("cold")
                                 .timeout(Duration.ofSeconds(5))
                                 .submit(Echo.class)
+                                .toCompletableFuture();
+                echoHandled.get(4, TimeUnit.SECONDS);
+                try (var permit =
+                        applicationJobQueue
+                                .acquire()
                                 .toCompletableFuture()
-                                .get(5, TimeUnit.SECONDS);
-                assertEquals(new Echo("remote"), reply);
+                                .get(5, TimeUnit.SECONDS)) {
+                    assertEquals(
+                            1, applicationJobQueue.snapshot().effectiveMaxQueuedApplicationJobs());
+                    assertEquals(1, applicationJobQueue.snapshot().permitsInUse());
+                    echoRelease.complete(null);
+                    assertEquals(new Echo("remote"), reply.get(1, TimeUnit.SECONDS));
+                    assertEquals(1, applicationJobQueue.snapshot().permitsInUse());
+                }
                 assertEquals(1, initialized.get());
             } finally {
+                echoRelease.complete(null);
                 repositoryField.set(sourceHost, original);
             }
         }
@@ -282,7 +304,8 @@ final class InstanceSpotColdActivationTest {
 
     public static final class EchoHandler implements ZLinkSpotRequestHandler<Instance, Echo, Echo> {
         public CompletionStage<Echo> handle(Instance spot, Echo request) {
-            return CompletableFuture.completedFuture(request);
+            echoHandled.complete(null);
+            return echoRelease.thenApply(ignored -> request);
         }
     }
 }

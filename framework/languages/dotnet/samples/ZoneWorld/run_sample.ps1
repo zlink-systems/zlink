@@ -572,6 +572,7 @@ try {
         $meshHost = if ($useProxy) { "127.0.0.2" } else { "127.0.0.1" }
         Write-ZoneWorldConfig "zone-node-$index" "zoneNode" @{
             nodeId = "zone-node-$index"
+            zoneCapacity = if ($index -eq 1) { 1 } elseif ($index -eq 2) { 3 } else { 0 }
             meshEndpoint = "tcp://${meshHost}:$($ports[$index - 1])"
             meshAdvertiseHost = if ($useProxy) { "127.0.0.1" } else { $null }
             faultTickZone = if ($index -in @(1, 2)) { "zone-nw" } else { $null }
@@ -588,6 +589,7 @@ try {
         @{ Index = 2; Port = $ports[3] })) {
         Write-ZoneWorldConfig "zone-node-$($replacement.Index)-replacement" "zoneNode" @{
             nodeId = "zone-node-$($replacement.Index)"
+            zoneCapacity = if ($replacement.Index -eq 1) { 1 } else { 3 }
             meshEndpoint = "tcp://127.0.0.1:$($replacement.Port)"
             # A replacement spawns no bots: the bots of a crashed node's zones stay registered
             # to the dead incarnation exactly as the zones do.
@@ -646,6 +648,8 @@ try {
     $node1Rid = Get-ZoneWorldRoutingId "zone-node-1"
     $node2Rid = Get-ZoneWorldRoutingId "zone-node-2"
     Wait-ZoneWorldPeerAdmission "zone-node-1" $node1Rid 1 "zone-node-2" $node2Rid 1
+
+    Invoke-ZoneWorldClient "LAYOUT"
 
     if ($G4Proven) { Add-ZoneWorldVerdict "ZW-G4" $true }
     if ($B8Proven) { Add-ZoneWorldVerdict "ZW-B8" $true }
@@ -821,13 +825,13 @@ try {
         Add-ZoneWorldVerdict "ZW-F1-population" ($allBots.Count -eq 8 -and $fixedRoster) "The fixed eight-bot roster was not observed."
     }
     if (Test-ZoneWorldVerdictSelected "ZW-F2") {
+        $boundary = Select-String -LiteralPath $ClientLog -Pattern 'ops-bot-boundary bot=([^ ]+) source=([^ ]+) target=([^ ]+)' | Select-Object -First 1
+        if (-not $boundary) { throw "Ops did not select a cross-owner X boundary" }
+        $bot = $boundary.Matches[0].Groups[1].Value
+        $target = $boundary.Matches[0].Groups[3].Value
         $correlated = $false
         for ($attempt = 0; $attempt -lt 600 -and -not $correlated; $attempt++) {
-            $node1 = Get-ZoneWorldLogText @("zone-node-1")
-            $node2 = Get-ZoneWorldLogText @("zone-node-2")
-            $actors = @(Split-ZoneWorldLogLines $node1 | Select-String -Pattern 'player=(bot-[^,]+), bot=True, initial=False' |
-                ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique)
-            $correlated = @($actors | Where-Object { $node2 -like "*player=$_, bot=True, initial=False*" }).Count -gt 0
+            $correlated = (Get-ZoneWorldLogText @($target)).Contains("player=$bot, bot=True, initial=False")
             if (-not $correlated) { Start-Sleep -Milliseconds 100 }
         }
         Add-ZoneWorldVerdict "ZW-F2" $correlated "No correlated cross-node bot handoff was observed."

@@ -1,0 +1,12 @@
+{
+  "extends": "../../packages/stream-connector/tsconfig.browser.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@zlink-systems/stream-wire": ["node_modules/@zlink-systems/stream-wire/dist/esm/index.d.ts"]
+    },
+    "rootDir": "../../packages/stream-connector/src",
+    "outDir": "node_modules/@zlink-systems/stream-connector/dist/browser"
+  },
+  "include": ["../../packages/stream-connector/src/**/*.ts"]
+}

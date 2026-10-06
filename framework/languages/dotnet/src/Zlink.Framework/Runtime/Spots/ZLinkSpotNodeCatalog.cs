@@ -2005,13 +2005,13 @@ internal sealed class ZLinkSpotNodeCatalog(
             outcome = await attempt.ConfigureAwait(false);
             if (outcome.Closed)
             {
-                await _lane
-                    .RunAsync(() =>
-                        activation.SetSuccessor(
-                            outcome.Successor,
-                            outcome.Authority,
-                            outcome.IntentFailure,
-                            () =>
+                await activation
+                    .SetSuccessorAsync(
+                        outcome.Successor,
+                        outcome.Authority,
+                        outcome.IntentFailure,
+                        () =>
+                            _lane.RunAsync(() =>
                             {
                                 if (outcome.Successor is { } successor)
                                 {
@@ -2019,8 +2019,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                                     _spots[activation.RuntimeSpotId] = successor;
                                     successor.AttachNativeDispatch();
                                 }
-                            }
-                        )
+                            })
                     )
                     .ConfigureAwait(false);
             }
@@ -2326,7 +2325,9 @@ internal sealed class ZLinkSpotNodeCatalog(
         var store =
             frameworkRegistration.Locations.ResolveStore()
             ?? throw new InvalidOperationException("Spot authority store is unavailable.");
-        var pendingIntent = activation.HasPendingCreationIntentOrSealAdmission();
+        var pendingIntent = await activation
+            .HasPendingCreationIntentOrSealAdmissionAsync()
+            .ConfigureAwait(false);
         var drainOwner = runtime.DrainAdmission.DrainOwner;
         if (pendingIntent && drainOwner == ZLinkDrainOwner.None)
         {
