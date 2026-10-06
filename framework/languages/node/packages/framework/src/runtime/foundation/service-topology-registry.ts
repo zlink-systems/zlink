@@ -305,35 +305,46 @@ export class ServiceTopologyRegistry {
     stableType: string,
     isReady: (descriptor: ServiceNodeDescriptor) => boolean = () => true
   ): ServiceNodeDescriptor | undefined {
+    return this.selectObjectPlacementWithStatus(stableType, isReady).descriptor;
+  }
+
+  selectObjectPlacementWithStatus(
+    stableType: string,
+    isReady: (descriptor: ServiceNodeDescriptor) => boolean = () => true
+  ): {
+    readonly status: ServiceObjectPlacementStatus;
+    readonly descriptor?: ServiceNodeDescriptor;
+  } {
     requireText(stableType, 'stableType');
-    return this.selectWeightedCycle(
+    const candidates = this.objectPlacementCandidates(stableType, isReady);
+    if (candidates.status !== 'available') return { status: candidates.status };
+    const descriptor = this.selectWeightedCycle(
       `object:${stableType}`,
-      () => {
-        const capability = `object-type:${stableType}`;
-        return [this.local, ...this.peersByRid.values()]
-          .map((value) => ('descriptor' in value ? value.descriptor : value))
-          .filter(
-            (descriptor) =>
-              descriptor.state === 'serving' &&
-              descriptor.objectRole === 'server' &&
-              descriptor.placementWeight > 0 &&
-              descriptor.activeCapacityUsed < descriptor.activeCapacityLimit &&
-              descriptor.pendingCapacityUsed < descriptor.pendingCapacityLimit &&
-              descriptor.protocolCapabilities.includes(capability)
-          )
-          .map(cloneDescriptor);
-      },
+      () => this.objectPlacementCandidates(stableType).eligible.map(cloneDescriptor),
       (descriptor) => descriptor.placementWeight,
       (descriptor) => descriptor.nodeRoutingId,
       (left, right) => compareOrdinal(left.nodeRoutingId, right.nodeRoutingId),
       isReady
     );
+    return descriptor === undefined
+      ? { status: 'unavailable' }
+      : { status: 'available', descriptor };
   }
 
   objectPlacementStatus(
     stableType: string,
     isReady: (descriptor: ServiceNodeDescriptor) => boolean = () => true
   ): ServiceObjectPlacementStatus {
+    return this.objectPlacementCandidates(stableType, isReady).status;
+  }
+
+  private objectPlacementCandidates(
+    stableType: string,
+    isReady: (descriptor: ServiceNodeDescriptor) => boolean = () => true
+  ): {
+    readonly status: ServiceObjectPlacementStatus;
+    readonly eligible: readonly ServiceNodeDescriptor[];
+  } {
     requireText(stableType, 'stableType');
     const capability = `object-type:${stableType}`;
     const supported = [
@@ -345,16 +356,15 @@ export class ServiceTopologyRegistry {
         descriptor.objectRole === 'server' &&
         descriptor.protocolCapabilities.includes(capability)
     );
-    if (supported.length === 0) return 'unsupported';
+    if (supported.length === 0) return { status: 'unsupported', eligible: [] };
     const withCapacity = supported.filter(
       (descriptor) =>
         descriptor.activeCapacityUsed < descriptor.activeCapacityLimit &&
         descriptor.pendingCapacityUsed < descriptor.pendingCapacityLimit
     );
-    if (withCapacity.length === 0) return 'capacity';
+    if (withCapacity.length === 0) return { status: 'capacity', eligible: [] };
     const weighted = withCapacity.filter((descriptor) => descriptor.placementWeight > 0);
-    if (weighted.length === 0) return 'unsupported';
-    return weighted.some(isReady) ? 'available' : 'unavailable';
+    return { status: weighted.some(isReady) ? 'available' : 'unavailable', eligible: weighted };
   }
 
   instanceSpotPlacementTypes(): readonly string[] {

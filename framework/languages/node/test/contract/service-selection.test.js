@@ -62,6 +62,25 @@ test('RouteMesh selects only the admitted peer when its own node has higher weig
   assert.equal(topology.hasKnownChannelTarget('orders'), true);
 });
 
+test('object placement uses current descriptor capacity and keeps selection unchanged when no route is ready', () => {
+  const objectNode = (rid, weight, overrides = {}) => ({
+    ...serviceNode(rid, weight),
+    objectRole: 'server',
+    protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY, 'object-type:T'].sort(),
+    ...overrides
+  });
+  const topology = new ServiceTopologyRegistry(objectNode('local', 0));
+  assert.equal(topology.admit(objectNode('a', 5), 'a'), 'admitted');
+  assert.equal(topology.admit(objectNode('b', 1), 'b'), 'admitted');
+  assert.equal(topology.selectObjectPlacementWithStatus('T', () => false).status, 'unavailable');
+  assert.equal(topology.selectObjectPlacement('T').nodeRoutingId, 'a');
+  assert.equal(
+    topology.admit(objectNode('a', 5, { descriptorRevision: 2n, activeCapacityUsed: 10 }), 'a'),
+    'admitted'
+  );
+  assert.equal(topology.selectObjectPlacement('T').nodeRoutingId, 'b');
+});
+
 test('RouteMesh weighted selection uses smooth cumulative credit with RID tiebreak', () => {
   // Channel messaging §2 excludes the requesting node from select-one targets.
   const topology = new ServiceTopologyRegistry(serviceNode('local', 0));
