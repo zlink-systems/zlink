@@ -14,7 +14,6 @@ public record CoreHwmBudgetSnapshot(
     long budgetGeneration,
     long measurementEpoch,
     long configuredMemoryLimitBytes,
-    long runtimeMemoryLimitBytes,
     long resolvedMemoryLimitBytes,
     long configuredCoreBudgetBytes,
     long effectiveCoreBudgetBytes,

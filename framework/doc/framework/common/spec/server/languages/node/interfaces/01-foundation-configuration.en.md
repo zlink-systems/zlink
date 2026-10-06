@@ -587,8 +587,7 @@ separate diagnostics.
 
 ## Dispatch Capacity Calculation Inputs
 
-The Node.js binding forwards a positive finite V8 `heap_size_limit` as Core's runtime
-memory hint. Core and application-job-queue profiles are independent enums and calculations,
+Core and application-job-queue profiles are independent enums and calculations,
 both defaulting to `Balanced`. Manual job cap is `1..2,147,483,647`; omission uses the
 common startup CPU snapshot and 32/64/128/256 coefficients. Pressure thresholds default to pause
 `80` and resume `60`; pause is an integer in `1..100`, resume is an integer in `0..99`, and resume

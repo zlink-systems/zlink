@@ -7854,6 +7854,235 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EntryReturn_SourceLeaveDoesNotBlockJoined(bool failLeave)
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var left = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var joined = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseJoined = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            entrySpotType: typeof(LocalJoinProbeEntrySpot),
+            userSpotType: typeof(EntryReturnSourceSpot)
+        );
+        var probe = runtime.Services.GetRequiredService<LocalEntryJoinProbe>();
+        var leaveCount = 0;
+        probe.LeaveHandler = async ct =>
+        {
+            Interlocked.Increment(ref leaveCount);
+            entered.TrySetResult();
+            await release.Task.WaitAsync(ct);
+            left.TrySetResult();
+            if (failLeave)
+                throw new InvalidOperationException("source leave failure");
+        };
+        probe.JoinedHandler = async (_, _, ct) =>
+        {
+            joined.TrySetResult();
+            await releaseJoined.Task.WaitAsync(ct);
+        };
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var created = await runtime.CreateAsync<EntryReturnSourceSpot>();
+            var source = Assert.Single(
+                runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                value => value.SpotId == created.Spot.SpotId
+            );
+            await source.JoinActorAsync(actor, ZLinkMessage.Empty, CancellationToken.None);
+            using (var handler = ZLinkDeferredActorJoinHandlerScope.Open())
+            {
+                actor.Context.JoinEntrySpot(ZLinkMessage.Empty).Defer();
+                handler.Complete();
+            }
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await joined.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(actor.JoinCompletion.Task.IsCompleted);
+            releaseJoined.TrySetResult();
+            Assert.IsType<ZLinkActorJoinCompletion.Accepted>(
+                await actor.JoinCompletion.Task.WaitAsync(TimeSpan.FromSeconds(2))
+            );
+            Assert.False(left.Task.IsCompleted);
+            Assert.Null(runtime.GetOrCreateActorState(actorRef.ActorId).LiveActivation);
+            release.TrySetResult();
+            await left.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(1, leaveCount);
+        }
+        finally
+        {
+            release.TrySetResult();
+            releaseJoined.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task EntryReturn_ActorQueueWaitDoesNotOwnEntryGate()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            entrySpotType: typeof(LocalJoinProbeEntrySpot)
+        );
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Task? owner = null;
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            owner = runtime
+                .GetOrCreateActorState(actorRef.ActorId)
+                .ExecuteLifecycleAsync(
+                    async ct =>
+                    {
+                        entered.TrySetResult();
+                        await release.Task.WaitAsync(ct);
+                    },
+                    cancellation.Token
+                )
+                .AsTask();
+            await entered.Task;
+            var join = runtime
+                .JoinActorEntrySpotAsync(
+                    RoutingId.From("entry-node"),
+                    actor,
+                    ZLinkMessage.Empty,
+                    cancellation.Token
+                )
+                .AsTask();
+            var entry = runtime.GetSpotNodeRuntime("entry").EntrySpotActivation!;
+            Assert.True(
+                entry.TryResolveActorDisconnected(typeof(ProbeActor), out var disconnected)
+            );
+            // This record must progress while the preceding Actor record is blocked.
+            await entry
+                .InvokeActorDisconnectedAsync(disconnected!, actor, cancellation.Token)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(2));
+            release.TrySetResult();
+            await owner;
+            await join.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            release.TrySetResult();
+            cancellation.Cancel();
+            if (owner is not null)
+                await owner;
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(ZLinkDiagnosticsLevel.Off)]
+    [InlineData(ZLinkDiagnosticsLevel.Normal)]
+    public async Task EntryReturn_ThreeMembersDestroyAndSourceCloseWithoutHostCancellation(
+        ZLinkDiagnosticsLevel level
+    )
+    {
+        var sourceEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseSource = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var node = new CapturingSpotNode();
+        using var observer = new CapturingMessageFlowObserver();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowObserver: observer,
+            messageFlowMode: level,
+            entrySpotType: typeof(LocalJoinProbeEntrySpot),
+            userSpotType: typeof(EntryReturnSourceSpot)
+        );
+        var probe = runtime.Services.GetRequiredService<LocalEntryJoinProbe>();
+        var leftCount = 0;
+        var allLeft = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? close = null;
+        try
+        {
+            var created = await runtime.CreateAsync<EntryReturnSourceSpot>();
+            var source = Assert.Single(
+                runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                value => value.SpotId == created.Spot.SpotId
+            );
+            var actors = new List<ProbeActor>();
+            foreach (var actorId in new[] { actorRef.ActorId, "player-2", "observer" })
+            {
+                var memberRef = actorRef with { ActorId = actorId };
+                if (actorId != actorRef.ActorId)
+                    await CreateTrackedLocalActorOwnershipAsync(
+                        runtime.Services.GetRequiredService<ZLinkLocationRuntime>().Store,
+                        runtime.Services.GetRequiredService<ZLinkLocationRuntime>().OwnerToken,
+                        runtime
+                            .Services.GetRequiredService<ZLinkLocationLifecycle>()
+                            .ActorOwnership,
+                        memberRef,
+                        CancellationToken.None
+                    );
+                var actor = RegisterProbeActor(runtime, memberRef);
+                await source.JoinActorAsync(actor, ZLinkMessage.Empty, CancellationToken.None);
+                actors.Add(actor);
+            }
+            probe.LeaveHandler = async ct =>
+            {
+                sourceEntered.TrySetResult();
+                await releaseSource.Task.WaitAsync(ct);
+                if (Interlocked.Increment(ref leftCount) == actors.Count)
+                {
+                    close = ((IZLinkSpotContext)source).CloseAsync(CancellationToken.None).AsTask();
+                    allLeft.TrySetResult();
+                }
+            };
+            probe.JoinedHandler = async (context, actor, ct) =>
+                await context.DestroyActorAsync(actor, ct);
+            var states = actors
+                .Select(actor => runtime.GetOrCreateActorState(actor.Context.ActorId))
+                .ToArray();
+            var joins = actors
+                .Select(actor =>
+                    runtime
+                        .JoinActorEntrySpotAsync(
+                            RoutingId.From("entry-node"),
+                            actor,
+                            ZLinkMessage.Empty,
+                            CancellationToken.None
+                        )
+                        .AsTask()
+                )
+                .ToArray();
+            await sourceEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var results = await Task.WhenAll(joins).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.All(results, result => Assert.IsType<ZLinkActorJoinResult.Accepted>(result));
+            releaseSource.TrySetResult();
+            // The source owner drains callbacks and the accepted Close without cancelling the host.
+            await allLeft.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await close!.WaitAsync(TimeSpan.FromSeconds(5));
+            foreach (var actor in actors)
+                await runtime.DestroyActorAsync(
+                    RoutingId.From("entry-node"),
+                    actor,
+                    CancellationToken.None
+                );
+            Assert.Equal(3, leftCount);
+            Assert.Equal(3, node.DestroyedActors.Count);
+            Assert.All(states, state => Assert.Null(state.Actor));
+        }
+        finally
+        {
+            releaseSource.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task LocalEntrySpotJoin_MissingActivation_DoesNotCreateANativeActor()
     {
@@ -11572,6 +11801,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
     private sealed class LocalEntryJoinProbe
     {
+        public Func<CancellationToken, ValueTask> LeaveHandler { get; set; } =
+            static _ => ValueTask.CompletedTask;
         public Func<CancellationToken, ValueTask<ZLinkSpotActorJoinResult>> Handler { get; set; } =
             _ => ValueTask.FromResult(ZLinkSpotActorJoinResult.Reject());
 
@@ -11581,6 +11812,26 @@ public sealed partial class EntrySpotActorDispatchTests
             CancellationToken,
             ValueTask
         > JoinedHandler { get; set; } = static (_, _, _) => ValueTask.CompletedTask;
+    }
+
+    private sealed class EntryReturnSourceSpot(IZLinkSpotContext context, LocalEntryJoinProbe probe)
+        : IZLinkSpot<ProbeActor>
+    {
+        public IZLinkSpotContext Context { get; } = context;
+
+        public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+            string actorId,
+            ZLinkMessage request,
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+
+        public ValueTask OnJoinedActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+
+        public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
+            probe.LeaveHandler(cancellationToken);
     }
 
     private sealed class LocalJoinProbeEntrySpot(
@@ -12712,7 +12963,7 @@ public sealed partial class EntrySpotActorDispatchTests
             IReadOnlyList<Message>
         >? ActorRequestHandler { get; set; }
 
-        public List<ZLinkBackendActorRef> DestroyedActors { get; } = [];
+        public ConcurrentBag<ZLinkBackendActorRef> DestroyedActors { get; } = [];
 
         public ConcurrentQueue<string> LifecycleEvents { get; } = new();
 

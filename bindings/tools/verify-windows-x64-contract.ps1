@@ -133,13 +133,13 @@ Assert-SourceMatch -RelativePath "bindings/dotnet/src/Zlink/Zlink.csproj" `
     -Pattern "ZLinkBindingVersionFile.*\.\.\/\.\.\/VERSION" `
     -Message ".NET package must read bindings/dotnet/VERSION"
 Assert-SourceMatch -RelativePath "bindings/dotnet/src/Zlink/Zlink.csproj" `
-    -Pattern "(?s)ZLinkWindowsX64NativeRoot.*runtimes\\win-x64\\native\\zlink\.dll" `
+    -Pattern "(?s)ZLinkWindowsX64NativeRoot\)\\\*\.dll.*runtimes\\win-x64\\native\\%\(Filename\)" `
     -Message ".NET Windows payload must use win-x64"
 Assert-SourceMatch -RelativePath "bindings/java/build.gradle" `
     -Pattern ("(?m)^version = '" + [regex]::Escape($javaVersion) + "'$") `
     -Message "Java package version does not match bindings/java/VERSION"
-Assert-SourceMatch -RelativePath "scripts/local-package/java/windows-package.init.gradle" `
-    -Pattern "native/windows-x86_64/zlink\.dll" `
+Assert-SourceMatch -RelativePath "bindings/java/build.gradle" `
+    -Pattern "zlink-native-resources/main/native/windows-x86_64" `
     -Message "Java Windows resource must use windows-x86_64"
 Assert-SourceMatch -RelativePath "bindings/java/src/main/java/systems/zlink/runtime/nativeapi/LibraryLoader.java" `
     -Pattern '(?s)a\.equals\("amd64"\) \|\| a\.equals\("x86_64"\).*return "x86_64"' `

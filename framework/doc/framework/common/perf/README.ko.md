@@ -115,7 +115,7 @@ Object role과 Store 필요성은 [MeshNode 계약][mesh]을 따르며, Store가
 - **Window 안에 terminal이 된 operation만 센다.** Window가 끝나면 owner는 새 operation을
   시작하지 않고 원본을 확정한다. 이때 terminal이 아닌 operation은 `messages.inflightAtEnd`로만
   세고 성공·실패·latency에 넣지 않는다. 셀이 끝나면 process를 종료하므로 남은 작업을 기다리지 않는다.
-- **Warmup drain을 넘으면 실패 원본을 남긴다.** Connection 재생성이나
+- **Warmup drain을 넘으면 실패 원본을 남긴다.** Drain 한도는 §5.2의 `drainTimeoutMs`다. Connection 재생성이나
   임의 sleep으로 잔여 작업을 없앤 것처럼 처리하면 같은 조건을 비교할 수 없기 때문이다.
 
 `messages.completed`는 cohort 중 window 안에 검증까지 끝난 성공 수다.
@@ -136,8 +136,9 @@ Trigger는 `runId`, `cellId`, `resetSeq`, phase만 전달하고 그 설정을 �
 Spot handler 안에서 outbound call을 재는 셀은 같은 process의 application driver가 public
 Spot request/send로 handler를 실행한다. Driver 호출도 §4.3의 request 규칙으로 연속 제출한다.
 Local driver 호출을 별도 KOPS로 세지 않는다.
-Driver 호출의 deadline은 §5.2의 `driverTimeoutMs`다. Driver 호출은 측정 대상 remote call을 감싸므로,
-remote call이 자기 deadline에 끝나도 driver가 그 결과를 받을 수 있어야 하기 때문이다.
+Driver 호출의 deadline은 §5.2의 측정 call deadline보다 `drainTimeoutMs`만큼 늦다. Driver 호출은
+측정 대상 remote call을 감싸므로, remote call이 자기 deadline에 끝나도 driver가 그 결과를 받을 수
+있어야 하기 때문이다.
 §10.5의 주 latency는 handler 안 remote call 직전부터 완료까지이며, driver부터의 전체 시간은
 `driver.latency.*`에 따로 기록한다. `driver.latency.*` 표본은 측정 operation이 검증까지 성공한 경우만이고,
 `driver.failed`는 driver 호출 자체의 실패만 센다. 측정 operation의 실패는 handler가 한 번만 기록한다.
@@ -250,15 +251,22 @@ Subscriber는 `role=subscriber`, `roleInstance=subscriberId`로 각각 한 항�
 
 ### 5.2 공통 workload 값
 
-표준 echo의 role config에는 `requestTimeoutMs=1000`, `correlationExpiryMs=1000`,
-`driverTimeoutMs=2000`, `setupTimeoutMs=30000`, `adminTimeoutMs=5000`을 기록한다.
-앞의 request 값은 public request call, expiry는 harness correlation, driver는 §4.2의 local driver 호출,
-setup은 공통 runner/준비 caller, admin 값은 HTTP client가 소비한다. 이 값의 소유자는 공통 runner이며
-role과 client는 role config에서 읽기만 한다. Send에는 시간 상한이 없다. Classic fanout publisher만
-public socket 설정의 송신 timeout 실제 값(표준 1000ms)을 기록한다([설정 소유 계약][submit]).
+표준 echo의 role config에는 `drainTimeoutMs=30000`, `setupTimeoutMs=30000`, `adminTimeoutMs=5000`을
+기록한다. 이 값의 소유자는 공통 runner이며 role과 client는 role config에서 읽기만 한다.
+
+- **측정 call의 deadline은 그 call이 속한 phase(warmup 또는 measured)가 끝나는 시각에
+  `drainTimeoutMs`를 더한 값이다.** Public request call의 deadline, send/send harness correlation의
+  expiry, worker call의 timeout이 모두 이 값이다. §4.3의 연속 제출은 backpressure 경계까지 queue를 채우므로
+  queue 대기는 latency에 들어가야 하고, 고정된 짧은 deadline으로 실패를 만들면 포화 상태를 잴 수 없기
+  때문이다. Measured window가 끝날 때 terminal이 아닌 operation은 §4.1대로 `inflightAtEnd`로만 센다.
+- Setup 값은 공통 runner와 준비 caller, admin 값은 HTTP client가 소비한다. Send에는 시간 상한이 없다.
+- Classic fanout publisher의 public socket 송신 timeout은 warmup·measured 시간과 `drainTimeoutMs`를 더한
+  값으로 설정하고 실제 값을 기록한다([설정 소유 계약][submit]). Socket 설정은 호출마다 바꿀 수 없으므로,
+  가장 먼저 시작한 publish도 측정 call deadline 전에 timeout되지 않게 하는 값이다. `NoDrop` publish의
+  admission 대기도 위와 같은 이유로 실패가 아니라 latency로 잰다.
 
 Worker config에는 `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
-`idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`와 executor의 실효 제한을 기록한다.
+`idleTimeoutMs=60000`과 executor의 실효 제한을 기록한다. Worker call의 timeout은 위의 측정 call deadline이다.
 적용은 각 언어의 public worker options만 사용한다(§10.8). Worker queue에는 상한이 없다
 ([Framework API](../spec/server/00-foundation/06-framework-api.ko.md)). Host가 받는 job의 상한은
 Application job queue가 소유하며 §23 manifest로만 바꾼다.
@@ -1192,7 +1200,7 @@ Application latency histogram은 다음 형식을 사용한다. Public provider�
 {
   "unit": "ms",
   "ticksUnit": "ns",
-  "bounds": [0.01, 0.0125, 0.016, 0.02, 0.025, 0.0315, 0.04, 0.05, 0.063, 0.08, 0.1, …, 800, 1000],
+  "bounds": [0.01, 0.0125, 0.016, 0.02, 0.025, 0.0315, 0.04, 0.05, 0.063, 0.08, 0.1, …, 80000, 100000],
   "counts": ["0", …],
   "overflow": "0",
   "count": "0",
@@ -1203,7 +1211,9 @@ Application latency histogram은 다음 형식을 사용한다. Public provider�
 ```
 
 - **Bounds는 `framework/perf/schema/histogram-bounds.json` 한 곳이 소유한다.** 0.01ms부터 decade마다
-  R10 수열 `1, 1.25, 1.6, 2, 2.5, 3.15, 4, 5, 6.3, 8`배로 800ms까지 두고 마지막 상한은 1000ms다(51개). 이웃 상한의
+  R10 수열 `1, 1.25, 1.6, 2, 2.5, 3.15, 4, 5, 6.3, 8`배로 80000ms까지 두고 마지막 상한은 100000ms다(71개).
+  §5.2의 측정 call deadline 아래에서 queue 대기를 포함한 성공 latency가 측정 구간과 drain 한도만큼 길어질 수
+  있으므로 상한이 그 길이를 넘어야 한다. 이웃 상한의
   비는 최대 약 1.28이므로 bucket 상한 추정값은 그 bucket의 실제 값보다 최대 약 28% 클 수 있다.
   Runner와 언어 role은 이 파일을 읽고 값을 다시 적지 않는다.
 - **Bucket는 `[0,b0]`, 이후 `(b[i-1],b[i]]`이며 누적 count가 아니다.** 같은 sample이

@@ -621,18 +621,19 @@ function createSpotState(
   }
 }
 
-export class ServiceTerminalOperationRegistry<T> {
-  private readonly operations: OperationRegistry<T>;
+export class ServiceTerminalOperationRegistry<T, Context = unknown> {
+  private readonly operations: OperationRegistry<T, Context>;
 
-  constructor(operations = new OperationRegistry<T>()) {
+  constructor(operations = new OperationRegistry<T, Context>()) {
     this.operations = operations;
   }
 
   register(
     timeoutMs: number,
-    timeoutOwner: 'registry' | 'sender' = 'registry'
+    timeoutOwner: 'registry' | 'sender' = 'registry',
+    context?: Context
   ): PendingOperation<T> {
-    return this.operations.register(timeoutMs, timeoutOwner);
+    return this.operations.register(timeoutMs, timeoutOwner, context);
   }
 
   reply(id: bigint, value: T): boolean {
@@ -649,6 +650,10 @@ export class ServiceTerminalOperationRegistry<T> {
 
   isPending(id: bigint): boolean {
     return this.operations.isPending(id);
+  }
+
+  context(id: bigint): Context | undefined {
+    return this.operations.context(id);
   }
 
   get size(): number {
