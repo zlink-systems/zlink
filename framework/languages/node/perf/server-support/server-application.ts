@@ -291,6 +291,8 @@ class AdminServer {
     }
     if (runtimes && config.objectRole === 'ObjectClient' && config.meshName != null)
       infrastructure &&= runtimes.mesh.snapshot(config.meshName).readyPeerCount > 0;
+    const transportEndpoints =
+      infrastructure && runtimes ? this.boundTransportEndpoints(config, runtimes) : {};
     const probe = measurement.setupEvidence.length > 0;
     const objects = this.options.objects;
     const objectsReady = objects?.ready ?? true;
@@ -301,11 +303,11 @@ class AdminServer {
         observedValue: this.publicStatus()
       }
     ];
-    if (Object.keys(config.transportEndpoints).length > 0)
+    if (Object.keys(transportEndpoints).length > 0)
       evidence.push({
-        kind: 'verifiedListenerReservation',
-        source: 'role config; coordinator OS bind reservation and public host startup',
-        observedValue: config.transportEndpoints
+        kind: 'boundTransportEndpoints',
+        source: 'public Framework listener status',
+        observedValue: transportEndpoints
       });
     if (objects) evidence.push(...objects.evidence);
     evidence.push(...Object.values(measurement.preparationEvidence));
@@ -327,6 +329,36 @@ class AdminServer {
       evidence,
       reasons
     };
+  }
+
+  private boundTransportEndpoints(config: RoleConfig, runtimes: Runtimes): Record<string, string> {
+    const endpoints: Record<string, string> = {};
+    for (const key of Object.keys(config.transportEndpoints)) {
+      let kind: 'routeMesh' | 'clientServer' | 'fanout' | 'stream';
+      let name: string;
+      switch (key) {
+        case 'mesh':
+          kind = 'routeMesh';
+          name = config.meshName!;
+          break;
+        case 'clientserver':
+          kind = 'clientServer';
+          name = config.channelName!;
+          break;
+        case 'fanout':
+          kind = 'fanout';
+          name = config.channelName!;
+          break;
+        case 'stream':
+          kind = 'stream';
+          name = 'perf-session';
+          break;
+        default:
+          throw new Error(`Unknown perf listener key '${key}'.`);
+      }
+      endpoints[key] = runtimes.host.getListenerStatus(kind, name).endpoint;
+    }
+    return endpoints;
   }
 }
 

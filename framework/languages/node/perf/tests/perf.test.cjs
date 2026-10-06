@@ -176,6 +176,42 @@ test('terminal at endTicks is inflightAtEnd and the outcome equation balances', 
   measurement.dispose();
 });
 
+test('warmup completion waits for submitted operations and active handlers to drain', async () => {
+  const roleConfig = config();
+  roleConfig.workload.warmupSeconds = 0.01;
+  const measurement = new Measurement(roleConfig, true);
+  let resolveEntered;
+  const entered = new Promise((resolve) => {
+    resolveEntered = resolve;
+  });
+  let operationStarted;
+  measurement.startPhase(
+    { runId: 'run', cellId: 'cell', phase: 'warmup', resetSeq: '0' },
+    () => {
+      operationStarted = measurement.beginOperation();
+      assert.notEqual(operationStarted, undefined);
+      measurement.handlerEnter();
+      resolveEntered();
+      return Promise.resolve();
+    }
+  );
+
+  let phaseCompleted = false;
+  const phaseTask = measurement.phaseTask.then(() => {
+    phaseCompleted = true;
+  });
+  await entered;
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(phaseCompleted, false);
+  } finally {
+    measurement.completeOperation(operationStarted);
+    measurement.handlerExit();
+  }
+  await phaseTask;
+  assert.equal(phaseCompleted, true);
+});
+
 test('worker warmup evidence is staged without recording a measured histogram sample', async () => {
   const roleConfig = config({ source: true, terminal: 'ordinary', worker: { taskMillis: 1 } });
   const measurement = openMeasurement(roleConfig);

@@ -80,6 +80,7 @@ export class Measurement {
   private inflight = 0;
   private maxInflight = 0;
   private activeHandlers = 0;
+  private drainWaiter: (() => void) | undefined;
   private start = 0n;
   private end = 0n;
   private startUnix: string | null = null;
@@ -223,8 +224,7 @@ export class Measurement {
     if (previous) return { ...previous, state: 'alreadyStarted' };
     if (
       !this.phaseFinished ||
-      this.inflight !== 0 ||
-      this.activeHandlers !== 0 ||
+      !this.isDrained() ||
       (trigger.phase === 'warmup' ? this.currentPhase !== 'setup' : this.currentPhase !== 'reset')
     )
       return reject('Previous phase has not drained and reset.');
@@ -292,19 +292,37 @@ export class Measurement {
     }
     this.sampler.end();
     this.endUnix = PerfClock.unixMs();
-    if (phase === 'warmup') await operations;
-    else this.sealedResults = true;
+    if (phase === 'warmup') {
+      await operations;
+      await this.waitForDrain();
+    }
+    this.sealedResults = true;
     this.currentPhase = 'complete';
     this.phaseFinished = true;
+  }
+
+  private isDrained(): boolean {
+    return this.inflight === 0 && this.activeHandlers === 0;
+  }
+
+  private waitForDrain(): Promise<void> {
+    if (this.isDrained()) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.drainWaiter = resolve;
+    });
+  }
+
+  private notifyDrained(): void {
+    const resolve = this.drainWaiter;
+    if (resolve === undefined || !this.isDrained()) return;
+    this.drainWaiter = undefined;
+    resolve();
   }
 
   resetPhase(request: ResetRequest, resetCapacity: (() => bigint) | undefined): ResetReply {
     const requested = DecimalText.u64(request.resetSeq);
     const drained =
-      this.phaseFinished &&
-      (this.start === 0n || PerfClock.now() >= this.end) &&
-      this.inflight === 0 &&
-      this.activeHandlers === 0;
+      this.phaseFinished && (this.start === 0n || PerfClock.now() >= this.end) && this.isDrained();
     if (
       request.runId === this.config.runId &&
       request.cellId === this.config.cellId &&
@@ -389,6 +407,7 @@ export class Measurement {
     const completed = completedTicks ?? PerfClock.now();
     if (this.sealedResults) return false;
     this.inflight--;
+    if (this.drainWaiter !== undefined) this.notifyDrained();
     if (completed >= this.end) return false;
     if (error !== undefined && error !== null) {
       this.recordError(error, true);
@@ -404,6 +423,7 @@ export class Measurement {
   }
   handlerExit(): void {
     this.activeHandlers--;
+    if (this.drainWaiter !== undefined) this.notifyDrained();
   }
   recordReply(request: PerfEchoRequest): void {
     this.recordApplicationCall(request, 'reply');
@@ -421,7 +441,7 @@ export class Measurement {
   }
 
   recordDiagnostic(error: unknown): void {
-    this.recordError(error, false);
+    if (!this.sealedResults) this.recordError(error, false);
   }
 
   private recordError(error: unknown, outcome: boolean): void {
