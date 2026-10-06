@@ -167,8 +167,6 @@ export type ServiceWireRelocationObject =
       readonly objectGeneration: bigint;
     };
 
-/** Shared CRC-32C wire bounds for the direct relocation payload transfer. */
-export const RELOCATION_PAYLOAD_TOTAL_LENGTH_MAX = 274_877_906_944n;
 export const RELOCATION_PAYLOAD_CHUNK_COUNT_MAX = 4096;
 export { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 
@@ -2656,29 +2654,6 @@ export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFro
   const record = decodeServiceWireFrozenRecordFrom(reader);
   reader.end('frozen record');
   return { ...record, canonicalBytes: Buffer.from(bytes) };
-}
-
-/**
- * Consumes exactly one canonical frozen record at `offset`.  Relocation
- * saved-work is a vector of back-to-back records, so its boundary is the
- * record grammar itself rather than an enclosing length field.
- */
-export function decodeServiceWireFrozenRecordPrefix(
-  bytes: Uint8Array,
-  offset = 0
-): { readonly record: ServiceWireFrozenRecord; readonly length: number } {
-  if (!Number.isSafeInteger(offset) || offset < 0 || offset >= bytes.byteLength) {
-    fail('Frozen record offset is outside the encoded bytes.');
-  }
-  const reader = new FrozenReader(bytes.subarray(offset));
-  const record = decodeServiceWireFrozenRecordFrom(reader);
-  return {
-    record: {
-      ...record,
-      canonicalBytes: Buffer.from(bytes.subarray(offset, offset + reader.position))
-    },
-    length: reader.position
-  };
 }
 
 function decodeServiceWireFrozenRecordFrom(reader: FrozenReader): ServiceWireFrozenRecord {
