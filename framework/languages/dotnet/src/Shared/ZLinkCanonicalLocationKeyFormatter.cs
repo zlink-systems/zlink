@@ -85,9 +85,6 @@ internal static class ZLinkCanonicalLocationKeyFormatter
                 or ZLinkLocationRole.Pub
                 or ZLinkLocationRole.Sub;
 
-    private static string NormalizePeerIdentity(RoutingId? nodeRid, string? endpoint) =>
-        nodeRid is { } rid ? rid.ToHex() : endpoint ?? string.Empty;
-
     private static string Encode(params string[] segments)
     {
         var builder = new StringBuilder();

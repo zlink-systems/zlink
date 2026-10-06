@@ -869,15 +869,6 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
         long leaseGeneration
     ) => Encode(new OwnerRecord(ownerId, leaseGeneration));
 
-    // Provider-private keys (capacity, reservation, aggregate, generation
-    // counter) aren't part of the public opaque-record contract
-    // (21-location-runtime.md#1.2) and keep this length-framed encoding.
-    private static string EncodeSegment(string value) =>
-        Encoding.UTF8.GetByteCount(value).ToString(CultureInfo.InvariantCulture)
-        + ":"
-        + value
-        + ":";
-
     private static ZLinkStoreKey Key(string value) => new(value);
 
     private static T Decode<T>(ReadOnlyMemory<byte> bytes) =>
