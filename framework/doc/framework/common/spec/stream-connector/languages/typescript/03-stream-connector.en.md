@@ -195,8 +195,16 @@ interface ZlinkStreamRequestCall {
   timeout(timeoutMs: number): ZlinkStreamRequestCall;
   compress(): ZlinkStreamRequestCall;
   submit<TReply = unknown>(signal?: AbortSignal): Promise<TReply>;
+  submit<TReply>(
+    replyType: abstract new (...args: never[]) => TReply,
+    signal?: AbortSignal
+  ): Promise<TReply>;
   submitEncoded(signal?: AbortSignal): Promise<ZlinkStreamEncodedPayload>;
-  submit(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
+  submitCallback(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
+  submitCallback<TReply>(
+    replyType: abstract new (...args: never[]) => TReply,
+    callback: (result: ZlinkStreamResultOf<TReply>) => void
+  ): void;
 }
 
 interface ZlinkStreamWaitCall<TPayload = ZlinkStreamEncodedPayload> {
@@ -315,7 +323,7 @@ surface puts that value in a `ZlinkStreamException`
 A bare `Error` is never thrown, so the caller decides which of the 13
 codes in
 [Common Spec §9](../../32-stream-connector.en.md#9-error-meaning) it is
-through the caught value's `error.code`. A callback terminator delivers
+through the caught value's `error.code`. A callback terminator (`submitCallback`) delivers
 the same value as `ZlinkStreamResultOf<T>.error`.
 
 The **means of attaching a packet name to a type** that
