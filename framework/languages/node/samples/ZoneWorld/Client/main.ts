@@ -263,7 +263,10 @@ async function main(): Promise<void> {
     const settledDiagonal = await second
       .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
       .where(
-        (message) => !message.payload.players.some((player) => player.playerId === joined.playerId)
+        (message) =>
+          message.payload.zoneId === boundary.diagonalZoneId &&
+          message.payload.players.some((player) => player.playerId === joinedSecond.playerId) &&
+          !message.payload.players.some((player) => player.playerId === joined.playerId)
       )
       .timeout(10_000)
       .submit();
@@ -271,7 +274,12 @@ async function main(): Promise<void> {
     for (let index = 0; index < 3; index += 1) {
       const diagonalView = await second
         .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-        .where((message) => message.payload.tick > lastTick)
+        .where(
+          (message) =>
+            message.payload.zoneId === boundary.diagonalZoneId &&
+            message.payload.players.some((player) => player.playerId === joinedSecond.playerId) &&
+            message.payload.tick > lastTick
+        )
         .submit();
       lastTick = diagonalView.payload.tick;
       zlinkStreamAssert.ensure(
