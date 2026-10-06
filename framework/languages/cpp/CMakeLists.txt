@@ -2253,6 +2253,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp
     "connector-unit;connector-contract;connector-timeout;connector-protocol"
     contract)
+  foreach(_codec_case reentrant order close)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_stream_codec_${_codec_case}
+      COMMAND test_cpp_stream_connector codec-${_codec_case}
+      LABELS "connector-unit;connector-contract;connector-regression"
+      TIER unit
+      TIMEOUT 10)
+  endforeach()
   target_compile_definitions(test_cpp_stream_revision PRIVATE
     ZLINK_STREAM_PACKET_NAME_FIXTURE_PATH="${CMAKE_CURRENT_LIST_DIR}/../../test/fixtures/stream-packet-name-whitespace.tsv")
   add_executable(test_cpp_stream_connector_no_exceptions

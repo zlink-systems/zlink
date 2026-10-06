@@ -169,18 +169,15 @@ using steady_clock_t = std::chrono::steady_clock;
 
 struct inbound_frame_t
 {
-    message_kind_t kind = message_kind_t::send;
-    std::optional<std::uint64_t> request_seq;
-    bool reply_to_pending = false;
-    dispatch_envelope_t envelope;
-    /* Set when only this packet failed and the connection stays (§9:
-   * DecompressionFailed). */
-    std::optional<error_t> packet_error;
+    stream_header_t header;
+    std::vector<std::uint8_t> payload;
 };
 
-result_t<dispatch_envelope_t> decode_packet (connector_state_t &state,
-                                             const stream_header_t &header,
-                                             std::vector<std::uint8_t> payload_bytes)
+result_t<dispatch_envelope_t>
+decode_packet (connector_state_t &state,
+               const stream_header_t &header,
+               std::vector<std::uint8_t> payload_bytes,
+               const std::shared_ptr<stream_connection_t> &observed_connection)
 {
     auto payload = std::move (payload_bytes);
     std::function<void ()> actor_event;
@@ -215,6 +212,15 @@ result_t<dispatch_envelope_t> decode_packet (connector_state_t &state,
               error_code_t::frame_too_large,
               "decompressed stream payload exceeds maximum stream payload size");
         }
+    }
+    // Only state application holds the transport lock. The codec above can
+    // call the connector surface; close/reconnect may end its observed connection.
+    std::lock_guard<std::mutex> lock (state.transport_mutex);
+    if (observed_connection
+        && (state.connection != observed_connection || state.close_requested.load ()
+            || !is_transport_connected (state))) {
+        return result_t<dispatch_envelope_t>::failure (
+          error_code_t::disconnected, "stream connection ended during payload decode");
     }
     if (header.kind == message_kind_t::control && header.name == heartbeat_ping_name) {
         /* Server liveness ping (graceful-drain-handoff §7.2): answer with a
@@ -293,7 +299,7 @@ result_t<dispatch_envelope_t> decode_packet (connector_state_t &state,
                                      std::move (handler_ids), std::move (actor));
         };
     }
-    packet_t packet{header.name, header.metadata, header.codec, compressed, payload};
+    packet_t packet{header.name, header.metadata, header.codec, compressed, std::move (payload)};
     std::optional<std::uint16_t> actor_slot;
     if (header.actor_slot) {
         std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
@@ -579,9 +585,7 @@ take_matching_queued_packet (connector_state_t &state,
     return matched;
 }
 
-std::optional<result_t<inbound_frame_t>>
-try_take_inbound_frame (connector_state_t &state,
-                        const std::unordered_set<std::uint64_t> &claimed_replies)
+std::optional<result_t<inbound_frame_t>> try_take_inbound_frame (connector_state_t &state)
 {
     if (state.inbound_buffer.size () < frame_codec_t::prefix_size) {
         return std::nullopt;
@@ -620,31 +624,9 @@ try_take_inbound_frame (connector_state_t &state,
         return result_t<inbound_frame_t>::failure (decoded.error ()->code,
                                                    decoded.error ()->message);
     }
-    auto header = decoded.value ();
     state.last_inbound_received = steady_clock_t::now ();
-    const bool reply_to_pending =
-      (header.kind == message_kind_t::response || header.kind == message_kind_t::error)
-      && header.request_seq
-      && state.pending_requests.find (*header.request_seq) != state.pending_requests.end ()
-      && !claimed_replies.contains (*header.request_seq);
-    if (header.kind == message_kind_t::response && !reply_to_pending) {
-        return result_t<inbound_frame_t>::success (
-          inbound_frame_t{header.kind, header.request_seq, false, {}});
-    }
-    auto packet = decode_inbound_packet (state, header, std::move (payload_bytes));
-    /* stream-connector §9: the one place that decides whether a decode failure
-   * ends the connection. A payload that fails to decompress fails only its
-   * packet; every other decode failure (frame, header, metadata, over the
-   * receive limit) is returned as a failure and ends the connection. */
-    if (!packet && packet.error ()->code == error_code_t::decompression_failed) {
-        return result_t<inbound_frame_t>::success (
-          inbound_frame_t{header.kind, header.request_seq, reply_to_pending, {}, *packet.error ()});
-    }
-    if (!packet) {
-        return result_t<inbound_frame_t>::failure (packet.error ()->code, packet.error ()->message);
-    }
-    return result_t<inbound_frame_t>::success (inbound_frame_t{
-      header.kind, header.request_seq, reply_to_pending, std::move (packet.value ())});
+    return result_t<inbound_frame_t>::success (
+      inbound_frame_t{std::move (decoded.value ()), std::move (payload_bytes)});
 }
 
 void kick_async_write (std::shared_ptr<connector_state_t> state, const char *reason);
@@ -884,14 +866,13 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
     std::unordered_set<std::uint64_t> claimed_replies;
     bool reschedule = false;
     {
-        std::lock_guard<std::mutex> lock (state->transport_mutex);
+        std::unique_lock<std::mutex> lock (state->transport_mutex);
         // A close can leave the previous connection's completion queued
         // while a reconnect installs a new connection. That stale completion
         // does not touch the new connection's read state or buffer.
         if (state->connection != observed_connection) {
             return;
         }
-        state->read_in_progress = false;
         state->inbound_buffer.insert (state->inbound_buffer.end (), bytes.begin (), bytes.end ());
         state->state_changed.notify_all ();
         if (state->close_requested.load () || !is_transport_connected (*state)) {
@@ -909,7 +890,7 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
         // A stream read can report both bytes and EOF. Decode the bytes that
         // arrived before applying the terminal transport error.
         while (true) {
-            auto frame = try_take_inbound_frame (*state, claimed_replies);
+            auto frame = try_take_inbound_frame (*state);
             if (!frame) {
                 break;
             }
@@ -920,53 +901,76 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                 break;
             }
             auto value = std::move (frame->value ());
-            if (value.reply_to_pending) {
-                claimed_replies.insert (*value.request_seq);
+            const auto &header = value.header;
+            const bool reply_to_pending =
+              (header.kind == message_kind_t::response || header.kind == message_kind_t::error)
+              && header.request_seq && state->pending_requests.contains (*header.request_seq)
+              && !claimed_replies.contains (*header.request_seq);
+            if (header.kind == message_kind_t::response && !reply_to_pending) {
+                continue;
+            }
+            if (reply_to_pending) {
+                claimed_replies.insert (*header.request_seq);
+            }
+            // Keep the existing read claim until this batch has been consumed.
+            // Request submission cannot start another reader while the codec runs.
+            lock.unlock ();
+            auto packet = decode_inbound_packet (*state, header, std::move (value.payload),
+                                                 observed_connection);
+            lock.lock ();
+            if (state->connection != observed_connection || state->close_requested.load ()
+                || !is_transport_connected (*state)) {
+                return;
+            }
+            // §9: only DecompressionFailed is packet-local. All other decode
+            // failures end the connection, including a decompressed size violation.
+            if (!packet && packet.error ()->code != error_code_t::decompression_failed) {
+                transport_error = *packet.error ();
+                break;
             }
             trace_connector_write (*state, "read-dispatch", [&] {
                 return std::string (
                   "seq="
-                  + (value.request_seq ? std::to_string (*value.request_seq) : std::string ("-"))
-                  + " name=" + value.envelope.packet.name
-                  + " kind=" + message_kind_name (value.kind));
+                  + (header.request_seq ? std::to_string (*header.request_seq) : std::string ("-"))
+                  + " name=" + header.name + " kind=" + message_kind_name (header.kind));
             });
             /* §5.2: pending request 매칭은 request_seq가 정본이다. packet name은 대조
        * 조건이 아니므로 이름이 달라도 응답을 버리지 않는다. */
-            if (value.packet_error) {
+            if (!packet) {
                 /* §9 DecompressionFailed: only this packet fails - the pending
          * request it answers, or the error handler for any other packet
          * (a Response that answers nothing is dropped, §5.2). */
-                if (value.reply_to_pending) {
+                if (reply_to_pending) {
                     completed_requests.emplace_back (
-                      *value.request_seq, result_t<request_reply_t>::failure (
-                                            value.packet_error->code, value.packet_error->message));
-                } else if (value.kind != message_kind_t::response) {
-                    stream_errors.push_back (*value.packet_error);
+                      *header.request_seq, result_t<request_reply_t>::failure (
+                                             packet.error ()->code, packet.error ()->message));
+                } else if (header.kind != message_kind_t::response) {
+                    stream_errors.push_back (*packet.error ());
                 }
-            } else if (value.reply_to_pending) {
-                if (value.kind == message_kind_t::response) {
+            } else if (reply_to_pending) {
+                if (header.kind == message_kind_t::response) {
                     completed_requests.emplace_back (
-                      *value.request_seq, result_t<request_reply_t>::success (
-                                            request_reply_t{std::move (value.envelope.packet)}));
+                      *header.request_seq, result_t<request_reply_t>::success (
+                                             request_reply_t{std::move (packet.value ().packet)}));
                 } else if (auto remote_error =
-                             decode_remote_error_message (value.envelope.packet)) {
+                             decode_remote_error_message (packet.value ().packet)) {
                     completed_requests.emplace_back (
-                      *value.request_seq,
+                      *header.request_seq,
                       result_t<request_reply_t>::failure (error_code_t::remote_error,
                                                           std::move (remote_error.value ())));
                 } else {
                     completed_requests.emplace_back (
-                      *value.request_seq,
+                      *header.request_seq,
                       result_t<request_reply_t>::failure (remote_error.error ()->code,
                                                           remote_error.error ()->message));
                 }
-            } else if (value.kind == message_kind_t::error) {
-                auto remote_error = decode_remote_error_message (value.envelope.packet);
+            } else if (header.kind == message_kind_t::error) {
+                auto remote_error = decode_remote_error_message (packet.value ().packet);
                 stream_errors.push_back (remote_error ? error_t{error_code_t::remote_error,
                                                                 std::move (remote_error.value ())}
                                                       : *remote_error.error ());
-            } else if (value.kind != message_kind_t::response) {
-                pushed_packets.push_back (std::move (value.envelope));
+            } else if (header.kind != message_kind_t::response) {
+                pushed_packets.push_back (std::move (packet.value ()));
             }
         }
         reschedule =
@@ -1000,6 +1004,13 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
     }
     for (auto &[request_seq, result] : completed_requests) {
         complete_pending_request (state, request_seq, std::move (result));
+    }
+    {
+        std::lock_guard<std::mutex> lock (state->transport_mutex);
+        if (state->connection != observed_connection) {
+            return;
+        }
+        state->read_in_progress = false;
     }
     if (transport_error) {
         // The state transition must precede socket cancellation. The
@@ -1288,11 +1299,13 @@ void deliver_received_packet (connector_state_t &state, packet_t packet)
                           dispatch_envelope_t{std::move (packet), std::nullopt});
 }
 
-result_t<dispatch_envelope_t> decode_inbound_packet (connector_state_t &state,
-                                                     const stream_header_t &header,
-                                                     std::vector<std::uint8_t> payload)
+result_t<dispatch_envelope_t>
+decode_inbound_packet (connector_state_t &state,
+                       const stream_header_t &header,
+                       std::vector<std::uint8_t> payload,
+                       const std::shared_ptr<stream_connection_t> &observed_connection)
 {
-    return decode_packet (state, header, std::move (payload));
+    return decode_packet (state, header, std::move (payload), observed_connection);
 }
 
 std::vector<pending_wait_t> take_pending_waits_locked (connector_state_t &state)
