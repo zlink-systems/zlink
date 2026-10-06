@@ -373,13 +373,12 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         CancellationToken cancellationToken
     )
     {
-        if (
-            !TryBeginRelocationBarrier(
+        var barrier = await TryBeginRelocationBarrierAsync(
                 ZLinkExecutionSealKind.Quiescent,
-                allowActorClaims: false,
-                out var barrier
+                allowActorClaims: false
             )
-        )
+            .ConfigureAwait(false);
+        if (barrier is null)
             throw new InvalidOperationException("SPOT execution lanes are already sealed.");
 
         try
@@ -455,15 +454,14 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     // Spot messaging §7: the lifecycle boundary keeps unstarted message
     // records behind Close while started continuations retain their turn.
-    internal ValueTask BeginCloseBoundaryAsync(CancellationToken cancellationToken)
+    internal async ValueTask BeginCloseBoundaryAsync(CancellationToken cancellationToken)
     {
-        if (
-            !TryBeginRelocationBarrier(
+        var barrier = await TryBeginRelocationBarrierAsync(
                 ZLinkExecutionSealKind.Close,
-                allowActorClaims: false,
-                out var barrier
+                allowActorClaims: false
             )
-        )
+            .ConfigureAwait(false);
+        if (barrier is null)
         {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
@@ -471,35 +469,24 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             );
         }
         MarkBarrierBoundary(barrier.Generation);
-        return ValueTask.CompletedTask;
     }
 
     internal bool HasPendingAcceptedState(Func<object, bool> predicate) =>
         _queue.HasPendingAcceptedState(predicate);
 
-    internal bool HasPendingAcceptedStateOrCloseApplicationAdmission(
+    internal ValueTask<bool> HasPendingAcceptedStateOrCloseApplicationAdmissionAsync(
         Func<object, bool> predicate
-    ) => _queue.HasPendingAcceptedStateOrCloseApplicationAdmission(predicate);
+    ) => _queue.HasPendingAcceptedStateOrCloseApplicationAdmissionAsync(predicate);
 
-    internal void VisitPendingAcceptedState(
+    internal ValueTask<bool> VisitPendingAcceptedStateAsync(
         ZLinkSpotSerialExecutor? successor,
-        Action<object> visit,
-        Action completed
+        Action<object> visit
     ) =>
-        _queue.RunOnSharedGate(() =>
-            RunBarrierState(() =>
-            {
-                if (successor is null)
-                    _queue.VisitPendingAcceptedState(null, visit, completed);
-                else
-                    successor.RunBarrierState(() =>
-                    {
-                        _queue.VisitPendingAcceptedState(successor._queue, visit, completed);
-                        return true;
-                    });
-                return true;
-            })
-        );
+        _queue.RunOnSharedGateAsync(() =>
+        {
+            _queue.VisitPendingAcceptedStateOnGate(successor?._queue, visit);
+            return true;
+        });
 
     internal Task PendingApplicationCompletion => _queue.ApplicationDrained;
 
@@ -963,156 +950,62 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             }
         };
 
-    internal bool TrySealRelocation(out ZLinkSpotExecutionRelocationSeal seal)
+    internal async ValueTask<ZLinkSpotExecutionRelocationSeal?> TrySealRelocationAsync()
     {
-        if (
-            !TryBeginRelocationBarrier(
+        var barrier = await TryBeginRelocationBarrierAsync(
                 ZLinkExecutionSealKind.Relocation,
-                allowActorClaims: false,
-                out var barrier
+                allowActorClaims: false
             )
-        )
+            .ConfigureAwait(false);
+        if (barrier is null)
         {
-            seal = null!;
-            return false;
+            return null;
         }
-        if (!_queue.TrySealRelocation(out var queueSeal))
+        var queueSeal = await _queue.TrySealRelocationAsync().ConfigureAwait(false);
+        if (queueSeal is null)
         {
             AbortBarrier(barrier.Generation);
-            seal = null!;
-            return false;
+            return null;
         }
         MarkBarrierBoundary(barrier.Generation);
         if (!barrier.Quiescent.Task.IsCompleted)
         {
-            _queue.TryAbortRelocation(queueSeal);
+            await _queue.TryAbortRelocationAsync(queueSeal).ConfigureAwait(false);
             AbortBarrier(barrier.Generation);
-            seal = null!;
-            return false;
+            return null;
         }
 
-        seal = new ZLinkSpotExecutionRelocationSeal(barrier.Generation, queueSeal);
-        return true;
+        return new ZLinkSpotExecutionRelocationSeal(barrier.Generation, queueSeal);
     }
 
-    internal bool TrySealPerActorShellRelocation(out ZLinkSpotExecutionRelocationSeal seal)
+    internal async ValueTask<ZLinkSpotExecutionRelocationSeal?> TrySealPerActorShellRelocationAsync()
     {
-        if (
-            _executionMode != ZLinkUserSpotExecutionMode.PerActor
-            || !TryBeginRelocationBarrier(
+        if (_executionMode != ZLinkUserSpotExecutionMode.PerActor)
+            return null;
+        var barrier = await TryBeginRelocationBarrierAsync(
                 ZLinkExecutionSealKind.Relocation,
-                allowActorClaims: true,
-                out var barrier
+                allowActorClaims: true
             )
-        )
+            .ConfigureAwait(false);
+        if (barrier is null)
         {
-            seal = null!;
-            return false;
+            return null;
         }
-        if (!_queue.TrySealRelocation(out var queueSeal))
+        var queueSeal = await _queue.TrySealRelocationAsync().ConfigureAwait(false);
+        if (queueSeal is null)
         {
             AbortBarrier(barrier.Generation);
-            seal = null!;
-            return false;
+            return null;
         }
         MarkBarrierBoundary(barrier.Generation);
         if (!barrier.Quiescent.Task.IsCompleted)
         {
-            _queue.TryAbortRelocation(queueSeal);
+            await _queue.TryAbortRelocationAsync(queueSeal).ConfigureAwait(false);
             AbortBarrier(barrier.Generation);
-            seal = null!;
-            return false;
+            return null;
         }
 
-        seal = new ZLinkSpotExecutionRelocationSeal(barrier.Generation, queueSeal);
-        return true;
-    }
-
-    internal bool TrySealRelocation(
-        Func<IReadOnlyList<ZLinkAcceptedWorkRecord>, bool> admit,
-        out ZLinkSpotExecutionRelocationSeal seal
-    ) => TrySealRelocation(0, admit, out seal, out _);
-
-    internal bool TrySealRelocation(
-        int reservedAcceptedSequences,
-        Func<IReadOnlyList<ZLinkAcceptedWorkRecord>, bool> admit,
-        out ZLinkSpotExecutionRelocationSeal seal,
-        out ulong firstReservedSequence
-    ) =>
-        TrySealRelocation(
-            reservedAcceptedSequences,
-            admit,
-            allowActorClaims: false,
-            out seal,
-            out firstReservedSequence
-        );
-
-    internal bool TrySealPerActorShellRelocation(
-        int reservedAcceptedSequences,
-        Func<IReadOnlyList<ZLinkAcceptedWorkRecord>, bool> admit,
-        out ZLinkSpotExecutionRelocationSeal seal,
-        out ulong firstReservedSequence
-    ) =>
-        TrySealRelocation(
-            reservedAcceptedSequences,
-            admit,
-            allowActorClaims: true,
-            out seal,
-            out firstReservedSequence
-        );
-
-    private bool TrySealRelocation(
-        int reservedAcceptedSequences,
-        Func<IReadOnlyList<ZLinkAcceptedWorkRecord>, bool> admit,
-        bool allowActorClaims,
-        out ZLinkSpotExecutionRelocationSeal seal,
-        out ulong firstReservedSequence
-    )
-    {
-        ArgumentNullException.ThrowIfNull(admit);
-        if (allowActorClaims && _executionMode != ZLinkUserSpotExecutionMode.PerActor)
-        {
-            seal = null!;
-            firstReservedSequence = 0;
-            return false;
-        }
-        if (
-            !TryBeginRelocationBarrier(
-                ZLinkExecutionSealKind.Relocation,
-                allowActorClaims,
-                out var barrier
-            )
-        )
-        {
-            seal = null!;
-            firstReservedSequence = 0;
-            return false;
-        }
-        if (
-            !_queue.TrySealRelocation(
-                reservedAcceptedSequences,
-                admit,
-                out var queueSeal,
-                out firstReservedSequence
-            )
-        )
-        {
-            AbortBarrier(barrier.Generation);
-            seal = null!;
-            firstReservedSequence = 0;
-            return false;
-        }
-        MarkBarrierBoundary(barrier.Generation);
-        if (!barrier.Quiescent.Task.IsCompleted)
-        {
-            _queue.TryAbortRelocation(queueSeal);
-            AbortBarrier(barrier.Generation);
-            seal = null!;
-            firstReservedSequence = 0;
-            return false;
-        }
-        seal = new ZLinkSpotExecutionRelocationSeal(barrier.Generation, queueSeal);
-        return true;
+        return new ZLinkSpotExecutionRelocationSeal(barrier.Generation, queueSeal);
     }
 
     internal bool IsRelocationReady =>
@@ -1157,13 +1050,12 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     )
     {
         ArgumentNullException.ThrowIfNull(reserveAcceptedSequencesAtBoundary);
-        if (
-            !TryBeginRelocationBarrier(
+        var barrier = await TryBeginRelocationBarrierAsync(
                 ZLinkExecutionSealKind.Relocation,
-                allowActorClaims,
-                out var barrier
+                allowActorClaims
             )
-        )
+            .ConfigureAwait(false);
+        if (barrier is null)
             throw new InvalidOperationException(
                 "SPOT execution lanes are already sealed for relocation."
             );
@@ -1181,27 +1073,28 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         catch
         {
             if (queueSeal is not null)
-                _queue.TryAbortRelocation(queueSeal);
+                await _queue.TryAbortRelocationAsync(queueSeal).ConfigureAwait(false);
             AbortBarrier(barrier.Generation);
             throw;
         }
     }
 
-    internal bool TryAbortRelocation(ZLinkSpotExecutionRelocationSeal seal)
+    internal ValueTask<bool> TryAbortRelocationAsync(ZLinkSpotExecutionRelocationSeal seal)
     {
         ArgumentNullException.ThrowIfNull(seal);
-        if (!_queue.IsInsideSharedGate)
-            return _queue.RunOnSharedGate(() => TryAbortRelocation(seal));
-        return RunBarrierState(() =>
-        {
-            if (_relocationBarrier?.Generation != seal.Generation)
-                return false;
-            if (!_queue.TryAbortRelocation(seal.QueueSeal))
-                return false;
-            _relocationAdmissionQueueOpened = false;
-            _relocationBarrier = null;
-            return true;
-        });
+        return RunBarrierStateAsync(
+            () =>
+            {
+                if (_relocationBarrier?.Generation != seal.Generation)
+                    return false;
+                if (!_queue.TryAbortRelocationOnGate(seal.QueueSeal))
+                    return false;
+                _relocationAdmissionQueueOpened = false;
+                _relocationBarrier = null;
+                return true;
+            },
+            gateTurn: true
+        );
     }
 
     internal async ValueTask<bool> TryOpenRelocationAfterMessageFollowAsync(
@@ -1218,7 +1111,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                         return null;
                     if (!_relocationAdmissionQueueOpened)
                     {
-                        if (!_queue.TryOpenRelocationAfterMessageFollow(seal.QueueSeal))
+                        if (!_queue.TryOpenRelocationAfterMessageFollowOnGate(seal.QueueSeal))
                             return null;
                         _relocationAdmissionQueueOpened = true;
                     }
@@ -1275,74 +1168,61 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         await ExecuteLifecycleOperationAsync(operation, cancellationToken).ConfigureAwait(false);
     }
 
-    internal bool TryCommitRelocation(
+    internal ValueTask<(
+        bool Succeeded,
+        IReadOnlyList<ZLinkAcceptedWorkRecord> Held
+    )> TryCommitRelocationAsync(
         ZLinkSpotExecutionRelocationSeal seal,
-        out IReadOnlyList<ZLinkAcceptedWorkRecord> held,
         bool preserveActorExecution = false
     )
     {
         ArgumentNullException.ThrowIfNull(seal);
-        if (!_queue.IsInsideSharedGate)
-        {
-            var outcome = _queue.RunOnSharedGate(() =>
+        return RunBarrierStateAsync(
+            () =>
             {
-                var ok = TryCommitRelocation(seal, out var value, preserveActorExecution);
-                return (ok, value);
-            });
-            held = outcome.value;
-            return outcome.ok;
-        }
-        var result = RunBarrierState(() =>
-        {
-            if (_relocationBarrier?.Generation != seal.Generation)
-                return (Succeeded: false, Held: (IReadOnlyList<ZLinkAcceptedWorkRecord>)[]);
-            if (
-                preserveActorExecution
-                && (
-                    _executionMode != ZLinkUserSpotExecutionMode.PerActor
-                    || !_relocationBarrier.AllowActorClaims
+                if (_relocationBarrier?.Generation != seal.Generation)
+                    return (Succeeded: false, Held: (IReadOnlyList<ZLinkAcceptedWorkRecord>)[]);
+                if (
+                    preserveActorExecution
+                    && (
+                        _executionMode != ZLinkUserSpotExecutionMode.PerActor
+                        || !_relocationBarrier.AllowActorClaims
+                    )
                 )
-            )
-                return (Succeeded: false, Held: (IReadOnlyList<ZLinkAcceptedWorkRecord>)[]);
-            if (!_queue.TryCommitRelocation(seal.QueueSeal, out var committed))
-                return (Succeeded: false, Held: (IReadOnlyList<ZLinkAcceptedWorkRecord>)[]);
-            _relocationAdmissionQueueOpened = false;
-            // The queue now answers every Spot-level admission as relocated.
-            // Actor and timer lanes end with it unless PerActor execution stays.
-            _relocationBarrier = null;
-            if (!preserveActorExecution)
-                _ = CompleteChildLanesOnStateLane();
-            return (Succeeded: true, Held: committed);
-        });
-        held = result.Held;
-        return result.Succeeded;
+                    return (Succeeded: false, Held: (IReadOnlyList<ZLinkAcceptedWorkRecord>)[]);
+                if (!_queue.TryCommitRelocationOnGate(seal.QueueSeal, out var committed))
+                    return (Succeeded: false, Held: (IReadOnlyList<ZLinkAcceptedWorkRecord>)[]);
+                _relocationAdmissionQueueOpened = false;
+                // The queue now answers every Spot-level admission as relocated.
+                // Actor and timer lanes end with it unless PerActor execution stays.
+                _relocationBarrier = null;
+                if (!preserveActorExecution)
+                    _ = CompleteChildLanesOnStateLane();
+                return (Succeeded: true, Held: committed);
+            },
+            gateTurn: true
+        );
     }
 
-    internal bool TryFreezeRelocationIngress(
-        ZLinkSpotExecutionRelocationSeal seal,
-        out IReadOnlyList<ZLinkAcceptedWorkRecord> held
-    )
+    internal ValueTask<(
+        bool Succeeded,
+        IReadOnlyList<ZLinkAcceptedWorkRecord> Held
+    )> TryFreezeRelocationIngressAsync(ZLinkSpotExecutionRelocationSeal seal)
     {
         ArgumentNullException.ThrowIfNull(seal);
-        if (!_queue.IsInsideSharedGate)
-        {
-            var outcome = _queue.RunOnSharedGate(() =>
+        return RunBarrierStateAsync(
+            () =>
             {
-                var ok = TryFreezeRelocationIngress(seal, out var value);
-                return (ok, value);
-            });
-            held = outcome.value;
-            return outcome.ok;
-        }
-        var result = RunBarrierState(() =>
-        {
-            if (_relocationBarrier?.Generation != seal.Generation)
-                return (Succeeded: false, Held: (IReadOnlyList<ZLinkAcceptedWorkRecord>)[]);
-            var succeeded = _queue.TryFreezeRelocationIngress(seal.QueueSeal, out var frozen);
-            return (Succeeded: succeeded, Held: frozen);
-        });
-        held = result.Held;
-        return result.Succeeded;
+                if (_relocationBarrier?.Generation != seal.Generation)
+                    return (Succeeded: false, Held: (IReadOnlyList<ZLinkAcceptedWorkRecord>)[]);
+                var succeeded = _queue.TryFreezeRelocationIngressOnGate(
+                    seal.QueueSeal,
+                    out var frozen
+                );
+                return (Succeeded: succeeded, Held: frozen);
+            },
+            gateTurn: true
+        );
     }
 
     private async ValueTask ExecuteOperationAsync(
@@ -1889,16 +1769,15 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             barrier.Quiescent.TrySetResult();
     }
 
-    private bool TryBeginRelocationBarrier(
+    private ValueTask<ZLinkExecutionBarrierState?> TryBeginRelocationBarrierAsync(
         ZLinkExecutionSealKind kind,
-        bool allowActorClaims,
-        out ZLinkExecutionBarrierState barrier
+        bool allowActorClaims
     )
     {
-        var result = RunBarrierState(() =>
+        return RunBarrierStateAsync<ZLinkExecutionBarrierState?>(() =>
         {
             if (_relocationBarrier is not null || _nextBarrierGeneration == ulong.MaxValue)
-                return (Succeeded: false, Barrier: (ZLinkExecutionBarrierState?)null);
+                return null;
 
             var created = new ZLinkExecutionBarrierState(
                 _nextBarrierGeneration++,
@@ -1910,15 +1789,13 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             );
             _relocationBarrier = created;
             _relocationAdmissionQueueOpened = false;
-            return (Succeeded: true, Barrier: created);
+            return created;
         });
-        barrier = result.Barrier!;
-        return result.Succeeded;
     }
 
     private void MarkBarrierBoundary(ulong generation)
     {
-        RunBarrierState(() =>
+        RunState(() =>
         {
             if (_relocationBarrier is not { } barrier || barrier.Generation != generation)
                 return;
@@ -1930,7 +1807,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     private void AbortBarrier(ulong generation)
     {
-        RunBarrierState(() =>
+        RunState(() =>
         {
             if (_relocationBarrier?.Generation == generation)
             {

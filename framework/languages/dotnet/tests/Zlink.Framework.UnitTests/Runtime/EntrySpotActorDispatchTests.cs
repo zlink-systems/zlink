@@ -5469,9 +5469,11 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         var shellSeal = await activation.TrySealPerActorShellRelocationAsync();
         Assert.NotNull(shellSeal);
-        Assert.True(
-            activation.CommitRelocation(shellSeal, out var held, preserveActorExecution: true)
+        var (heldSucceeded, held) = await activation.CommitRelocationAsync(
+            shellSeal,
+            preserveActorExecution: true
         );
+        Assert.True(heldSucceeded);
         Assert.Empty(held);
         var messageFollowDrained = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously

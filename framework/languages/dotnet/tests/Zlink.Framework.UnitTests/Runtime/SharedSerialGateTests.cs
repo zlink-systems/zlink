@@ -4,6 +4,72 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class SharedSerialGateTests
 {
+    private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(5);
+
+    [Fact]
+    public void RelocationBarrierHasNoSynchronousEntryPoint()
+    {
+        Assert.DoesNotContain(
+            typeof(ZLinkSpotSerialExecutor).GetMethods(
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+            ),
+            method => method.Name == "TryBeginRelocationBarrier"
+        );
+    }
+
+    [Fact]
+    public void SharedGateHasNoSynchronousEntryPoint()
+    {
+        Assert.DoesNotContain(
+            typeof(ZLinkSerialExecutionQueue).GetMethods(
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+            ),
+            method => method.Name == "RunOnSharedGate"
+        );
+    }
+
+    [Fact]
+    public async Task RelocationRequestReturnsWhileSharedGateIsBusy()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var queue = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        var entered = Signal();
+        var release = Signal();
+        var execution = queue
+            .RunAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(CompletionTimeout);
+            var request = queue.TrySealRelocationAsync();
+            Assert.False(request.IsCompleted);
+            release.TrySetResult();
+            await execution.WaitAsync(CompletionTimeout);
+            var seal = await request.AsTask().WaitAsync(CompletionTimeout);
+            Assert.NotNull(seal);
+            Assert.True(await queue.TryAbortRelocationAsync(seal));
+        }
+        finally
+        {
+            release.TrySetResult();
+            await execution.WaitAsync(CompletionTimeout);
+        }
+    }
+
     [Fact]
     public async Task IdleActorGateUsesOneAcquireRmwAndNoConsumerAdmissionLock()
     {
@@ -32,13 +98,13 @@ public sealed class SharedSerialGateTests
             .AsTask();
         try
         {
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await entered.Task.WaitAsync(CompletionTimeout);
             Assert.Equal(new[] { ZLinkSerialGateOperation.Acquire }, operations.ToArray());
         }
         finally
         {
             release.TrySetResult();
-            await execution.WaitAsync(TimeSpan.FromSeconds(5));
+            await execution.WaitAsync(CompletionTimeout);
         }
     }
 
@@ -66,7 +132,7 @@ public sealed class SharedSerialGateTests
                 CancellationToken.None
             )
             .AsTask();
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(CompletionTimeout);
         var published = new ConcurrentBag<ZLinkSerialWorkItem>();
         var releases = 0;
         var executions = 0;
@@ -98,11 +164,11 @@ public sealed class SharedSerialGateTests
                             })
                         )
                 )
-                .WaitAsync(TimeSpan.FromSeconds(5));
+                .WaitAsync(CompletionTimeout);
             var sealing = queue.SealRelocationAsync(CancellationToken.None).AsTask();
             Assert.False(sealing.IsCompleted);
             release.TrySetResult();
-            var seal = await sealing.WaitAsync(TimeSpan.FromSeconds(5));
+            var seal = await sealing.WaitAsync(CompletionTimeout);
             Assert.Equal(
                 Enumerable.Range(1, 256).Select(value => (ulong)value),
                 seal.Captured.Select(record => record.AcceptedSequence)
@@ -123,7 +189,8 @@ public sealed class SharedSerialGateTests
                     out var heldItem
                 )
             );
-            Assert.True(queue.TryFreezeRelocationIngress(seal, out var frozen));
+            var (frozenSucceeded, frozen) = await queue.TryFreezeRelocationIngressAsync(seal);
+            Assert.True(frozenSucceeded);
             Assert.Equal((ulong)257, Assert.Single(frozen).AcceptedSequence);
             Assert.Equal(
                 ZLinkAcceptedWorkAdmission.RelocationMoving,
@@ -134,19 +201,20 @@ public sealed class SharedSerialGateTests
                     out _
                 )
             );
-            Assert.True(queue.TryCommitRelocation(seal, out var held));
+            var (heldSucceeded, held) = await queue.TryCommitRelocationAsync(seal);
+            Assert.True(heldSucceeded);
             Assert.Equal(frozen, held);
             await Task.WhenAll(
                     published.Select(item => item.Completion).Append(heldItem.Completion)
                 )
-                .WaitAsync(TimeSpan.FromSeconds(5));
+                .WaitAsync(CompletionTimeout);
             Assert.Equal(257, Volatile.Read(ref releases));
             Assert.Equal(0, queue.ApplicationPendingCount);
         }
         finally
         {
             release.TrySetResult();
-            await blocker.WaitAsync(TimeSpan.FromSeconds(5));
+            await blocker.WaitAsync(CompletionTimeout);
         }
     }
 
@@ -180,7 +248,7 @@ public sealed class SharedSerialGateTests
                     )
                 )
                 .ToArray();
-            await Task.WhenAll(calls).WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.WhenAll(calls).WaitAsync(CompletionTimeout);
         }
         Assert.Equal(256, Volatile.Read(ref executions));
     }
@@ -211,7 +279,7 @@ public sealed class SharedSerialGateTests
                 CancellationToken.None
             )
             .AsTask();
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(CompletionTimeout);
         try
         {
             Assert.Equal(
@@ -246,31 +314,30 @@ public sealed class SharedSerialGateTests
                 await Task.Run(() =>
                         queue.HasPendingAcceptedState(state => Equals(state, "pending"))
                     )
-                    .WaitAsync(TimeSpan.FromSeconds(5))
+                    .WaitAsync(CompletionTimeout)
             );
             release.TrySetResult();
-            await activeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await activeEntered.Task.WaitAsync(CompletionTimeout);
             Assert.False(
                 await Task.Run(() =>
                         queue.HasPendingAcceptedState(state => Equals(state, "active"))
                     )
-                    .WaitAsync(TimeSpan.FromSeconds(5))
+                    .WaitAsync(CompletionTimeout)
             );
             Assert.True(
                 await Task.Run(() =>
                         queue.HasPendingAcceptedState(state => Equals(state, "pending"))
                     )
-                    .WaitAsync(TimeSpan.FromSeconds(5))
+                    .WaitAsync(CompletionTimeout)
             );
             releaseActive.TrySetResult();
-            await Task.WhenAll(active.Completion, pending.Completion)
-                .WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.WhenAll(active.Completion, pending.Completion).WaitAsync(CompletionTimeout);
         }
         finally
         {
             release.TrySetResult();
             releaseActive.TrySetResult();
-            await blocker.WaitAsync(TimeSpan.FromSeconds(5));
+            await blocker.WaitAsync(CompletionTimeout);
         }
     }
 
@@ -298,7 +365,7 @@ public sealed class SharedSerialGateTests
             )
             {
                 releasing.TrySetResult();
-                Assert.True(published.Wait(TimeSpan.FromSeconds(5)));
+                Assert.True(published.Wait(CompletionTimeout));
             }
         };
         var first = queue
@@ -306,7 +373,7 @@ public sealed class SharedSerialGateTests
             .AsTask();
         try
         {
-            await releasing.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await releasing.Task.WaitAsync(CompletionTimeout);
             var second = Task.Run(() =>
             {
                 Assert.True(
@@ -322,13 +389,13 @@ public sealed class SharedSerialGateTests
                 published.Set();
                 return item.Completion;
             });
-            await second.WaitAsync(TimeSpan.FromSeconds(5));
+            await second.WaitAsync(CompletionTimeout);
             Assert.Equal(1, Volatile.Read(ref executions));
         }
         finally
         {
             published.Set();
-            await first.WaitAsync(TimeSpan.FromSeconds(5));
+            await first.WaitAsync(CompletionTimeout);
         }
     }
 
@@ -368,7 +435,7 @@ public sealed class SharedSerialGateTests
                 CancellationToken.None
             )
             .AsTask();
-        await targetEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await targetEntered.Task.WaitAsync(CompletionTimeout);
         Volatile.Write(ref owner, target);
         current.Dispose();
         try
@@ -380,16 +447,13 @@ public sealed class SharedSerialGateTests
         finally
         {
             targetRelease.TrySetResult();
-            await blocker.WaitAsync(TimeSpan.FromSeconds(5));
+            await blocker.WaitAsync(CompletionTimeout);
         }
-        using (await next.WaitAsync(TimeSpan.FromSeconds(5))) { }
+        using (await next.WaitAsync(CompletionTimeout)) { }
         // Returning to PerActor relinquishes the shared consumer after terminal.
         Volatile.Write(ref owner, null);
         using (
-            await mailbox
-                .EnterAsync(CancellationToken.None)
-                .AsTask()
-                .WaitAsync(TimeSpan.FromSeconds(5))
+            await mailbox.EnterAsync(CancellationToken.None).AsTask().WaitAsync(CompletionTimeout)
         ) { }
     }
 
@@ -435,7 +499,7 @@ public sealed class SharedSerialGateTests
                 CancellationToken.None
             )
             .AsTask();
-        await suspended.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await suspended.Task.WaitAsync(CompletionTimeout);
         var blocker = queue
             .RunAsync(
                 async _ =>
@@ -446,7 +510,7 @@ public sealed class SharedSerialGateTests
                 CancellationToken.None
             )
             .AsTask();
-        await busy.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await busy.Task.WaitAsync(CompletionTimeout);
         queue.GateOperation = operation =>
         {
             if (
@@ -458,13 +522,13 @@ public sealed class SharedSerialGateTests
         try
         {
             external.TrySetResult();
-            await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await published.Task.WaitAsync(CompletionTimeout);
         }
         finally
         {
             release.TrySetResult();
         }
-        await Task.WhenAll(blocker, lifecycle).WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.WhenAll(blocker, lifecycle).WaitAsync(CompletionTimeout);
     }
 
     [Fact]
@@ -495,7 +559,7 @@ public sealed class SharedSerialGateTests
                 return;
             // Publish while the previous PerActor consumer is finishing its transfer.
             mailbox.NotifyReadiness();
-            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(entered.Wait(CompletionTimeout));
             transferred.TrySetResult();
         };
         var first = mailbox
@@ -511,7 +575,7 @@ public sealed class SharedSerialGateTests
                 CancellationToken.None
             )
             .AsTask();
-        await transferred.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await transferred.Task.WaitAsync(CompletionTimeout);
         var next = mailbox
             .RunAsync(
                 _ =>
@@ -531,7 +595,7 @@ public sealed class SharedSerialGateTests
         finally
         {
             external.TrySetResult();
-            await Task.WhenAll(first, next).WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.WhenAll(first, next).WaitAsync(CompletionTimeout);
         }
     }
 

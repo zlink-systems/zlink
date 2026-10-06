@@ -598,18 +598,65 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         return true;
     }
 
-    public bool TrySealRelocation(out ZLinkSerialRelocationSeal seal)
-    {
-        if (!IsInsideSharedGate)
+    internal ValueTask<ZLinkSerialRelocationSeal?> TrySealRelocationAsync() =>
+        RunOnSharedGateAsync(() => TrySealRelocationOnGate(out var seal) ? seal : null);
+
+    internal ValueTask<(
+        bool Succeeded,
+        ZLinkSerialRelocationSeal Seal,
+        ulong FirstReservedSequence
+    )> TrySealRelocationAsync(
+        int reservedAcceptedSequences,
+        Func<IReadOnlyList<ZLinkAcceptedWorkRecord>, bool> admit
+    ) =>
+        RunOnSharedGateAsync(() =>
         {
-            var result = RunOnSharedGate(() =>
-            {
-                var ok = TrySealRelocation(out var value);
-                return (ok, value);
-            });
-            seal = result.value;
-            return result.ok;
-        }
+            var succeeded = TrySealRelocationOnGate(
+                reservedAcceptedSequences,
+                admit,
+                out var seal,
+                out var first
+            );
+            return (succeeded, seal, first);
+        });
+
+    internal ValueTask<bool> TryAbortRelocationAsync(ZLinkSerialRelocationSeal seal) =>
+        RunOnSharedGateAsync(() => TryAbortRelocationOnGate(seal));
+
+    internal ValueTask<bool> TryOpenRelocationAfterMessageFollowAsync(
+        ZLinkSerialRelocationSeal seal
+    ) => RunOnSharedGateAsync(() => TryOpenRelocationAfterMessageFollowOnGate(seal));
+
+    internal ValueTask<(
+        bool Succeeded,
+        IReadOnlyList<ZLinkAcceptedWorkRecord> Held
+    )> TryCommitRelocationAsync(ZLinkSerialRelocationSeal seal) =>
+        RunOnSharedGateAsync(() =>
+        {
+            var succeeded = TryCommitRelocationOnGate(seal, out var held);
+            return (succeeded, held);
+        });
+
+    internal ValueTask<(
+        bool Succeeded,
+        IReadOnlyList<ZLinkAcceptedWorkRecord> Held
+    )> TryFreezeRelocationIngressAsync(ZLinkSerialRelocationSeal seal) =>
+        RunOnSharedGateAsync(() =>
+        {
+            var succeeded = TryFreezeRelocationIngressOnGate(seal, out var held);
+            return (succeeded, held);
+        });
+
+    internal ValueTask<bool> HasPendingAcceptedStateOrCloseApplicationAdmissionAsync(
+        Func<object, bool> predicate
+    ) =>
+        RunOnSharedGateAsync(() =>
+            HasPendingAcceptedStateOrCloseApplicationAdmissionOnGate(predicate)
+        );
+
+    private bool TrySealRelocationOnGate(out ZLinkSerialRelocationSeal seal)
+    {
+        RequireSharedGate();
         lock (_admissionGate)
         {
             if (_sharedOwner is not null)
@@ -632,37 +679,17 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
     }
 
-    internal bool TrySealRelocation(
-        Func<IReadOnlyList<ZLinkAcceptedWorkRecord>, bool> admit,
-        out ZLinkSerialRelocationSeal seal
-    ) => TrySealRelocation(0, admit, out seal, out _);
-
-    internal bool TrySealRelocation(
+    private bool TrySealRelocationOnGate(
         int reservedAcceptedSequences,
         Func<IReadOnlyList<ZLinkAcceptedWorkRecord>, bool> admit,
         out ZLinkSerialRelocationSeal seal,
         out ulong firstReservedSequence
     )
     {
+        RequireSharedGate();
         ArgumentNullException.ThrowIfNull(admit);
         if (reservedAcceptedSequences < 0)
             throw new ArgumentOutOfRangeException(nameof(reservedAcceptedSequences));
-        if (!IsInsideSharedGate)
-        {
-            var result = RunOnSharedGate(() =>
-            {
-                var ok = TrySealRelocation(
-                    reservedAcceptedSequences,
-                    admit,
-                    out var value,
-                    out var first
-                );
-                return (ok, value, first);
-            });
-            seal = result.value;
-            firstReservedSequence = result.first;
-            return result.ok;
-        }
         lock (_admissionGate)
         {
             if (_sharedOwner is not null)
@@ -787,11 +814,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         PublishDrain(drain);
     }
 
-    public bool TryAbortRelocation(ZLinkSerialRelocationSeal seal)
+    internal bool TryAbortRelocationOnGate(ZLinkSerialRelocationSeal seal)
     {
+        RequireSharedGate();
         ArgumentNullException.ThrowIfNull(seal);
-        if (!IsInsideSharedGate)
-            return RunOnSharedGate(() => TryAbortRelocation(seal));
         Func<CancellationToken, ValueTask>? drain;
         lock (_admissionGate)
         {
@@ -804,11 +830,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         return true;
     }
 
-    public bool TryOpenRelocationAfterMessageFollow(ZLinkSerialRelocationSeal seal)
+    internal bool TryOpenRelocationAfterMessageFollowOnGate(ZLinkSerialRelocationSeal seal)
     {
+        RequireSharedGate();
         ArgumentNullException.ThrowIfNull(seal);
-        if (!IsInsideSharedGate)
-            return RunOnSharedGate(() => TryOpenRelocationAfterMessageFollow(seal));
         Func<CancellationToken, ValueTask>? drain;
         lock (_admissionGate)
         {
@@ -857,22 +882,13 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             _applicationQueue.Adopt(item);
     }
 
-    public bool TryCommitRelocation(
+    internal bool TryCommitRelocationOnGate(
         ZLinkSerialRelocationSeal seal,
         out IReadOnlyList<ZLinkAcceptedWorkRecord> held
     )
     {
+        RequireSharedGate();
         ArgumentNullException.ThrowIfNull(seal);
-        if (!IsInsideSharedGate)
-        {
-            var result = RunOnSharedGate(() =>
-            {
-                var ok = TryCommitRelocation(seal, out var value);
-                return (ok, value);
-            });
-            held = result.value;
-            return result.ok;
-        }
         ZLinkSerialWorkItem[] released;
         lock (_admissionGate)
         {
@@ -897,22 +913,13 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         return true;
     }
 
-    public bool TryFreezeRelocationIngress(
+    internal bool TryFreezeRelocationIngressOnGate(
         ZLinkSerialRelocationSeal seal,
         out IReadOnlyList<ZLinkAcceptedWorkRecord> held
     )
     {
+        RequireSharedGate();
         ArgumentNullException.ThrowIfNull(seal);
-        if (!IsInsideSharedGate)
-        {
-            var result = RunOnSharedGate(() =>
-            {
-                var ok = TryFreezeRelocationIngress(seal, out var value);
-                return (ok, value);
-            });
-            held = result.value;
-            return result.ok;
-        }
         lock (_admissionGate)
         {
             if (!Matches(seal))
@@ -1338,14 +1345,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             && ReferenceEquals(turn.ExecutionGate, _sharedOwner)
             && !turn.Suspended.IsCompleted;
 
-    internal T RunOnSharedGate<T>(Func<T> operation)
+    private void RequireSharedGate()
     {
-        if (IsInsideSharedGate)
-            return operation();
-        T result = default!;
-        var item = PostSharedControl(() => result = operation());
-        item.Completion.GetAwaiter().GetResult();
-        return result;
+        if (!IsInsideSharedGate)
+            throw new InvalidOperationException("Shared queue state requires its execution gate.");
     }
 
     internal async ValueTask<T> RunOnSharedGateAsync<T>(Func<T> operation)
@@ -1627,12 +1630,11 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     // already waiting keeps admission open for the next incarnation; otherwise
     // application admission closes in the same decision, so a later message is
     // refused before admission.
-    internal bool HasPendingAcceptedStateOrCloseApplicationAdmission(Func<object, bool> predicate)
+    private bool HasPendingAcceptedStateOrCloseApplicationAdmissionOnGate(
+        Func<object, bool> predicate
+    )
     {
-        if (!IsInsideSharedGate)
-            return RunOnSharedGate(() =>
-                HasPendingAcceptedStateOrCloseApplicationAdmission(predicate)
-            );
+        RequireSharedGate();
         lock (_admissionGate)
         {
             if (_sharedOwner is not null)
@@ -1644,30 +1646,18 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
     }
 
-    internal void VisitPendingAcceptedState(
+    internal void VisitPendingAcceptedStateOnGate(
         ZLinkSerialExecutionQueue? successor,
-        Action<object> visit,
-        Action completed
+        Action<object> visit
     )
     {
-        if (!IsInsideSharedGate)
-        {
-            _ = RunOnSharedGate(() =>
-            {
-                VisitPendingAcceptedState(successor, visit, completed);
-                return true;
-            });
-            return;
-        }
+        RequireSharedGate();
         lock (_admissionGate)
         {
             if (_sharedOwner is not null)
                 ImportSharedPublished();
             if (successor is null)
-            {
-                completed();
                 return;
-            }
             lock (successor._admissionGate)
             {
                 foreach (var item in _applicationQueue)
@@ -1677,7 +1667,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                     visit(state);
                     item.AcceptedState = null;
                 }
-                completed();
             }
         }
     }
