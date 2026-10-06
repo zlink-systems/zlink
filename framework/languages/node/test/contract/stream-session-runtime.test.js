@@ -2314,69 +2314,6 @@ test('stream session runtime keeps request streams open after route disconnect e
   });
 });
 
-test('stream session runtime completes pending responses before session dispatch', async () => {
-  const socket = new FakeStreamSocket();
-  const events = [];
-  let pending;
-  const runtime = createStreamRuntime({
-    socket,
-    claimApplicationWork() {
-      throw new Error('terminal completion must not claim application work');
-    },
-    headerDecoder: (header) => JSON.parse(header.getString(), streamHeaderReviver),
-    sessionFactory(context) {
-      pending = context.startRequest(1000);
-      return {
-        context,
-        async onDispatch(header, payload) {
-          events.push(['dispatch', header.packetName, payload.decode()]);
-        }
-      };
-    }
-  });
-
-  runtime.start();
-  socket.emitPacket('session-f', fakeHeader({
-    kind: connector.ZlinkStreamMessageKind.Response,
-    requestSeq: 1n,
-    name: 'Move'
-  }), fakeMessage('response-body'));
-
-  await waitForCondition(() => pending !== undefined, 'pending stream request');
-  const response = await pending.promise;
-  await runtime.dispose();
-
-  assert.equal(response.getString(), 'response-body');
-  assert.deepEqual(events, []);
-});
-
-test('stream session runtime decompresses response frames before completing pending requests', async () => {
-  const socket = new FakeStreamSocket();
-  let pending;
-  const runtime = createStreamRuntime({
-    socket,
-    headerDecoder: (header) => JSON.parse(header.getString(), streamHeaderReviver),
-    sessionFactory(context) {
-      pending = context.startRequest(1000);
-      return { context };
-    }
-  });
-
-  runtime.start();
-  socket.emitPacket('session-compressed-response', fakeHeader({
-    kind: connector.ZlinkStreamMessageKind.Response,
-    flags: connector.ZlinkStreamHeaderFlags.PayloadCompressed,
-    requestSeq: 1n,
-    name: 'Move'
-  }), fakeMessageBytes(Buffer.from('40551F41010047504141414141', 'hex')));
-
-  await waitForCondition(() => pending !== undefined, 'compressed pending stream request');
-  const response = await pending.promise;
-  await runtime.dispose();
-
-  assert.equal(response.getString(), 'A'.repeat(96));
-});
-
 test('stream session runtime decompresses dispatch payloads before session handlers', async () => {
   const socket = new FakeStreamSocket();
   const events = [];
@@ -2445,33 +2382,6 @@ test('stream session runtime rejects compressed dispatch payloads above receive 
   assert.deepEqual(events, []);
   assert.equal(errors.length, 1);
   assert.match(errors[0].message, /maximum stream payload size/);
-});
-
-test('stream session pending request timeout removes request sequence', async () => {
-  const context = new framework.ZLinkStreamBindingRuntime().createSessionContext({
-    sessionId: 'session-timeout',
-    routingId: 'session-timeout',
-    write() {
-      return true;
-    },
-    async close() {}
-  });
-  const pending = context.startRequest(1);
-  await assert.rejects(
-    () => pending.promise,
-    /Client stream request timed out/
-  );
-
-  const consumed = context.tryCompleteResponse({
-    kind: 3,
-    codec: 1,
-    flags: 1,
-    requestSeq: pending.requestSeq,
-    name: 'LateReply',
-    metadata: new Map()
-  }, fakeMessage('late-body'));
-
-  assert.equal(consumed, false);
 });
 
 test('stream session runtime dispatches unmatched response frames to the session', async () => {

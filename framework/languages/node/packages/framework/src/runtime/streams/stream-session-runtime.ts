@@ -238,7 +238,7 @@ export class ZLinkStreamSessionRuntime {
   }
 
   enqueueConnected(localAddr?: string, remoteAddr?: string): void {
-    this.serial.executeInfrastructure(async () => this.markConnected(localAddr, remoteAddr));
+    this.serial.executeControl(async () => this.markConnected(localAddr, remoteAddr));
   }
 
   enqueuePacket(
@@ -270,7 +270,7 @@ export class ZLinkStreamSessionRuntime {
       decodedHeader.kind === ZLinkStreamMessageKind.Response ||
       decodedHeader.kind === ZLinkStreamMessageKind.Error
     ) {
-      this.enqueueInfrastructure(
+      this.enqueueControl(
         async () => {
           try {
             await this.dispatchPacket(payload, decodedHeader);
@@ -431,9 +431,6 @@ export class ZLinkStreamSessionRuntime {
     try {
       this.lastApplicationActivityAt = this.livenessClock.now();
       dispatchPayload = this.context.payloadForHeader(decodedHeader, payload);
-      if (this.context.tryCompleteResponse(decodedHeader, dispatchPayload)) {
-        return;
-      }
       const dispatchActor = this.context.actorForSlot(decodedHeader.actorSlot);
       if (decodedHeader.actorSlot !== undefined && dispatchActor === undefined) {
         const staleFlowEnabled = this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true;
@@ -795,18 +792,6 @@ export class ZLinkStreamSessionRuntime {
     onShutdownRejected?: () => void
   ): void {
     if (!this.serial.executeControl(work, {}, onRejected)) {
-      // The serial lane only refuses new work after dispose() closed it.
-      onShutdownRejected?.();
-      onRejected?.();
-    }
-  }
-
-  private enqueueInfrastructure(
-    work: () => Promise<void>,
-    onRejected?: () => void,
-    onShutdownRejected?: () => void
-  ): void {
-    if (!this.serial.executeInfrastructure(work, {}, onRejected)) {
       // The serial lane only refuses new work after dispose() closed it.
       onShutdownRejected?.();
       onRejected?.();

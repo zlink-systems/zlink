@@ -7522,14 +7522,14 @@ test('runtime host awaits routed actor disconnect notification before session cl
   assert.equal(disconnectCompleted, true);
 });
 
-test('local bound session error response rejects pending actor request', async () => {
+test('local bound session error response preserves request sequence and error payload', async () => {
   const stream = recordingStream('session-error-response', 'rid-error-response');
   const runtime = new framework.ZLinkStreamBindingRuntime({
     messageFactory: binaryMessageFactory()
   });
   const context = runtime.createSessionContext(stream);
   await context.actors.bind({ nodeRid: 'node-a', actorId: 'actor-error', generation: 1 });
-  const pending = context.startRequest(1000);
+  const requestSeq = 17n;
   framework.ZLinkPacket('ErrorContractPacket', {
     payload: {
       type: 'object',
@@ -7541,35 +7541,19 @@ test('local bound session error response rejects pending actor request', async (
   assert.equal(await runtime.sendLocalBoundSessionError(
     'actor-error',
     'ErrorContractPacket',
-    pending.requestSeq,
+    requestSeq,
     new Error('remote actor failed'),
     new Map()
   ), true);
 
   const frame = decodeFrame(stream.writes[0].bytes);
   assert.equal(frame.header.kind, connector.ZlinkStreamMessageKind.Error);
+  assert.equal(frame.header.codec, connector.ZlinkStreamCodec.Json);
+  assert.equal(frame.header.requestSeq, requestSeq);
   assert.deepEqual(JSON.parse(new TextDecoder().decode(frame.payload)), {
     code: 'internal_failure',
     message: 'remote actor failed',
   });
-  const header = {
-    kind: streamProtocol.ZLinkStreamMessageKind.Error,
-    codec: streamProtocol.ZLinkStreamCodec.Json,
-    flags: streamProtocol.ZLinkStreamHeaderFlags.HasRequestSeq,
-    requestSeq: pending.requestSeq,
-    name: 'ErrorContractPacket',
-    metadata: { values: new Map() }
-  };
-  const payload = {
-    data: () => Buffer.from(frame.payload),
-    close() {}
-  };
-
-  assert.equal(context.tryCompleteResponse(header, payload), true);
-  await assert.rejects(
-    () => pending.promise,
-    /remote actor failed/
-  );
 });
 
 test('stream session and bound session require packetName for structural payloads', async () => {
