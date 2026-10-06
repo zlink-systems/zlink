@@ -27,21 +27,39 @@ title: "packet 수신 · Kotlin"
 이 장은 그 큐에서 packet을 꺼내는 방법을 다룬다. 응답과 heartbeat는 이 큐를 거치지 않는다 —
 응답은 기다리는 request로 바로 이어지고, heartbeat는 연결 유지에 사용한다.
 
-## 1. handler 등록
+## 1. 타입 지정 수신과 디코딩
 
-handler가 받는 것은 payload만이 아니라 **message**다. message에는 packet 이름, decode한 payload,
-metadata가 함께 담긴다. 어떤 packet을 받을지는 payload 타입에서 정하거나 이름으로 지정한다.
+서버가 보낸 packet 이름으로 handler를 찾은 뒤, connector가 payload를 디코딩해 message에 담는다.
+message는 packet 이름, payload, metadata와 Actor ID를 함께 전달한다. bytes를 업무 타입으로 바꾸는
+역할을 맡은 객체가 codec이다. codec은 connector 생성 옵션에 하나만 등록한다.
 
-`on<T> { }` 또는 이름을 받는 `on(name, payloadType, handler)`를 사용한다.
+### 1.1 받는 쪽 — 타입을 지정한 handler
 
-다음 예제는 payload 타입으로 handler를 등록한다.
+다음 코드는 tutorial의 수신 등록이다. .NET·Java·Kotlin·C++ 예제는 기존 JSON 흐름의
+`NicknameChanged`를 받고, Node 예제는 Protobuf 흐름의 생성 클래스 `Ping`을 받는다.
+각 예제의 실행 절차는 해당 tutorial README가 설명한다.
+
+<iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push.html" title="Node 타입 지정 Protobuf 수신 예제" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/stream-protobuf-push.html" target="_blank">↗ 크게 보기</a></p>
 
 ```kotlin
-val subscription = connector.on<LeaderboardUpdate> { message ->
-    updateBoard(message.packetName, message.payload.rank)
-    CompletableFuture.completedFuture(null)
-}
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:typed-receive"
 ```
+
+### 1.2 타입이 codec으로 전달되는 순서
+
+`on(Type, handler)`는 타입에서 packet 이름을 정하고, 그 타입으로 payload를 디코딩한다.
+이름을 명시하는 형태는 이름으로 packet을 고르면서 디코딩 타입을 별도로 지정한다.
+타입의 이름과 서버 packet 이름이 다를 때 사용하는 형태다.
+
+`on<T> { ... }`는 `T::class.java`를 Java connector에 전달한다.
+이름을 지정하는 `on(name, T::class, handler)`도 같은 Java decoder를 사용한다.
+
+!!! note "Node Protobuf codec"
+
+    수정한 codec은 `on(Type, handler)`의 생성자로 디코딩한다. 타입이 없으면 factory의 기본 타입을 쓴다.
+    envelope codec도 handler 타입을 decoder에 전달한다. 배포된 0.28.0과의 차이와 실행 절차는
+    [Node Protobuf 송수신](../../../node/guide/stream-connector/40-protobuf.ko.md)이 설명한다.
 
 ## 2. 등록 해제
 
@@ -50,7 +68,7 @@ val subscription = connector.on<LeaderboardUpdate> { message ->
 실행되지 않고, 같은 값을 두 번 해제해도 오류가 아니다.
 
 ```kotlin
-subscription.close()
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-unsubscribe"
 ```
 
 **돌려받은 값의 수명이 등록의 수명인지는 언어가 정한다.** 소유권을 값으로 나타내는 언어에서는
@@ -70,10 +88,7 @@ subscription.close()
 느린 handler가 receive 경로를 막으므로 뒤따르는 수신 처리가 그만큼 늦어진다.
 
 ```kotlin
-while (running) {
-    connector.dispatch().await()
-    renderFrame()
-}
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-pump"
 ```
 
 아래 대기 표면은 등록된 handler가 아니라 수신 큐를 직접 관측한다. 그래서 pump를 호출하지 않는
@@ -92,10 +107,7 @@ packet 이름은 명시하거나 payload 타입에서 정할 수 있다.
 다음 예제는 payload 타입으로 packet 하나를 기다린다.
 
 ```kotlin
-val found = connector.waitFor<MatchFound>()
-    .where { it.payload.matchId == "match-7f3a" }
-    .timeout(Duration.ofSeconds(30))
-    .await()
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-wait"
 ```
 
 **술어와 반환은 payload가 아니라 message를 다룬다.** payload만 받으면 술어가 packet 이름과
@@ -109,15 +121,7 @@ metadata를 보지 못하기 때문이다. 걸러야 하는 값이 payload 안�
 이름의 packet이 그 순서로 도착했는지 확인한 뒤 message 목록을 돌려준다.
 
 ```kotlin
-connector.expectNone<OrderChanged>("order.changed")
-    .within(Duration.ofMillis(100))
-    .await()
-
-val steps = connector.waitForSequence<OrderChanged>("order.changed")
-    .expect { it.payload.status == OrderStatus.PAID }
-    .expect { it.payload.status == OrderStatus.SHIPPED }
-    .timeout(Duration.ofSeconds(2))
-    .await()
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-sequence"
 ```
 
 관찰 조건이 어긋난 실패 — 시간 안에 오지 않음, 오지 않아야 할 것이 도착함, 순서가 어긋남 — 는
@@ -131,7 +135,7 @@ packet 이름별로 **받은 개수**를 읽는다. 소비해도 값이 줄지 �
 도착한 시점에 값이 올라간다.
 
 ```kotlin
-val count = connector.receivedCount("leaderboard.update")
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-count"
 ```
 
 기준점은 연결이 성립한 시점이다. 연결이 성립하면 0에서 시작하고, 재연결하면 새 연결이므로 다시
@@ -200,7 +204,25 @@ unbind된 handle은 닫힌다. 닫힌 handle로 보내면 connector가 보내지
 unbind 직전에 이미 보낸 packet이 서버에 늦게 도착하면 서버는 그 packet을 다른 Actor로 넘기지
 않는다 — request는 `InvalidOperation` 오류 응답으로 끝나고, 단방향 send는 버려진다.
 
-## 9. 다음 장
+## 9. tutorial 실행 확인
+
+등록 해제·pump·조건 대기·순서·수신 개수 예제는 각 언어 StreamClient의 `--receiving` 모드에 있다.
+`STREAM_RECEIVING_ENDPOINT`는 JSON packet을 보내는 서버 주소다. Node는 WebSocket 주소를, 나머지 예제는 TCP 주소를 사용한다.
+검증용 peer는 `LeaderboardUpdate`를 두 번 보내고 `MatchFound`, `OrderChanged`를 정해진 순서로 보낸다.
+다섯 언어에서 실제로 확인한 결과는 같다.
+
+```text
+receiving: handler=1, frames=1, match=match-7f3a, sequence=paid,shipped, count=2
+```
+
+handler는 pump에서 한 번 실행되고 해제 뒤에는 실행되지 않는다. 두 번째 packet도 수신 개수에는 포함된다.
+조건에 맞는 match와 paid·shipped 순서를 확인하며, 순서 검증 전에는 OrderChanged가 오지 않는지 확인한다.
+
+## 10. 다음 장
 
 - 연결 상태와 재연결, 종료 사유 — [연결 생명주기](06-lifecycle.ko.md)
 - 수신 경로에서 나는 오류 — [오류 처리](07-error-handling.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

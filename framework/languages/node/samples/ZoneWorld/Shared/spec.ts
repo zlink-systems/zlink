@@ -36,8 +36,7 @@ const ZoneWorldSpec = {
   botCount: 8,
   borderSnapshotExpiryTicks: 3,
   nodeStatusReportPeriodMs: 5_000,
-  nodeStatusReportTtlMs: 15_000,
-  zoneSpotCapacity: 2
+  nodeStatusReportTtlMs: 15_000
 } as const;
 
 const ZoneWorldNames = {

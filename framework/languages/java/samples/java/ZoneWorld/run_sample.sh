@@ -66,6 +66,7 @@ write_server_config() {
   local bind_host=127.0.0.1 advertise=""
   if [[ "$B8_CHILD" == 1 && "$role" != ops && "$subscriber" != true ]]; then bind_host=127.0.0.2; advertise=127.0.0.1; fi
   {
+    echo "sample.zone-capacity=$(case "$node" in zone-node-1) echo 1;; zone-node-2) echo 3;; *) echo 0;; esac)"
     echo "sample.role=$role"; echo "sample.node-id=$node"
     echo "sample.mesh-endpoint=tcp://${bind_host}:${mesh}"
     echo "sample.stream-endpoint=tcp://127.0.0.1:${stream}"
@@ -210,6 +211,8 @@ rid1="$(routing_id zone-node-1)"; rid2="$(routing_id zone-node-2)"
 start gateway "$SERVER_BIN" --config "$CONFIG_DIR/gateway.properties"; wait_log gateway ZLINK_FRAMEWORK_READY 1 900
 start zone-node-3 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-3.properties"; wait_log zone-node-3 topology=ready 1 900
 
+run_client LAYOUT
+
 RUNNER_LOG="$LOG_DIR/runner.log"; : >"$RUNNER_LOG"; status=0
 # From here every scenario owns an explicit verdict. A blocked ID must not stop
 # the remaining canonical ledger from running.
@@ -318,16 +321,12 @@ if selected ZW-F1; then
   [[ "$bots" == 8 ]] && pass ZW-F1-population || fail ZW-F1-population "bot roster count=$bots"
 fi
 if selected ZW-F2; then
+  boundary="$(grep -F 'ops-bot-boundary ' "$LOG_DIR/client.log" | head -1)"
+  bot="${boundary#*bot=}"; bot="${bot%% source=*}"
+  target="${boundary##* target=}"
   crossed=""
   for ((i=0;i<300;i++)); do
-    [[ -z "$crossed" ]] || break
-    for source in zone-node-1 zone-node-2; do
-      [[ "$source" == zone-node-1 ]] && target=zone-node-2 || target=zone-node-1
-      while read -r bot; do
-        [[ -n "$bot" ]] || continue
-        if grep -Fq "player=$bot, bot=true" "$LOG_DIR/$target.log"; then crossed="$bot"; break 2; fi
-      done < <(sed -nE 's/.*player=(bot-[^,]+), bot=true, initial=false.*/\1/p' "$LOG_DIR/$source.log" | sort -u)
-    done
+    if grep -F "player=$bot, bot=true, initial=false" "$LOG_DIR/$target.log" >/dev/null; then crossed="$bot"; break; fi
     sleep .1
   done
   [[ -n "$crossed" ]] && pass ZW-F2 || fail ZW-F2 "no correlated cross-owner bot handoff"

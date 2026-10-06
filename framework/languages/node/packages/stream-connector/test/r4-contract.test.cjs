@@ -47,7 +47,7 @@ test('R4 request failure extraction preserves connector codes in reply hooks and
   assert.equal(replies[0].error.code, api.ZlinkStreamErrorCode.Disconnected);
   let completed;
   const callbackCompleted = new Promise((resolve) => { completed = resolve; });
-  connector.request(payload).packetName('Request').submit((result) => completed(result));
+  connector.request(payload).packetName('Request').submitCallback((result) => completed(result));
   const result = await callbackCompleted;
   assert.equal(result.isSuccess, false);
   assert.equal(result.error.code, api.ZlinkStreamErrorCode.Disconnected);

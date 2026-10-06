@@ -5614,7 +5614,11 @@ test('authority reconciliation resumes an exact Pending Instance reservation', a
 });
 
 test('production Instance authority adapter writes schema ColdActivating then Ready payloads', async () => {
-  const store = new ZLinkInMemoryAuthorityStore({ isTargetLive: () => true });
+  const storeNow = new Date('2026-10-07T00:00:00.000Z');
+  const store = new ZLinkInMemoryAuthorityStore(
+    { isTargetLive: () => true },
+    () => new Date(storeNow)
+  );
   const compareExchangeAuthority = store.compareExchangeAuthority.bind(store);
   let preserveAttempts = 0;
   store.compareExchangeAuthority = async (key, expected, mutation, signal) => {
@@ -7020,7 +7024,6 @@ test('Ready one-way Spot send forwards application metadata through runtime rout
           _target: unknown,
           _packet: unknown,
           _message: unknown,
-          _signal: unknown,
           forwarded: ReadonlyMap<string, string> | undefined
         ) {
           observed = forwarded;

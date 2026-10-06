@@ -174,33 +174,42 @@ export class ZlinkStreamRequestBuilder implements ZlinkStreamRequestCall {
   }
 
   submit<TReply = unknown>(signal?: AbortSignal): Promise<TReply>;
-  submit(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
+  submit<TReply>(
+    replyType: abstract new (...args: never[]) => TReply,
+    signal?: AbortSignal
+  ): Promise<TReply>;
   submit<TReply = unknown>(
-    signalOrCallback?:
-      AbortSignal | ((result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void)
-  ): Promise<TReply> | void {
-    this.state.ensureNotExecuted();
-    const operation = this.connector.requestEncoded(
-      this.state.resolveMessageName(),
-      this.payload,
-      this.state.metadata,
-      this.state.compress,
-      this.state.timeoutMs ?? this.connector.options.requestTimeoutMs,
-      typeof signalOrCallback === 'function' ? undefined : signalOrCallback,
-      this.state.actorSlot
+    replyTypeOrSignal?: (abstract new (...args: never[]) => TReply) | AbortSignal,
+    signal?: AbortSignal
+  ): Promise<TReply> {
+    const replyType = typeof replyTypeOrSignal === 'function' ? replyTypeOrSignal : undefined;
+    return this.submitEncoded(
+      replyType !== undefined ? signal : (replyTypeOrSignal as AbortSignal | undefined)
+    ).then((value) =>
+      (this.connector.options.codec ?? zlinkStreamJsonCodec).decode<TReply>(value, replyType)
     );
-    if (typeof signalOrCallback === 'function') {
-      operation.then(
-        (value) => this.enqueueCallback(() => signalOrCallback({ isSuccess: true, value })),
-        (error) =>
-          this.enqueueCallback(() =>
-            signalOrCallback({ isSuccess: false, error: unwrapStreamError(error) })
-          )
-      );
-      return;
-    }
-    return operation.then((value) =>
-      (this.connector.options.codec ?? zlinkStreamJsonCodec).decode<TReply>(value)
+  }
+
+  submitCallback(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
+  submitCallback<TReply>(
+    replyType: abstract new (...args: never[]) => TReply,
+    callback: (result: ZlinkStreamResultOf<TReply>) => void
+  ): void;
+  submitCallback<TReply = ZlinkStreamEncodedPayload>(
+    replyTypeOrCallback:
+      (abstract new (...args: never[]) => TReply) | ((result: ZlinkStreamResultOf<TReply>) => void),
+    callback?: (result: ZlinkStreamResultOf<TReply>) => void
+  ): void {
+    const operation =
+      callback !== undefined
+        ? this.submit(replyTypeOrCallback as abstract new (...args: never[]) => TReply)
+        : this.submitEncoded();
+    const handler =
+      callback ?? (replyTypeOrCallback as (result: ZlinkStreamResultOf<TReply>) => void);
+    operation.then(
+      (value) => this.enqueueCallback(() => handler({ isSuccess: true, value: value as TReply })),
+      (error) =>
+        this.enqueueCallback(() => handler({ isSuccess: false, error: unwrapStreamError(error) }))
     );
   }
 

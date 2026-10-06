@@ -223,6 +223,7 @@
         <Compile Include="Runtime/UnhandledDispatchPolicyTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorExactRequestMessageFlowTests.cs"/>
         <Compile Include="Runtime/UserSpotExecutionSchedulerTests.cs"/>
+        <Compile Include="Runtime/SharedSerialGateTests.cs"/>
         <Compile Include="Runtime/WorkerPoolTests.cs"/>
         <Compile Include="Runtime/WeightContractTests.cs"/>
         <Compile Include="../Common/FrameworkGlobalUsings.cs" Link="GlobalUsings.cs"/>
