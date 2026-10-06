@@ -4,6 +4,7 @@
 #include "testutil_unity.hpp"
 
 #include <chrono>
+#include <atomic>
 #include <cstdlib>
 #include <future>
 #include <thread>
@@ -99,6 +100,44 @@ void test_close_completion_poller_release_without_monitor ()
 {
     close_with_pending_writable_wait (false);
 }
+
+void test_monitor_close_wakes_wait_without_context_shutdown ()
+{
+    for (int iteration = 0; iteration != 10; ++iteration) {
+        void *ctx = zlink_ctx_new ();
+        TEST_ASSERT_NOT_NULL (ctx);
+        void *socket = zlink_socket (ctx, ZLINK_SOCKET_STREAM);
+        TEST_ASSERT_NOT_NULL (socket);
+        zlink_socket_monitor_open_options_t options = {};
+        options.events = ZLINK_EVENT_CONNECTION_READY;
+        void *monitor = zlink_socket_monitor_open (socket, &options);
+        TEST_ASSERT_NOT_NULL (monitor);
+        void *poller = zlink_poller_new ();
+        TEST_ASSERT_NOT_NULL (poller);
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_OK,
+          zlink_poller_add (poller, monitor, NULL, ZLINK_POLLIN));
+
+        std::atomic<bool> entered (false);
+        zlink_poller_event_t event = {};
+        zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
+        int wait_result = -1;
+        std::thread waiter ([&] {
+            entered.store (true, std::memory_order_release);
+            wait_result = zlink_poller_wait (poller, &event, 1, -1, &error);
+        });
+        while (!entered.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
+        waiter.join ();
+        TEST_ASSERT_EQUAL_INT (1, wait_result);
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+        TEST_ASSERT_EQUAL_INT (ZLINK_POLLERR, event.events);
+        TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (socket));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_ctx_term (ctx));
+    }
+}
 }
 
 int main ()
@@ -107,5 +146,6 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_close_completion_poller_release_with_monitor);
     RUN_TEST (test_close_completion_poller_release_without_monitor);
+    RUN_TEST (test_monitor_close_wakes_wait_without_context_shutdown);
     return UNITY_END ();
 }
