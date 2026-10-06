@@ -1,8 +1,9 @@
 # StreamClient Protobuf Tutorial
 
-Send and receive pushes using `Ping` generated from `.proto`, and decode request replies as `Pong`.
-The fixed-type codec handles `Ping`; replies use `submitEncoded()` and `fromProto(..., Pong)`.
-This example uses Node as a verification environment for the browser connector.
+One codec receives both generated `Ping` and `Pong` types through `on(Type, handler)`.
+Replies use `submitEncoded()` and `fromProto(..., Pong)`.
+The verification program runs the browser entry point with Node's WebSocket.
+Version 0.28.0 ignores handler types; before the fix is released, use the patched local codec package.
 
 ## Installation and Build
 
@@ -21,12 +22,16 @@ copies them to `dist/StreamClient/generated/` alongside the compiled code. Gener
 To verify without a server, run the verification WebSocket peer and tutorial together.
 
 ```bash
+npx --yes --package=esbuild@0.25.5 esbuild ../../packages/framework-codec-protobuf/src/index.ts \
+  --bundle --format=esm --platform=browser --target=es2022 \
+  --external:@zlink-systems/stream-wire \
+  --outfile=node_modules/@zlink-systems/framework-codec-protobuf/dist/browser/index.mjs
 npm run protobuf:check
-# protobuf: push=hello, reply.rank=7
+# protobuf: Ping=hello, Pong.rank=3, reply.rank=7
 ```
 
-The verification peer uses an ephemeral local port. It echoes a `Ping` send as a `Ping` push and replies
-to a `Ping` request with `Pong { rank: 7 }`. The checks also cover incorrect codec numbers and malformed bytes.
+The verification peer uses an ephemeral local port. It sends `Ping` and `Pong { rank: 3 }` pushes and
+replies to a `Ping` request with `Pong { rank: 7 }`. The checks also cover incorrect codec numbers and malformed bytes.
 
 If a server implementing the same protocol is available, set its address in the environment.
 

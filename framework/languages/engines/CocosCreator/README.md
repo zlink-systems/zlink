@@ -45,21 +45,20 @@ This compiles `EngineLobbyClient.ts` only. The Editor must verify the `cc` impor
 
 This Engine Lobby sample's server and client use JSON. A client example for a Protobuf server is
 provided separately in the [StreamClient Protobuf tutorial](../../node/tutorial/StreamClient/README.en.md).
-It sends and receives pushes using `Ping` generated from the same `.proto`, then checks the `rank`
-in a `Pong` reply. `npm run protobuf:check` runs it with a verification WebSocket peer and prints
-`protobuf: push=hello, reply.rank=7`.
+It receives generated `Ping` and `Pong` pushes through one codec and checks the `rank` in a `Pong` reply. `npm run protobuf:check` runs it with a verification WebSocket peer and prints
+`protobuf: Ping=hello, Pong.rank=3, reply.rank=7`.
 
 The [Node Protobuf messaging guide](../../../doc/framework/node/guide/stream-connector/40-protobuf.en.md)
 explains code generation and codec configuration. Browser clients use the package root of
 `@zlink-systems/framework-codec-protobuf`, with matching connector and codec package versions.
-This tutorial uses `0.28.0` for both. The server must also send Protobuf using the same schema and
+Both dependencies are pinned to `0.28.0`; this verification uses the local codec fix from #1503. The server must also send Protobuf using the same schema and
 packet names; changing only the client codec does not adapt the existing JSON server.
 This is not a verification result for Protobuf in the Cocos scene.
 
 Replies use `submitEncoded()` followed by `fromProto()` with the generated reply class.
 The type argument in `submit<Pong>()` alone does not pass a reply class to the decoder.
 [Protobuf codecs and types](../../../doc/framework/node/guide/stream-connector/41-protobuf-codecs.en.md)
-explains the current helpers' limits on selecting between receiving types from handler types alone.
+explains selecting multiple receiving types through handler constructors.
 
 ## Run the server
 

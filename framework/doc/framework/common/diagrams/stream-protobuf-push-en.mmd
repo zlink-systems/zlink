@@ -1,0 +1,13 @@
+flowchart LR
+    %% Typed Protobuf pushes
+    %% One codec decodes Ping and Pong through handler constructors
+    server["server<br/>Ping / Pong bytes"]:::infra
+    connector["connector<br/>on(Ping) / on(Pong)"]:::spot
+    codec["codec<br/>messageType.decode"]:::spot
+    handler["handler<br/>Ping / Pong instance"]:::app
+    server -->|"push"| connector
+    connector -->|"payload + type"| codec
+    codec -->|"message.payload"| handler
+    classDef infra fill:#edf0f5,stroke:#6b7c99,color:#253247;
+    classDef spot fill:#d9faec,stroke:#0eb989,color:#253247;
+    classDef app fill:#dff8ff,stroke:#0eafd0,color:#253247;

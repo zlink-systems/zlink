@@ -1,8 +1,10 @@
 # StreamClient Protobuf tutorial
 
-`.proto`에서 만든 `Ping`으로 보내고 push를 받으며, 요청 응답은 `Pong`으로 읽는다.
-고정 타입 codec은 `Ping`에 사용하고, 응답은 `submitEncoded()`와 `fromProto(..., Pong)`으로 읽는다.
-이 예제는 Node를 browser connector의 검증 환경으로 사용한다.
+`.proto`에서 만든 `Ping`과 `Pong`을 송수신하며, 요청 응답은 `Pong`으로 읽는다.
+codec 하나로 `Ping`과 `Pong` push를 각각 `on(Type, handler)`로 받으며, 응답은 `submitEncoded()`와 `fromProto(..., Pong)`으로 읽는다.
+검증 프로그램은 Node의 WebSocket으로 서버에 연결하며 browser용 connector 진입점을 실행한다.
+
+배포된 0.28.0은 handler 타입을 사용하지 않는다. 수정 배포 전에는 로컬 codec package를 사용한다.
 
 ## 설치와 빌드
 
@@ -21,11 +23,15 @@ npm run build
 서버 없이 확인하려면 다음 명령으로 검증용 WebSocket peer와 tutorial을 함께 실행한다.
 
 ```bash
+npx --yes --package=esbuild@0.25.5 esbuild ../../packages/framework-codec-protobuf/src/index.ts \
+  --bundle --format=esm --platform=browser --target=es2022 \
+  --external:@zlink-systems/stream-wire \
+  --outfile=node_modules/@zlink-systems/framework-codec-protobuf/dist/browser/index.mjs
 npm run protobuf:check
-# protobuf: push=hello, reply.rank=7
+# protobuf: Ping=hello, Pong.rank=3, reply.rank=7
 ```
 
-검증용 peer는 임시 로컬 포트에서 `Ping` send를 `Ping` push로 돌려주고, `Ping` request에는
+검증용 peer는 임시 로컬 포트에서 `Ping`과 `Pong { rank: 3 }` push를 보내고, `Ping` request에는
 `Pong { rank: 7 }`으로 응답한다. 잘못된 codec 번호와 손상된 bytes의 거부도 확인한다.
 
 같은 protocol을 구현한 서버가 준비돼 있으면 주소를 환경 변수로 지정해 실행한다.

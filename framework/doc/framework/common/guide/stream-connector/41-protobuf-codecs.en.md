@@ -2,35 +2,35 @@
 
 !!! info "After reading this chapter"
 
-    You can distinguish a fixed-type codec from an envelope codec, and packet names from decoding types.
+    You can distinguish a generated-class codec from an envelope codec, and packet names from decoding types.
     Runnable code comes from the same StreamClient tutorial as [Protobuf Messaging](40-protobuf.en.md).
 
 Protobuf bytes alone do not identify their message class. They contain field numbers and values,
 but no class name such as `Ping` or `Pong`. Selecting a handler by packet name and choosing a class
 to decode the bytes are separate operations.
 
-## 1. Fixed Types and Envelopes
+## 1. Handler Types and Fallback Types
 
-Use `createZlinkStreamProtobufCodec(Type)` when handling one message type.
-This factory calls only the `Type.encode` and `Type.decode` selected at creation.
-Passing different constructors to handlers does not change that choice.
+`createZlinkStreamProtobufCodec(Type)` calls the `decode` of the constructor registered with the handler.
+`on(Ping, handler)` and `on(Pong, handler)` receive different types through the same codec.
+A name-only registration uses the fallback `Type` supplied to the factory.
+Encoding uses the generated instance's `encode`. Values whose constructor has no `encode` use the fallback type.
 
-`createZlinkStreamProtobufEnvelopeCodec(options)` is available for protocols that already use their own
-envelope format. An envelope is an outer message carrying information to distinguish message kinds.
-The factory calls `options.encode` and `options.decode`; it does not automatically register message kinds.
+`createZlinkStreamProtobufEnvelopeCodec(options)` supports protocols that already use an envelope format.
+An envelope is an outer message containing information that distinguishes message kinds.
+The factory forwards the handler type to `options.decode(payload, messageType)`. The application's decoder
+controls how the inner message is read. The factory does not automatically register message kinds.
 
-| Surface | Where the type is selected | Current receiving behavior |
-|---|---|---|
-| `createZlinkStreamProtobufCodec(Type)` | At factory creation | Reads every payload as the same `Type` |
-| `createZlinkStreamProtobufEnvelopeCodec(options)` | In the application's envelope format | Delegates to `options.decode(payload)` without forwarding the handler type |
-| `fromProto(payload, ReplyType)` | At the call | Reads an encoded payload using the supplied `ReplyType` |
+| Surface                                           | Where the type is selected                   | Receiving behavior                                      |
+| ------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------- |
+| `createZlinkStreamProtobufCodec(Type)`            | Handler registration, or factory fallback    | Calls the supplied constructor's `decode`               |
+| `createZlinkStreamProtobufEnvelopeCodec(options)` | Handler registration and application decoder | Delegates to `options.decode(payload, messageType)`     |
+| `fromProto(payload, ReplyType)`                   | At the call                                  | Reads an encoded payload using the supplied `ReplyType` |
 
-!!! warning "Automatic Selection Between Receiving Types"
+!!! note "Fix Availability"
 
-    The connector passes the type from `on(Type, handler)` or `on(name, handler, Type)` to the codec.
-    However, the two Protobuf factories above do not use that argument. The current helpers do not
-    select between distinct `.proto` messages from handler types alone.
-    This difference is being reviewed in [#1503](https://github.com/zlink-systems/zlink/issues/1503).
+    Type forwarding above describes the fix in [#1503](https://github.com/zlink-systems/zlink/issues/1503).
+    Both factories in released version 0.28.0 ignore handler types.
 
 ## 2. Server Packet Names and Generated Classes
 

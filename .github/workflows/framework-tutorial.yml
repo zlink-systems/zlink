@@ -428,6 +428,10 @@ jobs:
         working-directory: framework/languages/node/tutorial/StreamClient
         run: |
           npm ci
+          npx --yes --package=esbuild@0.25.5 esbuild ../../packages/framework-codec-protobuf/src/index.ts \
+            --bundle --format=esm --platform=browser --target=es2022 \
+            --external:@zlink-systems/stream-wire \
+            --outfile=node_modules/@zlink-systems/framework-codec-protobuf/dist/browser/index.mjs
           npm run protobuf:check
 
       - name: Check that the documented snippet markers exist

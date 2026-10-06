@@ -19,13 +19,19 @@ title: "Node Protobuf 송수신 · Node/TypeScript"
     코드는 `framework/languages/node/tutorial/StreamClient`의 실행 예제에서 읽는다.
 
 서버가 Protobuf payload를 쓰는 경우 client도 같은 `.proto` 정의로 bytes를 읽어야 한다.
-이 예제는 `Ping` push와 `Pong` 응답을 받는다. 생성할 때 타입 하나를 지정하는 codec을 사용하며,
-여러 수신 타입의 자동 선택 범위는 [Protobuf codec과 타입](41-protobuf-codecs.ko.md)이 설명한다.
+이 예제는 codec 하나로 `Ping`과 `Pong` push를 각각 `on(Type, handler)`에 지정한 타입으로 받는다.
+메시지 종류가 255개여도 codec을 255개 만들 필요는 없다. 각 생성 클래스를 handler에 전달한다.
+타입 선택과 이름의 관계는 [Protobuf codec과 타입](41-protobuf-codecs.ko.md)이 설명한다.
+
+!!! note "수정 버전"
+
+    이 장은 [#1503](https://github.com/zlink-systems/zlink/issues/1503)의 codec 수정 동작을 설명한다.
+    배포된 0.28.0은 handler 타입을 사용하지 않는다. 배포 전 검증에는 수정한 로컬 package를 사용한다.
 
 ## 1. 메시지 코드 생성
 
 `.proto`는 메시지의 field 번호와 타입을 정의하는 파일이다. 이 예제는 문자열을 보내는 `Ping`과
-숫자로 응답하는 `Pong`을 정의한다.
+숫자를 보내는 `Pong`을 정의한다.
 
 ```protobuf title="StreamClient/messages.proto"
 --8<-- "framework/languages/node/tutorial/StreamClient/messages.proto:protobuf-schema"
@@ -52,8 +58,8 @@ server serializer용 `./framework` 진입점은 client에서 사용하지 않는
 --8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-imports"
 ```
 
-connector를 만들 때 codec 하나를 지정한다. 이 codec은 보내는 payload와 받는 payload를 모두
-`Ping`으로 처리한다. `endpoint`는 Protobuf를 사용하는 서버의 WebSocket 주소다.
+connector를 만들 때 codec 하나를 지정한다. 여기서 `Ping`은 수신 타입이 없는 경우의 기본값이다.
+송신은 생성 instance의 타입을, 타입 지정 수신은 handler에 전달한 생성자를 사용한다. `endpoint`는 Protobuf를 사용하는 서버의 WebSocket 주소다.
 
 ```typescript title="StreamClient/protobuf.ts"
 --8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-register"
@@ -61,8 +67,9 @@ connector를 만들 때 codec 하나를 지정한다. 이 codec은 보내는 pay
 
 ## 3. 받는 쪽 — push handler
 
-아래 예제는 동일한 `Ping` push에 세 형태의 handler를 등록한다. 실제 application에서는
-필요한 형태 하나를 사용한다. 이름만 지정한 마지막 handler도 이 고정 타입 codec으로는 `Ping`을 받는다.
+`on(Ping, handler)`는 `Ping`을, `on(Pong, handler)`는 `Pong`을 디코딩 타입으로 전달한다.
+같은 codec이 두 생성자의 `decode`를 각각 호출하므로 handler는 서로 다른 타입의 instance를 받는다.
+예제는 이름을 직접 지정하는 형태와 타입을 생략해 기본값을 쓰는 형태도 함께 보여 준다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push.html" title="Protobuf push 디코딩" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/stream-protobuf-push.html" target="_blank">↗ 크게 보기</a></p>
@@ -77,7 +84,7 @@ push를 받는다. 생성 클래스 이름과 wire 이름이 다르면 명시 �
 ## 4. 보내는 쪽 — send와 request
 
 앞 절의 handler가 받을 메시지를 보내려면 생성 클래스의 instance를 사용한다. connector는
-그 생성자에서 packet 이름 `Ping`을 정한다.
+그 생성자에서 packet 이름을 정하고, codec은 해당 생성자의 `encode`로 bytes를 만든다.
 
 ```typescript title="StreamClient/protobuf.ts"
 --8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-send"
@@ -99,22 +106,27 @@ codec으로 전달되지 않으므로, 위 예제처럼 응답 타입을 지정�
 ## 5. 실행 결과
 
 이 명령은 StreamClient의 검증용 WebSocket peer를 임시 로컬 포트에 실행하고 같은 tutorial 함수를
-호출한다. 별도로 Server를 실행할 필요가 없다. peer는 `Ping`을 push로 돌려주고, request에는
+호출한다. 별도로 Server를 실행할 필요가 없다. peer는 `Ping`과 `Pong { rank: 3 }`을 push로 보내고, request에는
 `Pong { rank: 7 }`으로 응답한다.
 
 ```bash
 cd framework/languages/node/tutorial/StreamClient
 npm ci
+# 수정 배포 전: 로컬 codec 소스를 빌드한다.
+npx --yes --package=esbuild@0.25.5 esbuild ../../packages/framework-codec-protobuf/src/index.ts \
+  --bundle --format=esm --platform=browser --target=es2022 \
+  --external:@zlink-systems/stream-wire \
+  --outfile=node_modules/@zlink-systems/framework-codec-protobuf/dist/browser/index.mjs
 npm run protobuf:check
-# protobuf: push=hello, reply.rank=7
+# protobuf: Ping=hello, Pong.rank=3, reply.rank=7
 ```
 
-검증은 실제 WebSocket 송수신, 세 수신 등록의 payload, 응답 타입을 확인한다. 잘못된 codec 번호와
-손상된 Protobuf bytes가 거부되는지도 확인한다. Node는 이 browser connector의 검증 환경으로 사용한다.
+검증은 실제 WebSocket 송수신, 두 메시지 타입의 handler payload와 송신 bytes, 응답 타입을 확인한다. 잘못된 codec 번호와
+손상된 Protobuf bytes가 거부되는지도 확인한다. 검증 프로그램은 Node의 WebSocket으로 서버에 연결하며 browser용 connector 진입점을 실행한다.
 
 ## 6. 관련 문서
 
-- 타입·이름 선택과 여러 메시지의 제약 — [Protobuf codec과 타입](41-protobuf-codecs.ko.md)
+- 타입·이름 선택과 기본 타입 — [Protobuf codec과 타입](41-protobuf-codecs.ko.md)
 - 수신 타입 전달과 handler 실행 시점 — [packet 수신](05-receiving.ko.md)
 - send와 request — [packet 송신](04-sending.ko.md)
 

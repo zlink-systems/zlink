@@ -19,13 +19,19 @@ title: "Node Protobuf Messaging · Node/TypeScript"
     Code comes from the runnable `framework/languages/node/tutorial/StreamClient` example.
 
 When a server uses Protobuf payloads, the client needs the same `.proto` definitions to read the bytes.
-This example receives a `Ping` push and a `Pong` reply. It uses a codec configured with one fixed type.
-[Protobuf Codecs and Types](41-protobuf-codecs.en.md) explains the limits of automatic selection between receiving types.
+This example uses one codec to receive `Ping` and `Pong` pushes through `on(Type, handler)`.
+Receiving 255 message kinds does not require 255 codecs. Pass each generated class to its handler registration.
+[Protobuf Codecs and Types](41-protobuf-codecs.en.md) explains how types and names are selected.
+
+!!! note "Fix Availability"
+
+    This chapter describes the codec fix in [#1503](https://github.com/zlink-systems/zlink/issues/1503).
+    Released version 0.28.0 ignores handler types. Before release, verification uses the patched local package.
 
 ## 1. Generating Message Code
 
 A `.proto` file defines message field numbers and types. This example defines `Ping`, which carries a
-string, and `Pong`, which carries a numeric reply.
+string, and `Pong`, which carries a number.
 
 ```protobuf title="StreamClient/messages.proto"
 --8<-- "framework/languages/node/tutorial/StreamClient/messages.proto:protobuf-schema"
@@ -52,8 +58,8 @@ The server serializer entry point, `./framework`, is not used in the client.
 --8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-imports"
 ```
 
-Configure one codec when creating the connector. This codec treats both outgoing and incoming payloads
-as `Ping`. The `endpoint` is the WebSocket address of a server using Protobuf.
+Configure one codec when creating the connector. The configured `Ping` is the fallback when no receiving type is supplied.
+Encoding uses the generated instance type; typed receiving uses the handler constructor. The `endpoint` is the WebSocket address of a server using Protobuf.
 
 ```typescript title="StreamClient/protobuf.ts"
 --8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-register"
@@ -61,8 +67,9 @@ as `Ping`. The `endpoint` is the WebSocket address of a server using Protobuf.
 
 ## 3. Receiving — Push Handlers
 
-The example registers three handler forms for the same `Ping` push. An application uses the one it needs.
-Even the final handler, registered with only a name, receives a `Ping` with this fixed-type codec.
+`on(Ping, handler)` supplies `Ping` as the decoding type; `on(Pong, handler)` supplies `Pong`.
+The same codec invokes each constructor's `decode`, so handlers receive instances of different types.
+The example also shows an explicit packet name and a name-only registration using the fallback type.
 
 <iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push-en.html" title="Protobuf push decoding" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/stream-protobuf-push-en.html" target="_blank">↗ Open larger</a></p>
@@ -77,7 +84,7 @@ receive the same push. Use the named form when the generated class name differs 
 ## 4. Sending — Send and Request
 
 Use a generated class instance to send the message received by the handlers above.
-The connector derives the packet name `Ping` from its constructor.
+The connector derives the packet name from the constructor, and the codec calls that constructor's `encode`.
 
 ```typescript title="StreamClient/protobuf.ts"
 --8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-send"
@@ -99,23 +106,27 @@ not passed to the codec at runtime, so the example specifies the reply type expl
 ## 5. Execution Result
 
 This command starts the StreamClient verification WebSocket peer on an ephemeral local port and calls
-the same tutorial function. A separate Server process is not needed. The peer echoes `Ping` as a push
-and replies to requests with `Pong { rank: 7 }`.
+the same tutorial function. A separate Server process is not needed. The peer sends `Ping` and `Pong { rank: 3 }` pushes and replies to requests with `Pong { rank: 7 }`.
 
 ```bash
 cd framework/languages/node/tutorial/StreamClient
 npm ci
+# Before release: build the patched local codec source.
+npx --yes --package=esbuild@0.25.5 esbuild ../../packages/framework-codec-protobuf/src/index.ts \
+  --bundle --format=esm --platform=browser --target=es2022 \
+  --external:@zlink-systems/stream-wire \
+  --outfile=node_modules/@zlink-systems/framework-codec-protobuf/dist/browser/index.mjs
 npm run protobuf:check
-# protobuf: push=hello, reply.rank=7
+# protobuf: Ping=hello, Pong.rank=3, reply.rank=7
 ```
 
-Verification checks real WebSocket traffic, the payload received by all three registrations, and the
+Verification checks real WebSocket traffic, handler payloads for both message types, encoded bytes, and the
 reply type. It also checks rejection of an incorrect codec number and malformed Protobuf bytes.
-Node is used as a verification environment for this browser connector.
+The verification program connects through Node's WebSocket and runs the connector's browser entry point.
 
 ## 6. Related Documents
 
-- Type and name selection and multiple-message limits — [Protobuf Codecs and Types](41-protobuf-codecs.en.md)
+- Type and name selection and fallback types — [Protobuf Codecs and Types](41-protobuf-codecs.en.md)
 - Receiving type propagation and handler execution — [Receiving Packets](05-receiving.en.md)
 - Send and request — [Sending Packets](04-sending.en.md)
 

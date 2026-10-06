@@ -2,6 +2,7 @@
 syntax = "proto3";
 package tutorial;
 
+// Both message types are received through one connector codec.
 message Ping { string text = 1; }
 message Pong { uint32 rank = 1; }
 // --8<-- [end:protobuf-schema]

@@ -15,35 +15,35 @@ title: "Node Protobuf codec과 타입 · Node/TypeScript"
 
 !!! info "이 장을 읽고 나면"
 
-    고정 타입 codec과 envelope codec의 차이를 알고, packet 이름과 디코딩 타입을 구분할 수 있다.
+    생성 클래스 codec과 envelope codec의 차이를 알고, packet 이름과 디코딩 타입을 구분할 수 있다.
     실행 코드는 [Protobuf 송수신](40-protobuf.ko.md)의 StreamClient tutorial과 같다.
 
 Protobuf bytes만으로는 어떤 메시지 클래스인지 알 수 없다. field 번호와 값은 들어 있지만,
 `Ping`이나 `Pong`이라는 클래스 이름은 들어 있지 않기 때문이다. packet 이름으로 handler를 고르는
 동작과, bytes를 어떤 클래스로 읽을지 정하는 동작은 별개다.
 
-## 1. 고정 타입과 envelope
+## 1. handler 타입과 기본 타입
 
-메시지 하나를 처리하는 경우에는 `createZlinkStreamProtobufCodec(Type)`을 사용한다.
-이 factory는 생성할 때 받은 `Type.encode`와 `Type.decode`만 호출한다.
-handler마다 다른 생성자를 전달해도 그 선택은 바뀌지 않는다.
+`createZlinkStreamProtobufCodec(Type)`은 handler에 지정한 생성자의 `decode`를 호출한다.
+`on(Ping, handler)`와 `on(Pong, handler)`는 같은 codec으로 서로 다른 타입을 받는다.
+타입 없이 이름만 등록하면 factory에 지정한 기본 `type`으로 디코딩한다.
+송신은 생성 instance의 `encode`를 사용한다. 생성자의 `encode`가 없는 값은 기본 타입으로 인코딩한다.
 
 자체 envelope 형식을 이미 쓰는 protocol에는 `createZlinkStreamProtobufEnvelopeCodec(options)`가 있다.
-여기서 envelope는 여러 메시지를 구분할 정보를 포함하는 바깥 메시지 형식이다. factory는
-`options.encode`와 `options.decode`를 호출하며, 메시지 종류를 자동으로 등록하는 기능은 제공하지 않는다.
+envelope는 여러 메시지를 구분할 정보를 포함하는 바깥 메시지 형식이다. factory는
+`options.decode(payload, messageType)`에 handler 타입을 전달한다. 내부 메시지를 읽는 방법은
+application의 decoder가 정한다. 메시지 종류를 자동 등록하는 기능은 제공하지 않는다.
 
-| 표면 | 타입을 정하는 곳 | 현재 수신 동작 |
-|---|---|---|
-| `createZlinkStreamProtobufCodec(Type)` | factory를 호출할 때 | 모든 payload를 같은 `type`으로 읽는다 |
-| `createZlinkStreamProtobufEnvelopeCodec(options)` | application의 envelope 형식 | `options.decode(payload)`에 위임하며 handler 타입은 넘기지 않는다 |
-| `fromProto(payload, ReplyType)` | 호출할 때 | 지정한 `ReplyType`으로 encoded payload를 읽는다 |
+| 표면                                              | 타입을 정하는 곳                    | 수신 동작                                       |
+| ------------------------------------------------- | ----------------------------------- | ----------------------------------------------- |
+| `createZlinkStreamProtobufCodec(Type)`            | handler 등록, 없으면 factory 기본값 | 지정한 생성자의 `decode` 호출                   |
+| `createZlinkStreamProtobufEnvelopeCodec(options)` | handler 등록과 application decoder  | `options.decode(payload, messageType)`에 위임   |
+| `fromProto(payload, ReplyType)`                   | 호출할 때                           | 지정한 `ReplyType`으로 encoded payload를 읽는다 |
 
-!!! warning "여러 수신 타입의 자동 선택"
+!!! note "수정 버전"
 
-    connector는 `on(Type, handler)` 또는 `on(name, handler, Type)`의 타입을 codec에 전달한다.
-    그러나 위 두 Protobuf factory는 그 인자를 사용하지 않는다. 서로 다른 `.proto` 메시지를
-    handler 타입만으로 선택하는 사용법은 현재 helper로 제공되지 않는다.
-    이 차이는 [#1503](https://github.com/zlink-systems/zlink/issues/1503)에서 확인 중이다.
+    위 타입 전달은 [#1503](https://github.com/zlink-systems/zlink/issues/1503)의 수정 동작이다.
+    배포된 0.28.0의 두 factory는 handler 타입을 사용하지 않는다.
 
 ## 2. 서버 packet 이름과 생성 클래스
 
