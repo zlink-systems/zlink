@@ -400,8 +400,7 @@ HWM의 계산과 queue admission은 Core가 담당한다.
 Context option은 byte 단위 Core memory limit·budget과 profile을 Core에 그대로 전달한다.
 계산·수동 override·admission은 [Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
 Context는 `core_hwm_budget_snapshot()`과 `reset_core_hwm_budget_metrics()`를 제공한다.
-Rust binding은 runtime memory hint를 만들지 않는다. 입력 우선순위는 수동 Core budget,
-명시 memory limit, Core fallback 순서다. 명시 입력이 Core가 감지한 finite hard limit보다
+명시 입력이 Core가 감지한 finite hard limit보다
 크면 `EINVAL`에 대응하는 기존 config error를 그대로 전달하고 clamp하지 않는다.
 
 Core 제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)에 따라
@@ -414,7 +413,7 @@ deferred HWM과 in-flight 사용량은 `u64` byte다. Pending message count는 �
 진단이고 `snd_pending_bytes`와 `rcv_pending_bytes`는 별도 `u64` byte 값이다.
 slot·message-unit·size-cap·connection-bucket property는 제공하지 않는다.
 
-Core budget snapshot은 ABI version/size, configured/runtime/resolved memory limit,
+Core budget snapshot은 ABI version/size, configured/resolved memory limit,
 configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/current/
 peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
 monitor/instance aggregate, application/completion queue count,

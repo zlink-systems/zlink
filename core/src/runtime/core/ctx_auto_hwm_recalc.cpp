@@ -203,8 +203,7 @@ bool zlink::ctx_t::auto_hwm_extend_plan_for_attach (
         || fresh.configured_core_budget_bytes
              != plan.configured_core_budget_bytes
         || fresh.configured_memory_limit_bytes
-             != plan.configured_memory_limit_bytes
-        || fresh.runtime_memory_limit_bytes != plan.runtime_memory_limit_bytes)
+             != plan.configured_memory_limit_bytes)
         return false;
 
     //  The extension itself allocates nothing — the caller passes a fixed

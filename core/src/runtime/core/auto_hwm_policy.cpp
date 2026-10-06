@@ -114,12 +114,6 @@ uint64_t resolved_memory_limit (const zlink::auto_hwm_budget_input_t &input_)
     if (input_.configured_memory_limit_bytes > 0)
         return input_.configured_memory_limit_bytes;
 
-    if (input_.runtime_memory_limit_bytes > 0 && input_.detected_hard_limit_bytes > 0) {
-        return std::min (input_.runtime_memory_limit_bytes,
-                         input_.detected_hard_limit_bytes);
-    }
-    if (input_.runtime_memory_limit_bytes > 0)
-        return input_.runtime_memory_limit_bytes;
     if (input_.detected_hard_limit_bytes > 0)
         return input_.detected_hard_limit_bytes;
     return input_.detected_physical_memory_bytes;
@@ -146,7 +140,6 @@ zlink::auto_hwm_budget_input_t::auto_hwm_budget_input_t () :
     enabled (false),
     profile (ZLINK_AUTO_HWM_PROFILE_BALANCED),
     configured_memory_limit_bytes (0),
-    runtime_memory_limit_bytes (0),
     configured_core_budget_bytes (0),
     detected_hard_limit_bytes (0),
     detected_physical_memory_bytes (0)
@@ -157,7 +150,6 @@ zlink::auto_hwm_context_plan_t::auto_hwm_context_plan_t () :
     enabled (false),
     profile (ZLINK_AUTO_HWM_PROFILE_BALANCED),
     configured_memory_limit_bytes (0),
-    runtime_memory_limit_bytes (0),
     resolved_memory_limit_bytes (0),
     configured_core_budget_bytes (0),
     effective_core_budget_bytes (0),
@@ -302,7 +294,6 @@ void zlink::auto_hwm_context_plan_make (const auto_hwm_budget_input_t &input_,
     out_->enabled = input_.enabled;
     out_->profile = normalize_profile (input_.profile);
     out_->configured_memory_limit_bytes = input_.configured_memory_limit_bytes;
-    out_->runtime_memory_limit_bytes = input_.runtime_memory_limit_bytes;
     out_->configured_core_budget_bytes = input_.configured_core_budget_bytes;
     out_->resolved_memory_limit_bytes = resolved_memory_limit (input_);
     //  The active directional queue count is only known once the physical

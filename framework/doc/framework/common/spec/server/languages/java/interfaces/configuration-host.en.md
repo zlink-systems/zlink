@@ -249,9 +249,7 @@ public interface FanoutChannelBuilder {
 ```
 
 The `coreHwmMemoryLimitBytes`, `coreHwmBudgetBytes`, and `coreHwmProfile` members of the
-`ZLinkInboundDispatchOptions` returned by `configureInboundDispatch()` are forwarded to Core. The Java
-binding forwards a positive finite `Runtime.maxMemory()` runtime memory
-hint. Core and job-queue profiles are independent enums, both defaulting to `BALANCED`.
+`ZLinkInboundDispatchOptions` returned by `configureInboundDispatch()` are forwarded to Core. Core and job-queue profiles are independent enums, both defaulting to `BALANCED`.
 Manual job cap is `1..2,147,483,647`; omission uses the common startup CPU snapshot and
 32/64/128/256 coefficients. Pressure thresholds default to pause `80` and resume `60`; pause
 is an integer in `1..100`, resume is an integer in `0..99`, and resume must be less than pause.
@@ -804,8 +802,7 @@ start and shutdown are each delivered once to the same
 
 ## Inbound Queue And Session Seal Options
 
-The Java binding forwards a positive finite `Runtime.maxMemory()` as Core's runtime memory
-hint. Core and job-queue profiles are independent enums, both defaulting to `BALANCED`.
+Core and job-queue profiles are independent enums, both defaulting to `BALANCED`.
 Manual job cap is `1..2,147,483,647`; omission uses the common startup CPU snapshot and
 32/64/128/256 coefficients. Range violation and overflow fail before bind, and runtime does
 not recompute the result.
