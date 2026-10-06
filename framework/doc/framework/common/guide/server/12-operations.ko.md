@@ -740,8 +740,7 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
 
 Fixed RoutingId를 사용하는 서버를 강제 종료한 직후 다시 시작하면 이전 process의 owner lease가
 아직 유효할 수 있다. 같은 MeshName과 RoutingId의 descriptor를 게시할 때 `REJECTED_CONFLICT`가
-발생하며 host startup이 실패한다. Spring 컨텍스트는 시작 예외로, .NET host는 `StartAsync` 예외로,
-Node는 bootstrap Promise의 reject로, C++ app host는 실패 반환으로 끝난다. 열린 포트만으로
+발생하며 host startup이 실패한다. 모든 언어에서 host 시작 호출이 실패로 끝난다. 열린 포트만으로
 readiness를 판정하지 않고, 시작이 성공한 뒤 공개 runtime 상태를 확인한다.
 
 배포 절차는 이전 서버의 정상 종료 결과를 확인한 뒤 replacement를 시작한다. 강제 종료했다면
