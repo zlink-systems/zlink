@@ -104,7 +104,7 @@ Every
 delivered the same way.
 
 Without an
-explicit value, every binding uses Core's container/OS detection.
+explicit value, Core uses the process/container hard limit it detects, or physical memory.
 
 Framework and
 the binding don't apply a profile ratio or divide the budget by connection count.

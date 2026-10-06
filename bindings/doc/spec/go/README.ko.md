@@ -93,7 +93,7 @@ modify, remove와 wait 호출은 호출자가 직렬화한다.
 Context memory limit·Core budget의 byte 값과 profile option을 Core에 전달한다.
 계산·수동 override·admission은 [Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
 
-입력 우선순위는 수동 Core budget, 명시 memory limit, Core fallback 순서다. 명시 입력이
+명시 입력이
 Core가 감지한 finite hard limit보다 크면 `EINVAL`에 대응하는 기존 config error를 그대로
 전달하고 clamp하지 않는다.
 

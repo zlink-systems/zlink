@@ -99,8 +99,7 @@ unlimited.
 Pass the byte-valued context memory limit and Core budget, and the profile option, to Core.
 Planning, manual overrides, and admission follow [Core HWM calculation and admission](../README.en.md#hwm-calculation-and-admission).
 
-Input precedence is manual Core budget, explicit memory limit, then Core
-fallback. If an explicit input exceeds
+If an explicit input exceeds
 a finite hard limit Core detected, the binding preserves the existing
 configuration error corresponding to `EINVAL` and does not clamp the value.
 

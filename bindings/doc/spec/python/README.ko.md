@@ -67,7 +67,7 @@ Context는 byte 단위 `core_hwm_memory_limit_bytes`, `core_hwm_budget_bytes`와
 queue별 분배는 Core가 정확히 한 번 수행한다. Caller가 방향별 HWM을 설정하면 그 방향은
 manual override가 되어 Auto-HWM 재계산에서 제외된다.
 Context는 `core_hwm_budget_snapshot()`과 `reset_core_hwm_budget_metrics()`도 제공한다.
-입력 우선순위는 수동 Core budget, 명시 memory limit, Core fallback 순서다. 명시 입력이
+명시 입력이
 Core가 감지한 finite hard limit보다 크면 `EINVAL`에 대응하는 기존 config error를 그대로
 전달하고 clamp하지 않는다.
 

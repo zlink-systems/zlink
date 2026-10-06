@@ -400,8 +400,7 @@ HWM의 계산과 queue admission은 Core가 담당한다.
 Context option은 byte 단위 Core memory limit·budget과 profile을 Core에 그대로 전달한다.
 계산·수동 override·admission은 [Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
 Context는 `core_hwm_budget_snapshot()`과 `reset_core_hwm_budget_metrics()`를 제공한다.
-입력 우선순위는 수동 Core budget,
-명시 memory limit, Core fallback 순서다. 명시 입력이 Core가 감지한 finite hard limit보다
+명시 입력이 Core가 감지한 finite hard limit보다
 크면 `EINVAL`에 대응하는 기존 config error를 그대로 전달하고 clamp하지 않는다.
 
 Core 제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)에 따라

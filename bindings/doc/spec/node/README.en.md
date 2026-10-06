@@ -629,8 +629,7 @@ interface CommonSocketOptions {
 }
 ```
 
-Input precedence is manual Core budget, explicit memory limit, then Core
-fallback. If an explicit input exceeds a finite hard limit Core detected, the
+If an explicit input exceeds a finite hard limit Core detected, the
 binding preserves the existing configuration error corresponding to `EINVAL`
 and does not clamp the value.
 

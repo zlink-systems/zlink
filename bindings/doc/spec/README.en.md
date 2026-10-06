@@ -1257,11 +1257,10 @@ Public SPOT channel and dispatch operations are owned by [Framework API](../../.
   binding. A byte value of `0` means that the explicit memory limit or
   manual Core budget is absent. A binding does not calculate profile ratios
   or per-queue HWM values.
-- Input precedence is manual Core budget, explicit memory limit, then the hard
-  limit or physical memory that Core detects. A binding does not forward a
-  managed heap limit (GC, JVM, V8, and so on) to Core: that value is not a limit
-  on the native memory Core queues use. A binding does not apply a profile ratio
-  itself.
+- A binding does not forward managed heap limits (GC, JVM, V8, and so on) to
+  Core. Memory-input precedence and connection admission follow
+  [Core Auto HWM §2](../../../core/doc/spec/core/systems/06-auto-hwm.en.md#2-auto-hwm-budget-calculation).
+  A binding does not apply a profile ratio itself.
 - If Core detects a finite hard limit and an explicit memory limit or manual
   Core budget exceeds it, the binding preserves Core's `EINVAL` and does not
   clamp the value.

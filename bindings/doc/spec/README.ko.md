@@ -1066,10 +1066,9 @@ Raw builder는 `routerSocket.request(rid).message(part).submit()`처럼 사용�
   모든 바인딩에서 typed context option으로 노출한다. Byte 입력 `0`은 각각 명시 memory
   limit 또는 수동 Core budget이 없다는 뜻이며 binding은 profile 비율이나 queue별 HWM을
   계산하지 않는다.
-- 입력 우선순위는 수동 Core budget, 명시 memory limit, Core가 감지한 hard limit·physical
-  memory 순서다. Binding은 managed heap 한도(GC·JVM·V8 등)를 Core에 전달하지 않는다 —
-  그 값은 Core queue가 쓰는 native memory의 한도가 아니다. Binding은 profile 비율을 적용하지
-  않는다.
+- Binding은 managed heap 한도(GC·JVM·V8 등)를 Core에 전달하지 않는다. Memory 입력의
+  우선순위와 연결 수용 기준은 [Core Auto HWM §2](../../../core/doc/spec/core/systems/06-auto-hwm.ko.md#2-auto-hwm-budget-계산)를
+  따른다. Binding은 profile 비율을 적용하지 않는다.
 - Core가 finite hard limit을 감지했을 때 명시 memory limit 또는 수동 Core budget이 이를
   넘으면 binding은 Core의 `EINVAL`을 그대로 전달하고 값을 clamp하지 않는다.
 - Context budget snapshot은 Core ABI v1의 version과 struct size를 포함해 다음 canonical

@@ -74,8 +74,7 @@ the profile ratio and distributes the result across physical directional
 queues exactly once. Setting a directional HWM makes that direction a manual
 override and excludes it from automatic HWM recalculation.
 Context also provides `core_hwm_budget_snapshot()` and
-`reset_core_hwm_budget_metrics()`. Input precedence is manual Core budget,
-explicit memory limit, then Core fallback. If an explicit input exceeds a finite hard limit Core
+`reset_core_hwm_budget_metrics()`. If an explicit input exceeds a finite hard limit Core
 detected, the binding preserves the existing configuration error corresponding
 to `EINVAL` and does not clamp the value.
 

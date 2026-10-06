@@ -278,7 +278,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_set_data(void *context_,
                                          size_t optvallen_);
 ```
 
-Each of the three Auto HWM byte options requires exactly `sizeof(uint64_t)`
+Each Auto HWM byte option requires exactly `sizeof(uint64_t)`
 bytes. `0` means the input is unset, not unlimited. Every other size, and any
 context option value not in the enum above, fails with `ZLINK_CONFIG_INVALID_ARGUMENT`.
 Setting a valid value stores it and then schedules an Auto HWM recalculation.
@@ -316,7 +316,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_get_data(void *context_,
                                          size_t *optvallen_);
 ```
 
-Each of the three Auto HWM byte options requires a `uint64_t` output buffer and
+Each Auto HWM byte option requires a `uint64_t` output buffer and
 an exact `*optvallen_` of `sizeof(uint64_t)` on input. Any other size, including
 a larger scratch buffer or a 4-byte one, fails with
 `ZLINK_CONFIG_INVALID_ARGUMENT` and `errno == EINVAL` instead of truncating or
@@ -387,7 +387,7 @@ test.
 **Options**
 - `zlink_ctx_set` with an unknown option or an invalid value produces `EINVAL`; with an invalid handle it produces `EFAULT` (`ZLINK_CONFIG_INVALID_HANDLE`).
 - `ZLINK_THREAD_PRIORITY` uses unique value `22` for set/get and does not change the read-only contract of `ZLINK_SOCKET_LIMIT` value `3`.
-- Attempting to set any of the three Auto HWM byte options through `zlink_ctx_set` produces `EINVAL` (only `zlink_ctx_set_data` may set them).
+- Attempting to set any Auto HWM byte option through `zlink_ctx_set` produces `EINVAL` (only `zlink_ctx_set_data` may set them).
 - Querying an Auto HWM byte option through `zlink_ctx_get_data` with a size other than exactly `sizeof(uint64_t)` produces `EINVAL` and writes the required size into `*optvallen_`.
 - Writing a context option value that is not in the enum through `zlink_ctx_set_data` produces `ZLINK_CONFIG_INVALID_ARGUMENT`.
 - Querying `ZLINK_THREAD_NAME_PREFIX` through `zlink_ctx_get_data` with a capacity smaller than the stored prefix length produces `EINVAL` and writes the required length into `*optvallen_`.

@@ -79,9 +79,8 @@ for TCP, TLS, WS, and WSS.
 ## 4. Measurement and limitations
 
 The monitor that reports runtime memory state separately exposes current bytes for application
-queues and completion lanes, as well as oversize-admission history. The ABI-reserved fields
-`runtime_memory_limit_bytes`, `application_accounted_bytes`, `outstanding_application_lease_count`,
-`deferred_origin_credit_bytes`, and `retired_queue_count` are always zero. The
+queues and completion lanes, as well as oversize-admission history. The snapshot's ABI-reserved fields and returned values
+follow the budget-snapshot contract in [Auto HWM §3](06-auto-hwm.en.md#zlink_ctx_get_auto_hwm_budget_snapshot). The
 [Core budget](../glossary.en.md#auto-hwm-budget) — the total number of bytes that Core uses as the
 basis for distributing HWM among application queues after calculating it from memory inputs — is
 the normal-state basis for distributing per-pipe HWM, not a hard cap on actual context memory

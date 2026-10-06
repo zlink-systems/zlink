@@ -581,7 +581,7 @@ interface CommonSocketOptions {
 }
 ```
 
-입력 우선순위는 수동 Core budget, 명시 memory limit, Core fallback 순서다. 명시 입력이
+명시 입력이
 Core가 감지한 finite hard limit보다 크면
 `EINVAL`에 대응하는 기존 config error를 그대로 전달하고 clamp하지 않는다.
 

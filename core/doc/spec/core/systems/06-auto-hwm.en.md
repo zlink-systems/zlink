@@ -34,8 +34,10 @@ Core checks the following inputs in priority order and selects the first usable 
 
 1. A positive `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`
 2. A positive `ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`
-3. A finite hard limit detected by Core (cgroup v2 `memory.max`, v1 `memory.limit_in_bytes`)
+3. A finite process/container hard limit Core detects when the context is created. When several positive limits are detected, the smallest
 4. Physical memory detected by Core
+
+Detection covers Windows Job Object memory limits, finite `RLIMIT_AS`, and Linux cgroup memory limits. On Linux, Core reads the limits (v2 `memory.max`, v1 `memory.limit_in_bytes`) of the current process's cgroup that `/proc/self/cgroup` names and of all its ancestor cgroups, and uses only positive values below physical memory. Undetected limits are not part of the resolved memory limit.
 
 The first available value among 2–4 is the **resolved memory limit**. Even when a manual Core budget is set, the resolved memory limit comes from 2–4, and the **connection admission** check below uses it.
 
@@ -109,7 +111,7 @@ The judgment uses the set of the two endpoint values, regardless of which endpoi
 | No finite manual value and at least one auto | Water-filling result (auto plan) |
 | Both unlimited manual | Admission is unlimited; the role-specific maximum is reserved once for calculation |
 
-**Connection admission.** A new pipe pair reserves successfully only when the bytes reserved so far plus this pair's per-direction minimums do not exceed the resolved memory limit. This check does not depend on the budget. The budget is the basis for dividing per-queue HWMs; when the reserved total exceeds the budget, Core keeps the minimums and sets the insufficient-budget flag as the following rule states. So even when every queue fills to its minimum, the total does not exceed the resolved memory limit.
+**Connection admission.** A new pipe pair reserves successfully only when the recorded minimum reservation total plus this pair's per-direction minimums does not exceed the resolved memory limit. The check uses the memory inputs the setters currently store, not the budget. The planner determines budget insufficiency under the manual-reservation and automatic-minimum rule below. What this check limits is the minimum reservation total at the time a new pair is reserved. Changing the memory limit or profile at runtime can leave the minimum total of existing queues above the resolved memory limit; existing queues follow the recalculation and HWM-change contracts below.
 
 If the budget remaining after subtracting manual reservations is less than the sum of the minimums for all automatic directions, Core does not reduce the minimums and sets the insufficient-budget flag. When the budget is sufficient, Core divides the remainder by the number of unique physical queues that have not reached their maximum and repeatedly increases each queue up to its maximum. It assigns division remainders one byte at a time in stable queue ID order. The same registry snapshot and inputs therefore always produce the same result.
 
@@ -502,7 +504,7 @@ This section collects the items that workers must verify. These behaviors are ob
 - Setting a memory limit or manual Core budget larger than a finite hard limit detected by Core fails with `EINVAL`.
 - A valid memory limit or manual Core budget is stored and recalculation is scheduled even when the value is less than the sum of current manual HWMs and automatic minimums. The recalculated snapshot preserves the automatic minimums and sets `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`.
 - Physical memory and the hard limit are detected only once when the context starts. Changing them while the context runs does not trigger detection again.
-- When a new pipe pair's minimum reservation total exceeds the budget but not the resolved memory limit, the attach succeeds, and the recalculated snapshot keeps the automatic minimums and sets `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`.
+- In a configuration where every direction is automatic, when a new pipe pair's minimum reservation total exceeds the budget but not the resolved memory limit, the attach succeeds, and the recalculated snapshot keeps the automatic minimums and sets `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`.
 - A new pair whose minimum reservation total would exceed the resolved memory limit is not registered. A synchronous inproc attach fails with `ENOBUFS`, and a network connection attempt ends without publishing.
 - Calling `zlink_ctx_set_data`/`zlink_ctx_get_data` for an Auto HWM byte option with a size other than exactly `sizeof(uint64_t)` fails with `EINVAL` and leaves the value unchanged.
 - With the same connection configuration and inputs, the snapshot's `effective_core_budget_bytes` is always the same (deterministic).

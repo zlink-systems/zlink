@@ -41,8 +41,13 @@ Core는 다음 입력을 우선순위 순으로 검사해 처음 사용할 수 �
 
 1. 양수 `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`
 2. 양수 `ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`
-3. Core가 감지한 finite hard limit(cgroup v2 `memory.max`, v1 `memory.limit_in_bytes`)
+3. Core가 context 생성 시 감지한 finite process·container hard limit. 감지한 양수 한도가 여러 개면 최솟값
 4. Core가 감지한 physical memory
+
+감지 대상은 Windows Job Object memory limit, finite `RLIMIT_AS`, Linux cgroup memory limit이다.
+Linux에서는 `/proc/self/cgroup`이 가리키는 현재 process의 cgroup과 그 상위 cgroup의 limit(v2
+`memory.max`, v1 `memory.limit_in_bytes`)을 모두 읽고, physical memory보다 작은 양수만 사용한다.
+감지하지 못한 한도는 resolved memory limit에 들어가지 않는다.
 
 2~4 중 처음 사용할 수 있는 값이 **resolved memory limit**이다. 수동 Core budget을 설정해도
 resolved memory limit은 2~4에서 구하며, 아래 **연결 수용** 판정이 이 값을 쓴다.
@@ -140,11 +145,12 @@ endpoint의 값을 더하지 않고 다음 규칙으로 최종 cap 하나를 계
 | 유한 manual 값은 없고 auto가 하나라도 있다 | Water-filling 결과(auto plan) |
 | 둘 다 unlimited manual이다 | Admission은 unlimited, 역할별 상한을 계산용 reservation으로 한 번 사용 |
 
-**연결 수용.** 새 pipe pair는 지금까지 예약된 byte 합계에 이번 쌍의 방향별 하한을 더한 값이
-resolved memory limit 이하일 때만 예약에 성공한다. 이 판정은 budget과 무관하다. Budget은
-queue별 HWM을 나누는 기준이고, 예약 합계가 budget을 넘으면 아래 규칙대로 하한을 유지하고
-budget 부족 flag를 설정한다. 따라서 모든 queue가 자기 하한까지 차도 그 합계는 resolved
-memory limit을 넘지 않는다.
+**연결 수용.** 새 pipe pair는 지금까지 기록된 하한 예약 합계에 이번 쌍의 방향별 하한을 더한
+값이 resolved memory limit 이하일 때만 예약에 성공한다. 판정에는 setter가 저장한 현재 memory
+입력을 쓰고 budget은 쓰지 않는다. Budget 부족 여부는 아래의 수동 예약과 자동 하한 합계
+규칙으로 planner가 판정한다. 이 판정이 제한하는 것은 새 pair를 예약하는 시점의 하한 예약
+합계다. 실행 중 memory limit이나 profile을 바꾸면 기존 queue의 하한 합계가 resolved memory
+limit보다 클 수 있으며, 기존 queue는 아래 재계산·HWM 변경 계약을 따른다.
 
 수동 예약을 뺀 budget이 모든 자동 방향의 하한 합계보다 작으면 하한을 낮추지 않고
 budget 부족 flag를 설정한다. 충분하면 아직 상한에 도달하지 않은 고유 physical queue
@@ -616,7 +622,7 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 - Core가 finite hard limit을 감지한 상태에서 그보다 큰 memory limit이나 수동 Core budget을 설정하면 `EINVAL`이다.
 - 유효한 memory limit이나 수동 Core budget은 현재 수동 HWM과 자동 하한의 합보다 작아도 저장되고 재계산이 예약된다. 재계산된 snapshot은 자동 하한을 유지하고 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다.
 - Physical memory와 hard limit은 context 시작 시 한 번만 감지한다. 실행 중 값을 바꿔도 현재 context는 재감지하지 않는다.
-- 새 pipe pair의 하한 예약 합계가 budget을 넘어도 resolved memory limit 이하이면 attach가 성공하고, 재계산된 snapshot은 자동 하한을 유지하며 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다.
+- 모든 방향이 자동인 구성에서 새 pipe pair의 하한 예약 합계가 budget을 넘어도 resolved memory limit 이하이면 attach가 성공하고, 재계산된 snapshot은 자동 하한을 유지하며 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다.
 - 하한 예약 합계가 resolved memory limit을 넘는 새 pair는 등록되지 않는다. 동기 inproc attach는 `ENOBUFS`로 실패하고, network 연결 시도는 publish 없이 종료된다.
 - Auto HWM byte 옵션을 정확히 `sizeof(uint64_t)`가 아닌 크기로 `zlink_ctx_set_data`/`zlink_ctx_get_data` 호출하면 `EINVAL`이고 값이 바뀌지 않는다.
 - 같은 연결 구성과 입력에서 snapshot의 `effective_core_budget_bytes`는 항상 같다(결정적).
