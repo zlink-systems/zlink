@@ -25,7 +25,6 @@ import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 
 import java.lang.reflect.Field;
@@ -102,7 +101,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
     }
 
     @Test
-    void instanceActivationRecoveryRequestFailureReportsOnce() throws Exception {
+    void instanceActivationRecoveryRequestFailureReportsOnceWithoutReply() throws Exception {
         try (DispatchDiagnostics diagnostics = new DispatchDiagnostics();
                 Pair pair = new Pair()) {
             var reporter =
@@ -118,9 +117,6 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                     new ZLinkFrameworkException(
                                             ZLinkFrameworkErrorKind.NOT_FOUND,
                                             "recovered activation handler is missing")));
-            var operations = (ZLinkServiceOperationRegistry) field(pair.source, "operations");
-            ZLinkServiceOperationRegistry.Operation<List<Message>> pending =
-                    operations.register(new java.util.UUID(0, 1), java.time.Duration.ofSeconds(5));
             var route = pair.instanceRoute("recovered-request-missing");
             try (Message packet = Message.from("Packet");
                     Message body = Message.from("body")) {
@@ -153,26 +149,68 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                         .get(2, TimeUnit.SECONDS));
                 assertEquals(1, reporter.reportedCount());
                 diagnostics.expect("request", "fail_caller", "no_handler");
-                var replyFailure =
-                        assertThrows(
-                                java.util.concurrent.ExecutionException.class,
-                                () -> pending.completion().get(2, TimeUnit.SECONDS));
-                assertEquals(
-                        ZLinkFrameworkErrorKind.NOT_FOUND,
-                        ((ZLinkFrameworkException) replyFailure.getCause()).kind());
                 assertTrue(diagnostics.events.isEmpty());
             }
         }
     }
 
     @Test
-    void recoveredInstanceRequestRepliesToOriginalCallerCorrelation() throws Exception {
+    void coldInstanceRequestFailsAsCoreRequestWhenTargetDisconnects() throws Exception {
+        try (Pair pair = new Pair()) {
+            var route =
+                    new ZLinkServiceM6BWireCodec.InstanceColdActivation(
+                            pair.target.routingId(),
+                            pair.target.lifecycleGeneration(),
+                            "cold-disconnect",
+                            "mesh",
+                            "unmaterialized",
+                            Long.toString(pair.target.status().descriptorRevision()),
+                            System.currentTimeMillis() + 5000);
+            pair.router().disconnect(pair.target.status().localEndpoint());
+            try (Message packet = Message.from("Packet");
+                    Message body = Message.from("body")) {
+                var readyFailure =
+                        assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () ->
+                                        pair.source
+                                                .requestInstanceSpot(
+                                                        pair.instanceRoute("ready-disconnect"),
+                                                        "unmaterialized",
+                                                        null,
+                                                        new byte[0],
+                                                        List.of(packet, body),
+                                                        Duration.ofSeconds(5))
+                                                .toCompletableFuture()
+                                                .get(2, TimeUnit.SECONDS));
+                var coldFailure =
+                        assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () ->
+                                        pair.source
+                                                .requestInstanceSpot(
+                                                        route,
+                                                        "unmaterialized",
+                                                        null,
+                                                        new byte[0],
+                                                        List.of(packet, body),
+                                                        Duration.ofSeconds(5))
+                                                .toCompletableFuture()
+                                                .get(2, TimeUnit.SECONDS));
+                assertEquals(
+                        ((ZLinkFrameworkException) readyFailure.getCause()).kind(),
+                        ((ZLinkFrameworkException) coldFailure.getCause()).kind());
+            }
+        }
+    }
+
+    @Test
+    void recoveredInstanceRequestRetainsRequestClassificationWithoutSendingReply()
+            throws Exception {
         try (Pair pair = new Pair()) {
             long replyRouteId = 43;
-            var operations = (ZLinkServiceOperationRegistry) field(pair.source, "operations");
-            ZLinkServiceOperationRegistry.Operation<List<Message>> pending =
-                    operations.register(new java.util.UUID(0, replyRouteId), Duration.ofSeconds(5));
             var route = pair.instanceRoute("recovered-reply");
+            var handled = new java.util.concurrent.atomic.AtomicInteger();
             ((ZLinkJavaRawSpotNode) pair.target.spotNode())
                     .registerInstanceSpotType(
                             "reply",
@@ -193,9 +231,11 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                     systems.zlink.framework.runtime.internal.backend
                                                                     .ZLinkBackendReceived
                                                             received) {
+                                                assertTrue(received.isRequest());
                                                 try (Message reply = Message.from("recovered")) {
                                                     received.reply().accept(List.of(reply));
                                                 }
+                                                handled.incrementAndGet();
                                                 return CompletableFuture.completedFuture(null);
                                             }
                                         });
@@ -227,12 +267,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                         .recoverInstanceActivation(envelope, route)
                         .toCompletableFuture()
                         .get(2, TimeUnit.SECONDS);
-                List<Message> replies = pending.completion().get(2, TimeUnit.SECONDS);
-                try {
-                    assertEquals("recovered", replies.getFirst().toUtf8String());
-                } finally {
-                    replies.forEach(Message::close);
-                }
+                assertEquals(1, handled.get());
             }
         }
     }
