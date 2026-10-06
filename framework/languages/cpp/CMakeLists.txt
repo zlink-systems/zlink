@@ -1965,6 +1965,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
   add_executable(test_cpp_framework_spot_close_conformance
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp)
   target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)
@@ -2253,6 +2254,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp
     "connector-unit;connector-contract;connector-timeout;connector-protocol"
     contract)
+  foreach(_codec_case reentrant order close reconnect)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_stream_codec_${_codec_case}
+      COMMAND test_cpp_stream_connector codec-${_codec_case}
+      LABELS "connector-unit;connector-contract;connector-regression"
+      TIER unit
+      TIMEOUT 10)
+  endforeach()
   target_compile_definitions(test_cpp_stream_revision PRIVATE
     ZLINK_STREAM_PACKET_NAME_FIXTURE_PATH="${CMAKE_CURRENT_LIST_DIR}/../../test/fixtures/stream-packet-name-whitespace.tsv")
   add_executable(test_cpp_stream_connector_no_exceptions

@@ -142,13 +142,15 @@ namespace
 {
 template <class Port, class Socket>
 void close_client_server_resources (Port &port,
-                                    std::unique_ptr<zlink::poller_t> &poller,
+                                    zlink::poller_t *transport_poller,
                                     std::unique_ptr<zlink::socket_monitor_t> &monitor,
                                     Socket &socket)
 {
     runtime_failure_collector_t failures;
-    failures.capture ([&] { runtime_failure_collector_t::close_resources (port, poller); });
-    if (!poller)
+    failures.capture ([&] { runtime_failure_collector_t::close_resources (port); });
+    // The monitor leaves the transport poller before it closes.
+    if (!monitor || !transport_poller
+        || failures.capture ([&] { (void) transport_poller->remove (*monitor); }))
         failures.capture ([&] { runtime_failure_collector_t::close_resources (monitor); });
     if (!port && !monitor)
         failures.capture ([&] { runtime_failure_collector_t::close_resources (socket); });
@@ -175,7 +177,7 @@ raw_client_server_server_t::~raw_client_server_server_t () noexcept
     if (!_options.runtime_failures->capture ([&] { close (); })) {
         _options.runtime_failures->retain (
           [context = std::move (_context), socket_mutex = std::move (_socket_mutex),
-           socket = std::move (_router), poller = std::move (_monitor_poller),
+           socket = std::move (_router), poller = _options.transport_poller,
            monitor = std::move (_monitor), port = std::move (_port)] () mutable {
               // Keep the native context and the port's borrowed mutex alive.
               (void) context;
@@ -225,12 +227,13 @@ void raw_client_server_server_t::start ()
           }
           ++_options.descriptor.descriptor_revision;
           _options.descriptor.state = mesh::service_node_state_t::serving;
-          auto monitor_poller = std::make_unique<zlink::poller_t> ();
-          monitor_poller->add (*monitor, zlink::poll_event_flag_t::pollin, 1);
+          // Monitor events wake the transport poller's owner; drains read them without waiting.
+          if (_options.transport_poller)
+              _options.transport_poller->add (*monitor, zlink::poll_event_flag_t::pollin,
+                                              _options.transport_monitor_slot);
           _port = std::make_shared<detail::backend::raw_route_port_t> (
             *router, _socket_mutex, zlink::poll_event_flag_t::pollin, _options.transport_poller,
             _options.transport_poller_slot);
-          _monitor_poller = std::move (monitor_poller);
           _monitor = std::move (monitor);
           _router = std::move (router);
           _receive_flow_registration = std::move (receive_flow_registration);
@@ -246,20 +249,20 @@ void raw_client_server_server_t::close ()
                            _mailbox.close ();
                            // _port stays published: off-lane readers (reply, receive) read it, and
                            // the port itself rejects work once closed.
-                           return std::tuple{_port, std::move (_monitor_poller),
-                                             std::move (_monitor), std::move (_router)};
+                           return std::tuple{_port, std::move (_monitor), std::move (_router)};
                        })
                        .get ();
     std::exception_ptr failure;
     try {
-        std::apply ([] (auto &...owned) { close_client_server_resources (owned...); }, resources);
+        close_client_server_resources (std::get<0> (resources), _options.transport_poller,
+                                       std::get<1> (resources), std::get<2> (resources));
     }
     catch (const std::exception &) {
         failure = std::current_exception ();
     }
     _lane
       .run_checked ([this, &resources, &failure] {
-          std::tie (std::ignore, _monitor_poller, _monitor, _router) = std::move (resources);
+          std::tie (std::ignore, _monitor, _router) = std::move (resources);
           _closed = !failure;
       })
       .get ();
@@ -332,22 +335,6 @@ task_t<std::size_t> raw_client_server_server_t::drain_monitor_events_task (
             if (!_monitor || !_monitor->valid ()) {
                 return std::optional<zlink::monitor_event_t>{};
             }
-            if (!_monitor_poller) {
-                return std::optional<zlink::monitor_event_t>{};
-            }
-            zlink::poll_event_t readiness;
-            try {
-                if (_monitor_poller->wait (&readiness, 1, std::chrono::milliseconds::zero ()) != 1
-                    || readiness.slot != 1
-                    || (static_cast<short> (readiness.revents)
-                        & static_cast<short> (zlink::poll_event_flag_t::pollin))
-                         == 0) {
-                    return std::optional<zlink::monitor_event_t>{};
-                }
-            }
-            catch (...) {
-                return std::optional<zlink::monitor_event_t>{};
-            }
             return _monitor->recv (zlink::recv_flags_t::dontwait);
         });
         if (!event) {
@@ -393,7 +380,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
   mesh::service_liveness_registry_t::clock_t::time_point now,
   std::shared_ptr<application_job_queue_t::permit_t> application_permit,
   receive_batch_budget_t *budget,
-  std::vector<mesh::service_mailbox_record_t> *application_records)
+  std::vector<received_application_record_t> *application_records)
 {
     // start() publishes these before receive; updates preserve channel_name,
     // and close() retains _port while in-flight receives finish.
@@ -547,7 +534,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
   detail::backend::raw_received_t received,
   messaging::envelope_header_t envelope,
   std::shared_ptr<application_job_queue_t::permit_t> application_permit,
-  std::vector<mesh::service_mailbox_record_t> *application_records)
+  std::vector<received_application_record_t> *application_records)
 {
     trace_client_server_lazy ("server-received", [&] {
         return "channel=" + envelope.channel_name
@@ -556,8 +543,6 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                + " client=" + routing_id_label (received.source_routing_id) + " reply_token="
                + (received.reply_token ? std::string ("present") : std::string ("-"));
     });
-    if (application_permit)
-        application_permit->mark_queued ();
     mesh::service_mailbox_record_t record{envelope.channel_name,
                                           mesh::service_mailbox_domain_t::application,
                                           std::move (received.parts),
@@ -567,23 +552,25 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                                           0,
                                           std::nullopt,
                                           std::nullopt,
-                                          [permit = std::move (application_permit)] () mutable {
+                                          [permit = application_permit] () mutable {
                                               if (!permit)
                                                   return;
                                               permit->release_for_handler_entry ();
                                               permit.reset ();
                                           }};
+    received_application_record_t received_record{std::move (record),
+                                                  std::move (application_permit)};
     if (application_records) {
-        application_records->push_back (std::move (record));
+        application_records->push_back (std::move (received_record));
         co_return client_server_pump_result_t::application;
     }
-    std::vector<mesh::service_mailbox_record_t> one;
-    one.push_back (std::move (record));
+    std::vector<received_application_record_t> one;
+    one.push_back (std::move (received_record));
     co_return co_await enqueue_application_records (one);
 }
 
 task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_application_records (
-  std::vector<mesh::service_mailbox_record_t> &records)
+  std::vector<received_application_record_t> &records)
 {
     if (records.empty ())
         co_return client_server_pump_result_t::no_data;
@@ -591,13 +578,19 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
     auto results = co_await _lane.run_task ([this, &records] {
         std::vector<client_server_pump_result_t> results;
         results.reserve (records.size ());
-        for (auto &record : records) {
-            if (_connections.find (record.source_routing_id) == _connections.end ())
+        for (auto &received : records) {
+            if (_connections.find (received.record.source_routing_id) == _connections.end ()) {
                 results.push_back (client_server_pump_result_t::protocol_error);
-            else
-                results.push_back (_mailbox.try_enqueue (std::move (record))
-                                     ? client_server_pump_result_t::application
-                                     : client_server_pump_result_t::backpressured);
+            } else if (_mailbox.try_enqueue (std::move (received.record), [&received] {
+                           // From here the admitted record alone owns its permit.
+                           if (received.permit)
+                               received.permit->mark_queued ();
+                           received.permit.reset ();
+                       })) {
+                results.push_back (client_server_pump_result_t::application);
+            } else {
+                results.push_back (client_server_pump_result_t::backpressured);
+            }
         }
         return results;
     });
@@ -607,11 +600,11 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
             result = client_server_pump_result_t::protocol_error;
         } else if (results[index] == client_server_pump_result_t::backpressured) {
             result = client_server_pump_result_t::backpressured;
-            if (records[index].reply_token) {
+            if (records[index].record.reply_token) {
                 const framework_exception_t error (
                   framework_error_kind_t::shutting_down,
                   "ClientServer is shutting down and rejects application work");
-                (void) co_await reply (records[index], error);
+                (void) co_await reply (records[index].record, error);
             }
         }
     }
@@ -784,7 +777,7 @@ raw_client_server_client_t::~raw_client_server_client_t () noexcept
     if (!_options.runtime_failures->capture ([&] { close (); })) {
         _options.runtime_failures->retain (
           [context = std::move (_context), socket_mutex = std::move (_socket_mutex),
-           socket = std::move (_dealer), poller = std::move (_monitor_poller),
+           socket = std::move (_dealer), poller = _options.transport_poller,
            monitor = std::move (_monitor), port = std::move (_port)] () mutable {
               // Keep the native context and the port's borrowed mutex alive.
               (void) context;
@@ -828,11 +821,12 @@ task_t<void> raw_client_server_client_t::start_task ()
         auto monitor = std::make_unique<zlink::socket_monitor_t> (dealer->monitor_open (
           zlink::monitor_event::connection_ready | zlink::monitor_event::disconnected));
         dealer->connect (_options.expected_server.advertised_endpoint);
-        auto monitor_poller = std::make_unique<zlink::poller_t> ();
-        monitor_poller->add (*monitor, zlink::poll_event_flag_t::pollin, 1);
+        // Monitor events wake the transport poller's owner; drains read them without waiting.
+        if (_options.transport_poller)
+            _options.transport_poller->add (*monitor, zlink::poll_event_flag_t::pollin,
+                                            _options.transport_monitor_slot);
         _port = std::make_shared<detail::backend::raw_dealer_port_t> (
           *dealer, _socket_mutex, _options.transport_poller, _options.transport_poller_slot);
-        _monitor_poller = std::move (monitor_poller);
         _monitor = std::move (monitor);
         _dealer = std::move (dealer);
         _receive_flow_registration = std::move (receive_flow_registration);
@@ -847,24 +841,22 @@ void raw_client_server_client_t::close ()
 
 task_t<void> raw_client_server_client_t::close_task ()
 {
-    std::tuple<decltype (_port), decltype (_monitor_poller), decltype (_monitor),
-               decltype (_dealer)>
-      resources;
+    std::tuple<decltype (_port), decltype (_monitor), decltype (_dealer)> resources;
     co_await _lane.run_task ([this, &resources] {
         _receive_flow_registration.close ();
-        resources = std::tuple{std::move (_port), std::move (_monitor_poller), std::move (_monitor),
-                               std::move (_dealer)};
+        resources = std::tuple{std::move (_port), std::move (_monitor), std::move (_dealer)};
         return true;
     });
     std::exception_ptr failure;
     try {
-        std::apply ([] (auto &...owned) { close_client_server_resources (owned...); }, resources);
+        close_client_server_resources (std::get<0> (resources), _options.transport_poller,
+                                       std::get<1> (resources), std::get<2> (resources));
     }
     catch (const std::exception &) {
         failure = std::current_exception ();
     }
     co_await _lane.run_task ([this, &resources, &failure] {
-        std::tie (_port, _monitor_poller, _monitor, _dealer) = std::move (resources);
+        std::tie (_port, _monitor, _dealer) = std::move (resources);
         if (!failure) {
             _ready = false;
             _closed = true;
@@ -903,23 +895,9 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
             std::pair<std::optional<zlink::monitor_event_t>,
                       std::shared_ptr<detail::backend::raw_dealer_port_t>>
               value;
-            if (_monitor && _monitor->valid () && _monitor_poller) {
-                zlink::poll_event_t readiness;
-                bool readable = false;
-                try {
-                    readable =
-                      _monitor_poller->wait (&readiness, 1, std::chrono::milliseconds::zero ()) == 1
-                      && readiness.slot == 1
-                      && (static_cast<short> (readiness.revents)
-                          & static_cast<short> (zlink::poll_event_flag_t::pollin))
-                           != 0;
-                }
-                catch (...) {
-                }
-                if (readable) {
-                    value.first = _monitor->recv (zlink::recv_flags_t::dontwait);
-                    value.second = _port;
-                }
+            if (_monitor && _monitor->valid ()) {
+                value.first = _monitor->recv (zlink::recv_flags_t::dontwait);
+                value.second = _port;
             }
             return value;
         });
@@ -1168,7 +1146,8 @@ task_t<void> raw_client_server_client_t::begin_admission_request (
     auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
       request_control_record (port, std::move (hello_message), client_server_admission_timeout));
     detail::observe_task_completion (
-      *running, [state = replies, running, connection, connection_generation] (
+      *running, [state = replies, running, connection, connection_generation,
+                 parked = _options.control_reply_parked] (
                   const result_t<detail::backend::raw_request_completion_t> &settled) {
           trace_client_server_lazy ("client-admission-complete", [&] {
               return std::string ("settled=") + (settled ? "true" : "false")
@@ -1177,7 +1156,7 @@ task_t<void> raw_client_server_client_t::begin_admission_request (
                                     + " parts=" + std::to_string (settled.value ().parts.size ())
                                 : std::string ());
           });
-          (void) state->lane.try_post ([state, connection, connection_generation, settled] {
+          (void) state->lane.try_post ([state, connection, connection_generation, settled, parked] {
               state->admission_in_flight = false;
               if (settled) {
                   state->admission.emplace (control_reply_state_t::parked_reply_t{
@@ -1188,6 +1167,8 @@ task_t<void> raw_client_server_client_t::begin_admission_request (
                     detail::backend::raw_request_completion_t{
                       zlink::request_result_t::internal_error, {}}});
               }
+              if (parked)
+                  parked ();
           });
       });
 }
@@ -1207,15 +1188,18 @@ task_t<void> raw_client_server_client_t::begin_probe_request (
       std::make_shared<task_t<detail::backend::raw_request_completion_t>> (request_control_record (
         port, std::move (probe_message), client_server_probe_request_timeout));
     detail::observe_task_completion (
-      *running, [state = _control_replies, running, probe_id, connection, connection_generation] (
+      *running, [state = _control_replies, running, probe_id, connection, connection_generation,
+                 parked = _options.control_reply_parked] (
                   const result_t<detail::backend::raw_request_completion_t> &settled) {
           if (!settled)
               return;
           (void) state->lane.try_post (
-            [state, probe_id, connection, connection_generation, settled] {
+            [state, probe_id, connection, connection_generation, settled, parked] {
                 state->probes.emplace_back (
                   probe_id, control_reply_state_t::parked_reply_t{connection, connection_generation,
                                                                   settled.value ()});
+                if (parked)
+                    parked ();
             });
       });
 }

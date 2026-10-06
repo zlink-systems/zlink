@@ -367,6 +367,8 @@ internal sealed class ZLinkActorRuntimeState(
     {
         Context?.UpdateSameNodeSpot(activation.SpotId);
         Activation = activation;
+        if (activation.ExecutionMode == ZLinkUserSpotExecutionMode.SpotWide)
+            _dispatchMailbox.BindExecutionOwner(() => Activation?._serial.ActorIngressOwner);
         EnsureActorMetric();
     }
 
