@@ -1005,7 +1005,9 @@ final class ZLinkJavaRawMeshNode
             if (removed.expectedRoutingId() != null) {
                 notRequiredPeers.remove(removed.expectedRoutingId());
                 rejectedPeers.remove(removed.expectedRoutingId());
-                disconnectAdmitted(removed.expectedRoutingId());
+                disconnectAdmitted(
+                        removed.expectedRoutingId(),
+                        admittedConnectionId(removed.expectedRoutingId()));
                 forgetKnownPeerChannelsIfUntracked(removed.expectedRoutingId());
             }
             RoutingId announcementRid =
@@ -6806,7 +6808,9 @@ final class ZLinkJavaRawMeshNode
                 return;
             }
             if (routeMeshConnectionNotRequired(localDescriptor, descriptor)) {
-                boolean disconnected = disconnectAdmitted(inbound.source());
+                boolean disconnected =
+                        disconnectAdmitted(
+                                inbound.source(), admittedConnectionId(inbound.source()));
                 admissionControlReadyConnections.remove(inbound.source());
                 boolean becameNotRequired = notRequiredPeers.add(inbound.source());
                 if (command == ServiceWireConstants.COMMAND_HELLO) {
@@ -7022,7 +7026,7 @@ final class ZLinkJavaRawMeshNode
         previous.forEach(
                 (peerRid, generation) -> {
                     if (!generation.equals(observed.get(peerRid))) {
-                        endRouteAdmission(peerRid);
+                        endRouteAdmission(peerRid, generation);
                     }
                 });
         finishRequestedIntentCloses();
@@ -7036,12 +7040,16 @@ final class ZLinkJavaRawMeshNode
     /**
      * The selected route that established admission has ended. Core owns endpoint reconnect while
      * the intent remains (transport-liveness §6). Clear the submitted generation so the next
-     * selected route receives HELLO once. An intent without an expected RID resolves it through the
-     * new handshake.
+     * selected route receives HELLO once. Only the ended route loses admission; a replacing route
+     * may already have completed its handshake before this observation. An intent without an
+     * expected RID resolves it through the new handshake.
      */
-    private void endRouteAdmission(RoutingId peerRid) {
-        disconnectAdmitted(peerRid);
-        announcedRouteGenerations.remove(peerRid);
+    private void endRouteAdmission(RoutingId peerRid, long generation) {
+        announcedRouteGenerations.remove(peerRid, generation);
+        if (!disconnectAdmitted(peerRid, routeConnectionId(generation))
+                && topology.peer(peerRid).isPresent()) {
+            return;
+        }
         peerIntents.forEach(
                 (intentId, intent) -> {
                     if (intent.expectedRoutingId() == null) {
@@ -7192,7 +7200,8 @@ final class ZLinkJavaRawMeshNode
         tick.timedOutNodes()
                 .forEach(
                         peer -> {
-                            if (disconnectAdmitted(peer)) signalStateChanged(peer);
+                            if (disconnectAdmitted(peer, admittedConnectionId(peer)))
+                                signalStateChanged(peer);
                         });
     }
 
@@ -7239,12 +7248,11 @@ final class ZLinkJavaRawMeshNode
     }
 
     /** Ends the peer's logical admission on the route it was admitted on. */
-    private boolean disconnectAdmitted(RoutingId peer) {
-        admissionControlReadyConnections.remove(peer);
-        String connectionId = admittedConnectionId(peer);
+    private boolean disconnectAdmitted(RoutingId peer, String connectionId) {
         if (connectionId.isEmpty() || !topology.disconnect(peer, connectionId)) {
             return false;
         }
+        admissionControlReadyConnections.remove(peer, connectionId);
         liveness.disconnect(peer, connectionId);
         return true;
     }
