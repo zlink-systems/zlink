@@ -22,7 +22,6 @@ const channelProtocol = require('../../packages/framework/dist/runtime/channels/
 const {
   holdTcpEndpoint,
   providerTokens,
-  reserveTcpEndpoint,
   resolveModuleProviders
 } = require('./helpers/nestjs-test-utils');
 
@@ -529,7 +528,6 @@ test('ZLinkModule.forRoot maps zlinkRequestHandler providers from NestJS DI', as
 });
 
 test('public channel request releases all Nest filters when one release fails', async () => {
-  const endpoint = await reserveTcpEndpoint();
   const released = [];
   class FirstFilter {
     invoke(_context, next) {
@@ -558,7 +556,7 @@ test('public channel request releases all Nest filters when one release fails', 
   builder
     .addClientServerChannel('node-scope')
     .server()
-    .listen(Number(new URL(endpoint).port))
+    .listen()
     .addRequestHandler('ScopeRequest', ScopeHandler);
   class ScopeModule {}
   Module({
@@ -569,6 +567,9 @@ test('public channel request releases all Nest filters when one release fails', 
     logger: false,
     abortOnError: false
   });
+  const endpoint = app
+    .get(nestjs.ZLINK_FRAMEWORK_RUNTIME)
+    .getListenerStatus('clientServer', 'node-scope').endpoint;
   const registration = framework.createFrameworkRegistration({
     channels: { 'node-scope': { client: { manualConnections: [endpoint] } } }
   });
@@ -586,7 +587,6 @@ test('public channel request releases all Nest filters when one release fails', 
 });
 
 test('request-scoped handler filters share the channel dispatch scope with the handler', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
   let dispatchSequence = 0;
   let singletonFilterSequence = 0;
   let singletonHandlerSequence = 0;
@@ -670,7 +670,7 @@ test('request-scoped handler filters share the channel dispatch scope with the h
   const frameworkOptions = nestjs.zlinkFramework()
     .options({ filters: [RequestScopeFilter, SingletonFilter] });
   const apiChannel = frameworkOptions.addClientServerChannel('api');
-  apiChannel.server().listen(Number(new URL(apiEndpoint).port)).addHandlerGroup('api');
+  apiChannel.server().listen().addHandlerGroup('api');
 
   class HandlerModule {}
   Module({
@@ -685,6 +685,9 @@ test('request-scoped handler filters share the channel dispatch scope with the h
   })(HandlerModule);
 
   const app = await NestFactory.createApplicationContext(HandlerModule, { logger: false, abortOnError: false });
+  const apiEndpoint = app
+    .get(nestjs.ZLINK_FRAMEWORK_RUNTIME)
+    .getListenerStatus('clientServer', 'api').endpoint;
   const clientRegistration = framework.createFrameworkRegistration({
     channels: { api: { client: { manualConnections: [apiEndpoint] } } }
   });
