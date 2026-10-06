@@ -701,10 +701,13 @@ internal abstract partial class ZLinkSpotActivation
                     await turn.YieldFrameworkCallAsync(
                             async token =>
                             {
-                                await completion.Task.ConfigureAwait(false);
+                                await completion.Task.WaitAsync(ct).ConfigureAwait(false);
                                 await recordTerminal(token).ConfigureAwait(false);
                             },
-                            ct
+                            // The accepted terminal record owns its Store completion. Spot
+                            // cancellation must not release this lifecycle item while that
+                            // completion can still mutate the authority being cleaned up.
+                            CancellationToken.None
                         )
                         .ConfigureAwait(false);
                     return true;
