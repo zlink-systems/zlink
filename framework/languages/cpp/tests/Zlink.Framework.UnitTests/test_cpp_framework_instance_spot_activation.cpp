@@ -8,6 +8,7 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
+#include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
@@ -517,6 +518,132 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingRequestUsesDefaultTimeoutForC
 
     EXPECT_FALSE (result);
     EXPECT_EQ (std::chrono::seconds (30), observed_timeout);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, ColdTypeClassificationUsesServingCapabilities)
+{
+    using namespace std::chrono_literals;
+    namespace fw = zlink::framework;
+    struct case_t
+    {
+        const char *name;
+        int weight;
+        int spot_limit;
+        int type_limit;
+        bool second_type;
+        bool fill_first;
+        std::optional<std::string> requested_type;
+        fw::framework_error_kind_t expected;
+    };
+    const std::vector<case_t> cases{
+      {"absent", 100, 0, 0, false, false, "absent", fw::framework_error_kind_t::not_found},
+      {"weight-zero", 0, 0, 0, false, false, "traced-player",
+       fw::framework_error_kind_t::unavailable},
+      {"aggregate-full", 100, 1, 0, false, true, "traced-player",
+       fw::framework_error_kind_t::unavailable},
+      {"per-type-full", 100, 0, 1, false, true, "traced-player",
+       fw::framework_error_kind_t::unavailable},
+      {"multiple-types-after-full", 100, 1, 0, true, true, std::nullopt,
+       fw::framework_error_kind_t::invalid_operation}};
+
+    for (const auto &test_case : cases) {
+        SCOPED_TRACE (test_case.name);
+        auto app = fw::app_t::create ();
+        auto &options = app.add_zlink_framework ();
+        options.add_location_store (std::make_shared<fw::runtime::in_memory_location_store_t> ());
+        options.add_relocation_store (
+          std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+        options.configure_locations ().polling_interval = 10ms;
+        auto mesh = options.add_route_mesh ("cold-type-classification");
+        mesh.set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from ("cold-type-node"))
+          .listen ("tcp://127.0.0.1:0")
+          .set_placement_weight (test_case.weight);
+        if (test_case.spot_limit != 0)
+            mesh.set_spot_limit (test_case.spot_limit);
+        mesh.add_instance_spot_factory<traced_instance_spot_t> (
+          "traced-player",
+          [] (fw::instance_spot_context_t context) {
+              return std::make_shared<traced_instance_spot_t> (std::move (context));
+          },
+          [limit = test_case.type_limit] (auto &factory) {
+              if (limit)
+                  factory.set_stable_type_limit (limit);
+              factory.disable_relocation ();
+          });
+        if (test_case.second_type) {
+            mesh.add_instance_spot_factory<traced_instance_spot_t> (
+              "other-player",
+              [] (fw::instance_spot_context_t context) {
+                  return std::make_shared<traced_instance_spot_t> (std::move (context));
+              },
+              [] (auto &factory) { factory.disable_relocation (); });
+        }
+        char command[] = "cold-type-classification";
+        char *argv[] = {command};
+        int exit_code = -1;
+        std::thread host ([&] { exit_code = app.run (1, argv); });
+        auto cleanup =
+          std::unique_ptr<fw::app_t, std::function<void (fw::app_t *)>> (&app, [&] (auto *) {
+              app.stop ();
+              host.join ();
+          });
+        const auto ready_deadline = std::chrono::steady_clock::now () + 5s;
+        while (!app.is_ready () && std::chrono::steady_clock::now () < ready_deadline)
+            std::this_thread::yield ();
+        ASSERT_TRUE (app.is_ready ());
+        auto provider = app.advanced ().services ().build_provider ();
+        auto &client = provider.get_required<fw::route_client_t> ();
+        if (test_case.fill_first) {
+            const auto first =
+              client.request_to_spot ("filled-spot", traced_request_t{1})
+                .instance_spot (test_case.second_type ? "other-player" : "traced-player")
+                .in_mesh ("cold-type-classification")
+                .timeout (3s)
+                .async<traced_reply_t> ()
+                .result_for (4s);
+            ASSERT_TRUE (first.has_value ());
+            ASSERT_TRUE (*first) << (first->error () ? first->error ()->what () : "");
+            const auto capacity_deadline = std::chrono::steady_clock::now () + 5s;
+            bool published_full = false;
+            std::string last_capacity;
+            while (!published_full && std::chrono::steady_clock::now () < capacity_deadline) {
+                const auto listed =
+                  provider.get_required<fw::runtime::store_location_resolvers_t> ()
+                    .list_live_mesh_nodes ("cold-type-classification")
+                    .result ();
+                published_full = listed && !listed.value ().empty ()
+                                 && listed.value ().front ().capacity.spots.active == 1;
+                if (listed && !listed.value ().empty ()) {
+                    const auto &capacity = listed.value ().front ().capacity;
+                    last_capacity = std::to_string (capacity.spots.limit) + ":"
+                                    + std::to_string (capacity.spots.active) + ":"
+                                    + std::to_string (capacity.spots.reserved);
+                }
+                if (!published_full)
+                    std::this_thread::yield ();
+            }
+            ASSERT_TRUE (published_full) << last_capacity;
+        }
+        const auto reply = test_case.requested_type
+                             ? client.request_to_spot ("probe-spot", traced_request_t{2})
+                                 .instance_spot (*test_case.requested_type)
+                                 .in_mesh ("cold-type-classification")
+                                 .timeout (3s)
+                                 .async<traced_reply_t> ()
+                                 .result_for (4s)
+                             : client.request_to_spot ("probe-spot", traced_request_t{2})
+                                 .instance_spot ()
+                                 .in_mesh ("cold-type-classification")
+                                 .timeout (3s)
+                                 .async<traced_reply_t> ()
+                                 .result_for (4s);
+        ASSERT_TRUE (reply.has_value ());
+        ASSERT_FALSE (*reply);
+        EXPECT_EQ (test_case.expected, reply->error_kind ());
+        cleanup.reset ();
+        EXPECT_EQ (0, exit_code);
+    }
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation,

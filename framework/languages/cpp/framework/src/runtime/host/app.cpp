@@ -1751,34 +1751,9 @@ void app_t::_apply_zlink_framework ()
                   listed, "Instance Spot target lookup failed");
             for (auto &descriptor : listed.value ()) {
                 if (descriptor.state != framework_runtime_state_t::serving
-                    || descriptor.object_role != object_role_t::server
-                    || descriptor.placement_weight <= 0)
+                    || descriptor.object_role != object_role_t::server)
                     continue;
-                visible_targets.push_back (descriptor);
-                const auto capable = std::any_of (
-                  descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
-                  [&] (const auto &capability) {
-                      return capability.object_kind == placement_object_kind_t::instance_spot
-                             && (!intent.stable_type
-                                 || capability.stable_type == *intent.stable_type);
-                  });
-                const auto spot_capacity = descriptor.capacity.spots;
-                const auto typed_capacity = std::find_if (
-                  descriptor.capacity.spot_types.begin (), descriptor.capacity.spot_types.end (),
-                  [&] (const auto &typed) {
-                      return typed.object_kind == placement_object_kind_t::instance_spot
-                             && intent.stable_type && typed.stable_type == *intent.stable_type;
-                  });
-                const auto typed_available =
-                  !intent.stable_type || typed_capacity == descriptor.capacity.spot_types.end ()
-                  || typed_capacity->usage.limit == 0
-                  || typed_capacity->usage.active + typed_capacity->usage.reserved
-                       < static_cast<std::uint64_t> (typed_capacity->usage.limit);
-                if (capable && typed_available
-                    && (spot_capacity.limit == 0
-                        || spot_capacity.active + spot_capacity.reserved
-                             < static_cast<std::uint64_t> (spot_capacity.limit)))
-                    candidates.push_back (std::move (descriptor));
+                visible_targets.push_back (std::move (descriptor));
             }
             const auto authority =
               co_await location_store.read_authority (runtime::spot_authority_key (spot_id));
@@ -1803,47 +1778,50 @@ void app_t::_apply_zlink_framework ()
                 co_return result_t<selected_instance_target_t>::failure (
                   framework_error_kind_t::unavailable, "Ready Instance Spot owner is unavailable");
             }
-            if (candidates.empty ())
-                co_return result_t<selected_instance_target_t>::failure (
-                  framework_error_kind_t::not_found, "No eligible Instance Spot target is Ready");
             std::set<std::string> stable_types;
-            for (const auto &candidate : candidates)
+            for (const auto &candidate : visible_targets)
                 for (const auto &capability : candidate.object_capabilities)
                     if (capability.object_kind == placement_object_kind_t::instance_spot
                         && (!intent.stable_type || capability.stable_type == *intent.stable_type))
                         stable_types.insert (capability.stable_type);
+            if (stable_types.empty ())
+                co_return result_t<selected_instance_target_t>::failure (
+                  framework_error_kind_t::not_found, "No Instance Spot target provides the type");
             if (!intent.stable_type && stable_types.size () != 1)
                 co_return result_t<selected_instance_target_t>::failure (
-                  framework_error_kind_t::not_configured,
+                  framework_error_kind_t::invalid_operation,
                   "Instance Spot stable type is required when the Mesh publishes multiple types");
             const auto stable_type =
               intent.stable_type ? *intent.stable_type : *stable_types.begin ();
-            candidates.erase (
-              std::remove_if (
-                candidates.begin (), candidates.end (),
-                [&] (const auto &candidate) {
-                    const auto capable = std::any_of (
-                      candidate.object_capabilities.begin (), candidate.object_capabilities.end (),
-                      [&] (const auto &capability) {
-                          return capability.object_kind == placement_object_kind_t::instance_spot
-                                 && capability.stable_type == stable_type;
-                      });
-                    const auto typed = std::find_if (
-                      candidate.capacity.spot_types.begin (), candidate.capacity.spot_types.end (),
-                      [&] (const auto &capacity) {
-                          return capacity.object_kind == placement_object_kind_t::instance_spot
-                                 && capacity.stable_type == stable_type;
-                      });
-                    return !capable
-                           || (typed != candidate.capacity.spot_types.end ()
-                               && typed->usage.limit > 0
-                               && typed->usage.active + typed->usage.reserved
-                                    >= static_cast<std::uint64_t> (typed->usage.limit));
-                }),
-              candidates.end ());
+            for (const auto &candidate : visible_targets) {
+                if (candidate.placement_weight <= 0)
+                    continue;
+                const auto capable = std::any_of (
+                  candidate.object_capabilities.begin (), candidate.object_capabilities.end (),
+                  [&] (const auto &capability) {
+                      return capability.object_kind == placement_object_kind_t::instance_spot
+                             && capability.stable_type == stable_type;
+                  });
+                const auto typed = std::find_if (
+                  candidate.capacity.spot_types.begin (), candidate.capacity.spot_types.end (),
+                  [&] (const auto &capacity) {
+                      return capacity.object_kind == placement_object_kind_t::instance_spot
+                             && capacity.stable_type == stable_type;
+                  });
+                const auto &spots = candidate.capacity.spots;
+                const auto spots_full =
+                  spots.limit > 0
+                  && spots.active + spots.reserved >= static_cast<std::uint64_t> (spots.limit);
+                const auto type_full = typed != candidate.capacity.spot_types.end ()
+                                       && typed->usage.limit > 0
+                                       && typed->usage.active + typed->usage.reserved
+                                            >= static_cast<std::uint64_t> (typed->usage.limit);
+                if (capable && !spots_full && !type_full)
+                    candidates.push_back (candidate);
+            }
             if (candidates.empty ())
                 co_return result_t<selected_instance_target_t>::failure (
-                  framework_error_kind_t::not_found,
+                  framework_error_kind_t::unavailable,
                   "No eligible Instance Spot target has capacity");
             const auto index = std::hash<std::string>{}(std::string (spot_id)) % candidates.size ();
             co_return result_t<selected_instance_target_t>::success (
