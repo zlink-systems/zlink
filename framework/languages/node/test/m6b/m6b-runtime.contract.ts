@@ -5902,7 +5902,7 @@ test('production Instance Ready commit Store rejection is exposed as RequestFail
   );
 });
 
-test('concurrent Instance activation CAS loser joins Ready and returns the winner route', async () => {
+test('concurrent Instance activation CAS loser returns Unavailable without waiting or routing to the winner', async () => {
   const store = new ZLinkInMemoryAuthorityStore({ isTargetLive: () => true });
   const roots = new Map<string, Buffer>();
   const relocationStore: ZLinkRelocationStore = {
@@ -5973,33 +5973,17 @@ test('concurrent Instance activation CAS loser joins Ready and returns the winne
     ...activation,
     target: loserTarget
   });
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  const creating = await store.readAuthority(
+  await assert.rejects(
+    () => loser,
+    (error: unknown) =>
+      error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.Unavailable
+  );
+  const stillReserved = await store.readAuthority(
     encodeAuthorityKey('instance_spot', winnerTarget.targetSpotId)
   );
-  assert.equal(creating.kind, 'snapshot');
-  if (creating.kind !== 'snapshot') throw new Error('Winner reservation is missing.');
-  const committed = await winnerAuthority.commit(winnerTarget, winner.reservation, {
-    kind: 'instance',
-    stableType: winnerTarget.stableType,
-    ref: {
-      spotId: winnerTarget.targetSpotId,
-      generation: winner.reservation.attempt
-    },
-    authorityOwnerGeneration: creating.authorityOwnerGeneration
-  } as never);
-  assert.equal(committed.kind, 'committed');
-
-  const joined = await loser;
-  assert.equal(joined.kind, 'ready');
-  if (joined.kind !== 'ready') throw new Error('CAS loser did not join Ready.');
-  assert.equal(joined.route.targetNodeRid, winnerTarget.targetNodeRid);
-  assert.equal(joined.route.targetNodeGeneration, winnerTarget.targetNodeGeneration);
-  assert.equal(joined.route.storeVersion, committed.route.storeVersion);
-  assert.ok(
-    new ServiceInstanceActivationRedirectError(joined.route) instanceof
-      ServiceInstanceActivationRedirectError
-  );
+  assert.equal(stillReserved.kind, 'snapshot');
+  if (stillReserved.kind !== 'snapshot') throw new Error('Winner reservation is missing.');
+  assert.equal(stillReserved.allocation.state, 'reserved');
   assert.equal(roots.size, 2);
 });
 
