@@ -2679,10 +2679,10 @@ export class ServiceStatefulRuntime {
   private instanceApplicationTerminalCompletion(
     target: ServiceInstanceApplicationTarget
   ): (() => Promise<void>) | undefined {
-    if (this.instanceApplicationLifecycle === undefined) return undefined;
+    const lifecycle = this.instanceApplicationLifecycle;
+    if (lifecycle === undefined) return undefined;
     return async () => {
-      const authorityReleased =
-        (await this.instanceApplicationLifecycle?.completeTerminal(target)) ?? false;
+      const authorityReleased = await lifecycle.completeTerminal(target);
       if (!authorityReleased) return;
       const current = this.instanceIntents.get(target.targetSpotId);
       if (
