@@ -124,12 +124,6 @@ export class ContextBase extends NativeHandle {
     this.options = ContextOptions.create(this);
   }
 
-  shutdown(): void {
-    closeCall('context shutdown failed', () => {
-      requireNative().ctxShutdown(this._native);
-    });
-  }
-
   recalculateAutoHwm(): void {
     configCall('context auto HWM recalculation failed', () => {
       requireNative().ctxRecalculateAutoHwm(this._native);
@@ -160,11 +154,6 @@ export class ContextBase extends NativeHandle {
 export class Context extends ContextBase {
   constructor() {
     super(configCall('context creation failed', () => requireNative().ctxNew()));
-    const heapLimitBytes = BigInt(Math.trunc(getHeapStatistics().heap_size_limit));
-    if (heapLimitBytes > 0n) {
-      setContextUInt64(this, ContextOption.AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES,
-        heapLimitBytes, 'runtimeMemoryLimitBytes');
-    }
   }
 
   shutdown(): void {
