@@ -191,7 +191,6 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                     Type actorType,
                     out ZLinkSpotActorLifecycleDescriptor? descriptor
                 ) => activation.TryResolveActorJoined(actorType, out descriptor),
-                acquireActorTurn: true,
                 throwOnFailure: false,
                 cancellationToken
             )
@@ -214,7 +213,6 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                     Type actorType,
                     out ZLinkSpotActorLifecycleDescriptor? descriptor
                 ) => activation.TryResolveActorJoined(actorType, out descriptor),
-                acquireActorTurn: false,
                 throwOnFailure: true,
                 cancellationToken
             )
@@ -264,7 +262,6 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                     Type actorType,
                     out ZLinkSpotActorLifecycleDescriptor? descriptor
                 ) => activation.TryResolveActorLeft(actorType, out descriptor),
-                acquireActorTurn: false,
                 throwOnFailure: true,
                 cancellationToken
             )
@@ -306,7 +303,6 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
         IZLinkActor actor,
         RoutingId? targetNodeRid,
         TryResolveLifecycle resolve,
-        bool acquireActorTurn,
         bool throwOnFailure,
         CancellationToken cancellationToken
     )
@@ -317,7 +313,6 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                 null,
                 targetNodeRid,
                 resolve,
-                acquireActorTurn,
                 throwOnFailure,
                 cancellationToken
             )
@@ -330,7 +325,6 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
         ZLinkMessage? request,
         RoutingId? targetNodeRid,
         TryResolveLifecycle resolve,
-        bool acquireActorTurn,
         bool throwOnFailure,
         CancellationToken cancellationToken
     )
@@ -349,13 +343,7 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                     && descriptor is not null
                 )
                     await activation
-                        .InvokeActorLifecycleAsync(
-                            descriptor,
-                            actor,
-                            request,
-                            acquireActorTurn,
-                            cancellationToken
-                        )
+                        .InvokeActorLifecycleAsync(descriptor, actor, request, cancellationToken)
                         .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

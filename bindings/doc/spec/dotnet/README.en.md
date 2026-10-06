@@ -420,10 +420,7 @@ public partial class CommonSocketOptions
 }
 ```
 
-Input precedence is manual Core budget, explicit memory limit, the available-
-memory limit reported by .NET GC, then Core fallback. Setting either of the
-first two values disables automatic GC-hint detection. The binding does not
-combine the hint with Core's hard limit. If an explicit input exceeds a finite
+If an explicit input exceeds a finite
 hard limit Core detected, the binding preserves the existing configuration
 exception corresponding to `EINVAL` and does not clamp the value.
 
@@ -441,7 +438,7 @@ forwarded unchanged. There is no message-count overload or alias.
 - Pending bytes are exposed separately as `SndPendingBytes` and `RcvPendingBytes`.
 - If a snapshot's `AbiVersion` is not `4`, or its `StructSize` differs from the binding layout, it throws `NotSupportedException`. An older monitoring layout is not accepted.
 
-`CoreHwmBudgetSnapshot` projects ABI version/size, configured/runtime/resolved
+`CoreHwmBudgetSnapshot` projects ABI version/size, configured/resolved
 memory limits, configured/effective budgets, planned/applied/manual-reserved
 HWM, Core-queue/application/current/peak/provisional accounted bytes,
 completion current/peak/pending and total-messaging values, monitor/instance

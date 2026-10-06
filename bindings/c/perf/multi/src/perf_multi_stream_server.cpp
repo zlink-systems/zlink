@@ -170,9 +170,29 @@ int main (int argc, char **argv)
 
     std::cout << "READY," << endpoint << std::endl;
     // The runner sends this START only after the raw client has connected every
-    // requested session and completed the size update. Keep context/socket APIs
-    // on this thread; it becomes the server event-loop owner immediately below.
-    if (!perf_multi_handshake::wait_for_start_from_stdin (msg_size)) {
+    // requested session and completed the size update. Read stdin separately so
+    // this owner thread can drain the bounded monitor throughout connection.
+    std::atomic<bool> start_received (false);
+    bool start_ok = false;
+    std::thread start_reader ([&] {
+        start_ok = perf_multi_handshake::wait_for_start_from_stdin (msg_size);
+        start_received.store (true, std::memory_order_release);
+    });
+    bool monitor_ok = true;
+    while (!start_received.load (std::memory_order_acquire)) {
+        if (poll_connect_ready_count (connect_monitor) >= settings.clients)
+            break;
+        if (connect_monitor.state->error_code != 0)
+            break;
+        zlink_pollitem_t item = {connect_monitor.monitor, 0, ZLINK_POLLIN, 0};
+        const int rc = perf_socket_poll (&item, 1, 50);
+        if (rc < 0 && zlink_errno () != EINTR) {
+            monitor_ok = false;
+            break;
+        }
+    }
+    start_reader.join ();
+    if (!start_ok || !monitor_ok) {
         close_connect_monitor (connect_monitor);
         const zlink_close_result_t close_result = close_stream_server_fenced (server);
         if (close_result == ZLINK_CLOSE_OK)

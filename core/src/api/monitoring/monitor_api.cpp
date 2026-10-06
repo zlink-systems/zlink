@@ -190,10 +190,6 @@ zlink_close_result_t zlink_monitor_close (void **monitor_p_)
         }
     }
 
-    //  Monitor recv/close are caller-serialized. Stop the pull socket before
-    //  handing it to the common close path; there is no callback worker to
-    //  detach or defer.
-    socket->stop ();
     handle = socket_handle_t ();
     const zlink_close_result_t rc = zlink_close (monitor);
     if (raw_source_monitor_socket) {

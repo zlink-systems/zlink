@@ -524,10 +524,10 @@ class FrameworkVersionAgreementTest(unittest.TestCase):
     def test_packages_json_declares_all_supported_framework_versions(self):
         packages = json.loads((Path(__file__).resolve().parents[1] / "schema/packages.json").read_text())
         self.assertEqual(set(packages), {"dotnet", "cpp", "java", "kotlin", "node"})
-        # The C++ driver moved to the 0.28.0 package (#1466); the other drivers follow in their own changes.
-        self.assertEqual({language: declared_framework_version(language) for language in packages},
-                         {"dotnet": "0.26.0", "cpp": "0.28.0", "java": "0.26.0", "kotlin": "0.26.0", "node": "0.26.0"})
-        self.assertEqual(agreed_framework_version("0.26.0", declared_framework_version("dotnet")), "0.26.0")
+        declared = {declared_framework_version(language) for language in packages}
+        self.assertEqual(len(declared), 1)
+        version = declared.pop()
+        self.assertEqual(agreed_framework_version(version, declared_framework_version("dotnet")), version)
 
     def test_observed_package_version_mismatch_fails(self):
         with self.assertRaises(RuntimeError):
@@ -541,7 +541,8 @@ class FrameworkVersionAgreementTest(unittest.TestCase):
                                    package_source="local")
             with patch("runner.subprocess.run", return_value=SimpleNamespace(returncode=0)) as run:
                 build(args, ["Client"])
-        self.assertEqual(run.call_args.kwargs["env"]["ZLINK_PERF_FRAMEWORK_VERSION"], "0.26.0")
+        self.assertEqual(run.call_args.kwargs["env"]["ZLINK_PERF_FRAMEWORK_VERSION"],
+                         declared_framework_version("dotnet"))
         self.assertEqual(run.call_args.kwargs["env"]["ZLINK_PERF_PACKAGE_SOURCE"], "local")
 
     def test_jvm_launchers_build_through_the_java_perf_build_script(self):

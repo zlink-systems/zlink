@@ -11,7 +11,7 @@ if [[ "$ZLINK_CORE_VERSION" != "$ZLINK_REPOSITORY_VERSION" && "${ZLINK_CORE_ALLO
   echo "ZLINK_CORE_RELEASE_VERSION $ZLINK_CORE_VERSION must match repository VERSION $ZLINK_REPOSITORY_VERSION" >&2
   return 2 2>/dev/null || exit 2
 fi
-ZLINK_CORE_MAJOR="${ZLINK_CORE_VERSION%%.*}"
+ZLINK_CORE_ABI_SOVERSION="$(awk -F= '/^LIBZLINK_ABI_SOVERSION=/{print $2}' "${ZLINK_VERSION_FILE}")"
 ZLINK_CORE_RELEASE_MODE=0
 ZLINK_CORE_PACKAGE_PREFIX="${ZLINK_CORE_PACKAGE_PREFIX:-}"
 
@@ -114,11 +114,11 @@ zlink_sync_linux_native_dir() {
   zlink_has_local_core_runtime || return 0
 
   rm -f "${native_dir}/libzlink.so" \
-    "${native_dir}/libzlink.so.${ZLINK_CORE_MAJOR}" \
+    "${native_dir}/libzlink.so.${ZLINK_CORE_ABI_SOVERSION}" \
     "${native_dir}/libzlink.so."*
   cp -f "${ZLINK_LOCAL_CORE_RUNTIME}" "${native_dir}/libzlink.so.${ZLINK_CORE_VERSION}"
-  ln -sfn "libzlink.so.${ZLINK_CORE_VERSION}" "${native_dir}/libzlink.so.${ZLINK_CORE_MAJOR}"
-  ln -sfn "libzlink.so.${ZLINK_CORE_MAJOR}" "${native_dir}/libzlink.so"
+  ln -sfn "libzlink.so.${ZLINK_CORE_VERSION}" "${native_dir}/libzlink.so.${ZLINK_CORE_ABI_SOVERSION}"
+  ln -sfn "libzlink.so.${ZLINK_CORE_ABI_SOVERSION}" "${native_dir}/libzlink.so"
 }
 
 zlink_sync_linux_native_dirs_by_find() {

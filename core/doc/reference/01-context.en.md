@@ -99,7 +99,7 @@ zlink_ctx_set_data(ctx, ZLINK_THREAD_NAME_PREFIX, prefix, strlen(prefix) + 1);
 ```
 
 **Parameters.** `option_` is one of the Auto HWM byte options
-`ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`, `ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES`,
+`ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`,
 `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`, or `ZLINK_THREAD_NAME_PREFIX`. Byte options require
 exactly `sizeof(uint64_t)` bytes; `0` leaves the corresponding explicit value unset. The name
 prefix is a null-terminated string of at most 16 bytes, including its terminator.
@@ -154,7 +154,7 @@ zlink_ctx_reset_auto_hwm_budget_metrics(ctx);
 calling — Core writes only the smaller prefix of the caller size and the Core v1 size, and
 returns the full Core v1 size in `struct_size`. `zlink_ctx_reset_auto_hwm_budget_metrics` takes
 only the context handle. The snapshot struct carries the budget plan
-(`configured_memory_limit_bytes`, `runtime_memory_limit_bytes`, `resolved_memory_limit_bytes`,
+(`configured_memory_limit_bytes`, `resolved_memory_limit_bytes`,
 `configured_core_budget_bytes`, `effective_core_budget_bytes`, `total_planned_hwm_bytes`,
 `total_applied_hwm_bytes`, `manual_reserved_hwm_bytes`), accounted-byte counters
 (`core_queue_accounted_bytes`, `current_accounted_bytes`, `provisional_accounted_bytes`,

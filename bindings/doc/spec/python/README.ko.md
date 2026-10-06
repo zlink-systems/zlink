@@ -67,9 +67,7 @@ Context는 byte 단위 `core_hwm_memory_limit_bytes`, `core_hwm_budget_bytes`와
 queue별 분배는 Core가 정확히 한 번 수행한다. Caller가 방향별 HWM을 설정하면 그 방향은
 manual override가 되어 Auto-HWM 재계산에서 제외된다.
 Context는 `core_hwm_budget_snapshot()`과 `reset_core_hwm_budget_metrics()`도 제공한다.
-입력 우선순위는 수동 Core budget, 명시 memory limit, 명확한 별도 VM hard limit을 얻을 수
-있을 때의 runtime hint, Core fallback 순서다. 앞의 두 값을 지정하면 runtime hint를 자동
-감지하지 않는다. Binding은 hint와 Core hard limit을 직접 결합하지 않는다. 명시 입력이
+명시 입력이
 Core가 감지한 finite hard limit보다 크면 `EINVAL`에 대응하는 기존 config error를 그대로
 전달하고 clamp하지 않는다.
 
@@ -83,7 +81,7 @@ applied, deferred HWM과 in-flight 사용량은 byte 단위의 Python `int`다. 
 count는 표시용 진단이고 `snd_pending_bytes`와 `rcv_pending_bytes`는 별도 byte 값이다.
 slot·message-unit·size-cap·connection-bucket property는 제공하지 않는다.
 
-Core budget snapshot은 ABI version/size, configured/runtime/resolved memory limit,
+Core budget snapshot은 ABI version/size, configured/resolved memory limit,
 configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/current/
 peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
 monitor/instance aggregate, application/completion queue count,

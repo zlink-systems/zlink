@@ -12,6 +12,20 @@ test('version matches core', () => {
     const patch = Number(versionFile.match(/^LIBZLINK_VERSION_PATCH=(\d+)$/m)[1]);
     assert.deepEqual(zlink.version(), [major, minor, patch]);
 });
+test('context keeps Core memory detection and omits the reserved runtime hint', () => {
+    const ctx = zlink.createContext();
+    try {
+        assert.equal(ctx.options.coreHwmMemoryLimitBytes, 0n);
+        ctx.recalculateAutoHwm();
+        const snapshot = ctx.getCoreHwmBudgetSnapshot();
+        assert.equal(snapshot.configuredMemoryLimitBytes, 0n);
+        assert.ok(snapshot.resolvedMemoryLimitBytes > 0n);
+        assert.equal(Object.hasOwn(snapshot, 'runtimeMemoryLimitBytes'), false);
+    }
+    finally {
+        ctx.close();
+    }
+});
 test('legacy compatibility socket stays out of the aligned public api', () => {
     assert.equal(zlink.Socket, undefined);
     assert.equal(zlink.BaseSocket, undefined);

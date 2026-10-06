@@ -100,7 +100,6 @@ sequenceDiagram
 | `CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS` | `14`; `int`, set/get | `3000` ms | 저장한 debounce로 재계산을 예약함 |
 | `CTX_OPT_AUTO_HWM_PROFILE` | `17`; `int`, set/get | `BALANCED` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
 | `CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES` | `19`; `uint64_t`, set_data/get_data | `0` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
-| `CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES` | `20`; `uint64_t`, set_data/get_data | `0` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
 | `CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES` | `21`; `uint64_t`, set_data/get_data | `0` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
 
 ```c
@@ -116,8 +115,7 @@ typedef enum zlink_auto_hwm_profile_t
 각 profile의 정확한 memory 비율, 고정 cap과 역할별 하한·상한은
 [Auto HWM §2](systems/06-auto-hwm.ko.md#2-auto-hwm-budget-계산)가 소유한다.
 
-Auto HWM byte 옵션 세 개(`MEMORY_LIMIT_BYTES`, `RUNTIME_MEMORY_LIMIT_BYTES`,
-`CORE_BUDGET_BYTES`)가 어떤 budget을 계산하고 어떻게 admission에 쓰이는지는
+Auto HWM byte 옵션 두 개(`MEMORY_LIMIT_BYTES`, `CORE_BUDGET_BYTES`)가 어떤 budget을 계산하고 어떻게 admission에 쓰이는지는
 [Auto HWM](systems/06-auto-hwm.ko.md)이 소유한다.
 
 ### 4.1 기본값
@@ -131,7 +129,6 @@ Auto HWM byte 옵션 세 개(`MEMORY_LIMIT_BYTES`, `RUNTIME_MEMORY_LIMIT_BYTES`,
 #define ZLINK_CTX_AUTO_HWM_RECALC_DEBOUNCE_MS_DFLT 3000  // 재계산 기본 debounce (ms)
 #define ZLINK_CTX_AUTO_HWM_PROFILE_DFLT ZLINK_AUTO_HWM_PROFILE_BALANCED  // 기본 profile
 #define ZLINK_CTX_AUTO_HWM_MEMORY_LIMIT_BYTES_DFLT ((uint64_t) 0)  // 명시적 limit 미설정
-#define ZLINK_CTX_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES_DFLT ((uint64_t) 0)  // runtime hint 없음
 #define ZLINK_CTX_AUTO_HWM_CORE_BUDGET_BYTES_DFLT ((uint64_t) 0)  // 수동 Core budget 미설정
 ```
 
@@ -235,7 +232,7 @@ runtime은 첫 socket 생성에서 시작되지만, 그 전에 양수 debounce�
 `ZLINK_CTX_OPT_AUTO_HWM_PROFILE`은 다음 자동 HWM 계산에서 쓰는 profile을
 바꾸며, runtime 중에도 안전하게 조정할 수 있다. Profile은 memory 비율과
 역할별 byte 하한·상한을 선택한다. `SNDBUF` / `RCVBUF` 기본값은 `-1`이며,
-auto-HWM profile은 이 값을 자동으로 바꾸지 않는다. 세 Auto HWM byte 옵션은
+auto-HWM profile은 이 값을 자동으로 바꾸지 않는다. Auto HWM byte 옵션은
 `zlink_ctx_set`으로 설정할 수 없고 `EINVAL`로 실패한다. (계약은 [Auto HWM](systems/06-auto-hwm.ko.md) 참조)
 
 **반환값:** 성공 시 `ZLINK_CONFIG_OK`, 실패 시 `zlink_config_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
@@ -261,7 +258,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_set_data(void *context_,
                                          size_t optvallen_);
 ```
 
-세 Auto HWM byte 옵션은 정확히 `sizeof(uint64_t)` byte를 받는다. 값 `0`은
+Auto HWM byte 옵션은 정확히 `sizeof(uint64_t)` byte를 받는다. 값 `0`은
 unlimited가 아니라 해당 입력을 설정하지 않았다는 뜻이다. 다른 크기와 위 enum에 없는
 context 옵션 값은 `ZLINK_CONFIG_INVALID_ARGUMENT`로 실패한다. 유효한 값을 설정하면
 값을 저장한 뒤 Auto HWM 재계산을 예약한다. 새 budget이 현재 수동 HWM과 자동 하한을 함께
@@ -296,7 +293,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_get_data(void *context_,
                                          size_t *optvallen_);
 ```
 
-세 Auto HWM byte 옵션에는 `uint64_t` output buffer가 필요하고, 호출할 때
+Auto HWM byte 옵션에는 `uint64_t` output buffer가 필요하고, 호출할 때
 `*optvallen_`이 정확히 `sizeof(uint64_t)`여야 한다. 더 큰 임시 buffer나 4-byte
 크기를 포함해 그 밖의 크기는 값을 잘라 쓰거나 일부만 채우지 않고
 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `errno == EINVAL`로 실패한다. 이때 필요한
@@ -363,7 +360,7 @@ unit test 하나로 이어진다.
 **옵션**
 - `zlink_ctx_set`에 알 수 없는 옵션이나 유효하지 않은 값을 주면 `EINVAL`, 유효하지 않은 핸들이면 `EFAULT`(`ZLINK_CONFIG_INVALID_HANDLE`)다.
 - `ZLINK_THREAD_PRIORITY`는 고유 값 `22`로 설정·조회하고 `ZLINK_SOCKET_LIMIT` 값 `3`의 읽기 전용 계약에 영향을 주지 않는다.
-- 세 Auto HWM byte 옵션을 `zlink_ctx_set`으로 설정하려 하면 `EINVAL`이다(설정은 `zlink_ctx_set_data`만 허용).
+- Auto HWM byte 옵션을 `zlink_ctx_set`으로 설정하려 하면 `EINVAL`이다(설정은 `zlink_ctx_set_data`만 허용).
 - Auto HWM byte 옵션을 `zlink_ctx_get_data`로 정확히 `sizeof(uint64_t)`가 아닌 크기로 조회하면 `EINVAL`이고 필요한 크기를 `*optvallen_`에 기록한다.
 - enum에 없는 context 옵션 값을 `zlink_ctx_set_data`로 쓰면 `ZLINK_CONFIG_INVALID_ARGUMENT`다.
 - `ZLINK_THREAD_NAME_PREFIX`를 `zlink_ctx_get_data`로 저장된 prefix 길이보다 작은 용량으로 조회하면 `EINVAL`이고 필요한 길이를 `*optvallen_`에 기록한다.

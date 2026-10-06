@@ -247,7 +247,7 @@ async function waitForConnectionReadyCount(
           }
           drained = true;
           if (event.event === MonitorEventType.ConnectionReady) {
-            readyCount += 1;
+            readyCount = Number(event.value);
             if (readyCount >= targetCount) {
               return;
             }

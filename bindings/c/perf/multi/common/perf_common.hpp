@@ -146,7 +146,7 @@ inline void connect_monitor_handler (const zlink_monitor_event_t *event_, void *
         std::lock_guard<std::mutex> lock (state->sync);
         switch (event_->event) {
             case ZLINK_EVENT_CONNECTION_READY:
-                ++state->connection_ready_count;
+                state->connection_ready_count = static_cast<size_t> (event_->value);
                 break;
 
             case ZLINK_EVENT_BIND_FAILED:

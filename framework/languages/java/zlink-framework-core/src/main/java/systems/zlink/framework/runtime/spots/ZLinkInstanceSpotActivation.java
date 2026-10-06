@@ -504,10 +504,8 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                         List.of(
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         () -> {
-                                                            context.ownerQueue()
+                                                            return context.ownerQueue()
                                                                     .commitLifecycleTransition();
-                                                            return CompletableFuture
-                                                                    .completedFuture(null);
                                                         }),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         () -> {
@@ -531,16 +529,17 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                         }),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         () -> {
-                                                            context.ownerQueue()
+                                                            return context.ownerQueue()
                                                                     .pendingMessages()
-                                                                    .forEach(
-                                                                            message ->
-                                                                                    transferRouteReceived(
-                                                                                            (ZLinkBackendReceived)
-                                                                                                    message));
-                                                            closeActiveRouteReceives();
-                                                            return CompletableFuture
-                                                                    .completedFuture(null);
+                                                                    .thenAccept(
+                                                                            messages -> {
+                                                                                messages.forEach(
+                                                                                        message ->
+                                                                                                transferRouteReceived(
+                                                                                                        (ZLinkBackendReceived)
+                                                                                                                message));
+                                                                                closeActiveRouteReceives();
+                                                                            });
                                                         }),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         context::closeTimersAsync),
