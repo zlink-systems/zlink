@@ -90,6 +90,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
             self.assertEqual(ctx.options.core_hwm_budget_bytes, 16 * 1024 * 1024)
             ctx.recalculate_auto_hwm()
             before = ctx.core_hwm_budget_snapshot()
+            self.assertFalse(hasattr(before, "runtime_memory_limit_bytes"))
             self.assertEqual(before.abi_version, 1)
             self.assertEqual(before.configured_core_budget_bytes, 16 * 1024 * 1024)
             self.assertEqual(len(before.reserved_u64), 8)

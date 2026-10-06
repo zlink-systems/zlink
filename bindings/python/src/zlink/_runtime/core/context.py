@@ -93,7 +93,7 @@ class NativeContext:
         values = {
             name: int(getattr(native, name))
             for name, _ in ZlinkAutoHwmBudgetSnapshot._fields_
-            if name != "reserved_u64"
+            if name not in ("reserved_u64", "runtime_memory_limit_bytes")
         }
         values["reserved_u64"] = tuple(int(value) for value in native.reserved_u64)
         return CoreHwmBudgetSnapshot(**values)

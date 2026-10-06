@@ -533,12 +533,11 @@ open_connect_monitor (SocketLike &socket, uint64_t monitor_hwm, connect_monitor_
 // common/perf_monitor_wait.hpp (socket_monitor_t overload).
 using ::perf::wait_socket_monitor_event;
 
-inline int poll_connect_ready_count (connect_monitor_t &mon)
+inline int poll_connect_ready_count (connect_monitor_t &mon, int ready = 0)
 {
     if (!mon.monitor.get ())
         return 0;
 
-    int ready = 0;
     for (;;) {
         const std::optional<zlink::monitor_event_t> ev =
           mon.monitor->recv (static_cast<int> (zlink::send_flags_t::dontwait));
@@ -546,21 +545,22 @@ inline int poll_connect_ready_count (connect_monitor_t &mon)
             break;
         if (static_cast<uint64_t> (ev->event)
             == static_cast<uint64_t> (zlink::monitor_event::connection_ready)) {
-            ++ready;
+            ready = static_cast<int> (ev->value);
         }
     }
 
     return ready;
 }
 
-inline bool wait_connect_ready_count (connect_monitor_t &mon, size_t expected_ready, int timeout_ms)
+inline bool wait_connect_ready_count (connect_monitor_t &mon, size_t expected_ready,
+                                      int timeout_ms, int already_ready = 0)
 {
     if (expected_ready == 0)
         return true;
     if (!mon.monitor.get ())
         return false;
 
-    size_t ready = static_cast<size_t> (poll_connect_ready_count (mon));
+    size_t ready = static_cast<size_t> (poll_connect_ready_count (mon, already_ready));
     if (ready >= expected_ready)
         return true;
     if (timeout_ms <= 0)
@@ -591,7 +591,8 @@ inline bool wait_connect_ready_count (connect_monitor_t &mon, size_t expected_re
         if (rc == 0)
             continue;
 
-        ready += static_cast<size_t> (poll_connect_ready_count (mon));
+        ready = static_cast<size_t> (
+          poll_connect_ready_count (mon, static_cast<int> (ready)));
     }
 
     return ready >= expected_ready;

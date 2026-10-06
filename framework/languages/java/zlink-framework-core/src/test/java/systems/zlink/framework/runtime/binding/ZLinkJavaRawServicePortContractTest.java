@@ -28,6 +28,30 @@ import java.util.concurrent.TimeUnit;
 
 final class ZLinkJavaRawServicePortContractTest {
     @Test
+    void socketRegistrationRunsWithTheActualStateOwner() {
+        var stopped = new IllegalStateException("creation stopped before native allocation");
+        var context =
+                (systems.zlink.contracts.core.Context)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                systems.zlink.contracts.core.Context.class.getClassLoader(),
+                                new Class<?>[] {systems.zlink.contracts.core.Context.class},
+                                (proxy, method, args) -> {
+                                    assertEquals("createRouterSocket", method.getName());
+                                    org.junit.jupiter.api.Assertions.assertNotNull(
+                                            systems.zlink.framework.runtime.internal.execution
+                                                    .ZLinkStateLane.current());
+                                    throw stopped;
+                                });
+        try (var port = new ZLinkJavaRawServicePort(context)) {
+            assertSame(
+                    stopped,
+                    assertThrows(
+                            IllegalStateException.class,
+                            () -> port.openRouter(RoutingId.from("lane-owner"))));
+        }
+    }
+
+    @Test
     void failedPollerCloseCanBeRetriedByItsOwner() throws Exception {
         var attempts = new java.util.concurrent.atomic.AtomicInteger();
         var failure =
@@ -75,6 +99,9 @@ final class ZLinkJavaRawServicePortContractTest {
                                         case "equals" -> proxy == args[0];
                                         case "setRoutingId" -> null;
                                         case "close" -> {
+                                            org.junit.jupiter.api.Assertions.assertNull(
+                                                    systems.zlink.framework.runtime.internal
+                                                            .execution.ZLinkStateLane.current());
                                             if (attempts.incrementAndGet() == 1) {
                                                 throw failure;
                                             }

@@ -16,6 +16,7 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
 
@@ -27,7 +28,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -44,7 +44,8 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     private final boolean ownsContext;
     private final LinkedHashMap<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
             new LinkedHashMap<>();
-    private final AtomicBoolean closed = new AtomicBoolean();
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private CompletableFuture<Void> closeCompletion;
 
     ZLinkJavaRawServicePort() {
         this(Zlink.createContext(), true);
@@ -91,12 +92,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     }
 
     void ensureReceivePollerRegistered(RouterSocket router) {
-        inStateLane(
-                () -> {
-                    ensureOwnedOnLane(router);
-                    receivePollers.get(router).ensureRegistered();
-                    return null;
-                });
+        inStateLane(() -> receivePollerOnLane(router)).ensureRegistered();
     }
 
     CompletionStage<Void> send(RouterSocket router, RoutingId target, List<byte[]> frames) {
@@ -387,28 +383,37 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
 
     @Override
     public void close() {
-        inStateLane(
-                () -> {
-                    closeOnLane();
-                    return null;
-                });
-    }
-
-    private void closeOnLane() {
-        if (closed.get()) {
-            return;
+        var attempt = new CompletableFuture<Void>();
+        var completion =
+                inStateLane(
+                        () -> {
+                            if (closeCompletion == null) closeCompletion = attempt;
+                            return closeCompletion;
+                        });
+        if (completion == attempt) {
+            try {
+                // The close claim excludes registry operations; disposal may wait on the
+                // binding's operation gate and therefore runs outside the state turn.
+                var remaining =
+                        inStateLane(() -> List.copyOf(receivePollers.reversed().entrySet()));
+                for (var entry : remaining) {
+                    entry.getValue().close();
+                    entry.getKey().close();
+                    inStateLane(() -> receivePollers.remove(entry.getKey()));
+                }
+                if (ownsContext) context.close();
+                attempt.complete(null);
+            } catch (RuntimeException | Error failure) {
+                // Retain resources whose disposal failed for the caller's next close.
+                inStateLane(
+                        () -> {
+                            closeCompletion = null;
+                            return null;
+                        });
+                attempt.completeExceptionally(failure);
+            }
         }
-        var remaining = receivePollers.reversed().entrySet().iterator();
-        while (remaining.hasNext()) {
-            var entry = remaining.next();
-            entry.getValue().close();
-            entry.getKey().close();
-            remaining.remove();
-        }
-        if (ownsContext) {
-            context.close();
-        }
-        closed.set(true);
+        ZLinkCompletionBridge.await(completion);
     }
 
     private void ensureOwnedOnLane(RouterSocket router) {
@@ -431,12 +436,12 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         return receivePollers.get(router);
     }
 
-    private synchronized <T> T inStateLane(Supplier<T> work) {
-        return work.get();
+    private <T> T inStateLane(Supplier<T> work) {
+        return ZLinkCompletionBridge.await(stateLane.runNowOrQueue(work));
     }
 
     private void ensureOpen() {
-        if (closed.get()) {
+        if (closeCompletion != null) {
             throw new IllegalStateException("service port is closed");
         }
     }

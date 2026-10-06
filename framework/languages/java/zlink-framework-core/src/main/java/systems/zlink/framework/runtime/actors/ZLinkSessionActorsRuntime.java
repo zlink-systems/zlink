@@ -761,12 +761,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         return generation;
     }
 
-    private ZLinkBoundActor installBinding(ZLinkBoundActor actor) {
-        BindingCleanup cleanup = inStateLane(() -> installBindingOnLane(actor));
-        finishBindingInstall(actor, cleanup);
-        return actor;
-    }
-
     private BindingCleanup installBindingOnLane(ZLinkBoundActor actor) {
         ActorRef current = actor.ref();
         long bindingGeneration = actor.bindingGeneration();
@@ -1164,10 +1158,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         disconnectFailure);
         }
         current.forEach(actor -> notifyDisconnectedSafely(actor, RELAY_SUBMIT_TIMEOUT));
-    }
-
-    private boolean ingressDrained(ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
-        return inStateLane(() -> ingressDrainedCore(command));
     }
 
     private boolean ingressDrainedCore(ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
@@ -1620,11 +1610,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             ZLinkBackendActorRef targetActor,
             CompletableFuture<Void> completion) {}
 
-    private CompletionStage<Void> cachedRouteTerminal(
-            ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
-        return inStateLane(() -> cachedRouteTerminalCore(command));
-    }
-
     private CompletionStage<Void> cachedRouteTerminalCore(
             ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
         RouteTerminal terminal = routeTerminals.get(relocationKey(command));
@@ -1763,11 +1748,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         routeFlights.put(key, flight);
         CompletableFuture.runAsync(() -> startRoutePreparation(flight));
         return flight.completion();
-    }
-
-    private CompletionStage<Void> applyRelocationAbort(
-            ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
-        return onStateLane(() -> applyRelocationAbortCore(command)).thenCompose(stage -> stage);
     }
 
     private CompletionStage<Void> applyRelocationAbortCore(

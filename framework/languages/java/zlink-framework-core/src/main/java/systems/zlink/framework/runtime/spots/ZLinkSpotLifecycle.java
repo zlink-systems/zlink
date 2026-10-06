@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
@@ -684,18 +683,5 @@ final class ZLinkSpotLifecycle {
         boolean existing() {
             return created == null;
         }
-    }
-
-    private static RuntimeException closeComponent(Runnable close, RuntimeException firstFailure) {
-        try {
-            close.run();
-        } catch (ZlinkCloseException ignored) {
-        } catch (RuntimeException error) {
-            if (firstFailure == null) {
-                return error;
-            }
-            firstFailure.addSuppressed(error);
-        }
-        return firstFailure;
     }
 }

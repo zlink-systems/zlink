@@ -923,13 +923,6 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         stop().toCompletableFuture().join();
     }
 
-    private void cancelTickTask() {
-        if (tickTask != null) {
-            tickTask.cancel(false);
-            tickTask = null;
-        }
-    }
-
     List<FanoutPublisherSnapshot> publisherSnapshots(String channelName) {
         return inStateLane(
                 () ->

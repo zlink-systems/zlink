@@ -1176,6 +1176,55 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void actorReplacementRetainsSessionTurnUntilCallbackTerminal() throws Exception {
+        TestSession.replacementMode = ReplacementMode.PENDING;
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        ZLinkActor first =
+                fixture.actors()
+                        .getOrCreateLocalActor(REPLACEMENT_ACTOR, ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        ZLinkActor second =
+                fixture.actors()
+                        .getOrCreateLocalActor("second-replacement-actor", ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        ZLinkBackendActorRef firstRef = fixture.actors().currentRef(first);
+        ZLinkBackendActorRef secondRef = fixture.actors().currentRef(second);
+        for (ZLinkBackendActorRef actorRef : List.of(firstRef, secondRef)) {
+            session.context()
+                    .actors()
+                    .bind(
+                            new ActorRef(
+                                    actorRef.actorId(),
+                                    actorRef.generation(),
+                                    MESH,
+                                    actorRef.nodeRid()))
+                    .toCompletableFuture()
+                    .join();
+        }
+
+        fixture.runtime().handleBoundSessionReplaced(firstRef.nodeRid(), replacement(firstRef));
+        assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
+        fixture.runtime().handleBoundSessionReplaced(secondRef.nodeRid(), replacement(secondRef));
+        try {
+            assertFalse(session.secondReplacementEntered.await(40, TimeUnit.MILLISECONDS));
+            assertEquals(1, session.replacementCallbacks.get());
+        } finally {
+            session.replacementCompletion.complete(System.nanoTime());
+        }
+        assertTrue(session.secondReplacementEntered.await(5, TimeUnit.SECONDS));
+        assertEquals(2, session.replacementCallbacks.get());
+    }
+
+    @Test
     void boundSessionReplacementDeadlineClosesAStalledCallback() throws Exception {
         TestSession.replacementMode = ReplacementMode.PENDING;
         FakeStream stream = new FakeStream();
@@ -1205,13 +1254,17 @@ final class ZLinkStreamRuntimeIngressTest {
         long started = System.nanoTime();
         fixture.runtime().handleBoundSessionReplaced(actorRef.nodeRid(), replacement(actorRef));
 
-        assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
-        assertEquals(PEER_A, stream.disconnectedPeer.get(5, TimeUnit.SECONDS));
-        assertEquals(1, session.replacementCallbacks.get());
-        assertFalse(session.replacementCompletion.isDone());
-        assertTrue(
-                stream.disconnectStartedAt - started >= TimeUnit.MILLISECONDS.toNanos(100),
-                "a stalled callback must close after its deadline");
+        try {
+            assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
+            assertEquals(PEER_A, stream.disconnectedPeer.get(5, TimeUnit.SECONDS));
+            assertEquals(1, session.replacementCallbacks.get());
+            assertFalse(session.replacementCompletion.isDone());
+            assertTrue(
+                    stream.disconnectStartedAt - started >= TimeUnit.MILLISECONDS.toNanos(100),
+                    "a stalled callback must close after its deadline");
+        } finally {
+            session.replacementCompletion.complete(System.nanoTime());
+        }
     }
 
     private static ReplacementFixture startReplacement(FakeStream stream) {
@@ -1547,6 +1600,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private final AtomicInteger dispatchCount = new AtomicInteger();
         private final AtomicInteger replacementCallbacks = new AtomicInteger();
         private final CountDownLatch replacementEntered = new CountDownLatch(1);
+        private final CountDownLatch secondReplacementEntered = new CountDownLatch(1);
         private final CompletableFuture<Long> replacementCompletion = new CompletableFuture<>();
         private final List<String> packetNames = Collections.synchronizedList(new ArrayList<>());
 
@@ -1593,7 +1647,9 @@ final class ZLinkStreamRuntimeIngressTest {
 
         @Override
         public CompletionStage<Void> onActorBindingReplaced(String actorId) {
-            replacementCallbacks.incrementAndGet();
+            if (replacementCallbacks.incrementAndGet() == 2) {
+                secondReplacementEntered.countDown();
+            }
             replacementEntered.countDown();
             return switch (replacementMode) {
                 case SUCCESS -> {

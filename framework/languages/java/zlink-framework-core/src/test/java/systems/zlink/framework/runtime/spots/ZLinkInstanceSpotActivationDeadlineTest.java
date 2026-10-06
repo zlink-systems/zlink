@@ -6,8 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.errors.*;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -30,12 +29,12 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
     private static final Duration WAIT = Duration.ofSeconds(5);
 
     @Test
-    void pendingReservationEndsAtSourceMeshDefaultRequestDeadline() throws Exception {
+    void sourceSendsEnvelopeWithoutReservingAndWaitsOnlyForAdmission() throws Exception {
         run(false, true);
     }
 
     @Test
-    void delayedResolveDoesNotRestartActivationDeadline() throws Exception {
+    void delayedResolveDoesNotRestartWireActivationDeadline() throws Exception {
         run(true, true);
     }
 
@@ -45,16 +44,65 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
     }
 
     @Test
-    void publicRouteResolveConsumesOriginalActivationDeadline() throws Exception {
-        run(true, true, true);
+    void inferredTypeIgnoresPreparingDescriptors() throws Exception {
+        assertTypeSelection(
+                List.of(descriptor(TYPE, ZLinkFrameworkRuntimeState.PREPARING)),
+                "resolveInstanceType",
+                null,
+                ZLinkFrameworkErrorKind.NOT_FOUND);
     }
 
-    private static void run(boolean delayResolve, boolean meshOverride) throws Exception {
-        run(delayResolve, meshOverride, false);
+    @Test
+    void explicitTypeWithoutServingCapabilityIsNotFound() throws Exception {
+        assertTypeSelection(
+                List.of(descriptor(TYPE + "-other", ZLinkFrameworkRuntimeState.SERVING)),
+                "selectInstanceSpotTarget",
+                TYPE,
+                ZLinkFrameworkErrorKind.NOT_FOUND);
     }
 
-    private static void run(boolean delayResolve, boolean meshOverride, boolean delayRoute)
+    private static void assertTypeSelection(
+            List<ZLinkMeshNodeDescriptor> descriptors,
+            String methodName,
+            String requestedType,
+            ZLinkFrameworkErrorKind expected)
             throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addRouteMesh(MESH).listen("inproc://type-" + UUID.randomUUID()).objects().server();
+        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            var host = (ZLinkSpotRuntime) runtime.spotManager();
+            var repository =
+                    (ZLinkLocationRepository)
+                            Proxy.newProxyInstance(
+                                    ZLinkLocationRepository.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkLocationRepository.class},
+                                    (proxy, method, arguments) -> {
+                                        if (method.getName().equals("listMeshNodes"))
+                                            return CompletableFuture.completedFuture(
+                                                    new ZLinkLocationPage<>(descriptors, null));
+                                        throw new UnsupportedOperationException(method.getName());
+                                    });
+            var method =
+                    ZLinkSpotRuntime.class.getDeclaredMethod(
+                            methodName, ZLinkLocationRepository.class, String.class, String.class);
+            method.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            var result = (CompletionStage<?>) method.invoke(host, repository, MESH, requestedType);
+            var failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    result.toCompletableFuture()
+                                            .get(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+            assertEquals(
+                    expected,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void run(boolean delayResolve, boolean meshOverride) throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(meshOverride ? WAIT : ACTIVATION_TIMEOUT);
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
@@ -64,10 +112,6 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
         if (meshOverride) mesh.setDefaultRequestTimeout(ACTIVATION_TIMEOUT);
         try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
             var host = (ZLinkSpotRuntime) runtime.spotManager();
-            var descriptor = descriptor();
-            var resolve = new CompletableFuture<ZLinkAuthorityReadResult>();
-            var cancellation = new CompletableFuture<ZLinkStoreCancellation>();
-            var reservation = new CompletableFuture<ZLinkObjectReserveResult>();
             var repository =
                     (ZLinkLocationRepository)
                             Proxy.newProxyInstance(
@@ -75,34 +119,67 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                                     new Class<?>[] {ZLinkLocationRepository.class},
                                     (proxy, method, arguments) ->
                                             switch (method.getName()) {
-                                                case "read" -> resolve;
+                                                case "read" ->
+                                                        CompletableFuture.completedFuture(
+                                                                new ZLinkAuthorityMissing(
+                                                                        Instant.now()));
                                                 case "listMeshNodes" ->
                                                         CompletableFuture.completedFuture(
                                                                 new ZLinkLocationPage<>(
-                                                                        List.of(descriptor), null));
-                                                case "reserve" -> {
-                                                    var token =
-                                                            (ZLinkStoreCancellation) arguments[1];
-                                                    cancellation.complete(token);
-                                                    observeDeadline(token, reservation);
-                                                    yield reservation;
-                                                }
+                                                                        List.of(descriptor()),
+                                                                        null));
+                                                case "reserve" ->
+                                                        throw new AssertionError(
+                                                                "source must not create a reservation");
                                                 default ->
                                                         throw new UnsupportedOperationException(
                                                                 method.getName());
                                             });
-            var store = ZLinkSpotRuntime.class.getDeclaredField("userSpotLocationStore");
-            store.setAccessible(true);
-            var original = store.get(host);
-            store.set(host, repository);
+            var storeField = ZLinkSpotRuntime.class.getDeclaredField("userSpotLocationStore");
+            storeField.setAccessible(true);
+            var originalStore = storeField.get(host);
+            storeField.set(host, repository);
+            var nodesField = ZLinkSpotRuntime.class.getDeclaredField("routeMeshNodesByName");
+            nodesField.setAccessible(true);
+            var nodes =
+                    (Map<
+                                    String,
+                                    systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkInternalMeshNode>)
+                            nodesField.get(host);
+            var originalNode = nodes.get(MESH);
+            var wireRoute = new CompletableFuture<Object>();
+            var admission = new CompletableFuture<Void>();
+            var source =
+                    (systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode)
+                            Proxy.newProxyInstance(
+                                    originalNode.getClass().getClassLoader(),
+                                    new Class<?>[] {
+                                        systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkInternalMeshNode.class
+                                    },
+                                    (proxy, method, arguments) -> {
+                                        if (method.getName().equals("submitInstanceSpotSend")) {
+                                            wireRoute.complete(arguments[0]);
+                                            return admission;
+                                        }
+                                        try {
+                                            return method.invoke(originalNode, arguments);
+                                        } catch (
+                                                java.lang.reflect.InvocationTargetException
+                                                        failure) {
+                                            throw failure.getCause();
+                                        }
+                                    });
+            var substituted = new HashMap<>(nodes);
+            substituted.put(MESH, source);
+            nodesField.set(host, Map.copyOf(substituted));
             var routeResolve = new CompletableFuture<Optional<SpotTransportAddress>>();
-            var routeResolver = ZLinkChannelRuntime.class.getDeclaredField("spotAddressResolver");
-            routeResolver.setAccessible(true);
-            var originalResolver = routeResolver.get(runtime.route());
-            if (delayRoute) {
-                routeResolver.set(
-                        runtime.route(), (SpotTransportAddressResolver) spotId -> routeResolve);
-            }
+            var resolverField = ZLinkChannelRuntime.class.getDeclaredField("spotAddressResolver");
+            resolverField.setAccessible(true);
+            var originalResolver = resolverField.get(runtime.route());
+            resolverField.set(
+                    runtime.route(), (SpotTransportAddressResolver) spotId -> routeResolve);
             try {
                 long started = System.currentTimeMillis();
                 var send =
@@ -113,73 +190,48 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                                 .submit()
                                 .toCompletableFuture();
                 long submitted = System.currentTimeMillis();
-                if (delayResolve) {
-                    // Hold resolution beyond the original deadline. A recomputed deadline
-                    // would incorrectly permit a new reservation wait.
-                    CompletableFuture.runAsync(
-                                    () -> {},
-                                    CompletableFuture.delayedExecutor(
-                                            ACTIVATION_TIMEOUT.toMillis() + 100,
-                                            TimeUnit.MILLISECONDS))
-                            .get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
-                }
+                send.whenComplete(
+                        (done, failure) -> {
+                            if (failure != null) wireRoute.completeExceptionally(failure);
+                        });
+                if (delayResolve) waitUntil(submitted + ACTIVATION_TIMEOUT.toMillis() + 100);
                 routeResolve.complete(Optional.empty());
-                resolve.complete(new ZLinkAuthorityMissing(Instant.now()));
-                var token = cancellation.get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
-                if (delayResolve) {
-                    assertTrue(
-                            token.isCancellationRequested(),
-                            "resolve must preserve the submit deadline");
-                } else {
-                    assertFalse(token.isCancellationRequested());
-                    long beforeDeadline = started + ACTIVATION_TIMEOUT.toMillis() - 100;
-                    waitUntil(beforeDeadline);
-                    assertFalse(
-                            token.isCancellationRequested(), "activation must not expire early");
-                    assertFalse(send.isDone());
-                    waitUntil(submitted + ACTIVATION_TIMEOUT.toMillis() + 100);
-                    assertTrue(token.isCancellationRequested(), "pending reservation must expire");
-                }
-                var failure =
-                        assertThrows(
-                                ExecutionException.class,
-                                () -> send.get(WAIT.toMillis(), TimeUnit.MILLISECONDS));
-                assertEquals(
-                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                        assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+                Object route = wireRoute.get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+                assertEquals("InstanceColdActivation", route.getClass().getSimpleName());
+                long deadline = (long) route.getClass().getMethod("deadlineUnixMs").invoke(route);
+                assertTrue(deadline >= started + ACTIVATION_TIMEOUT.toMillis());
+                assertTrue(deadline <= submitted + ACTIVATION_TIMEOUT.toMillis());
+                waitUntil(submitted + ACTIVATION_TIMEOUT.toMillis() + 100);
+                assertFalse(
+                        send.isDone(),
+                        "target activation deadline must not terminate pending outbound admission");
+                admission.complete(null);
+                send.get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
             } finally {
-                reservation.completeExceptionally(new IllegalStateException("test cleanup"));
-                resolve.complete(new ZLinkAuthorityMissing(Instant.now()));
+                admission.complete(null);
                 routeResolve.complete(Optional.empty());
-                routeResolver.set(runtime.route(), originalResolver);
-                store.set(host, original);
+                nodesField.set(host, nodes);
+                resolverField.set(runtime.route(), originalResolver);
+                storeField.set(host, originalStore);
             }
         }
     }
 
-    private static void observeDeadline(
-            ZLinkStoreCancellation token, CompletableFuture<ZLinkObjectReserveResult> reservation) {
-        if (reservation.isDone()) return;
-        if (token.isCancellationRequested()) {
-            reservation.completeExceptionally(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                            "activation reservation expired"));
-            return;
-        }
-        CompletableFuture.delayedExecutor(5, TimeUnit.MILLISECONDS)
-                .execute(() -> observeDeadline(token, reservation));
-    }
-
     private static void waitUntil(long deadline) throws Exception {
-        long remaining = Math.max(0, deadline - System.currentTimeMillis());
         CompletableFuture.runAsync(
                         () -> {},
-                        CompletableFuture.delayedExecutor(remaining, TimeUnit.MILLISECONDS))
+                        CompletableFuture.delayedExecutor(
+                                Math.max(0, deadline - System.currentTimeMillis()),
+                                TimeUnit.MILLISECONDS))
                 .get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private static ZLinkMeshNodeDescriptor descriptor() {
+        return descriptor(TYPE, ZLinkFrameworkRuntimeState.SERVING);
+    }
+
+    private static ZLinkMeshNodeDescriptor descriptor(
+            String type, ZLinkFrameworkRuntimeState state) {
         return new ZLinkMeshNodeDescriptor(
                 MESH,
                 RoutingId.from("deadline-target"),
@@ -191,7 +243,7 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                 List.of(
                         new ZLinkObjectCapability(
                                 ZLinkPlacementObjectKind.INSTANCE_SPOT,
-                                TYPE,
+                                type,
                                 ZLinkObjectMaintenancePolicyKind.SNAPSHOT,
                                 true,
                                 0)),
@@ -204,11 +256,11 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                         List.of(
                                 new ZLinkSpotTypeCapacity(
                                         ZLinkPlacementObjectKind.INSTANCE_SPOT,
-                                        TYPE,
+                                        type,
                                         new ZLinkCapacityUsage(0, 0, 8)))),
                 new ZLinkActivationConcurrency(0, 8),
                 Optional.empty(),
-                ZLinkFrameworkRuntimeState.SERVING,
+                state,
                 "security",
                 "owner",
                 1,

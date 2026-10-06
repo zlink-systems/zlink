@@ -445,14 +445,6 @@ public final class ZLinkLocationDescriptorCodec {
         }
     }
 
-    private static void putNullableText(ObjectNode node, String field, String value) {
-        if (value == null) {
-            node.putNull(field);
-        } else {
-            node.put(field, value);
-        }
-    }
-
     private static String text(JsonNode node, String field) {
         String value = nullableText(node, field);
         return value == null ? "" : value;

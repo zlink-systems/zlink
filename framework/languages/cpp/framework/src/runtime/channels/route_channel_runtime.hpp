@@ -3,6 +3,7 @@
 
 #include "runtime/channels/channel_pending_requests.hpp"
 #include "runtime/channels/route_connection_set.hpp"
+#include "runtime/configuration/request_defaults.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 
@@ -138,7 +139,8 @@ class route_channel_runtime_t
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
     std::optional<zlink::routing_id_t> _routing_id;
-    std::chrono::milliseconds _default_request_timeout{std::chrono::seconds (30)};
+    std::chrono::milliseconds _default_request_timeout{
+      runtime::configuration::default_request_timeout};
     std::string _bind_endpoint;
     std::vector<std::string> _manual_connections;
     bool _running = false;

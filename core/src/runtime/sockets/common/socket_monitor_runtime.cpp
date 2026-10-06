@@ -106,50 +106,6 @@ bool zlink::socket_monitor_runtime_t::erase_ready_connection (
     return erased;
 }
 
-bool zlink::socket_monitor_runtime_t::erase_ready_connection_for_endpoint (
-  const endpoint_uri_pair_t &endpoint_uri_pair_,
-  uint32_t *ready_count_out_,
-  uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_)
-{
-    if (transport_pair_id_ != 0) {
-        const std::string prefix = make_monitor_ready_endpoint_prefix (endpoint_uri_pair_);
-        std::string pair_suffix;
-        pair_suffix.append (reinterpret_cast<const char *> (&transport_pair_id_),
-                            sizeof (transport_pair_id_));
-        pair_suffix.append (reinterpret_cast<const char *> (&transport_pair_generation_),
-                            sizeof (transport_pair_generation_));
-        for (std::set<std::string>::iterator it = ready_connections.begin ();
-             it != ready_connections.end (); ++it) {
-            if (it->compare (0, prefix.size (), prefix) != 0
-                || it->size () < prefix.size () + pair_suffix.size ()
-                || it->compare (it->size () - pair_suffix.size (), pair_suffix.size (),
-                                pair_suffix)
-                     != 0)
-                continue;
-
-            ready_connections.erase (it);
-            if (ready_count_out_)
-                *ready_count_out_ = ready_count ();
-            return true;
-        }
-        return false;
-    }
-    const std::string prefix = make_monitor_ready_endpoint_prefix (endpoint_uri_pair_);
-    for (std::set<std::string>::iterator it = ready_connections.begin ();
-         it != ready_connections.end (); ++it) {
-        if (it->compare (0, prefix.size (), prefix) != 0)
-            continue;
-
-        ready_connections.erase (it);
-        if (ready_count_out_)
-            *ready_count_out_ = ready_count ();
-        return true;
-    }
-
-    return false;
-}
-
 bool zlink::socket_monitor_runtime_t::mark_transport_pair_lane_ready (
   const endpoint_uri_pair_t &endpoint_uri_pair_,
   transport_lane_t lane_,

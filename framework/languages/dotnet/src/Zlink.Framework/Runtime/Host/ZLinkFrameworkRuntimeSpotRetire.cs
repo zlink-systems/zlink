@@ -1523,33 +1523,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
     }
 
-    private static byte[][] EncodeCanonicalReply(
-        string channelName,
-        ZLinkCanonicalAcceptedRequest request,
-        ZLinkCanonicalTerminalCompletion completion
-    )
-    {
-        var payload =
-            completion.Payload
-            ?? throw new ZLinkRelocationDataLostException(
-                "Canonical terminal reply has no application payload."
-            );
-        using var header = ZLinkEnvelopeCodec.EncodeHeader(
-            new ZLinkEnvelopeHeader(
-                ZLinkMessageKind.Response,
-                channelName,
-                payload.PacketName,
-                payload.ContentType,
-                request.ReplyRouteId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                null,
-                null,
-                null,
-                null
-            )
-        );
-        return [header.ToArray(), payload.Payload.ToArray()];
-    }
-
     internal async ValueTask AbortInboundSpotAggregateAsync(TargetStage stage)
     {
         if (Volatile.Read(ref stage.Published) != 0)
