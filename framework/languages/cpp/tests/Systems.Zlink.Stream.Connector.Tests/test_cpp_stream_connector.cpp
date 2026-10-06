@@ -1292,6 +1292,66 @@ int main (int argc, char **argv)
     if (argc == 2) {
         return test_inbound_codec (argv[1]);
     }
+    const auto eventually = [] (const std::function<bool ()> &predicate) {
+        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+        while (!predicate () && std::chrono::steady_clock::now () < deadline) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        return predicate ();
+    };
+
+    // stream-connector §4.7: retain an incomplete frame after a multi-frame read.
+    for (const bool split_payload : {false, true}) {
+        using namespace zlink::stream_connector;
+        connector_options_t options;
+        options.dispatch_mode = dispatch_mode_t::manual;
+        options.heartbeat.enabled = false;
+        options.reconnect.enabled = false;
+        auto connector = connector_factory_t::create (options);
+        auto state = std::static_pointer_cast<detail::connector_state_t> (
+          connector_internal_handle (connector));
+        auto connection = std::make_shared<fed_read_connection_t> ();
+        state->connection = connection;
+        detail::change_state (state, connection_state_t::connected);
+        detail::start_read_loop (state);
+        const auto first =
+          make_server_frame (message_kind_t::send, 0, "batch", "first").to_string ();
+        const auto second =
+          make_server_frame (message_kind_t::send, 0, "batch", "second").to_string ();
+        const auto third =
+          make_server_frame (message_kind_t::send, 0, "batch", "third").to_string ();
+        const auto split = split_payload ? third.size () - 2 : std::size_t{3};
+        connection->feed (zlink::message_t::from (first + second + third.substr (0, split)));
+        if (!eventually ([&] {
+                std::lock_guard lock (state->transport_mutex);
+                return state->dispatch_queue.size () == 2;
+            })) {
+            (void) connector.close ();
+            return fail (408);
+        }
+        bool retained;
+        {
+            std::lock_guard lock (state->transport_mutex);
+            retained = std::string (state->inbound_buffer.begin (), state->inbound_buffer.end ())
+                       == third.substr (0, split);
+        }
+        connection->feed (zlink::message_t::from (third.substr (split)));
+        const bool completed = eventually ([&] {
+            std::lock_guard lock (state->transport_mutex);
+            return state->dispatch_queue.size () == 3;
+        });
+        bool ordered = false;
+        if (completed) {
+            std::lock_guard lock (state->transport_mutex);
+            ordered = state->inbound_buffer.empty ()
+                      && as_string (state->dispatch_queue[0].packet.payload) == "first"
+                      && as_string (state->dispatch_queue[1].packet.payload) == "second"
+                      && as_string (state->dispatch_queue[2].packet.payload) == "third";
+        }
+        (void) connector.close ();
+        if (!retained || !completed || !ordered)
+            return fail (409);
+    }
     /* stream-connector §4.5: 진단 바이트는 엄격한 UTF-8이다.
      * 잘못된 서버 제어 프레임의 결과를 공개 연결 종료 이벤트로 관찰한다. */
     for (const auto &[diagnostic, valid] :
@@ -3253,13 +3313,6 @@ int main (int argc, char **argv)
         // Async sends/requests ride the shared runner (write strand + posted
         // delivery), so completions are awaited with a bounded poll instead of
         // being asserted synchronously after submit.
-        const auto eventually = [] (const std::function<bool ()> &predicate) {
-            const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
-            while (!predicate () && std::chrono::steady_clock::now () < deadline) {
-                std::this_thread::sleep_for (std::chrono::milliseconds (1));
-            }
-            return predicate ();
-        };
         const auto no_pending_requests = [] (const auto &state) {
             std::lock_guard<std::mutex> lock (state->transport_mutex);
             return state->pending_requests.empty ();

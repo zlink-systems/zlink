@@ -585,38 +585,37 @@ take_matching_queued_packet (connector_state_t &state,
     return matched;
 }
 
-std::optional<result_t<inbound_frame_t>> try_take_inbound_frame (connector_state_t &state)
+std::optional<result_t<inbound_frame_t>> try_take_inbound_frame (connector_state_t &state,
+                                                                 std::size_t &consumed)
 {
-    if (state.inbound_buffer.size () < frame_codec_t::prefix_size) {
+    if (state.inbound_buffer.size () - consumed < frame_codec_t::prefix_size) {
         return std::nullopt;
     }
-    const auto header_size =
-      static_cast<std::size_t> ((state.inbound_buffer[0] << 8) | state.inbound_buffer[1]);
-    const auto payload_size = (static_cast<std::size_t> (state.inbound_buffer[2]) << 24)
-                              | (static_cast<std::size_t> (state.inbound_buffer[3]) << 16)
-                              | (static_cast<std::size_t> (state.inbound_buffer[4]) << 8)
-                              | static_cast<std::size_t> (state.inbound_buffer[5]);
+    const auto header_size = static_cast<std::size_t> ((state.inbound_buffer[consumed] << 8)
+                                                       | state.inbound_buffer[consumed + 1]);
+    const auto payload_size =
+      (static_cast<std::size_t> (state.inbound_buffer[consumed + 2]) << 24)
+      | (static_cast<std::size_t> (state.inbound_buffer[consumed + 3]) << 16)
+      | (static_cast<std::size_t> (state.inbound_buffer[consumed + 4]) << 8)
+      | static_cast<std::size_t> (state.inbound_buffer[consumed + 5]);
     if (auto limits = validate_inbound_frame_limits (state, header_size, payload_size); !limits) {
         return result_t<inbound_frame_t>::failure (
           limits.error ()->code,
           limits.error () ? limits.error ()->message : "stream connector frame is too large");
     }
     const auto frame_size = frame_codec_t::prefix_size + header_size + payload_size;
-    if (state.inbound_buffer.size () < frame_size) {
+    if (state.inbound_buffer.size () - consumed < frame_size) {
         return std::nullopt;
     }
 
-    std::vector<std::uint8_t> header_bytes (
-      state.inbound_buffer.begin () + frame_codec_t::prefix_size,
-      state.inbound_buffer.begin () + frame_codec_t::prefix_size
-        + static_cast<std::ptrdiff_t> (header_size));
+    const auto frame_begin = state.inbound_buffer.begin () + static_cast<std::ptrdiff_t> (consumed);
+    std::vector<std::uint8_t> header_bytes (frame_begin + frame_codec_t::prefix_size,
+                                            frame_begin + frame_codec_t::prefix_size
+                                              + static_cast<std::ptrdiff_t> (header_size));
     std::vector<std::uint8_t> payload_bytes (
-      state.inbound_buffer.begin () + frame_codec_t::prefix_size
-        + static_cast<std::ptrdiff_t> (header_size),
-      state.inbound_buffer.begin () + static_cast<std::ptrdiff_t> (frame_size));
-    state.inbound_buffer.erase (state.inbound_buffer.begin (),
-                                state.inbound_buffer.begin ()
-                                  + static_cast<std::ptrdiff_t> (frame_size));
+      frame_begin + frame_codec_t::prefix_size + static_cast<std::ptrdiff_t> (header_size),
+      frame_begin + static_cast<std::ptrdiff_t> (frame_size));
+    consumed += frame_size;
 
     header_codec_t header_codec;
     auto decoded = header_codec.decode (header_bytes);
@@ -889,8 +888,9 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
 
         // A stream read can report both bytes and EOF. Decode the bytes that
         // arrived before applying the terminal transport error.
+        std::size_t consumed = 0;
         while (true) {
-            auto frame = try_take_inbound_frame (*state);
+            auto frame = try_take_inbound_frame (*state, consumed);
             if (!frame) {
                 break;
             }
@@ -973,6 +973,9 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                 pushed_packets.push_back (std::move (packet.value ()));
             }
         }
+        state->inbound_buffer.erase (state->inbound_buffer.begin (),
+                                     state->inbound_buffer.begin ()
+                                       + static_cast<std::ptrdiff_t> (consumed));
         reschedule =
           is_transport_connected (*state) && !state->close_requested.load () && !transport_error;
         if (!reschedule) {

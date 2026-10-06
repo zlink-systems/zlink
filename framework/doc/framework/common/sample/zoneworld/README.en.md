@@ -106,42 +106,42 @@ order of movement/publish is described in the §7 sequence diagrams.
   registers these canonical stable type strings identically (actorJoin does not carry the stable
   type on the wire — it is resolved from the Location Store authority row, so diverging names
   break cross-language joins).
-- Each ZoneNode declares a Zone Spot capacity of 2. The four zones are therefore spread 2/2
-  across the two nodes by capacity, and any 2/2 split of the 2x2 grid guarantees an adjacent
-  zone pair with different owners. The runner never assumes a zone→NodeId mapping: it discovers
-  the actual owner layout via Ops probes and picks the cross-owner boundary from that. Fixtures
-  or tests that pin a specific zone to a specific NodeId are forbidden.
-  Each ZoneNode's bootstrap claims its first zone, then **prefers an adjacent zone** for its
-  second claim (contiguous-region preference). A 2/2 split therefore always forms two contiguous
-  regions, so both a cross-owner adjacent pair and a same-owner adjacent pair (ZW-E4's
-  precondition) deterministically exist — a diagonal split ({nw,se}/{ne,sw}) has no same-owner
-  adjacent pair and would make E4 unsatisfiable, so it is excluded. The preference is only the
-  claim-attempt ORDER, not owner computation; placement remains owned by Framework capacity.
+- The two ZoneNodes declare Zone Spot capacities of 1 and 3. Both nodes provide the same Zone
+  Spot and Player Actor capabilities. When
+  all four zones are Ready, capacity spreads them 1/3. In a 2x2 grid the node that owns three zones
+  has a same-owner adjacent pair (ZW-E4's precondition), and the single zone and its neighbor form
+  a cross-owner adjacent pair. The runner reads the actual owner layout via Ops probes and picks the
+  adjacent pair each scenario needs from all zone boundaries. Fixtures or tests that pin a specific
+  zone to a specific NodeId are forbidden. Bootstrap claim order does not guarantee owner adjacency.
+  Owner selection and capacity reservation for Zone Spots and Player Actors follow
+  [MeshNode §5.1–§5.2](../../spec/server/03-spot-actor/03-mesh-node.en.md#51-weight-and-capacity).
 - **The readiness line is fixed.** When a ZoneNode finishes preparing it writes exactly one line
   to standard output: `topology=ready node=<NodeId> zones=<comma-joined ZoneIds>`. With no zone,
   nothing follows `zones=`. The runner waits on this line before moving to the next step, so a
   per-language string makes a shared runner procedure impossible. No extra field is appended.
-- **Bootstrap announces readiness only after it holds two zones.** A ZoneNode claims at startup
-  and repeats until its own census holds two zones. Announcing readiness before that lets
+- **At the initial cold start, bootstrap announces readiness only after it holds as many zones as its declared capacity.**
+  A ZoneNode claims at startup and repeats until the zone count in its local census equals its
+  declared Zone Spot capacity. The factory's capacity declaration and the bootstrap's readiness
+  check use the same setting. The runner checks that the zone lists the two nodes report contain
+  all four ZoneIds without duplicates. Announcing readiness before that lets
   `ZW-C1` — "the console observes both ZoneNodes as Registered and Connected" — pass a node that
   holds no zone, which changes what the assertion means. Registering only the factory and
   creating the Zone Spot on the first request does not satisfy this.
 - **Claim retry is `250 ms` apart, at most `120` attempts.** The other ZoneNode may not be up
   yet, leaving capacity free, so a node retries instead of failing immediately. A node that
-  exhausts all 120 attempts without holding two zones fails startup — it never quietly announces
+  exhausts all 120 attempts without holding as many zones as its declared capacity fails startup — it never quietly announces
   readiness with no zone. The values are fixed because a per-language interval or count makes the
   same scenario fail at a different moment in each language, which splits the verdict.
-- **A crash-replacement process announces readiness without claiming a zone.** §7.5 defines a
-  crash replacement as "becoming able to accept new objects" and forbids restoring the previous
-  owner's objects. Only in this case is readiness announced with zero zones, and the runner turns
-  that intent on explicitly. The setting is named `allowEmptyZoneSet`, spelled to each language's
+- **The replacement configuration announces readiness without acquiring zones.** Restarts after
+  either graceful or abrupt stops in §11.2 use this configuration. §7.5 defines a replacement as
+  "becoming able to accept new objects" and forbids restoring the previous owner's objects. The
+  runner enables it explicitly; the initial cold start does not use it. The setting is named `allowEmptyZoneSet`, spelled to each language's
   naming rule (`allow_empty_zone_set`, `allowsEmptyZoneSet`). On this path a node stops retrying
   and announces readiness once `attempt` reaches `8` with an empty census. A normal startup never
   takes this path.
 - `zoneworld.mesh` carries the ChannelName, Spot/Actor direct messages, and Logical Multicast.
 - `zoneworld.broadcast` is a classic fanout publisher/subscriber connection independent of the mesh.
-- Location Store placement selects the owner of objects such as Zone Spots and Player Actors.
-  NodeId and the transport RID are separate domains.
+- NodeId and the transport RID are separate domains.
 - Only the Gateway and Ops endpoints are provided to the Client; the ZoneNode endpoint isn't
   exposed.
 
@@ -477,13 +477,13 @@ rejected, the direction reverses. The initial coordinates and directions are fix
 
 | PlayerId | Start Coordinate | Direction | Border Effect |
 |---|---|---|---|
-| bot-nw-x | (10,15) | (+1,0) | X-border cross-node relocation |
+| bot-nw-x | (10,15) | (+1,0) | X-border movement (owner-dependent behavior in §7.2) |
 | bot-nw-y | (15,10) | (0,+1) | No X border |
-| bot-ne-x | (90,15) | (-1,0) | X-border cross-node relocation |
+| bot-ne-x | (90,15) | (-1,0) | X-border movement (owner-dependent behavior in §7.2) |
 | bot-ne-y | (85,10) | (0,+1) | No X border |
-| bot-sw-x | (10,85) | (+1,0) | X-border cross-node relocation |
+| bot-sw-x | (10,85) | (+1,0) | X-border movement (owner-dependent behavior in §7.2) |
 | bot-sw-y | (15,90) | (0,-1) | No X border |
-| bot-se-x | (90,85) | (-1,0) | X-border cross-node relocation |
+| bot-se-x | (90,85) | (-1,0) | X-border movement (owner-dependent behavior in §7.2) |
 | bot-se-y | (85,90) | (0,-1) | No X border |
 
 ### 7.4 Ops Observation, Announce, And Maintenance
@@ -713,11 +713,11 @@ to the Gateway".
 | ZW-E1 | base | SetMaintenanceReq(node,true) | only that NodeId's desired state changes, recorded in the store |
 | ZW-E2 | E1 | new join into a zone on the maintenance node | rejected ZoneMaintenance by target OnActorJoin (§7.4 sole decider) |
 | ZW-E3 | E1 | movement inside a maintenance zone | allowed |
-| ZW-E4 | E1 | move to a different zone on the maintenance node | rejected ZoneMaintenance (same-zone only) |
+| ZW-E4 | a player has entered the source zone of a same-owner adjacent pair chosen from the actual owner layout, and E1 is applied to that owner | a normal MoveMsg to the target zone | rejected ZoneMaintenance; the source zone, position, and membership stay unchanged (a move inside the same zone is allowed as in E3) |
 | ZW-E5 | E1 | ZoneNode restart | maintenance state restored for the same NodeId |
 | ZW-E6 | base | NodeDiagnosticsReq | latest zone list, player counts, maintenance returned |
 | ZW-F1 | base | observe bots | 8 bots move with the fixed §7.3 initial values/trajectories |
-| ZW-F2 | F1 | X-bot reaches the boundary | cross-owner bot relocation completes (no binding) |
+| ZW-F2 | F1; an X-bot moving toward a cross-owner X boundary selected from the actual owner layout | the selected bot reaches that boundary | cross-owner bot relocation completes (no binding) |
 | ZW-F3 | F1 | induce a bot move rejection | direction reverses |
 | ZW-F4 | F1 | observe client pushes | no push targeted at bots (negative evidence) |
 | ZW-G1 | base | RID observation (probe) | actual `zn-<lowercase-uuid-v4>` format check (a printed marker alone is insufficient), distinct across nodes |
@@ -746,12 +746,10 @@ different signals, so the same ID tested something different in each language.
 | ZW-G4 | abrupt | the row's precondition is a crash replacement (kill→start) |
 
 **A restarted ZoneNode does not take its zones back.** §2.2 fixes that a Ready owner failure is
-never an automatic replacement, so the restarted process comes up with the **replacement
-configuration that reaches ready with zero zones** — the same whether the stop was graceful or
-abrupt. Only the initial cold start claims zones.
+never an automatic replacement, so a restarted ZoneNode uses the zone set and readiness check of
+the replacement configuration in §3.
 
-Leaving this unstated makes a restarted node demand two zones and retry the claim until its budget
-runs out, which is exactly the state the cpp implementation was in.
+Without the replacement configuration, a restarted node demands as many zones as at its initial startup and retries claims until its budget runs out, which is exactly the state the cpp implementation was in.
 
 **The ZW-E5 judging connection opens before the ZoneNode stop begins.** The order is fixed:
 

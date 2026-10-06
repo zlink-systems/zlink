@@ -244,8 +244,7 @@ public interface FanoutChannelBuilder {
 ```
 
 `configureInboundDispatch()`가 반환하는 `ZLinkInboundDispatchOptions`의 `coreHwmMemoryLimitBytes`,
-`coreHwmBudgetBytes`, `coreHwmProfile`은 Core에 전달한다. Java binding은
-양수 유한 `Runtime.maxMemory()`를 runtime memory hint로 전달한다. Core와 job queue profile은 기본값
+`coreHwmBudgetBytes`, `coreHwmProfile`은 Core에 전달한다. Core와 job queue profile은 기본값
 `BALANCED`인 독립된 enum과 계산이다. Manual job cap은 `1..2,147,483,647`이고 생략하면 common startup
 CPU snapshot과 32/64/128/256 계수를 사용한다. Pressure threshold 기본값은 pause `80`, resume `60`이고,
 pause는 `1..100`, resume은 `0..99`의 정수이며 resume은 pause보다 작아야 한다. 이 범위·순서 위반과
@@ -731,7 +730,7 @@ shutdown이 같은 `ZLinkFrameworkRuntime`에 한 번씩 전달되는지 확인�
 
 ## Inbound queue와 Session seal option
 
-Java binding은 양수 유한 `Runtime.maxMemory()`를 Core runtime memory hint로 전달한다. Core와 job queue
+Core와 job queue
 profile은 독립된 enum이며 둘 다 기본값은 `BALANCED`다. Manual job cap은 `1..2,147,483,647`이고 생략하면
 common startup CPU snapshot과 32/64/128/256 계수를 사용한다. 범위 위반과 overflow는 bind 전에 실패하며
 runtime 중 다시 계산하지 않는다.

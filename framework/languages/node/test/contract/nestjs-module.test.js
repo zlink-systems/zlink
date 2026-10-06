@@ -149,7 +149,6 @@ const EMPTY_CORE_HWM_BUDGET_SNAPSHOT = Object.freeze({
   budgetGeneration: 0n,
   measurementEpoch: 0n,
   configuredMemoryLimitBytes: 0n,
-  runtimeMemoryLimitBytes: 0n,
   resolvedMemoryLimitBytes: 0n,
   configuredCoreBudgetBytes: 0n,
   effectiveCoreBudgetBytes: 0n,
