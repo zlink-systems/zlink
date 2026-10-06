@@ -1,6 +1,5 @@
 # zlink Rust Binding API Reference
 
-The binding forwards explicit memory limits and Core budgets unchanged. Core detects process and container hard limits; managed heap limits are not forwarded. The budget snapshot projects configured and resolved memory limits.
 
 This reference is generated from the Rust source in `bindings/rust/src/`.
 

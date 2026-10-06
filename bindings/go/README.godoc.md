@@ -1,6 +1,5 @@
 # zlink Go Binding API Reference
 
-The binding forwards explicit memory limits and Core budgets unchanged. Core detects process and container hard limits; managed heap limits are not forwarded. The budget snapshot projects configured and resolved memory limits.
 
 The Go binding is implemented in the `zlink.systems/zlink` module under
 `bindings/go`.

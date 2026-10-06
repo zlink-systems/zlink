@@ -1,6 +1,5 @@
 # Zlink
 
-The binding forwards explicit memory limits and Core budgets unchanged. Core detects process and container hard limits; managed heap limits are not forwarded. The budget snapshot projects configured and resolved memory limits.
 
 Zlink is the .NET binding package for zlink.
 
