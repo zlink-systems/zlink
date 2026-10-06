@@ -233,6 +233,12 @@ struct client_server_location_runtime_t::pump_task_state_t
     }
 };
 
+struct client_server_location_runtime_t::publication_request_t
+{
+    bool completed = false;
+    bool published = false;
+};
+
 struct client_server_location_runtime_t::ready_waiter_t
 {
     std::string channel_name;
@@ -761,31 +767,34 @@ void client_server_location_runtime_t::start_client (const channel_snapshot_t &c
 bool client_server_location_runtime_t::publish_descriptor_state (
   framework_runtime_state_t state) noexcept
 {
-    if (state != framework_runtime_state_t::draining)
-        return true;
+    return state != framework_runtime_state_t::draining || request_publication ();
+}
+
+bool client_server_location_runtime_t::republish_after_store_recovery ()
+{
+    // stop() owns descriptor removal, so a stopping runtime has nothing to republish.
+    return empty () || _stop->load (std::memory_order_acquire) || request_publication ();
+}
+
+bool client_server_location_runtime_t::request_publication () noexcept
+{
+    auto request = std::make_shared<publication_request_t> ();
     {
         std::lock_guard lock (_server_progress_mutex);
         if (_stop->load (std::memory_order_acquire))
             return false;
-        _descriptor_publish_result = false;
-        _descriptor_publish_pending = true;
+        _publication_requests.push_back (request);
     }
-    _server_progress_changed.notify_all ();
     _wake_timer->signal ();
 
     std::unique_lock lock (_server_progress_mutex);
     if (!runtime::infrastructure_wait_guard::condition_wait_for (
           _server_progress_changed, lock, std::chrono::seconds (5),
-          [this] { return !_descriptor_publish_pending; }, "client-server/descriptor-publish",
+          [&request] { return request->completed; }, "client-server/descriptor-publish",
           runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion)) {
         return false;
     }
-    return _descriptor_publish_result;
-}
-
-bool client_server_location_runtime_t::republish_after_store_recovery ()
-{
-    return publish_servers ();
+    return request->published;
 }
 
 void client_server_location_runtime_t::run ()
@@ -794,23 +803,28 @@ void client_server_location_runtime_t::run ()
     std::shared_ptr<task_t<worker_lane_snapshot_t>> pending_worker_snapshot;
     std::shared_ptr<task_t<bool>> pending_maintenance;
     std::shared_ptr<task_t<void>> pending_reconcile;
-    std::unique_lock<std::mutex> maintenance_lock;
+    // Requests taken by the in-flight maintenance turn; empty for a periodic turn.
+    std::vector<std::shared_ptr<publication_request_t>> serving;
     std::optional<std::chrono::steady_clock::time_point> next_worker_deadline;
     for (;;) {
         if (pending_maintenance && pending_maintenance->await_ready ()) {
             auto completed = std::move (pending_maintenance);
             const auto &result = completed->result ();
             const bool published = result && result.value ();
-            const bool reconcile_after_publish = !_descriptor_publish_pending;
+            const bool reconcile_after_publish = serving.empty ();
             if (!result)
                 _locations->record_store_error ();
-            if (_descriptor_publish_pending) {
-                _descriptor_publish_result = published;
-                _descriptor_publish_pending = false;
-            }
-            maintenance_lock.unlock ();
-            if (!reconcile_after_publish)
+            if (!reconcile_after_publish) {
+                {
+                    std::lock_guard lock (_server_progress_mutex);
+                    for (const auto &request : serving) {
+                        request->published = published;
+                        request->completed = true;
+                    }
+                }
+                serving.clear ();
                 _server_progress_changed.notify_all ();
+            }
             if (reconcile_after_publish && result && !_stop->load (std::memory_order_acquire)) {
                 pending_reconcile = std::make_shared<task_t<void>> (reconcile_task ());
                 detail::observe_task_terminal (
@@ -842,15 +856,16 @@ void client_server_location_runtime_t::run ()
         const auto now = std::chrono::steady_clock::now ();
         if (!_stop->load (std::memory_order_acquire) && !pending_maintenance && !pending_reconcile
             && !pending_worker_snapshot) {
-            maintenance_lock = std::unique_lock<std::mutex> (_server_progress_mutex);
-            if (_descriptor_publish_pending || now >= next_reconcile) {
+            {
+                std::lock_guard lock (_server_progress_mutex);
+                serving.swap (_publication_requests);
+            }
+            if (!serving.empty () || now >= next_reconcile) {
                 _client_pump_snapshot.clear ();
                 pending_maintenance = std::make_shared<task_t<bool>> (publish_servers_task ());
                 detail::observe_task_terminal (
                   *pending_maintenance,
                   [wake = _wake_timer] (const result_t<bool> &) { wake->signal (); });
-            } else {
-                maintenance_lock.unlock ();
             }
         }
         try {
@@ -928,12 +943,6 @@ void client_server_location_runtime_t::run ()
             // A failed wait ends only this wait; the next iteration still owns pending work.
         }
     }
-}
-
-bool client_server_location_runtime_t::publish_servers ()
-{
-    std::lock_guard publish_lock (_server_progress_mutex);
-    return publish_servers_task ().result ().value ();
 }
 
 task_t<bool> client_server_location_runtime_t::publish_servers_task ()
@@ -1788,8 +1797,9 @@ void client_server_location_runtime_t::stop ()
     const bool was_stopped = _stop->exchange (true, std::memory_order_acq_rel);
     {
         std::lock_guard lock (_server_progress_mutex);
-        _descriptor_publish_result = false;
-        _descriptor_publish_pending = false;
+        for (const auto &request : _publication_requests)
+            request->completed = true;
+        _publication_requests.clear ();
     }
     _server_progress_changed.notify_all ();
     _wake_timer->signal ();
