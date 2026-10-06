@@ -18,10 +18,19 @@
 #include <stdlib.h>
 
 #include <chrono>
+#include <climits>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
 #include <vector>
+
+#if defined(HAVE_FORK) && !defined(ZLINK_HAVE_WINDOWS)
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace
 {
@@ -126,6 +135,109 @@ bool wait_async_owner_transition (async_owner_transition_gate_t *gate_,
       lock, std::chrono::seconds (3),
       [gate_, field_] { return gate_->*field_; });
 }
+
+#if defined(HAVE_FORK) && !defined(ZLINK_HAVE_WINDOWS)
+struct fd_exhaustion_guard_t
+{
+    fd_exhaustion_guard_t () : changed (false)
+    {
+        memset (&original, 0, sizeof (original));
+    }
+
+    ~fd_exhaustion_guard_t () { restore (); }
+
+    bool restore ()
+    {
+        bool ok = true;
+        if (changed) {
+            if (setrlimit (RLIMIT_NOFILE, &original) == 0)
+                changed = false;
+            else
+                ok = false;
+        }
+        for (size_t i = 0; i < opened_fds.size (); ++i)
+            close (opened_fds[i]);
+        opened_fds.clear ();
+        return ok;
+    }
+
+    struct rlimit original;
+    bool changed;
+    std::vector<int> opened_fds;
+};
+
+int create_socket_with_exhausted_nofile ()
+{
+    void *const ctx = zlink_ctx_new ();
+    if (!ctx)
+        return 20;
+    void *const seed_socket = zlink_socket (ctx, ZLINK_SOCKET_SUB);
+    if (!seed_socket)
+        return 21;
+
+    fd_exhaustion_guard_t limit;
+    if (getrlimit (RLIMIT_NOFILE, &limit.original) != 0)
+        return 22;
+
+    rlim_t scan_limit = limit.original.rlim_cur;
+    if (scan_limit > static_cast<rlim_t> (INT_MAX))
+        scan_limit = static_cast<rlim_t> (INT_MAX);
+    int highest_open_fd = -1;
+    for (rlim_t fd = 0; fd < scan_limit; ++fd) {
+        errno = 0;
+        if (fcntl (static_cast<int> (fd), F_GETFD) != -1)
+            highest_open_fd = static_cast<int> (fd);
+        else if (errno != EBADF)
+            return 23;
+    }
+    if (highest_open_fd == INT_MAX)
+        return 24;
+
+    struct rlimit restricted = limit.original;
+    restricted.rlim_cur = static_cast<rlim_t> (highest_open_fd + 1);
+    if (setrlimit (RLIMIT_NOFILE, &restricted) != 0)
+        return 25;
+    limit.changed = true;
+
+    for (;;) {
+        const int fd = open ("/dev/null", O_RDONLY);
+        if (fd == -1) {
+            if (errno != EMFILE && errno != ENFILE)
+                return 26;
+            break;
+        }
+        try {
+            limit.opened_fds.push_back (fd);
+        } catch (...) {
+            close (fd);
+            return 27;
+        }
+    }
+
+    for (int attempt = 0; attempt != 3; ++attempt) {
+        errno = 0;
+        void *const socket = zlink_socket (ctx, ZLINK_SOCKET_SUB);
+        const int socket_errno = errno;
+        if (socket) {
+            if (!limit.restore ())
+                return 28;
+            (void) zlink_connect (socket, "tcp://127.0.0.1:1");
+            return 29;
+        }
+        if (socket_errno != EMFILE && socket_errno != ENFILE)
+            return 30;
+    }
+
+    if (!limit.restore ())
+        return 31;
+    // A rejected creation must leave the context able to terminate.
+    if (zlink_close (seed_socket) != 0)
+        return 32;
+    if (zlink_ctx_term (ctx) != 0)
+        return 33;
+    return 0;
+}
+#endif
 }
 
 namespace zlink
@@ -1232,6 +1344,39 @@ void test_transport_owner_start_waits_for_explicit_async_quiesce ()
     TEST_ASSERT_EQUAL_INT (0, ctx_term_rc);
 }
 
+void test_socket_creation_rejects_invalid_mailbox ()
+{
+#if defined(HAVE_FORK) && !defined(ZLINK_HAVE_WINDOWS)
+    const pid_t child = fork ();
+    TEST_ASSERT_TRUE_MESSAGE (child >= 0, "fork failed");
+    if (child == 0) {
+        alarm (30);
+        _exit (create_socket_with_exhausted_nofile ());
+    }
+
+    int child_status = 0;
+    pid_t waited;
+    do {
+        waited = waitpid (child, &child_status, 0);
+    } while (waited == -1 && errno == EINTR);
+    TEST_ASSERT_EQUAL_INT_MESSAGE (child, waited, "waitpid failed");
+
+    char failure[128];
+    if (WIFSIGNALED (child_status))
+        snprintf (failure, sizeof (failure), "child terminated by signal %d",
+                  WTERMSIG (child_status));
+    else if (WIFEXITED (child_status))
+        snprintf (failure, sizeof (failure), "child returned %d",
+                  WEXITSTATUS (child_status));
+    else
+        snprintf (failure, sizeof (failure), "child status 0x%x", child_status);
+    TEST_ASSERT_TRUE_MESSAGE (
+      WIFEXITED (child_status) && WEXITSTATUS (child_status) == 0, failure);
+#else
+    TEST_IGNORE_MESSAGE ("RLIMIT_NOFILE regression test requires POSIX fork");
+#endif
+}
+
 int main ()
 {
     setup_test_environment ();
@@ -1251,6 +1396,7 @@ int main ()
     RUN_CTX_DESTROY_TEST (test_session_decoder_queue_accounting_publication);
     RUN_CTX_DESTROY_TEST (test_monitor_owner_start_waits_for_idle_detach_linearization);
     RUN_CTX_DESTROY_TEST (test_transport_owner_start_waits_for_explicit_async_quiesce);
+    RUN_CTX_DESTROY_TEST (test_socket_creation_rejects_invalid_mailbox);
 #undef RUN_CTX_DESTROY_TEST
     return UNITY_END ();
 }

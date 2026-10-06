@@ -84,9 +84,12 @@ zlink::socket_base_t::create (int type_, class ctx_t *parent_, uint32_t tid_, in
 
     alloc_assert (s);
 
-    if (s->_mailbox == NULL) {
+    mailbox_t *const mailbox = static_cast<mailbox_t *> (s->_mailbox);
+    if (mailbox == NULL || !mailbox->valid ()) {
+        const int create_errno = errno;
         s->lifecycle_coordinator ().mark_destroyed ();
         LIBZLINK_DELETE (s);
+        errno = create_errno;
         return NULL;
     }
 

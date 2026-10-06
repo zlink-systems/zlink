@@ -14,6 +14,12 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ### Fixed
 
+- `zlink_socket()` returns `NULL` with the preserved errno (for example
+  `EMFILE`) when the socket mailbox cannot create its signaler because the
+  process file-descriptor limit is reached. It used to return a socket whose
+  mailbox fd was `-1`, and the first `zlink_connect()` aborted with
+  `Bad file descriptor` in `signaler.cpp`. The rejected socket's cleanup no
+  longer starts the context control runtime (#1481).
 - `ZLINK_OPT_BINDTODEVICE` is applied to the OS socket of `tcp`, `tls`, `ws`
   and `wss` transports: before bind on a listener and before connect on a
   connecter. It was stored but never applied since before 1.10.0. On a platform
