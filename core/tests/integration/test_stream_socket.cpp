@@ -1162,7 +1162,29 @@ void test_stream_tcp_ready_count_returns_to_zero ()
     TEST_ASSERT_TRUE (wait_monitor_ready_edge_direct (monitor, routing_id, 5000));
     close_raw_fd (client);
 
-    TEST_ASSERT_TRUE (wait_monitor_ready_count_direct (monitor, 0, 5000));
+    bool saw_disconnected = false;
+    bool saw_ready_after_disconnect = false;
+    uint64_t ready_after_disconnect = UINT64_MAX;
+    for (int i = 0; i < 5000 && !saw_ready_after_disconnect; ++i) {
+        zlink_monitor_event_t event = {};
+        const zlink_recv_result_t rc =
+          zlink_socket_monitor_recv (monitor, &event, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA) {
+            msleep (1);
+            continue;
+        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
+        if (event.event == ZLINK_EVENT_DISCONNECTED)
+            saw_disconnected = true;
+        else if (saw_disconnected
+                 && event.event == ZLINK_EVENT_CONNECTION_READY) {
+            saw_ready_after_disconnect = true;
+            ready_after_disconnect = event.value;
+        }
+    }
+    TEST_ASSERT_TRUE (saw_disconnected);
+    TEST_ASSERT_TRUE (saw_ready_after_disconnect);
+    TEST_ASSERT_EQUAL_UINT64 (0, ready_after_disconnect);
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
     test_context_socket_close_zero_linger (server);
 }
