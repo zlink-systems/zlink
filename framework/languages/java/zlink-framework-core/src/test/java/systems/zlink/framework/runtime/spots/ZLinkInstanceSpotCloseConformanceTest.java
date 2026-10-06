@@ -65,6 +65,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         store.readyCapacityConflicts.set(1);
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
+        options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         options.addRouteMesh(MESH)
                 .listen("tcp://127.0.0.1:0")
@@ -76,6 +77,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                         TYPE, Instance.class, factory -> factory.disableRelocation());
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(options, new CapturingBackend())) {
+            awaitServing(runtime);
             Reply reply =
                     runtime.route()
                             .requestToSpot(spotId, new InitialProbe())
@@ -130,6 +132,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         ObservedStore store = new ObservedStore(spotId, observation);
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
+        options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
         options.addRouteMesh(MESH)
                 .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from(spotId))
@@ -140,6 +143,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                         TYPE, Instance.class, factory -> factory.disableRelocation());
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(options, new CapturingBackend())) {
+            awaitServing(runtime);
             runtime.route()
                     .requestToSpot(spotId, new InitialProbe())
                     .instanceSpot(TYPE)
@@ -195,6 +199,8 @@ final class ZLinkInstanceSpotCloseConformanceTest {
             var repository = new ZLinkProviderLocationRepository(store);
             var options = new DefaultZLinkFrameworkOptions();
             options.addLocationStore(store);
+            options.addRelocationStore(
+                    new systems.zlink.framework.runtime.InMemoryRelocationStore());
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addRouteMesh(MESH)
                     .listen("tcp://127.0.0.1:0")
@@ -208,6 +214,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
             try (ArrivalLog flow = new ArrivalLog(spotId);
                     ZLinkFrameworkRuntime runtime =
                             ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
+                awaitServing(runtime);
                 try {
                     runtime.route()
                             .requestToSpot(spotId, new InitialProbe())
@@ -478,6 +485,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         var repository = new ZLinkProviderLocationRepository(store);
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
+        options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
         options.addRouteMesh(MESH)
                 .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from(spotId))
@@ -489,6 +497,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         CapturingBackend backend = new CapturingBackend();
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
+            awaitServing(runtime);
             try {
                 runtime.route()
                         .requestToSpot(spotId, new InitialProbe())
@@ -657,6 +666,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         var relocationStore = new systems.zlink.framework.runtime.InMemoryRelocationStore();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
+        options.addRelocationStore(relocationStore);
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         var node = options.addRouteMesh(MESH);
         node.listen(host.equals("Relocating") ? "tcp://127.0.0.1:0" : "inproc://" + spotId)
@@ -667,7 +677,6 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                 TYPE, Instance.class, factory -> factory.disableRelocation());
         DefaultZLinkFrameworkOptions targetOptions = null;
         if (host.equals("Relocating")) {
-            options.addRelocationStore(relocationStore);
             addRelocationHold(objects);
             targetOptions = new DefaultZLinkFrameworkOptions();
             targetOptions.addLocationStore(store.inner);
@@ -713,6 +722,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                 ? null
                                 : ZLinkFrameworkRuntimeTestAccess.start(
                                         targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+                    awaitServing(runtime);
                     if (host.equals("Relocating")) {
                         observeUntil(
                                         runtime.routeMeshRuntime().observe(MESH, 8),
@@ -1144,6 +1154,13 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         } finally {
             reached.cancel(false);
         }
+    }
+
+    private static void awaitServing(ZLinkFrameworkRuntime runtime) throws Exception {
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                .toCompletableFuture()
+                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+        assertTrue(runtime.isReady(), "Instance fixture requires a serving descriptor");
     }
 
     private static <T> CompletableFuture<Void> observeUntil(

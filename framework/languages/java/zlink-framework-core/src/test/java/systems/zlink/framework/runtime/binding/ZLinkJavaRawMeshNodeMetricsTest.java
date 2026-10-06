@@ -25,6 +25,7 @@ import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 
 import java.lang.reflect.Field;
@@ -117,6 +118,9 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                     new ZLinkFrameworkException(
                                             ZLinkFrameworkErrorKind.NOT_FOUND,
                                             "recovered activation handler is missing")));
+            var operations = (ZLinkServiceOperationRegistry) field(pair.source, "operations");
+            ZLinkServiceOperationRegistry.Operation<List<Message>> pending =
+                    operations.register(new java.util.UUID(0, 1), java.time.Duration.ofSeconds(5));
             var route = pair.instanceRoute("recovered-request-missing");
             try (Message packet = Message.from("Packet");
                     Message body = Message.from("body")) {
@@ -149,7 +153,86 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                         .get(2, TimeUnit.SECONDS));
                 assertEquals(1, reporter.reportedCount());
                 diagnostics.expect("request", "fail_caller", "no_handler");
+                var replyFailure =
+                        assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () -> pending.completion().get(2, TimeUnit.SECONDS));
+                assertEquals(
+                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                        ((ZLinkFrameworkException) replyFailure.getCause()).kind());
                 assertTrue(diagnostics.events.isEmpty());
+            }
+        }
+    }
+
+    @Test
+    void recoveredInstanceRequestRepliesToOriginalCallerCorrelation() throws Exception {
+        try (Pair pair = new Pair()) {
+            long replyRouteId = 43;
+            var operations = (ZLinkServiceOperationRegistry) field(pair.source, "operations");
+            ZLinkServiceOperationRegistry.Operation<List<Message>> pending =
+                    operations.register(new java.util.UUID(0, replyRouteId), Duration.ofSeconds(5));
+            var route = pair.instanceRoute("recovered-reply");
+            ((ZLinkJavaRawSpotNode) pair.target.spotNode())
+                    .registerInstanceSpotType(
+                            "reply",
+                            (type, ignored, spot) -> {
+                                spot.onDispatchEvent(
+                                        new systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkInternalAsyncSpotDispatchHandler() {
+                                            @Override
+                                            public CompletionStage<Void> handleAsync(
+                                                    systems.zlink.framework.runtime.internal.backend
+                                                                    .ZLinkBackendSpotDispatchInfo
+                                                            info) {
+                                                return CompletableFuture.completedFuture(null);
+                                            }
+
+                                            @Override
+                                            public CompletionStage<Void> handleRoute(
+                                                    systems.zlink.framework.runtime.internal.backend
+                                                                    .ZLinkBackendReceived
+                                                            received) {
+                                                try (Message reply = Message.from("recovered")) {
+                                                    received.reply().accept(List.of(reply));
+                                                }
+                                                return CompletableFuture.completedFuture(null);
+                                            }
+                                        });
+                                return CompletableFuture.completedFuture(null);
+                            });
+            try (Message packet = Message.from("Packet");
+                    Message body = Message.from("body")) {
+                var envelope =
+                        new systems.zlink.framework.runtime.internal.service
+                                .ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope(
+                                route.targetSpotId(),
+                                "reply",
+                                "mesh",
+                                pair.target.routingId(),
+                                pair.target.lifecycleGeneration(),
+                                Long.toString(pair.target.status().descriptorRevision()),
+                                pair.source.routingId(),
+                                pair.source.lifecycleGeneration(),
+                                java.util.Optional.empty(),
+                                true,
+                                0,
+                                replyRouteId,
+                                replyRouteId,
+                                System.currentTimeMillis() + 5000,
+                                new byte[0],
+                                new ZLinkServiceM6AWireCodec()
+                                        .encodeFrameworkMultipartFrame(List.of(packet, body)));
+                pair.target
+                        .recoverInstanceActivation(envelope, route)
+                        .toCompletableFuture()
+                        .get(2, TimeUnit.SECONDS);
+                List<Message> replies = pending.completion().get(2, TimeUnit.SECONDS);
+                try {
+                    assertEquals("recovered", replies.getFirst().toUtf8String());
+                } finally {
+                    replies.forEach(Message::close);
+                }
             }
         }
     }
