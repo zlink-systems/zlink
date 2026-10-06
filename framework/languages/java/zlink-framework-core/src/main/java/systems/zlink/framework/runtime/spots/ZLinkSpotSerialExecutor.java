@@ -610,10 +610,6 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                                                 serialExecutor, spotQueue)));
     }
 
-    private List<ZLinkSerialExecutionQueue> timerSnapshot() {
-        return inStateLane(() -> List.copyOf(timerQueues.values()));
-    }
-
     private List<ZLinkActorSerialExecutor> actorSnapshot() {
         return inStateLane(() -> List.copyOf(actorQueues.values()));
     }
