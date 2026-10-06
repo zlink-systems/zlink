@@ -266,6 +266,7 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
 
     private async Task RunPhase(Func<Task>? workload)
     {
+        var currentPhase = Phase;
         Task operations;
         try
         {
@@ -276,6 +277,18 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
             RecordDiagnostic(error);
             operations = Task.CompletedTask;
         }
+        var observedOperations = operations.ContinueWith(
+            completed =>
+            {
+                if (completed.IsFaulted)
+                    RecordDiagnostic(completed.Exception!.GetBaseException());
+                else if (completed.IsCanceled)
+                    RecordDiagnostic(new OperationCanceledException());
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
         var initialPublicState = SamplePublicState?.Invoke();
         if (initialPublicState is not null)
             lock (gate)
@@ -296,16 +309,12 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
                     publicStateSamples.Add(publicState);
             }
         }
-        // Both phases wait for work already issued to finish inside the shared call deadline.
-        try
+        // Warmup must drain before reset; measured seals the window with unresolved work counted as inflight.
+        if (currentPhase == "warmup")
         {
-            await operations.ConfigureAwait(false);
+            await observedOperations.ConfigureAwait(false);
+            await WaitForOperationsAsync().ConfigureAwait(false);
         }
-        catch (Exception error)
-        {
-            RecordDiagnostic(error);
-        }
-        await WaitForOperationsAsync().ConfigureAwait(false);
         lock (gate)
         {
             sampler.End();
@@ -464,7 +473,10 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
     public void RecordDiagnostic(Exception error)
     {
         lock (gate)
-            RecordError(error, false);
+        {
+            if (!sealedResults)
+                RecordError(error, false);
+        }
     }
 
     private void RecordError(Exception error, bool outcome)

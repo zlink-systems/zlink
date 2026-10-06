@@ -128,7 +128,7 @@ public sealed class HarnessContractTests
     }
 
     [Fact]
-    public async Task MeasuredPhaseWaitsForIssuedOperationsToDrain()
+    public async Task MeasuredPhaseSealsAtWindowEndWithAnOutstandingOperation()
     {
         var config = Config(.01) with
         {
@@ -139,8 +139,13 @@ public sealed class HarnessContractTests
         await measurement.PhaseTask.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.True(measurement.Reset(Reset(measurement), null).ok);
 
-        var issued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var issued = new TaskCompletionSource<long>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var producerFinished = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         Assert.True(
             measurement
                 .Start(
@@ -148,18 +153,30 @@ public sealed class HarnessContractTests
                     async () =>
                     {
                         Assert.True(measurement.BeginOperation(out var started));
-                        issued.TrySetResult();
+                        issued.TrySetResult(started);
                         await release.Task;
                         measurement.CompleteOperation(started);
+                        producerFinished.TrySetResult();
                     }
                 )
                 .accepted
         );
-        await issued.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await Task.Delay(30);
-        Assert.False(measurement.PhaseTask.IsCompleted);
-        release.TrySetResult();
-        await measurement.PhaseTask.WaitAsync(TimeSpan.FromSeconds(2));
+        var operationStarted = await issued.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            await measurement.PhaseTask.WaitAsync(TimeSpan.FromSeconds(2));
+            var snapshot = measurement.Snapshot(null);
+            Assert.Equal("complete", snapshot.phase);
+            Assert.Equal("1", snapshot.metrics["messages.sent"]);
+            Assert.Equal("0", snapshot.metrics["messages.completed"]);
+            Assert.Equal("1", snapshot.metrics["messages.inflightAtEnd"]);
+            Assert.False(measurement.CompleteOperation(operationStarted));
+        }
+        finally
+        {
+            release.TrySetResult();
+            await producerFinished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
     }
 
     [Fact]

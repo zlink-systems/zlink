@@ -241,11 +241,33 @@ public static class ServerApplication
     private static string? ObservedTopology(IServiceProvider services) =>
         services.GetRequiredService<RoleConfig>().topology;
 
+    private static Dictionary<string, string> BoundTransportEndpoints(
+        RoleConfig config,
+        IZLinkFrameworkRuntime runtime
+    )
+    {
+        Dictionary<string, string> endpoints = new(StringComparer.Ordinal);
+        foreach (var key in config.transportEndpoints.Keys)
+        {
+            var (kind, name) = key switch
+            {
+                "stream" => (ZLinkListenerKind.Stream, "perf-session"),
+                "mesh" => (ZLinkListenerKind.RouteMesh, config.meshName!),
+                "clientserver" => (ZLinkListenerKind.ClientServer, config.channelName!),
+                "fanout" => (ZLinkListenerKind.Fanout, config.channelName!),
+                _ => throw new InvalidOperationException($"Unknown perf listener key '{key}'."),
+            };
+            endpoints.Add(key, runtime.GetListenerStatus(kind, name).Endpoint);
+        }
+        return endpoints;
+    }
+
     public static PerfReady Ready(IServiceProvider services)
     {
         var config = services.GetRequiredService<RoleConfig>();
         var measurement = services.GetRequiredService<Measurement>();
-        var host = services.GetRequiredService<IZLinkFrameworkRuntime>().Status;
+        var frameworkRuntime = services.GetRequiredService<IZLinkFrameworkRuntime>();
+        var host = frameworkRuntime.Status;
         var infrastructure = host.IsReady;
         var topology = ObservedTopology(services);
         if (topology == "routemesh")
@@ -280,6 +302,9 @@ public static class ServerApplication
                     .GetRequiredService<IZLinkRouteMeshRuntime>()
                     .GetStatus(config.meshName)
                     .ReadyPeerCount > 0;
+        var transportEndpoints = infrastructure
+            ? BoundTransportEndpoints(config, frameworkRuntime)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
         var probe = measurement.SetupEvidence.Length > 0;
         // A role without this cell's public create/bind result registers ObjectsReadiness; baselines have none.
         var objects = services.GetService<ObjectsReadiness>();
@@ -293,13 +318,13 @@ public static class ServerApplication
                 observedValue = PublicStatus(services),
             },
         ];
-        if (config.transportEndpoints.Count > 0)
+        if (transportEndpoints.Count > 0)
             evidence.Add(
                 new
                 {
-                    kind = "verifiedListenerReservation",
-                    source = "role config; coordinator OS bind reservation and public host startup",
-                    observedValue = config.transportEndpoints,
+                    kind = "boundTransportEndpoints",
+                    source = "public Framework listener status",
+                    observedValue = transportEndpoints,
                 }
             );
         if (objects is not null)
