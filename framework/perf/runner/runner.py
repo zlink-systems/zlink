@@ -378,7 +378,7 @@ def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell:
 
 
 def wait_roles_complete(owned: OwnedProcesses, roles: list[dict], workload: dict, deadline: float, stage: str) -> None:
-    """Poll each role until its phase is complete, sharing the phase's setup-timeout deadline."""
+    """Poll each role until its phase is complete, sharing the phase drain deadline (§4.1)."""
     pending = list(roles)
     admin_timeout = workload["adminTimeoutMs"] / 1000
     observed = {}
@@ -395,7 +395,7 @@ def wait_roles_complete(owned: OwnedProcesses, roles: list[dict], workload: dict
                 pending.remove(role)
         if pending and time.monotonic() >= deadline:
             write_json(owned.cell / "tmp" / (stage + "-completion-failed.json"), observed)
-            raise TimeoutError(f"Role phase did not complete inside setupTimeoutMs={workload['setupTimeoutMs']}")
+            raise TimeoutError(f"Role {stage} did not complete before its deadline; see tmp/{stage}-completion-failed.json")
         if pending:
             time.sleep(0.02)
 
@@ -408,8 +408,8 @@ def comparison(args: argparse.Namespace, cell: Cell, env: dict) -> tuple[dict, s
                 "connections": v.get("connections"),
                 "logicalStreams": v.get("logical_streams"), "clientCount": v["client_count"],
                 "connectConcurrency": v.get("connect_concurrency"),
-                "requestTimeoutMs": 1000, "correlationExpiryMs": 1000, "driverTimeoutMs": 2000,
-                "setupTimeoutMs": 30000, "adminTimeoutMs": 5000, "socketSendTimeoutMs": 1000}
+                "drainTimeoutMs": 30000, "setupTimeoutMs": 30000, "adminTimeoutMs": 5000,
+                "socketSendTimeoutMs": math.ceil((args.warmup_seconds + args.duration_seconds) * 1000) + 30000}
     pool = v.get("worker_pool_size")
     comparable = {"language": args.language, "scenario": scenario.name, "mode": cell.mode, "terminal": cell.terminal,
                   "topology": cell.topology, "discovery": scenario.discovery, "objectRole": scenario.object_roles,
@@ -420,7 +420,7 @@ def comparison(args: argparse.Namespace, cell: Cell, env: dict) -> tuple[dict, s
                   "packageSource": args.package_source,
                   "subscriberCount": cell.subscriber_count,
                   "worker": {"algorithm": "xorshift32-v1", "taskMillis": v["worker_task_millis"], "minThreads": pool, "maxThreads": pool,
-                             "idleTimeoutMs": 60000, "workerTimeoutMs": workload["requestTimeoutMs"]} if scenario.worker else None,
+                             "idleTimeoutMs": 60000} if scenario.worker else None,
                   "splitRule": "q=N/P,r=N%P,count=q+(i<r),first=i*q+min(i,r)" if cs else "one source; stream IDs 0..N-1",
                   "workload": workload, "serializer": env["serializer"],
                   "cpu": {key: env[key] for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity")},
@@ -535,11 +535,12 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
             duration = config["workload"]["warmupSeconds" if phase == "warmup" else "durationSeconds"]
             for client in clients:
                 client.send("wait")
-            completion_deadline = time.monotonic() + duration + config["workload"]["setupTimeoutMs"] / 1000
+            # §4.1, §5.2: a phase completes when its work has drained; the drain limit is drainTimeoutMs.
+            completion_deadline = time.monotonic() + duration + config["workload"]["drainTimeoutMs"] / 1000
             for client in clients:
                 remaining = completion_deadline - time.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError(f"Client phase did not complete inside setupTimeoutMs={config['workload']['setupTimeoutMs']}")
+                    raise TimeoutError(f"Client phase did not complete inside drainTimeoutMs={config['workload']['drainTimeoutMs']}")
                 acknowledgement = client.receive(remaining, "response")["response"]
                 if not acknowledgement.get("ok") or acknowledgement.get("phase") != "complete":
                     raise RuntimeError("Client phase did not complete successfully; collect its firstErrors evidence")

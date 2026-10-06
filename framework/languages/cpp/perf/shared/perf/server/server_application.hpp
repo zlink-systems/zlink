@@ -447,7 +447,7 @@ inline void configure_base (fw::zlink_framework_options_t &options, role_t &role
 {
     const auto &config = role.config;
     options.set_default_request_timeout (
-      std::chrono::milliseconds (config.workload.request_timeout_ms));
+      std::chrono::milliseconds (config.workload.setup_timeout_ms));
     options.configure_network ().set_bind_host ("127.0.0.1");
     options.configure_network ().set_advertise_host (std::optional<std::string> ("127.0.0.1"));
     // Perf spec §20: the run-owned Docker Redis, one namespace per cell; only Store scenarios carry it.

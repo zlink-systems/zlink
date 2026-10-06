@@ -66,7 +66,7 @@ class actor_no_bind_request_echo_scenario_t
         std::exception_ptr error;
         try {
             const auto reply = co_await actors.request (actor_id, request)
-                                 .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
+                                 .timeout (measurement.call_timeout ())
                                  .async<echo_reply_t> ();
             payload_pattern_t::validate_identity (request, reply);
             measurement.pattern ().validate (reply.payload);

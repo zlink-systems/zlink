@@ -50,7 +50,7 @@ class s2s_remote_request_spot_t final : public perf_spot_base_t<s2s_remote_reque
             operation_started = !probe;
             request.sent_ticks = dec (started);
             auto call = _route.request_to_channel (*config.channel_name, request)
-                          .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms));
+                          .timeout (measurement.call_timeout ());
             echo_reply_t reply;
             if (config.terminal == "yield") {
                 _role.metrics.count ("spot.applicationYieldCalls");
@@ -115,7 +115,7 @@ class s2s_spot_to_channel_request_echo_scenario_t
         for (std::size_t target = 0; target < config.spot_ids.size (); ++target) {
             const auto echo = measurement.request (static_cast<int> (target), _sequences.next (static_cast<int> (target)), true);
             const auto driven = route.request_to_spot (config.spot_ids[target], drive_request_t{echo})
-                                  .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms))
+                                  .timeout (measurement.call_timeout (true))
                                   .async<drive_reply_t> ()
                                   .result ()
                                   .value ();
@@ -148,7 +148,7 @@ class s2s_spot_to_channel_request_echo_scenario_t
             drive_reply_t driven;
             try {
                 driven = co_await route.request_to_spot (spot_id, drive_request_t{echo})
-                           .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms)).async<drive_reply_t> ();
+                           .timeout (measurement.call_timeout (true)).async<drive_reply_t> ();
             }
             catch (...) {
                 _role.metrics.count ("driver.failed");

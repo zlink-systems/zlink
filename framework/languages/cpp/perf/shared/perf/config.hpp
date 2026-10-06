@@ -18,7 +18,7 @@ struct workload_t
     std::optional<int> connections, logical_streams;
     int client_count = 1;
     std::optional<int> connect_concurrency;
-    int request_timeout_ms = 0, correlation_expiry_ms = 0, driver_timeout_ms = 0, setup_timeout_ms = 0,
+    int drain_timeout_ms = 0, setup_timeout_ms = 0,
         admin_timeout_ms = 0, socket_send_timeout_ms = 0;
 };
 inline void from_json (const json &in, workload_t &v)
@@ -30,9 +30,7 @@ inline void from_json (const json &in, workload_t &v)
     v.logical_streams = in.at ("logicalStreams").get<std::optional<int>> ();
     v.client_count = in.at ("clientCount").get<int> ();
     v.connect_concurrency = in.at ("connectConcurrency").get<std::optional<int>> ();
-    v.request_timeout_ms = in.at ("requestTimeoutMs").get<int> ();
-    v.correlation_expiry_ms = in.at ("correlationExpiryMs").get<int> ();
-    v.driver_timeout_ms = in.at ("driverTimeoutMs").get<int> ();
+    v.drain_timeout_ms = in.at ("drainTimeoutMs").get<int> ();
     v.setup_timeout_ms = in.at ("setupTimeoutMs").get<int> ();
     v.admin_timeout_ms = in.at ("adminTimeoutMs").get<int> ();
     v.socket_send_timeout_ms = in.at ("socketSendTimeoutMs").get<int> ();
@@ -57,7 +55,7 @@ inline void from_json (const json &in, store_config_t &v)
 struct worker_config_t
 {
     std::string algorithm;
-    int task_millis = 0, min_threads = 0, max_threads = 0, idle_timeout_ms = 0, worker_timeout_ms = 0;
+    int task_millis = 0, min_threads = 0, max_threads = 0, idle_timeout_ms = 0;
 };
 inline void from_json (const json &in, worker_config_t &v)
 {
@@ -66,7 +64,6 @@ inline void from_json (const json &in, worker_config_t &v)
     v.min_threads = in.at ("minThreads").get<int> ();
     v.max_threads = in.at ("maxThreads").get<int> ();
     v.idle_timeout_ms = in.at ("idleTimeoutMs").get<int> ();
-    v.worker_timeout_ms = in.at ("workerTimeoutMs").get<int> ();
 }
 
 struct diagnostics_config_t

@@ -112,7 +112,7 @@ class s2s_spot_to_channel_send_send_echo_scenario_t
             auto echo = measurement.request (static_cast<int> (target), _sequences.next (static_cast<int> (target)), true);
             echo.return_spot_id = config.spot_ids[target];
             const auto driven = route.request_to_spot (config.spot_ids[target], drive_request_t{echo})
-                                  .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms))
+                                  .timeout (measurement.call_timeout (true))
                                   .async<drive_reply_t> ()
                                   .result ()
                                   .value ();
@@ -153,7 +153,7 @@ class s2s_spot_to_channel_send_send_echo_scenario_t
         std::optional<std::int64_t> driver_finished;
         try {
             driven = co_await route.request_to_spot (spot_id, drive_request_t{echo})
-                       .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms)).async<drive_reply_t> ();
+                       .timeout (measurement.call_timeout (true)).async<drive_reply_t> ();
             driver_finished = now_ticks ();
         }
         catch (...) {

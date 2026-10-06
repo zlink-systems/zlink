@@ -86,7 +86,7 @@ class send_send_correlation_t
     {
         auto entry = std::make_shared<entry_t> (
           request, started_ticks,
-          now_ticks () + static_cast<std::int64_t> (_measurement.config ().workload.correlation_expiry_ms) * 1'000'000);
+          _measurement.call_deadline_ticks ());
         {
             std::lock_guard lock (_gate);
             if (!_entries.emplace (request.correlation_id, entry).second)

@@ -60,7 +60,7 @@ class session_echo_only_scenario_t
                         options.endpoint = _endpoint;
                         options.dispatch_mode = sc::dispatch_mode_t::immediate;
                         options.connect_timeout = std::chrono::milliseconds (workload.setup_timeout_ms);
-                        options.request_timeout = std::chrono::milliseconds (workload.request_timeout_ms);
+                        options.request_timeout = std::chrono::milliseconds (workload.setup_timeout_ms);
                         auto connector = std::make_shared<sc::connector_t> (sc::connector_factory_t::create (options));
                         if (const auto connected = connector->connect (); !connected)
                             throw connector_error_t (std::to_string (static_cast<int> (connected.error ()->code)), false, connected.error ()->message);
@@ -148,7 +148,7 @@ class session_echo_only_scenario_t
             expected.sequence = request.sequence;
             expected.correlation_id = request.correlation_id;
             slot.connector->request (request)
-              .timeout (std::chrono::milliseconds (_manifest.workload.request_timeout_ms))
+              .timeout (_measurement.call_timeout ())
               .submit<echo_reply_t> ([this, loops, slot, expected = std::move (expected), started, chain] (sc::result_t<echo_reply_t> reply) {
                   std::exception_ptr error;
                   try {

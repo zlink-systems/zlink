@@ -222,6 +222,18 @@ class measurement_t
     std::string phase () const { std::lock_guard lock (_gate); return _phase; }
     std::string reset_seq () const { std::lock_guard lock (_gate); return _reset_seq; }
     std::int64_t end_ticks () const { std::lock_guard lock (_gate); return _end; }
+    std::int64_t call_deadline_ticks () const
+    {
+        std::lock_guard lock (_gate);
+        return _start == 0 ? now_ticks () + static_cast<std::int64_t> (_config.workload.setup_timeout_ms) * 1'000'000
+                           : _end + static_cast<std::int64_t> (_config.workload.drain_timeout_ms) * 1'000'000;
+    }
+    std::chrono::milliseconds call_timeout (bool driver = false) const
+    {
+        const auto remaining = std::max<std::int64_t> (1, call_deadline_ticks () - now_ticks ());
+        return std::chrono::ceil<std::chrono::milliseconds> (std::chrono::nanoseconds (remaining))
+               + std::chrono::milliseconds (driver ? _config.workload.drain_timeout_ms : 0);
+    }
     bool can_issue () const
     {
         std::lock_guard lock (_gate);

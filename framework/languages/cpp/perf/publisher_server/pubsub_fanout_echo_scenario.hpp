@@ -114,6 +114,7 @@ class pubsub_fanout_echo_scenario_t
         else
             fanout_metrics::null_key (snapshot, "fanout.publishOpsPerSec", "PHASE_NOT_STARTED", "No measured window has run.");
         snapshot["provenance"]["fanout"] = {{"channelName", _role.config.channel_name}, {"topic", fanout_topic}, {"noDrop", true},
+                                            {"socketSendTimeoutMs", _role.config.workload.socket_send_timeout_ms},
                                             {"publisherSequenceScope", "one counter per run; warmup and measured ranges are disjoint"},
                                             {"sequenceOriginal", "publisher-sequences.json"}};
         if (!final)

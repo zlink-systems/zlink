@@ -19,7 +19,9 @@ int main (int argc, char **argv)
         options.add_fanout_channel (*role_ref.config.channel_name)
           .enable_publisher (role_ref.config.transport_endpoints.at ("fanout"))
           .set_automatic_routing_id_prefix ("perf-publisher")
-          .set_no_drop (true);
+          .set_no_drop (true)
+          // §5.2: phase lengths plus drainTimeoutMs, so even the first publish meets its call deadline first.
+          .set_send_timeout (std::chrono::milliseconds (role_ref.config.workload.socket_send_timeout_ms));
         app.add_hosted_service (std::make_unique<perf::prepare_service_t> (role_ref, [scenario] (const std::atomic<bool> &stopping) { scenario->prepare (stopping); }));
     });
 }

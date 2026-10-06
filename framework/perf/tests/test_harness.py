@@ -39,6 +39,19 @@ def histogram(samples, overflow=0):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_phase_deadline_configuration(self):
+        args = options(["single", "--scenario", "spot-worker-offload-echo", "--warmup-seconds", "2",
+                        "--duration-seconds", "3", *COMMON])
+        env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
+        env["serializer"] = {"name": "typed JSON"}
+        comparable, _ = comparison(args, expand(args, False)[0], env)
+        workload = comparable["workload"]
+        self.assertEqual(workload["drainTimeoutMs"], 30000)
+        self.assertEqual(workload["socketSendTimeoutMs"], 35000)
+        for removed in ("requestTimeoutMs", "correlationExpiryMs", "driverTimeoutMs"):
+            self.assertNotIn(removed, workload)
+        self.assertNotIn("workerTimeoutMs", comparable["worker"])
+
     def test_store_waits_for_published_endpoint_and_internal_ping(self):
         def docker_result(*command, **_kwargs):
             if command[0] == "run":
@@ -307,7 +320,6 @@ class HarnessTests(unittest.TestCase):
         local_args = options(["single", "--scenario", "session-echo-only", "--package-source", "local", *COMMON])
         self.assertEqual(local_args.package_source, "local")
         workload = comparison(args, expand(args, False)[0], env)[0]["workload"]
-        self.assertEqual(workload["driverTimeoutMs"], 2000)
         self.assertEqual(workload["setupTimeoutMs"], 30000)
         self.assertEqual(workload["adminTimeoutMs"], 5000)
         self.assertNotIn("settleTimeoutMs", workload)
@@ -512,7 +524,9 @@ class FrameworkVersionAgreementTest(unittest.TestCase):
     def test_packages_json_declares_all_supported_framework_versions(self):
         packages = json.loads((Path(__file__).resolve().parents[1] / "schema/packages.json").read_text())
         self.assertEqual(set(packages), {"dotnet", "cpp", "java", "kotlin", "node"})
-        self.assertEqual({declared_framework_version(language) for language in packages}, {"0.26.0"})
+        # The C++ driver moved to the 0.28.0 package (#1466); the other drivers follow in their own changes.
+        self.assertEqual({language: declared_framework_version(language) for language in packages},
+                         {"dotnet": "0.26.0", "cpp": "0.28.0", "java": "0.26.0", "kotlin": "0.26.0", "node": "0.26.0"})
         self.assertEqual(agreed_framework_version("0.26.0", declared_framework_version("dotnet")), "0.26.0")
 
     def test_observed_package_version_mismatch_fails(self):

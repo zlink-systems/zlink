@@ -33,7 +33,7 @@ class spot_no_await_echo_scenario_t
         for (std::size_t target = 0; target < config.spot_ids.size (); ++target) {
             const auto request = measurement.request (static_cast<int> (target), _sequences.next (static_cast<int> (target)), true);
             const auto reply = route.request_to_spot (config.spot_ids[target], request)
-                                 .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
+                                 .timeout (measurement.call_timeout ())
                                  .async<echo_reply_t> ()
                                  .result ()
                                  .value ();
@@ -65,7 +65,7 @@ class spot_no_await_echo_scenario_t
         std::exception_ptr error;
         try {
             const auto reply = co_await route.request_to_spot (spot_id, request)
-                                 .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
+                                 .timeout (measurement.call_timeout ())
                                  .async<echo_reply_t> ();
             payload_pattern_t::validate_identity (request, reply);
             measurement.pattern ().validate (reply.payload);

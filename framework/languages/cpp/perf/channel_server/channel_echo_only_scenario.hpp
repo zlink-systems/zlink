@@ -80,7 +80,7 @@ class channel_echo_only_scenario_t
         auto &route = _role.service<fw::route_client_t> ();
         const auto request = measurement.request (0, _sequences.next (0), true);
         const auto reply = route.request_to_channel (*config.channel_name, request)
-                             .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
+                             .timeout (measurement.call_timeout ())
                              .async<echo_reply_t> ()
                              .result ()
                              .value ();
@@ -113,7 +113,7 @@ class channel_echo_only_scenario_t
         std::exception_ptr error;
         try {
             const auto reply = co_await route.request_to_channel (*config.channel_name, request)
-                                 .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
+                                 .timeout (measurement.call_timeout ())
                                  .async<echo_reply_t> ();
             payload_pattern_t::validate_identity (request, reply);
             measurement.pattern ().validate (reply.payload);

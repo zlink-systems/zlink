@@ -52,6 +52,24 @@ json measured_snapshot (measurement_t &measurement)
     return measurement.snapshot (json::object ());
 }
 
+void test_phase_deadlines ()
+{
+    auto cfg = config ();
+    cfg.workload.drain_timeout_ms = 100;
+    cfg.workload.setup_timeout_ms = 100;
+    measurement_t measurement (cfg, true);
+    require (measurement.call_timeout () == std::chrono::milliseconds (cfg.workload.setup_timeout_ms),
+             "setup calls must use the setup timeout");
+    require (measurement.start (trigger ("warmup", "0"), {}).accepted, "warmup did not start");
+    const auto deadline = measurement.call_deadline_ticks ();
+    require (deadline == measurement.end_ticks () + 100'000'000, "deadline must equal phase end plus drain");
+    std::this_thread::sleep_for (std::chrono::milliseconds (2));
+    require (measurement.call_deadline_ticks () == deadline, "later submissions must share the phase deadline");
+    require (measurement.call_timeout (true) - measurement.call_timeout () >= std::chrono::milliseconds (99),
+             "the driver must receive an additional drain interval");
+    measurement.wait_phase ();
+}
+
 void test_terminal_window_and_inflight_accounting ()
 {
     measurement_t measurement (config (), true);
@@ -252,7 +270,8 @@ void test_subscriber_entry_time_survives_snapshot ()
 void test_correlation_releases_request_after_close ()
 {
     auto cfg = config ();
-    cfg.workload.correlation_expiry_ms = 100;
+    cfg.workload.drain_timeout_ms = 100;
+    cfg.workload.setup_timeout_ms = 100;
     measurement_t measurement (cfg, true);
     scenario_metrics_t metrics (measurement);
     send_send_correlation_t correlations (measurement, metrics);
@@ -268,7 +287,7 @@ void test_correlation_releases_request_after_close ()
 void test_correlation_owner_completes_once ()
 {
     auto cfg = config ();
-    cfg.workload.correlation_expiry_ms = 100;
+    cfg.workload.drain_timeout_ms = 100;
     cfg.workload.duration_seconds = 0.25;
     measurement_t measurement (cfg, true);
     scenario_metrics_t metrics (measurement);
@@ -317,7 +336,10 @@ void test_correlation_owner_completes_once ()
     require (measurement.begin_operation (late_started, "send"), "second correlation did not start");
     auto late = measurement.request (0, 2);
     auto late_entry = correlations.register_request (late, late_started);
-    std::this_thread::sleep_for (std::chrono::milliseconds (110));
+    require (late_entry->expires_at_ticks == measurement.call_deadline_ticks (),
+             "a send/send correlation must expire at the phase call deadline");
+    std::this_thread::sleep_for (std::chrono::nanoseconds (late_entry->expires_at_ticks - now_ticks ())
+                                 + std::chrono::milliseconds (10));
     correlations.reply (payload_pattern_t::reply (late, now_ticks ()));
     const auto [late_error, late_completed] = correlations.complete (late_entry).result ().value ();
     require (late_error && late_entry->state == send_send_correlation_t::expired,
@@ -389,6 +411,7 @@ int main ()
 {
     try {
         test_terminal_window_and_inflight_accounting ();
+        test_phase_deadlines ();
         test_driver_latency_uses_result_window ();
         test_public_error_classification ();
         test_histogram_percentile_cap ();

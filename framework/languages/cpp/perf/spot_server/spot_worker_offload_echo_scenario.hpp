@@ -7,7 +7,7 @@
 // echo identity and payload validation; the worker call interval is recorded separately in §14 worker.*. The Spot handler runs
 // one `run_cpu_worker` call per request: Yield (default) hands the turn back while the worker runs, ordinary keeps it. The worker
 // callback is the self-contained xorshift32-v1 task of worker-task-millis (no sleep); it checks time and cancellation every 1024
-// iterations. Public worker options carry min/max threads and idle timeout; the call timeout is the workerTimeoutMs.
+// iterations. Public worker options carry min/max threads and idle timeout; the call deadline is phase end plus drainTimeoutMs.
 // worker-offload; payload 1024 bytes. Store: run Docker Redis (Spot addresses). Null: worker queue depth and Spot internals have
 // no public observation; remote call, Actor, fanout do not apply.
 
@@ -62,7 +62,7 @@ class spot_worker_offload_spot_t final : public perf_spot_base_t<spot_worker_off
             const auto submitted = now_ticks ();
             auto call = _context
                           .run_cpu_worker ([task_millis] (std::stop_token cancellation) { return xorshift32 (task_millis, cancellation); })
-                          .timeout (std::chrono::milliseconds (config.worker->worker_timeout_ms));
+                          .timeout (measurement.call_timeout ());
             worker_observation_t observation;
             if (config.terminal == "yield") {
                 _role.metrics.count ("spot.applicationYieldCalls");
@@ -127,7 +127,7 @@ class spot_worker_offload_echo_scenario_t
           .provenance ("workerOptions",
                        {{"algorithm", worker.algorithm}, {"taskMillis", worker.task_millis},
                         {"applied", {{"minThreads", worker.min_threads}, {"maxThreads", worker.max_threads}, {"idleTimeoutMs", worker.idle_timeout_ms}}},
-                       {"callTimeoutMs", worker.worker_timeout_ms}});
+                       {"callDeadlineRule", "phaseEnd+drainTimeoutMs"}});
     }
 
     void prepare (const std::atomic<bool> &stopping)
@@ -140,7 +140,7 @@ class spot_worker_offload_echo_scenario_t
         for (std::size_t target = 0; target < config.spot_ids.size (); ++target) {
             const auto request = measurement.request (static_cast<int> (target), _sequences.next (static_cast<int> (target)), true);
             const auto reply = route.request_to_spot (config.spot_ids[target], request)
-                                 .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
+                                 .timeout (measurement.call_timeout ())
                                  .async<echo_reply_t> ()
                                  .result ()
                                  .value ();
@@ -172,7 +172,7 @@ class spot_worker_offload_echo_scenario_t
         std::exception_ptr error;
         try {
             const auto reply = co_await route.request_to_spot (spot_id, request)
-                                 .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
+                                 .timeout (measurement.call_timeout ())
                                  .async<echo_reply_t> ();
             payload_pattern_t::validate_identity (request, reply);
             measurement.pattern ().validate (reply.payload);
