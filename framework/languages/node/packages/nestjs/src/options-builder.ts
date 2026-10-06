@@ -438,6 +438,11 @@ class DefaultZLinkNestFanoutChannelBuilder
     return this;
   }
 
+  setSendTimeout(timeoutMs: number): this {
+    this.updatePublisher({ sendTimeoutMs: timeoutMs });
+    return this;
+  }
+
   enableSubscriber(endpoint?: string | readonly string[]): this {
     const mode = endpoint === undefined ? 'automatic' : 'manual';
     if (this.subscriberMode !== undefined && this.subscriberMode !== mode) {

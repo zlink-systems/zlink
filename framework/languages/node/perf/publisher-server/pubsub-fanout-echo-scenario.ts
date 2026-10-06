@@ -175,7 +175,8 @@ export async function runPubSubFanoutEcho(
           .enablePublisher(config.transportEndpoints.fanout)
           .setAdvertiseHost('127.0.0.1')
           .setRoutingIdPrefix('perf-publisher')
-          .setNoDrop(PUBLISHER_NO_DROP);
+          .setNoDrop(PUBLISHER_NO_DROP)
+          .setSendTimeout(config.workload.socketSendTimeoutMs);
       },
       workload: () => scenario?.run,
       prepare: async (app) => {

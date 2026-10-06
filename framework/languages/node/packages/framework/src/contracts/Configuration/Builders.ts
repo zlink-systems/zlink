@@ -180,6 +180,7 @@ export interface ZLinkFanoutChannelBuilder {
   routingId(routingId: string): this;
   setRoutingIdPrefix(prefix: string): this;
   setNoDrop(noDrop?: boolean): this;
+  setSendTimeout(timeoutMs: number): this;
   enableSubscriber(): this;
   subscribe(topic: string): this;
   connect(endpoint: string): this;
