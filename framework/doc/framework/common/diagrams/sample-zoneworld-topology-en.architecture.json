@@ -46,7 +46,7 @@
       "title": "ZoneNode roles",
       "items": [
         "ZoneNode A/B run with the same executable capability, registering the Zone Spot factory (stable type zoneworld.zone, four Spot instances by ZoneId), the Player Actor factory (stable type zoneworld.player), the zone Channel, and the report channel.",
-        "Each ZoneNode declares a Zone Spot capacity of 2 — the four zones split 2/2 across the two nodes by capacity; the split is discovered via Ops probes, never pinned by fixtures.",
+        "Zone Spot capacity and readiness follow §3 of the ZoneWorld sample contract.",
         "Location Store placement selects the owner of objects such as Zone Spots and Player Actors. NodeId and the transport RID are separate domains.",
         "Only the Gateway and Ops endpoints are exposed to the Client; the ZoneNode endpoint isn't exposed."
       ]
