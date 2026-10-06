@@ -24,35 +24,8 @@ const {
 const {
   encodeServiceMetadataFrame
 } = require('../../packages/framework/dist/runtime/foundation/service-metadata-codec');
-const {
-  ZLinkDispatchErrorReporter
-} = require('../../packages/framework/dist/runtime/channels/dispatch-error-reporter');
-const { logs } = require('@opentelemetry/api-logs');
-const { LoggerProvider } = require('@opentelemetry/sdk-logs');
-const fs = require('node:fs');
-const flowRecords = [];
 const TEST_APPLICATION_JOB_CAPACITY = 1n;
 const TEST_NATIVE_REQUEST_SEQUENCE = 1n;
-const loggerProvider = new LoggerProvider({
-  processors: [
-    {
-      onEmit(record) {
-        flowRecords.push(record);
-        if (process.env.ZLINK_TEST_FLOW_FILE)
-          fs.appendFileSync(
-            process.env.ZLINK_TEST_FLOW_FILE,
-            JSON.stringify(record.attributes, (_key, value) =>
-              typeof value === 'bigint' ? String(value) : value
-            ) + '\n'
-          );
-      },
-      forceFlush: async () => {},
-      shutdown: async () => {}
-    }
-  ]
-});
-logs.setGlobalLoggerProvider(loggerProvider);
-test.after(() => loggerProvider.shutdown());
 
 function ingressOwner() {
   const permit = {
@@ -66,14 +39,16 @@ function ingressOwner() {
   });
 }
 
-// nativeReplyIngress models a Core Request record carrying its live reply capability.
-function pair({ nativeReplyIngress = false } = {}) {
+// Core Request supplies the inbound request sequence and opaque reply capability.
+function pair() {
   const nodes = new Map();
   const events = [];
   function node(rid, generation) {
     const queued = [];
     const sent = [];
+    const requests = [];
     const replyDeliveries = [];
+    const activeRequests = new Set();
     const applicationJobQueue = new ApplicationJobQueue(
       resolveApplicationJobQueueConfiguration(
         { maxQueuedApplicationJobs: TEST_APPLICATION_JOB_CAPACITY },
@@ -109,24 +84,6 @@ function pair({ nativeReplyIngress = false } = {}) {
         events.push(`send:${rid}:${parts[0][SERVICE_WIRE_COMMAND_OFFSET]}`);
         const destination = nodes.get(target);
         const received = { sourceRoutingId: rid, parts };
-        if (
-          nativeReplyIngress &&
-          parts[0][SERVICE_WIRE_COMMAND_OFFSET] === wire.M6bServiceWireCommand.instanceSpot
-        ) {
-          const request = wire.decodeStatefulHeader(parts[0]);
-          if (
-            request.kind === 'instanceSpot' &&
-            request.operationKind === 'request' &&
-            request.replyRouteId !== undefined
-          ) {
-            received.requestSequence = TEST_NATIVE_REQUEST_SEQUENCE;
-            received.reply = (replyParts) => {
-              replyDeliveries.push(
-                nodes.get(rid).receive({ sourceRoutingId: target, parts: replyParts })
-              );
-            };
-          }
-        }
         const permit = await destination.applicationJobQueue.acquire();
         try {
           await destination.receive(received);
@@ -135,8 +92,56 @@ function pair({ nativeReplyIngress = false } = {}) {
           permit.releaseAfterInternalProcessing();
         }
       },
-      requestService() {
-        throw new Error('Cold request must use send admission and its source pending operation.');
+      requestService(target, parts, timeoutMs) {
+        requests.push({ target, parts, timeoutMs });
+        events.push(`request:${rid}:${parts[0][SERVICE_WIRE_COMMAND_OFFSET]}`);
+        const destination = nodes.get(target);
+        return new Promise((resolve, reject) => {
+          let settled = false;
+          const finish = (callback, value) => {
+            if (settled) return;
+            settled = true;
+            activeRequests.delete(pendingRequest);
+            callback(value);
+          };
+          const pendingRequest = {
+            target,
+            fail: (error) => finish(reject, error)
+          };
+          activeRequests.add(pendingRequest);
+          if (!connected || destination === undefined) {
+            pendingRequest.fail(new Error(`Core request target '${target}' is disconnected.`));
+            return;
+          }
+          const received = {
+            sourceRoutingId: rid,
+            parts,
+            requestSequence: BigInt(requests.length - 1) + TEST_NATIVE_REQUEST_SEQUENCE,
+            reply: (replyParts) => {
+              replyDeliveries.push(Promise.resolve());
+              finish(
+                resolve,
+                replyParts.map((part) => Buffer.from(part))
+              );
+            }
+          };
+          void destination.applicationJobQueue.acquire().then(
+            async (permit) => {
+              if (settled) {
+                permit.releaseAfterInternalProcessing();
+                return;
+              }
+              try {
+                await destination.receive(received);
+              } catch (error) {
+                pendingRequest.fail(error);
+              } finally {
+                permit.releaseAfterInternalProcessing();
+              }
+            },
+            (error) => pendingRequest.fail(error)
+          );
+        });
       },
       replyService(record, parts) {
         if (record.requestSequence === undefined || record.reply === undefined)
@@ -146,26 +151,15 @@ function pair({ nativeReplyIngress = false } = {}) {
       }
     };
     const runtime = new ServiceStatefulRuntime(raw, rid, generation);
-    const reporter = new ZLinkDispatchErrorReporter(
-      undefined,
-      undefined,
-      { reportRuntimeTaskException() {} },
-      {
-        diagnostics: { messageFlow: 'normal', sampleRate: 1, includeMessageSizes: false },
-        liveMode: { mode: 'normal' },
-        sourceMeshGeneration: generation
-      }
-    );
-    runtime.setDispatchErrorReporter(reporter, 'play');
     const value = {
       generation,
       runtime,
       queued,
       sent,
+      requests,
       replyDeliveries,
       applicationJobQueue,
       raw,
-      reporter,
       receive: (record) =>
         ingress({
           command: record.parts[0][SERVICE_WIRE_COMMAND_OFFSET],
@@ -175,6 +169,11 @@ function pair({ nativeReplyIngress = false } = {}) {
         }),
       disconnect(peer) {
         connected = false;
+        for (const request of [...activeRequests]) {
+          if (request.target === peer) {
+            request.fail(new Error(`Core request target '${peer}' disconnected.`));
+          }
+        }
         for (const listener of disconnect) listener(peer);
       },
       observerCount: () => disconnect.size,
@@ -242,6 +241,7 @@ function pair({ nativeReplyIngress = false } = {}) {
     payload,
     events,
     restartTarget() {
+      source.disconnect('target');
       target.runtime.close();
       target = node('target', 7n);
       target.runtime.registerAsyncInstanceActivationAuthority(authority);
@@ -255,7 +255,7 @@ function pair({ nativeReplyIngress = false } = {}) {
 
 for (const recovery of [false, true]) {
   for (const terminal of [RequestResult.Ok, RequestResult.Busy]) {
-    test(`cold ${recovery ? 'recovered' : 'normal'} reply completes source once (terminal=${terminal})`, async (t) => {
+    test(`cold ${recovery ? 'recovered activation survives caller disconnect' : 'request uses the Core reply capability'} (terminal=${terminal})`, async (t) => {
       const p = pair();
       t.after(() => p.close());
       const metadataFrame = encodeServiceMetadataFrame(new Map([['test', 'first']]));
@@ -268,8 +268,8 @@ for (const recovery of [false, true]) {
       );
       pending.promise.catch(() => {});
       await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(p.source.sent.length, 1);
-      const request = wire.decodeStatefulHeader(p.source.sent[0].parts[0]);
+      assert.equal(p.source.requests.length, 1);
+      const request = wire.decodeStatefulHeader(p.source.requests[0].parts[0]);
       assert.equal(request.kind, 'instanceSpot');
       assert.equal(p.target.queued.length, 1);
       if (recovery) {
@@ -288,8 +288,10 @@ for (const recovery of [false, true]) {
           applicationPayloadFrame: encodeApplicationPayload(p.payload),
           metadataFrame
         };
-        // A new runtime has no live ingress capability or admitted-operation memory.
+        const callerFailure = assert.rejects(pending.promise, /disconnected/);
+        // A new runtime has no live Core request capability or admitted-operation memory.
         p.restartTarget();
+        await callerFailure;
         await p.target.runtime.recoverInstanceActivation(envelope, p.route);
       }
       const mailbox = p.target.queued.shift();
@@ -298,31 +300,34 @@ for (const recovery of [false, true]) {
       assert.equal(mailbox.stateful.deadlineUnixMs, request.deadlineUnixMs);
       assert.deepEqual(mailbox.parts[1], encodeApplicationPayload(p.payload));
       mailbox.stateful.onHandlerTurnStarted?.();
-      mailbox.stateful.reply(terminal, 0, terminal === RequestResult.Ok ? p.payload : undefined);
+      if (recovery) {
+        assert.equal(mailbox.stateful.reply, undefined);
+      } else {
+        mailbox.stateful.reply(terminal, 0, terminal === RequestResult.Ok ? p.payload : undefined);
+      }
       await mailbox.stateful.onTerminalCompletion();
       mailbox.applicationJob.close();
-      const result = await pending.promise;
-      assert.equal(result.terminalResult, terminal);
-      if (terminal === RequestResult.Ok)
-        assert.deepEqual(result.payload.payload, p.payload.payload);
       assert.equal(p.source.runtime.pendingOperationCount, 0);
-      assert.equal(p.source.observerCount(), 0);
-      assert.equal(p.target.sent.length, 1);
-      assert.ok(
-        p.events.indexOf('durable:complete') <
-          p.events.indexOf(`send:target:${M6aServiceWireCommand.reply}`)
-      );
-      assert.equal(
-        await p.source.receive({ sourceRoutingId: 'target', parts: p.target.sent[0].parts }),
-        'infrastructure'
-      );
-      assert.equal(p.source.runtime.pendingOperationCount, 0);
+      assert.equal(p.target.sent.length, 0);
+      if (recovery) {
+        assert.equal(mailbox.stateful.activationRecord.replyRouteId, pending.id);
+      } else {
+        const result = await pending.promise;
+        assert.equal(result.terminalResult, terminal);
+        if (terminal === RequestResult.Ok)
+          assert.deepEqual(result.payload.payload, p.payload.payload);
+        assert.equal(p.source.sent.length, 0);
+        assert.ok(
+          p.events.indexOf('durable:complete') <
+            p.events.indexOf(`reply:target:${M6aServiceWireCommand.reply}`)
+        );
+      }
     });
   }
 }
 
-test('normal cold reply uses the original reply capability when source application permits are full', async (t) => {
-  const p = pair({ nativeReplyIngress: true });
+test('cold Core reply completes while source application permits are full', async (t) => {
+  const p = pair();
   let releasePermits;
   t.after(async () => {
     releasePermits?.();
@@ -332,7 +337,7 @@ test('normal cold reply uses the original reply capability when source applicati
   const pending = p.source.runtime.requestToMissingInstanceSpot(p.placement, p.payload, 10000);
   pending.promise.catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(p.source.sent.length, 1);
+  assert.equal(p.source.requests.length, 1);
   assert.equal(p.target.queued.length, 1);
   releasePermits = await p.source.occupyAllApplicationPermits();
   const full = p.source.applicationJobQueue.snapshot();
@@ -364,22 +369,22 @@ test('normal cold reply uses the original reply capability when source applicati
   }
 });
 
-test('cold reply without a current source peer is not sent; original source deadline wins', async (t) => {
+test('target disconnect fails the cold Core request and suppresses a late reply', async (t) => {
   const p = pair();
   t.after(() => p.close());
   const pending = p.source.runtime.requestToMissingInstanceSpot(p.placement, p.payload, 10000);
-  const rejected = assert.rejects(pending.promise, /timed out/);
+  const rejected = assert.rejects(pending.promise, /disconnected/);
   await new Promise((resolve) => setImmediate(resolve));
-  p.target.hidePeer();
+  assert.equal(p.source.requests.length, 1);
+  p.source.disconnect('target');
+  await rejected;
+  assert.equal(p.source.runtime.pendingOperationCount, 0);
   const mailbox = p.target.queued.shift();
   mailbox.stateful.reply(RequestResult.Ok, 0, p.payload);
   await mailbox.stateful.onTerminalCompletion();
   mailbox.applicationJob.close();
   assert.equal(p.target.sent.length, 0);
-  assert.equal(p.target.reporter.reportedCount, 1);
-  assert.equal(p.source.runtime.pendingOperationCount, 1);
-  p.source.runtime.expireOperations(performance.now() + 20000, performance.now() + 1000);
-  await rejected;
+  assert.equal(p.source.runtime.pendingOperationCount, 0);
 });
 
 for (const winner of ['timeout', 'cancellation', 'disconnect', 'close']) {
@@ -406,7 +411,7 @@ for (const winner of ['timeout', 'cancellation', 'disconnect', 'close']) {
   });
 }
 
-test('cold source accepts only its target RID and lifecycle; malformed reply fails the original pending request', async (t) => {
+test('cold Core reply with a mismatched logical correlation fails the pending request', async (t) => {
   const p = pair();
   t.after(() => p.close());
   const pending = p.source.runtime.requestToMissingInstanceSpot(p.placement, p.payload, 10000);
@@ -415,34 +420,33 @@ test('cold source accepts only its target RID and lifecycle; malformed reply fai
     (error) => error.kind === ZLinkFrameworkErrorKind.ProtocolError
   );
   await new Promise((resolve) => setImmediate(resolve));
-  const parts = [wire.encodeStatefulReply(pending.id, RequestResult.Ok, 0)];
-  assert.equal(await p.source.receive({ sourceRoutingId: 'other', parts }), 'protocolError');
-  const originalPeer = p.source.raw.topology.peer;
-  p.source.raw.topology.peer = () => ({ descriptor: { lifecycleGeneration: 8n } });
-  assert.equal(await p.source.receive({ sourceRoutingId: 'target', parts }), 'protocolError');
-  assert.equal(p.source.runtime.pendingOperationCount, 1);
-  p.source.raw.topology.peer = originalPeer;
-  assert.equal(
-    await p.source.receive({ sourceRoutingId: 'target', parts: [...parts, Buffer.of(0)] }),
-    'infrastructure'
-  );
+  p.target.raw.replyService = (record) => {
+    assert.notEqual(record.requestSequence, undefined);
+    assert.equal(typeof record.reply, 'function');
+    record.reply([wire.encodeStatefulReply(pending.id + 1n, RequestResult.Ok, 0)]);
+  };
+  const mailbox = p.target.queued.shift();
+  mailbox.stateful.reply(RequestResult.Ok, 0, p.payload);
+  await mailbox.stateful.onTerminalCompletion();
+  mailbox.applicationJob.close();
   await rejected;
   assert.equal(p.source.runtime.pendingOperationCount, 0);
-  p.target.queued.shift().applicationJob.close();
 });
 
-test('cold send admission rejection fails the same source pending request', async (t) => {
+test('cold Core request admission rejection fails the source pending request', async (t) => {
   const p = pair();
   t.after(() => p.close());
-  p.source.raw.sendService = async () => false;
+  p.source.raw.requestService = async () => {
+    throw new Error('Core request admission rejected.');
+  };
   const pending = p.source.runtime.requestToMissingInstanceSpot(p.placement, p.payload, 10000);
-  await assert.rejects(pending.promise, /admission failed/);
+  await assert.rejects(pending.promise, /admission rejected/);
   assert.equal(p.source.runtime.pendingOperationCount, 0);
   assert.equal(p.source.observerCount(), 0);
   assert.equal(p.target.queued.length, 0);
 });
 
-test('cold pending requests each release their intent observer on disconnect', async (t) => {
+test('cold pending requests use Core disconnect completion without Framework observers', async (t) => {
   const p = pair();
   t.after(() => p.close());
   const requests = Array.from({ length: 2 }, () =>
@@ -450,7 +454,8 @@ test('cold pending requests each release their intent observer on disconnect', a
   );
   const rejected = requests.map((pending) => assert.rejects(pending.promise, /disconnected/));
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(p.source.observerCount(), 2);
+  assert.equal(p.source.requests.length, 2);
+  assert.equal(p.source.observerCount(), 0);
   p.source.disconnect('target');
   await Promise.all(rejected);
   assert.equal(p.source.runtime.pendingOperationCount, 0);
@@ -458,10 +463,10 @@ test('cold pending requests each release their intent observer on disconnect', a
   for (const mailbox of p.target.queued) mailbox.applicationJob.close();
 });
 
-test('recovery reply uses ReplyRouteId independently of OperationId.low', async (t) => {
+test('recovered cold activation preserves its reply correlation without a live Core token', async (t) => {
   const p = pair();
   t.after(() => p.close());
-  const pending = p.source.runtime.operations.register(10000, 'registry', p.placement);
+  const replyRouteId = 23n;
   const envelope = {
     targetMeshName: 'play',
     target: p.placement,
@@ -470,20 +475,20 @@ test('recovery reply uses ReplyRouteId independently of OperationId.low', async 
     sourceSpotId: 'origin',
     operationKind: 'request',
     operation: { high: 5n, low: 9n },
-    replyRouteId: pending.id,
+    replyRouteId,
     deadlineUnixMs: BigInt(Date.now() + 10000),
     applicationPayloadFrame: encodeApplicationPayload(p.payload)
   };
-  assert.notEqual(envelope.operation.low, envelope.replyRouteId);
+  assert.notEqual(envelope.operation.low, replyRouteId);
   await p.target.runtime.recoverInstanceActivation(envelope, p.route);
   const mailbox = p.target.queued.shift();
   assert.deepEqual(mailbox.stateful.activationRecord.operation, envelope.operation);
-  mailbox.stateful.reply(RequestResult.Ok, 0, p.payload);
+  assert.equal(mailbox.stateful.activationRecord.replyRouteId, replyRouteId);
+  assert.equal(mailbox.stateful.reply, undefined);
+  mailbox.stateful.onHandlerTurnStarted?.();
   await mailbox.stateful.onTerminalCompletion();
   mailbox.applicationJob.close();
-  assert.equal((await pending.promise).terminalResult, RequestResult.Ok);
-  assert.equal(p.source.runtime.pendingOperationCount, 0);
-  assert.equal(p.target.sent.length, 1);
+  assert.equal(p.target.sent.length, 0);
 });
 
 test('source-local cold request uses the same logical pending completion without a native reply token', async (t) => {
@@ -498,28 +503,4 @@ test('source-local cold request uses the same logical pending completion without
   assert.equal((await pending.promise).terminalResult, RequestResult.Ok);
   assert.equal(p.target.runtime.pendingOperationCount, 0);
   assert.equal(p.target.sent.length, 0);
-});
-
-test('cold reply failed send is observed once through existing diagnostics', async (t) => {
-  const p = pair();
-  t.after(() => p.close());
-  const pending = p.source.runtime.requestToMissingInstanceSpot(p.placement, p.payload, 10000);
-  const rejected = assert.rejects(pending.promise, /timed out/);
-  await new Promise((resolve) => setImmediate(resolve));
-  const error = new Error('injected reply send failure');
-  let submissions = 0;
-  p.target.raw.sendService = async () => {
-    submissions++;
-    throw error;
-  };
-  const mailbox = p.target.queued.shift();
-  mailbox.stateful.reply(RequestResult.Ok, 0, p.payload);
-  await mailbox.stateful.onTerminalCompletion();
-  mailbox.applicationJob.close();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(submissions, 1);
-  assert.equal(p.target.reporter.reportedCount, 1);
-  assert.ok(flowRecords.some((record) => Object.values(record.attributes).includes(error.message)));
-  p.source.runtime.expireOperations(performance.now() + 20000, performance.now() + 1000);
-  await rejected;
 });

@@ -106,8 +106,6 @@ import {
 import { SERVICE_WIRE_MAGIC, SERVICE_WIRE_MAJOR } from './service-wire-constants.generated';
 import {
   ServiceWireProtocolError,
-  M6aServiceWireCommand,
-  decodeReplyHeader,
   decodeApplicationPayload,
   decodeApplicationPayloadView,
   encodeApplicationPayload,
@@ -384,10 +382,7 @@ export class ServiceStatefulRuntime {
 
   readonly registry: ServiceStatefulRegistry;
 
-  private readonly operations: ServiceTerminalOperationRegistry<
-    ServiceStatefulResult,
-    ServiceInstanceActivationTarget
-  >;
+  private readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult>;
   private readonly sessionDeliveries = new Map<string, ServiceSessionDelivery>();
   /**
    * A local Actor owner can replace its own session binding before the
@@ -1558,8 +1553,8 @@ export class ServiceStatefulRuntime {
     metadataFrame?: Uint8Array
   ): ServiceStatefulPendingOperation {
     const timeoutMs = remainingDeadlineMs(deadlineUnixMs);
-    const pending = this.operations.register(timeoutMs, 'registry', target);
-    this.submitColdRequest(
+    const pending = this.operations.register(timeoutMs);
+    this.submitRequest(
       pending,
       target.targetNodeRid,
       instanceOperationParts(
@@ -1578,7 +1573,9 @@ export class ServiceStatefulRuntime {
           payloadFrame
         ],
         metadataFrame
-      )
+      ),
+      timeoutMs,
+      'instanceSpotRequest'
     );
     return pending;
   }
@@ -2031,30 +2028,6 @@ export class ServiceStatefulRuntime {
   private async ingress(
     record: RawServiceIngressRecord
   ): Promise<RawServicePumpResult | undefined> {
-    if (record.command === M6aServiceWireCommand.reply) {
-      let correlation: bigint;
-      try {
-        correlation = decodeReplyHeader(record.parts[0]!).correlation;
-      } catch {
-        return 'protocolError';
-      }
-      const target = this.operations.context(correlation);
-      if (target === undefined) return 'infrastructure';
-      if (
-        record.sourceRoutingId !== target.targetNodeRid ||
-        this.tryPeerGeneration(record.sourceRoutingId) !== target.targetNodeGeneration
-      ) {
-        return 'protocolError';
-      }
-      this.completeRemoteReply(
-        { id: correlation },
-        target.targetNodeRid,
-        'instanceSpotRequest',
-        undefined,
-        record.parts
-      );
-      return 'infrastructure';
-    }
     // These frozen relocation controls overlap the legacy stateful command
     // number range (30-34). They are bare infrastructure records and must
     // fall through to RawServiceMeshRuntime's relocation ingress instead of
@@ -2095,6 +2068,12 @@ export class ServiceStatefulRuntime {
           record.parts[metadata ? 2 : 1],
           metadata ? record.parts[1] : undefined
         );
+      }
+      if (
+        decoded.kind === 'instanceSpot' &&
+        (decoded.operationKind === 'request') !== (record.requestSequence !== undefined)
+      ) {
+        return 'protocolError';
       }
       const hasPayload = [
         'spotSend',
@@ -2270,7 +2249,7 @@ export class ServiceStatefulRuntime {
             sourceSpotId: record.sourceSpotId,
             targetSpot: record.target.spot,
             ...(record.kind === 'spotRequest'
-              ? { reply: this.replyPort(ingress, record.correlation, 'spotRequest') }
+              ? { reply: this.replyPort(ingress, record.correlation) }
               : {})
           }
         );
@@ -2318,7 +2297,7 @@ export class ServiceStatefulRuntime {
               originalReplyRouteId: ingress.requestSequence ?? 0n
             },
             ...(record.kind === 'actorRequest'
-              ? { reply: this.replyPort(ingress, record.correlation, 'actorRequest') }
+              ? { reply: this.replyPort(ingress, record.correlation) }
               : {})
           }
         );
@@ -2371,7 +2350,8 @@ export class ServiceStatefulRuntime {
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'instanceSpot' }>,
     payloadFrame: Buffer,
-    metadataFrame?: Buffer
+    metadataFrame?: Buffer,
+    localReply?: NonNullable<ServiceStatefulMailboxData['reply']>
   ): RawServicePumpResult {
     if (record.activation === 'missing' && this.asyncInstanceAuthority !== undefined) {
       const ownedIngress = shareIngressOwnership(ingress);
@@ -2379,7 +2359,7 @@ export class ServiceStatefulRuntime {
         ownedIngress,
         record,
         payloadFrame,
-        undefined,
+        localReply,
         metadataFrame
       ).finally(() => ownedIngress.applicationJobOwner?.close());
       return 'infrastructure';
@@ -2411,7 +2391,7 @@ export class ServiceStatefulRuntime {
       record,
       payloadFrame,
       spot,
-      undefined,
+      localReply,
       this.instanceApplicationTerminalCompletion(applicationTarget),
       metadataFrame
     );
@@ -2467,7 +2447,10 @@ export class ServiceStatefulRuntime {
     }
     const directReply =
       record.operationKind === 'request'
-        ? (localReply ?? this.replyPort(ingress, record.replyRouteId, 'instanceSpotRequest'))
+        ? (localReply ??
+          (ingress.requestSequence === undefined
+            ? undefined
+            : this.replyPort(ingress, record.replyRouteId)))
         : undefined;
     const applicationTarget =
       applicationTargetOverride ??
@@ -2502,7 +2485,7 @@ export class ServiceStatefulRuntime {
       ...(metadataFrame === undefined ? {} : { applicationMetadata: metadataFrame }),
       ...(terminalCompletion === undefined ? {} : { onTerminalCompletion: terminalCompletion }),
       ...(onHandlerTurnStarted === undefined ? {} : { onHandlerTurnStarted }),
-      ...(record.operationKind === 'request'
+      ...(record.operationKind === 'request' && directReply !== undefined
         ? {
             reply:
               onTerminalCompletion === undefined
@@ -2577,8 +2560,7 @@ export class ServiceStatefulRuntime {
       const result = failure(terminalError);
       if (localReply !== undefined) {
         localReply(result.terminalResult, result.failureCode);
-      } else {
-        if (record.replyRouteId === undefined) return;
+      } else if (ingress.requestSequence !== undefined && record.replyRouteId !== undefined) {
         this.replyWire(ingress, record.replyRouteId, result.terminalResult, result.failureCode);
       }
     }
@@ -2631,7 +2613,12 @@ export class ServiceStatefulRuntime {
         throw new Error('Rematerialized Instance message was not admitted to the local queue.');
       }
     } catch (error) {
-      if (record.operationKind !== 'request' || record.replyRouteId === undefined) return;
+      if (
+        record.operationKind !== 'request' ||
+        record.replyRouteId === undefined ||
+        ingress.requestSequence === undefined
+      )
+        return;
       const result = failure(error);
       this.replyWire(ingress, record.replyRouteId, result.terminalResult, result.failureCode);
     }
@@ -2806,8 +2793,8 @@ export class ServiceStatefulRuntime {
       return;
     }
 
-    const pending = this.operations.register(remainingMs, 'registry', redirectedTarget);
-    this.submitColdRequest(
+    const pending = this.operations.register(remainingMs);
+    this.submitRequest(
       pending,
       route.targetNodeRid,
       instanceOperationParts(
@@ -2826,14 +2813,16 @@ export class ServiceStatefulRuntime {
           payloadFrame
         ],
         metadataFrame
-      )
+      ),
+      remainingMs,
+      'instanceSpotRequest'
     );
     const result = await pending.promise;
     if (localReply !== undefined) {
       localReply(result.terminalResult, result.failureCode, result.payload);
       return;
     }
-    if (record.replyRouteId !== undefined) {
+    if (ingress.requestSequence !== undefined && record.replyRouteId !== undefined) {
       this.replyWire(
         ingress,
         record.replyRouteId,
@@ -3429,7 +3418,7 @@ export class ServiceStatefulRuntime {
         kindData: control,
         ...(canonicalApplicationPayload === undefined ? {} : { canonicalApplicationPayload }),
         reply: (terminalResult, failureCode, replyPayload, tail) => {
-          return this.replyPort(ingress, record.correlation, 'actorJoin')(
+          return this.replyPort(ingress, record.correlation)(
             terminalResult,
             failureCode,
             replyPayload,
@@ -4062,14 +4051,12 @@ export class ServiceStatefulRuntime {
 
   private replyPort(
     ingress: RawServiceIngressRecord,
-    correlation: bigint | undefined,
-    operationKind: 'spotRequest' | 'actorRequest' | 'actorJoin' | 'instanceSpotRequest'
+    correlation: bigint | undefined
   ): NonNullable<ServiceStatefulMailboxData['reply']> {
     if (correlation === undefined)
       throw new ServiceWireProtocolError('Request correlation is missing.');
     return (terminalResult, failureCode, payload, tail) => {
       this.replyWire(ingress, correlation, terminalResult, failureCode, payload, tail);
-      void operationKind;
       return true;
     };
   }
@@ -4086,81 +4073,7 @@ export class ServiceStatefulRuntime {
       encodeStatefulReply(correlation, terminalResult, failureCode, tail),
       ...(payload === undefined ? [] : [encodeApplicationPayload(payload)])
     ];
-    if (
-      ingress.requestSequence === undefined &&
-      ingress.command === M6bServiceWireCommand.instanceSpot
-    ) {
-      const record = decodeStatefulHeader(ingress.parts[0]!);
-      if (record.kind === 'instanceSpot' && record.activation === 'missing') {
-        if (this.tryPeerGeneration(record.sourceNodeRid) !== record.sourceNodeGeneration) {
-          this.reportColdReplyFailure(record, undefined);
-          return;
-        }
-        void this.submitOneWay(record.sourceNodeRid, parts).then(
-          (result) => {
-            if (result !== SubmitResult.Ok) this.reportColdReplyFailure(record, result);
-          },
-          (error) => this.reportColdReplyFailure(record, error)
-        );
-        return;
-      }
-    }
     this.raw.replyService(ingress, parts);
-  }
-
-  private reportColdReplyFailure(
-    record: Extract<
-      ServiceStatefulWireRecord,
-      { readonly kind: 'instanceSpot'; readonly activation: 'missing' }
-    >,
-    error: unknown
-  ): void {
-    const reporter = this.dispatchErrors;
-    if (reporter?.captureEnabled() !== true) return;
-    reporter.report({
-      surface: ZLinkDispatchErrorSurface.InstanceSpot,
-      messageKind: ZLinkDispatchMessageKind.Request,
-      reason: ZLinkDispatchErrorReason.ReplyPathMissing,
-      action: ZLinkDispatchErrorAction.Drop,
-      meshName: this.dispatchErrorMeshName,
-      targetRid: record.sourceNodeRid,
-      spotId: record.target.targetSpotId,
-      error:
-        typeof error === 'number'
-          ? new Error(`Cold reply admission failed: ${error}.`)
-          : (error ?? new Error('Cold reply has no current source peer generation.'))
-    });
-  }
-
-  private submitColdRequest(
-    pending: ServiceStatefulPendingOperation,
-    targetNodeRid: string,
-    parts: readonly Buffer[]
-  ): void {
-    const stopObserving = this.raw.observePeerConnectionIntentRemoved((nodeRid) => {
-      if (nodeRid !== targetNodeRid) return;
-      this.operations.fail(
-        pending.id,
-        createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-          `Cold Instance target '${nodeRid}' disconnected.`
-        )
-      );
-    });
-    void pending.promise.then(stopObserving, stopObserving);
-    void this.submitOneWay(targetNodeRid, parts).then(
-      (result) => {
-        if (result !== SubmitResult.Ok)
-          this.operations.fail(
-            pending.id,
-            createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-              `Cold Instance request admission failed: ${result}.`
-            )
-          );
-      },
-      (error) => this.operations.fail(pending.id, error)
-    );
   }
 
   private handleUserSpotOperation(
@@ -4863,23 +4776,17 @@ export class ServiceStatefulRuntime {
       return;
     }
     if (decoded.kind === 'instanceSpot') {
-      if (decoded.activation === 'missing' && this.asyncInstanceAuthority !== undefined) {
-        void this.continueMissingInstanceActivation(ingress, decoded, payloadFrame!, localReply);
-        return;
-      }
-      try {
-        const activation = this.requireInstanceActivation(ingress, decoded);
-        this.enqueueApplicationFrame(ingress, `spot:${activation.ref.spotId}`, payloadFrame!, {
-          receiveKind: ReceiveKind.InstanceSpotActivation,
-          operationKind: OperationKind.InstanceSpotRequest,
-          correlation: pending.id,
-          ...(decoded.sourceSpotId === undefined ? {} : { sourceSpotId: decoded.sourceSpotId }),
-          targetSpot: activation.ref,
-          reply: localReply
-        });
-      } catch (error) {
-        this.operations.reply(pending.id, failure(error));
-      }
+      const hasMetadata = (ingress.flags & M6bServiceWireFlag.metadata) !== 0;
+      const metadataFrame = hasMetadata
+        ? validateServiceMetadataFrame(ingress.parts[1]!)
+        : undefined;
+      this.enqueueInstanceSpot(
+        ingress,
+        decoded,
+        ingress.parts[hasMetadata ? 2 : 1]!,
+        metadataFrame,
+        localReply
+      );
       return;
     }
     this.operations.reply(pending.id, {
@@ -5138,9 +5045,7 @@ export class ServiceStatefulRuntime {
         ...(wire.correlation === undefined ? {} : { correlation: wire.correlation }),
         sourceSpotId: wire.sourceSpotId,
         targetSpot: wire.target.spot,
-        ...(wire.kind === 'spotRequest'
-          ? { reply: this.replyPort(ingress, wire.correlation, 'spotRequest') }
-          : {})
+        ...(wire.kind === 'spotRequest' ? { reply: this.replyPort(ingress, wire.correlation) } : {})
       }
     );
   }
