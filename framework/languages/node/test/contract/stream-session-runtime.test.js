@@ -611,6 +611,56 @@ test('Actor binding replacement callback can send before close and does not bloc
   await runtime.dispose();
 });
 
+test('Actor replacement retains the session turn until callback terminal', async () => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const events = [];
+  let release;
+  let entered;
+  const terminal = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    sessionFactory(context) {
+      return {
+        context,
+        async onActorBindingReplaced(ctx, actorId) {
+          events.push(actorId);
+          if (actorId === 'actor-a') { entered(); await terminal; }
+        }
+      };
+    }
+  });
+  runtime.start();
+  runtime.markConnected('replacement-turn');
+  const session = runtime.findSession('replacement-turn');
+  const retired = {
+    sessionOwnerNodeRid: 'session-owner', sessionOwnerNodeGeneration: 1n,
+    sessionOwnerId: 'session-runtime', sessionOwnerLeaseGeneration: 1n,
+    sessionRid: 'replacement-turn', retiredBindingGeneration: 7n
+  };
+  session.enqueueActorBindingReplaced({ nodeRid: 'owner', actorId: 'actor-a', generation: 1n }, retired);
+  await started;
+  session.enqueueActorBindingReplaced({ nodeRid: 'owner', actorId: 'actor-b', generation: 1n }, retired);
+  try {
+    await clock.flush();
+    assert.deepEqual(events, ['actor-a']);
+    await clock.advance(99);
+    assert.deepEqual(socket.disconnects, []);
+    release();
+    await clock.flush();
+    assert.deepEqual(events, ['actor-a', 'actor-b']);
+    await clock.advance(99);
+    assert.deepEqual(socket.disconnects, []);
+    await clock.advance(1);
+    assert.deepEqual(socket.disconnects, ['replacement-turn']);
+  } finally {
+    release();
+    await runtime.dispose();
+  }
+});
+
 test('stalled Actor binding replacement callback is force-closed at its lifecycle deadline', async () => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
@@ -619,6 +669,9 @@ test('stalled Actor binding replacement callback is force-closed at its lifecycl
   const callbackDidStart = new Promise((resolve) => {
     callbackStarted = resolve;
   });
+  let releaseCallback;
+  const callbackTerminal = new Promise((resolve) => { releaseCallback = resolve; });
+  let disconnected = false;
   const runtime = createStreamRuntime({
     socket,
     livenessClock: clock,
@@ -628,8 +681,9 @@ test('stalled Actor binding replacement callback is force-closed at its lifecycl
         context,
         async onActorBindingReplaced() {
           callbackStarted();
-          await new Promise(() => {});
+          await callbackTerminal;
         },
+        async onDisconnected() { disconnected = true; },
         async onDispatch(header) {
           events.push([context.sessionId, header.packetName]);
         }
@@ -668,6 +722,10 @@ test('stalled Actor binding replacement callback is force-closed at its lifecycl
     () => socket.disconnects.includes('session-a'),
     'stalled replacement callback deadline close'
   );
+  assert.equal(disconnected, false);
+  releaseCallback();
+  await clock.flush();
+  assert.equal(disconnected, true);
   await runtime.dispose();
 });
 

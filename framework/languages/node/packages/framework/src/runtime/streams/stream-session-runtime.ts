@@ -316,8 +316,7 @@ export class ZLinkStreamSessionRuntime {
   }
 
   /**
-   * Starts the callback on the session lane and observes its terminal result
-   * without retaining that lane while application code awaits unrelated work.
+   * Retains the session turn through the callback's terminal result.
    */
   enqueueActorBindingReplaced(
     actor: ServiceActorRef,
@@ -328,7 +327,6 @@ export class ZLinkStreamSessionRuntime {
       if (!this.context.beginActorBindingReplacement(actor, retiredSession)) return;
       const session = await this.requireSession();
       let callbackDeadlineTimer: unknown;
-      let callbackTerminal = false;
       let forcedClose = false;
       const scheduleClose = (): void => {
         if (forcedClose) return;
@@ -343,23 +341,6 @@ export class ZLinkStreamSessionRuntime {
           void this.close().catch((error) => this.options.onError?.(error));
         }, ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CLOSE_DELAY_MS);
       };
-      const completeCallback = (): void => {
-        if (callbackTerminal) return;
-        callbackTerminal = true;
-        if (callbackDeadlineTimer !== undefined) {
-          this.livenessClock.clearTimer(callbackDeadlineTimer);
-          callbackDeadlineTimer = undefined;
-        }
-        scheduleClose();
-      };
-      const reportCallbackFailure = (error: unknown): void => {
-        try {
-          this.options.onError?.(error);
-        } catch {
-          // Diagnostics must not prevent the lifecycle terminal transition.
-        }
-        completeCallback();
-      };
       callbackDeadlineTimer = this.livenessClock.setTimer(() => {
         if (
           this.disposed ||
@@ -372,18 +353,15 @@ export class ZLinkStreamSessionRuntime {
         void this.close().catch((error) => this.options.onError?.(error));
       }, this.options.replacementCallbackTimeoutMs ?? DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS);
 
-      const callback = session.onActorBindingReplaced;
-      if (callback === undefined) {
-        completeCallback();
-        return;
-      }
       try {
-        // Start the callback on this lifecycle turn, but do not retain the
-        // serial lane while application code awaits an unrelated operation.
-        const result = callback.call(session, this.context, actor.actorId);
-        void Promise.resolve(result).then(() => completeCallback(), reportCallbackFailure);
+        await session.onActorBindingReplaced?.(this.context, actor.actorId);
       } catch (error) {
-        reportCallbackFailure(error);
+        this.options.onError?.(error);
+      } finally {
+        if (callbackDeadlineTimer !== undefined) {
+          this.livenessClock.clearTimer(callbackDeadlineTimer);
+        }
+        scheduleClose();
       }
     });
   }
@@ -784,12 +762,12 @@ export class ZLinkStreamSessionRuntime {
   private queueDisconnect(error: unknown): void {
     if (this.disconnected || this.disconnectQueued) return;
     this.disconnectQueued = true;
-    this.stream.markTransportClosed();
     this.stopLivenessChecks();
     void this.serial
       .executeFinal(async () => {
         this.disconnectQueued = false;
         if (this.disconnected) return;
+        this.stream.markTransportClosed();
         this.disconnected = true;
         await this.complete(error, true);
       })
