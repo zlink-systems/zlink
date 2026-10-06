@@ -2253,7 +2253,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp
     "connector-unit;connector-contract;connector-timeout;connector-protocol"
     contract)
-  foreach(_codec_case reentrant order close)
+  foreach(_codec_case reentrant order close reconnect)
     zlink_framework_cpp_add_test(
       NAME test_cpp_stream_codec_${_codec_case}
       COMMAND test_cpp_stream_connector codec-${_codec_case}

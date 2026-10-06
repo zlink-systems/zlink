@@ -1209,7 +1209,7 @@ int test_inbound_codec (const std::string &mode)
     codec->observe = [&] (const auto &) {
         (void) connector.pending_dispatch_count ();
         const auto index = ++decoded;
-        if (mode == "codec-order" && index == 1) {
+        if ((mode == "codec-order" || mode == "codec-reconnect") && index == 1) {
             first_entered.set_value ();
             release.wait ();
         }
@@ -1226,6 +1226,28 @@ int test_inbound_codec (const std::string &mode)
           make_server_frame (message_kind_t::send, 0, "codec.close", "closing", true, 7));
         passed = decoded == 1 && connector.state () == connection_state_t::closed
                  && state->actors_by_slot.empty () && state->actors_by_id.empty ();
+    } else if (mode == "codec-reconnect") {
+        const auto old_frame =
+          make_server_frame (message_kind_t::send, 0, "old.frame", "old", true);
+        const auto trailing = make_server_frame (message_kind_t::send, 0, "old.partial", "x");
+        const auto old_batch =
+          zlink::message_t::from (old_frame.to_string () + trailing.to_string ().substr (0, 3));
+        auto reading = std::async (std::launch::async, [&] { connection->feed (old_batch); });
+        entered.wait ();
+        detail::connection_ended (state, {error_code_t::disconnected, "old connection ended"},
+                                  connection);
+        auto next_connection = std::make_unique<fed_read_connection_t> ();
+        auto *next_reader = next_connection.get ();
+        passed = detail::change_state (state, connection_state_t::connected, std::nullopt,
+                                       std::move (next_connection));
+        detail::start_read_loop (state);
+        next_reader->feed (make_server_frame (message_kind_t::send, 0, "new.frame", "new"));
+        auto next = connector.wait_for ("new.frame", std::chrono::seconds (1));
+        passed = passed && next && next.value ().payload == as_bytes ("new")
+                 && connector.received_count ("new.frame") == 1
+                 && connector.received_count ("old.frame") == 0;
+        release_first.set_value ();
+        reading.get ();
     } else {
         const auto batch = zlink::message_t::from (
           make_server_frame (message_kind_t::send, 0, "codec.order", "1", true).to_string ()
@@ -1252,6 +1274,13 @@ int test_inbound_codec (const std::string &mode)
         passed = passed && decoded == expected;
     }
     (void) connector.close ();
+    if (mode == "codec-reconnect") {
+        // A closed connector cannot install another connection. The next
+        // connection reset above belongs to reconnect, not to close work.
+        passed = passed
+                 && !detail::change_state (state, connection_state_t::connected, std::nullopt,
+                                           std::make_unique<fed_read_connection_t> ());
+    }
     finished.set_value ();
     watchdog.join ();
     std::cout << mode << ": " << (passed ? "passed" : "failed") << '\n';
