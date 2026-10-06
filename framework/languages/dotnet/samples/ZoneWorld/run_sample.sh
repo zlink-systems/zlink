@@ -137,7 +137,7 @@ fi
 write_zone_node_config() {
   local name="$1" mesh_host="$2" mesh_port="$3" advertise_host="$4" fault_tick_zone="$5" disable_bots="$6" subscriber_only="$7" allow_empty_zone_set="${8:-false}"
   cat >"$CONFIG_DIR/$name.json" <<EOF
-{"shared":{"redisEndpoint":"${REDIS_ENDPOINT}","redisKeyPrefix":"zoneworld-${RUN_ID}:","logDirectory":"${LOG_DIR}"},"zoneNode":{"nodeId":"${name%-replacement}","meshEndpoint":"tcp://${mesh_host}:${mesh_port}","meshAdvertiseHost":${advertise_host},"faultTickZone":${fault_tick_zone},"disableBots":${disable_bots},"subscriberOnly":${subscriber_only},"allowEmptyZoneSet":${allow_empty_zone_set}}}
+{"shared":{"redisEndpoint":"${REDIS_ENDPOINT}","redisKeyPrefix":"zoneworld-${RUN_ID}:","logDirectory":"${LOG_DIR}"},"zoneNode":{"nodeId":"${name%-replacement}","zoneCapacity":$(case "${name%-replacement}" in zone-node-1) echo 1;; zone-node-2) echo 3;; *) echo 0;; esac),"meshEndpoint":"tcp://${mesh_host}:${mesh_port}","meshAdvertiseHost":${advertise_host},"faultTickZone":${fault_tick_zone},"disableBots":${disable_bots},"subscriberOnly":${subscriber_only},"allowEmptyZoneSet":${allow_empty_zone_set}}}
 EOF
 }
 
@@ -513,6 +513,8 @@ g_fail() { echo "scenario $1 FAILED: $2" >&2; exit 1; }
 if [[ "$G4_PROVEN" == "1" ]]; then g_pass ZW-G4; fi
 if [[ "$B8_PROVEN" == "1" ]]; then g_pass ZW-B8; fi
 
+run_client LAYOUT
+
 node1_mesh_rid="$(routing_id_of zone-node-1)"
 node2_mesh_rid="$(routing_id_of zone-node-2)"
 
@@ -778,23 +780,15 @@ runner_scenario_pair() {
   selects "$id" || return 0
 
   if [[ "$id" == "ZW-F2" ]]; then
-    # The fixed bot id is not a contract: all four X-axis bots are valid witnesses, and
-    # capacity placement can initially put either side on either process. A non-initial
-    # entry is the target-side completion of an Actor Join. Seeing the same bot complete
-    # one on both process logs proves it crossed the process-owner boundary in both
-    # directions without depending on an internal debug-only source-leave marker.
-    local actor
+    local boundary actor target
+    boundary="$(grep -F 'ops-bot-boundary ' "$LOG_DIR/client.log" | head -1)"
+    actor="${boundary#*bot=}"; actor="${actor%% source=*}"
+    target="${boundary##* target=}"
     for _ in $(seq 1 600); do
-      while IFS= read -r actor; do
-        [[ -n "$actor" ]] || continue
-        if grep -Fq "player=$actor, bot=True, initial=False" \
-            "$LOG_DIR/zone-node-2.log" 2>/dev/null; then
-          pass "$id"
-          return 0
-        fi
-      done < <(sed -nE \
-        's/.*player=(bot-[^,]+), bot=True, initial=False.*/\1/p' \
-        "$LOG_DIR/zone-node-1.log" 2>/dev/null | sort -u)
+      if grep -Fq "player=$actor, bot=True, initial=False" "$LOG_DIR/$target.log"; then
+        pass "$id"
+        return 0
+      fi
       sleep 0.1
     done
     fail "$id" "$description (no correlated cross-node bot handoff)"

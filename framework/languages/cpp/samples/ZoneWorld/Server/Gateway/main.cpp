@@ -197,25 +197,9 @@ class world_bootstrap_handler_t
                 ++zone_count;
         }
 
-        struct route_t
-        {
-            const char *id;
-            int x;
-            int y;
-            int dx;
-            int dy;
-        };
-        constexpr std::array routes{route_t{"bot-nw-x", 10, 15, 1, 0},
-                                    route_t{"bot-nw-y", 15, 10, 0, 1},
-                                    route_t{"bot-ne-x", 90, 15, -1, 0},
-                                    route_t{"bot-ne-y", 85, 10, 0, 1},
-                                    route_t{"bot-sw-x", 10, 85, 1, 0},
-                                    route_t{"bot-sw-y", 15, 90, 0, -1},
-                                    route_t{"bot-se-x", 90, 85, -1, 0},
-                                    route_t{"bot-se-y", 85, 90, 0, -1}};
         std::vector<fw::actor_id_t> actor_ids;
         int bot_count = 0;
-        for (const auto &route : routes) {
+        for (const auto &route : bot_fixtures ()) {
             const auto created = co_await _directory
                                    .get_or_create (fw::actor_id_t (route.id), names_t::player_actor)
                                    .in_mesh (names_t::mesh)
@@ -229,8 +213,8 @@ class world_bootstrap_handler_t
                 throw fw::framework_exception_t (fw::framework_error_kind_t::unavailable,
                                                  "bot actor creation was rejected");
         }
-        for (std::size_t index = 0; index < routes.size (); ++index) {
-            const auto &route = routes[index];
+        for (std::size_t index = 0; index < bot_fixtures ().size (); ++index) {
+            const auto &route = bot_fixtures ()[index];
             const auto entered = co_await _actors
                                    .request (
                                      actor_ids[index],

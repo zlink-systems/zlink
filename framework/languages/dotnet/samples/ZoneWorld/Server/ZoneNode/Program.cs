@@ -115,8 +115,8 @@ builder.Services.AddZLinkFramework(options =>
             factory =>
                 factory
                     // Every eligible process requests all four global ZoneIds. Capacity is the
-                    // only placement input and limits each process to two local Zone Spot owners.
-                    .StableTypeLimit(2)
+                    // only placement input; readiness uses the same declared local capacity.
+                    .StableTypeLimit(node.ZoneCapacity)
                     .DisableRelocation()
         );
     // --8<-- [end:doc-zw-node-register]

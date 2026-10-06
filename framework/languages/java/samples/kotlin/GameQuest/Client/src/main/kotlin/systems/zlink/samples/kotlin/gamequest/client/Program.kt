@@ -150,6 +150,17 @@ class GameQuestClientScenario(private val options: GameQuestClientOptions) {
         ensure(snapshot.unlockedFeatureIds.contains("auction"))
 
         ensure(postRaw(options.missionAHttpEndpoint, "/self-check/owner/player-alice/close"))
+        println("gamequest-close-requested player=player-alice")
+        waitForCloseReplayRelease()
+        val closeReplay =
+            apiAStream.request<SyncQuestProgressRes>(SyncQuestProgressReq("player-alice")).await()
+        ensure(hasProgress(closeReplay.updatedQuests, QuestIds.FirstHunt, 3))
+        ensure(
+            closeReplay.updatedQuests.any {
+                it.questId == QuestIds.OpenAuction && it.status == QuestStatuses.RewardGranted
+            }
+        )
+        println("gamequest-close-replay=completed")
 
         val tutorial =
             apiAStream
@@ -270,15 +281,23 @@ class GameQuestClientScenario(private val options: GameQuestClientOptions) {
         error("Projection did not reach $questId=$currentCount")
     }
 
+    private suspend fun waitForCloseReplayRelease() {
+        waitForRelease("close-replay.release", "close replay")
+    }
+
     private suspend fun waitForOwnerTerminationRelease() {
-        val release = Path.of(options.controlDirectory, "owner-terminated")
+        waitForRelease("owner-terminated", "owner termination")
+    }
+
+    private suspend fun waitForRelease(fileName: String, scenario: String) {
+        val release = Path.of(options.controlDirectory, fileName)
         repeat(SampleTimings.RunnerWaitAttempts) {
             if (Files.exists(release)) {
                 return
             }
             delay(SampleTimings.RunnerWaitMillis)
         }
-        error("Runner did not release the owner-termination scenario")
+        error("Runner did not release the $scenario scenario")
     }
 
     private fun hasProgress(
