@@ -19,6 +19,10 @@ export interface ZlinkStreamRequestCall {
   metadata(metadata: ZlinkStreamMetadata): ZlinkStreamRequestCall;
   timeout(timeoutMs: number): ZlinkStreamRequestCall;
   compress(): ZlinkStreamRequestCall;
+  // The reply type comes from this call site, as in the other connectors (Java
+  // `.submit(Reply.class)`, .NET `.Async<TReply>()`, C++ `.submit<TReply>()`). TypeScript
+  // erases `TReply`, so the constructor is passed as a value and reaches the single codec's
+  // `decode(payload, replyType)`. There is no message-type registry (spec §5.4).
   submit<TReply = unknown>(signal?: AbortSignal): Promise<TReply>;
   submit<TReply>(
     replyType: abstract new (...args: never[]) => TReply,
