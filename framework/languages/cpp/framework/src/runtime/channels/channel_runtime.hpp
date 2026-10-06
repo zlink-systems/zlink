@@ -12,6 +12,7 @@
 #include "runtime/channels/channel_runtime_bundle.hpp"
 #include "runtime/channels/route_channel_registration.hpp"
 #include "runtime/channels/route_channel_runtime.hpp"
+#include "runtime/configuration/request_defaults.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
@@ -196,7 +197,8 @@ class channel_runtime_state_t
     std::map<std::string, channel_snapshot_t> channels;
     runtime::offload_executor_t lane_executor{1, "zlink-channel-state"};
     mutable runtime::state_lane_t lane{lane_executor};
-    std::chrono::milliseconds default_request_timeout{std::chrono::seconds (30)};
+    std::chrono::milliseconds default_request_timeout{
+      runtime::configuration::default_request_timeout};
     std::size_t pending = 0;
     channel_pending_requests_t pending_requests;
     std::map<std::string, std::shared_ptr<channel_runtime_bundle_t>> server_bundles;
