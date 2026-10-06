@@ -24,6 +24,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private readonly ZLinkExecutionLanePolicy _spotLanePolicy;
     private readonly ZLinkExecutionLanePolicy _actorLanePolicy;
     private readonly ZLinkExecutionLanePolicy _timerLanePolicy;
+    private readonly Action? _actorConsumerSelected;
+    private readonly Action<ZLinkSerialGateOperation>? _executionGateObserved;
     private ZLinkExecutionBarrierState? _relocationBarrier;
     private ZLinkRelocationAdmissionOpeningState? _relocationAdmissionOpening;
     private bool _relocationAdmissionQueueOpened;
@@ -44,7 +46,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         ZLinkUserSpotExecutionMode executionMode = ZLinkUserSpotExecutionMode.SpotWide,
         ZLinkExecutionLanePolicy? spotLanePolicy = null,
         ZLinkExecutionLanePolicy? actorLanePolicy = null,
-        ZLinkExecutionLanePolicy? timerLanePolicy = null
+        ZLinkExecutionLanePolicy? timerLanePolicy = null,
+        Action? actorConsumerSelected = null,
+        Action<ZLinkSerialGateOperation>? executionGateObserved = null
     )
     {
         _activation = activation;
@@ -56,22 +60,34 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         _spotLanePolicy = spotLanePolicy ?? ZLinkExecutionLanePolicy.Default;
         _actorLanePolicy = actorLanePolicy ?? ZLinkExecutionLanePolicy.Default;
         _timerLanePolicy = timerLanePolicy ?? ZLinkExecutionLanePolicy.Default;
+        _actorConsumerSelected = actorConsumerSelected;
+        _executionGateObserved = executionGateObserved;
         _executionOwner = executionOwner ?? activation?.RuntimeExecutionOwner ?? new object();
         _taskRunner = new ZLinkRuntimeTaskRunner(_errorSink, _stopToken, _executionOwner);
         _queue = CreateQueue(_spotLanePolicy);
         _lastApplicationWorkCompletedAt = Stopwatch.GetTimestamp();
     }
 
-    private ZLinkSerialExecutionQueue CreateQueue(ZLinkExecutionLanePolicy policy)
+    private ZLinkSerialExecutionQueue CreateQueue(
+        ZLinkExecutionLanePolicy policy,
+        ZLinkSerialExecutionQueue? sharedOwner = null
+    )
     {
-        return new ZLinkSerialExecutionQueue(
+        var queue = new ZLinkSerialExecutionQueue(
             _taskRunner,
             _errorSink,
             _stopToken,
             policy,
-            IsApplicationStartAllowed
+            IsApplicationStartAllowed,
+            sharedGate: _executionMode == ZLinkUserSpotExecutionMode.SpotWide,
+            sharedOwner: sharedOwner
         );
+        queue.GateOperation = _executionGateObserved;
+        return queue;
     }
+
+    internal ZLinkSerialExecutionQueue? ActorIngressOwner =>
+        _executionMode == ZLinkUserSpotExecutionMode.SpotWide ? _queue : null;
 
     private static bool AlwaysDisabled() => false;
 
@@ -150,13 +166,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         var (lane, claim) = AcquireActorApplicationAdmission(actorId);
         return RunClaimedAsync(
             lane,
-            ct =>
-                _executionMode == ZLinkUserSpotExecutionMode.SpotWide
-                    ? _queue.RunAsync(
-                        innerCt => ExecuteActorOperationAsync(actorId, operation, state, innerCt),
-                        ct
-                    )
-                    : ExecuteActorOperationAsync(actorId, operation, state, ct),
+            ct => ExecuteActorOperationAsync(actorId, operation, state, ct),
             claim,
             cancellationToken,
             payloadBytes,
@@ -183,13 +193,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         var (lane, claim) = accepted;
         return RunClaimedAsync(
             lane,
-            ct =>
-                _executionMode == ZLinkUserSpotExecutionMode.SpotWide
-                    ? _queue.RunAsync(
-                        innerCt => ExecuteActorOperationAsync(actorId, operation, state, innerCt),
-                        ct
-                    )
-                    : ExecuteActorOperationAsync(actorId, operation, state, ct),
+            ct => ExecuteActorOperationAsync(actorId, operation, state, ct),
             claim,
             cancellationToken
         );
@@ -220,10 +224,13 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                     lane,
                     reservation.RunAsync,
                     claim,
-                    CancellationToken.None
+                    CancellationToken.None,
+                    ready: _executionMode == ZLinkUserSpotExecutionMode.SpotWide
+                        ? () => reservation.IsReady
+                        : null
                 )
                 .AsTask();
-            reservation.BindExecution(execution);
+            reservation.BindExecution(execution, lane.NotifyReadiness);
             return reservation;
         }
         catch
@@ -479,18 +486,20 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         Action<object> visit,
         Action completed
     ) =>
-        RunBarrierState(() =>
-        {
-            if (successor is null)
-                _queue.VisitPendingAcceptedState(null, visit, completed);
-            else
-                successor.RunBarrierState(() =>
-                {
-                    _queue.VisitPendingAcceptedState(successor._queue, visit, completed);
-                    return true;
-                });
-            return true;
-        });
+        _queue.RunOnSharedGate(() =>
+            RunBarrierState(() =>
+            {
+                if (successor is null)
+                    _queue.VisitPendingAcceptedState(null, visit, completed);
+                else
+                    successor.RunBarrierState(() =>
+                    {
+                        _queue.VisitPendingAcceptedState(successor._queue, visit, completed);
+                        return true;
+                    });
+                return true;
+            })
+        );
 
     internal Task PendingApplicationCompletion => _queue.ApplicationDrained;
 
@@ -1181,6 +1190,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     internal bool TryAbortRelocation(ZLinkSpotExecutionRelocationSeal seal)
     {
         ArgumentNullException.ThrowIfNull(seal);
+        if (!_queue.IsInsideSharedGate)
+            return _queue.RunOnSharedGate(() => TryAbortRelocation(seal));
         return RunBarrierState(() =>
         {
             if (_relocationBarrier?.Generation != seal.Generation)
@@ -1200,24 +1211,27 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(seal);
         ArgumentNullException.ThrowIfNull(reserveBeforeApplicationAdmission);
-        var opening = await RunBarrierStateAsync(() =>
-            {
-                if (_relocationBarrier?.Generation != seal.Generation)
-                    return null;
-                if (!_relocationAdmissionQueueOpened)
+        var opening = await RunBarrierStateAsync(
+                () =>
                 {
-                    if (!_queue.TryOpenRelocationAfterMessageFollow(seal.QueueSeal))
+                    if (_relocationBarrier?.Generation != seal.Generation)
                         return null;
-                    _relocationAdmissionQueueOpened = true;
-                }
+                    if (!_relocationAdmissionQueueOpened)
+                    {
+                        if (!_queue.TryOpenRelocationAfterMessageFollow(seal.QueueSeal))
+                            return null;
+                        _relocationAdmissionQueueOpened = true;
+                    }
 
-                var barrier = _relocationBarrier;
-                _activeApplicationClaims++;
-                barrier.ActiveClaims++;
-                var pending = new ZLinkRelocationAdmissionOpeningState(barrier);
-                _relocationAdmissionOpening = pending;
-                return pending;
-            })
+                    var barrier = _relocationBarrier;
+                    _activeApplicationClaims++;
+                    barrier.ActiveClaims++;
+                    var pending = new ZLinkRelocationAdmissionOpeningState(barrier);
+                    _relocationAdmissionOpening = pending;
+                    return pending;
+                },
+                gateTurn: true
+            )
             .ConfigureAwait(false);
         if (opening is null)
             return false;
@@ -1268,6 +1282,16 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     )
     {
         ArgumentNullException.ThrowIfNull(seal);
+        if (!_queue.IsInsideSharedGate)
+        {
+            var outcome = _queue.RunOnSharedGate(() =>
+            {
+                var ok = TryCommitRelocation(seal, out var value, preserveActorExecution);
+                return (ok, value);
+            });
+            held = outcome.value;
+            return outcome.ok;
+        }
         var result = RunBarrierState(() =>
         {
             if (_relocationBarrier?.Generation != seal.Generation)
@@ -1300,6 +1324,16 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     )
     {
         ArgumentNullException.ThrowIfNull(seal);
+        if (!_queue.IsInsideSharedGate)
+        {
+            var outcome = _queue.RunOnSharedGate(() =>
+            {
+                var ok = TryFreezeRelocationIngress(seal, out var value);
+                return (ok, value);
+            });
+            held = outcome.value;
+            return outcome.ok;
+        }
         var result = RunBarrierState(() =>
         {
             if (_relocationBarrier?.Generation != seal.Generation)
@@ -1460,14 +1494,21 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         }
     }
 
-    private async ValueTask<T> RunBarrierStateAsync<T>(Func<T> work)
+    private async ValueTask<T> RunBarrierStateAsync<T>(Func<T> work, bool gateTurn = false)
     {
         ArgumentNullException.ThrowIfNull(work);
         while (true)
         {
-            var turn = await _stateLane
-                .RunAsync(() => RunBarrierStateTurn(work, callbackOpening: null))
-                .ConfigureAwait(false);
+            var turn =
+                gateTurn && _executionMode == ZLinkUserSpotExecutionMode.SpotWide
+                    ? await _queue
+                        .RunOnSharedGateAsync(() =>
+                            RunState(() => RunBarrierStateTurn(work, callbackOpening: null))
+                        )
+                        .ConfigureAwait(false)
+                    : await _stateLane
+                        .RunAsync(() => RunBarrierStateTurn(work, callbackOpening: null))
+                        .ConfigureAwait(false);
             if (turn.Retry is null)
                 return turn.Result!;
             await turn.Retry.ConfigureAwait(false);
@@ -1502,6 +1543,15 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private T RunState<T>(Func<T> work)
     {
         _stateLane.ThrowIfReentrant();
+        if (ZLinkSerialTurn.Current is { ExecutionGate: not null } turn)
+        {
+            var operation = work;
+            work = () =>
+            {
+                using var scope = ZLinkSerialTurn.Push(turn);
+                return operation();
+            };
+        }
         return AwaitStateLane(_stateLane.RunAsync(work));
     }
 
@@ -1574,7 +1624,12 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 ZLinkFrameworkErrorKind.ShuttingDown,
                 "SPOT execution lanes are complete."
             );
-        lane = CreateQueue(policy);
+        lane = CreateQueue(
+            policy,
+            _executionMode == ZLinkUserSpotExecutionMode.SpotWide ? _queue : null
+        );
+        if (ReferenceEquals(lanes, _actorLanes))
+            lane.ConsumerSelected = _actorConsumerSelected;
         lanes.Add(key, lane);
         return lane;
     }
@@ -1606,7 +1661,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         CancellationToken cancellationToken,
         long payloadBytes = 0,
         long metadataBytes = 0,
-        bool transferred = false
+        bool transferred = false,
+        Func<bool>? ready = null
     )
     {
         ZLinkSerialWorkItem item;
@@ -1628,7 +1684,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                     payloadBytes,
                     metadataBytes,
                     transferred,
-                    cancellationToken
+                    cancellationToken,
+                    ready
                 )
                 .ConfigureAwait(false);
         }

@@ -6,6 +6,64 @@ namespace Zlink.Framework.UnitTests;
 public sealed class UserSpotExecutionSchedulerTests
 {
     [Fact]
+    public async Task SpotWide_ActorConsumerWaitsForSharedGateBeforeDequeueAndClaim()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        var selected = NewSignal();
+        var selections = 0;
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            static () => false,
+            CancellationToken.None,
+            errorSink,
+            executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+            actorConsumerSelected: () =>
+            {
+                Interlocked.Increment(ref selections);
+                selected.TrySetResult();
+            }
+        );
+        var spotStarted = NewSignal();
+        var releaseSpot = NewSignal();
+        var spot = executor
+            .ExecuteAsync(
+                async (_, _) =>
+                {
+                    spotStarted.TrySetResult();
+                    await releaseSpot.Task.ConfigureAwait(false);
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        Task? first = null;
+        Task? second = null;
+        try
+        {
+            await spotStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // These synchronous calls publish both Actor records while the
+            // ordinary async Spot handler retains the shared gate.
+            first = RecordActor(executor, "actor-a", null, null, NewSignal());
+            second = RecordActor(executor, "actor-b", null, null, NewSignal());
+            Assert.False(first.IsCompleted);
+            Assert.False(second.IsCompleted);
+            await Assert.ThrowsAsync<TimeoutException>(() =>
+                selected.Task.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.Equal(0, Volatile.Read(ref selections));
+        }
+        finally
+        {
+            releaseSpot.TrySetResult();
+            await Task.WhenAll(new[] { spot, first, second }.OfType<Task>())
+                .WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        // The same observation must record actual consumption after release;
+        // absence while occupied cannot pass because the seam is disconnected.
+        Assert.True(selected.Task.IsCompletedSuccessfully);
+        Assert.Equal(2, Volatile.Read(ref selections));
+    }
+
+    [Fact]
     public void FactoryRegistrationFixesExecutionModeAndRejectsInvalidValues()
     {
         var registration = new ZLinkSpotNodeRegistration { SpotNodeName = "execution-node" };
@@ -847,6 +905,25 @@ public sealed class UserSpotExecutionSchedulerTests
         finally
         {
             allowReservation.Set();
+        }
+    }
+
+    [Fact]
+    public async Task SpotWideReplayPublicationDoesNotHoldGateBeforeCallbackIsReady()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(errors, ZLinkUserSpotExecutionMode.SpotWide);
+        var seal = await executor.SealRelocationAsync(CancellationToken.None);
+        var reserved = executor.ReserveRelocationActorQueue(seal, "actor-1");
+        var abort = Task.Run(() => executor.TryAbortRelocation(seal));
+        try
+        {
+            Assert.True(await abort.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            reserved.Discard();
+            await abort.WaitAsync(TimeSpan.FromSeconds(5));
         }
     }
 
