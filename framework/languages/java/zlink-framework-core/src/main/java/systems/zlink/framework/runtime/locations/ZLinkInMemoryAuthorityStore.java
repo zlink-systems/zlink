@@ -783,48 +783,6 @@ final class ZLinkInMemoryAuthorityStore {
         return state != null && state.reservation.equals(reservation);
     }
 
-    private boolean currentCapacityFits(
-            ZLinkMeshNodeDescriptor descriptor, ZLinkPlacementCapacityBundle bundle) {
-        AllocationCounterKey nodeKey =
-                new AllocationCounterKey(
-                        new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid()),
-                        descriptor.lifecycleGeneration());
-        if (!hasCapacity(
-                        actorAllocationCounters.get(nodeKey),
-                        descriptor.capacity().actors().limit(),
-                        0)
-                || !hasCapacity(
-                        spotAllocationCounters.get(nodeKey),
-                        descriptor.capacity().spots().limit(),
-                        0)) {
-            return false;
-        }
-        if (bundle.spotType().isEmpty()) {
-            return true;
-        }
-        ZLinkSpotTypeCapacityDelta delta = bundle.spotType().orElseThrow();
-        ZLinkObjectCapability capability =
-                descriptor.objectCapabilities().stream()
-                        .filter(
-                                candidate ->
-                                        candidate.objectKind() == delta.objectKind()
-                                                && candidate
-                                                        .stableType()
-                                                        .equals(delta.stableType()))
-                        .findFirst()
-                        .orElse(null);
-        return capability != null
-                && hasCapacity(
-                        typeAllocationCounters.get(
-                                new TypeAllocationCounterKey(
-                                        nodeKey.descriptor(),
-                                        nodeKey.lifecycleGeneration(),
-                                        delta.objectKind(),
-                                        delta.stableType())),
-                        capability.spotLimit(),
-                        0);
-    }
-
     private DescriptorAdmission descriptorAdmission(
             ZLinkMeshNodeDescriptorKey descriptorKey,
             long lifecycleGeneration,
@@ -1080,13 +1038,6 @@ final class ZLinkInMemoryAuthorityStore {
     private void activateAllocation(ZLinkPlacementAllocation allocation) {
         adjustPending(allocation, allocation.capacityBundle(), -1);
         adjustActive(allocation, allocation.capacityBundle(), 1);
-    }
-
-    private void relocateAllocation(
-            ZLinkPlacementAllocation source, ZLinkPlacementAllocation target) {
-        adjustActive(source, source.capacityBundle(), -1);
-        adjustPending(target, target.capacityBundle(), -1);
-        adjustActive(target, target.capacityBundle(), 1);
     }
 
     private void adjustPending(

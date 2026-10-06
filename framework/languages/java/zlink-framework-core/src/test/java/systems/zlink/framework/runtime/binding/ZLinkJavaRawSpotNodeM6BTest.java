@@ -3182,7 +3182,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             ZLinkBackendSpot source = node.spotNode().createSpot("send-relocation-source");
             ZLinkBackendSpot target = node.spotNode().createSpot("send-relocation-target");
             var queue = new systems.zlink.framework.execution.ZLinkSerialExecutionQueue();
-            var seal = queue.trySealRelocation().orElseThrow();
+            var seal = queue.trySealRelocation().toCompletableFuture().join().orElseThrow();
             target.onDispatchEvent(
                     new systems.zlink.framework.runtime.internal.backend
                             .ZLinkInternalAsyncSpotDispatchHandler() {
@@ -3215,8 +3215,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                         .toCompletableFuture()
                         .join();
             }
-            assertEquals(1, queue.freezeRelocationIngress(seal).orElseThrow().size());
-            assertTrue(queue.abortRelocation(seal));
+            assertEquals(
+                    1,
+                    queue.freezeRelocationIngress(seal)
+                            .toCompletableFuture()
+                            .join()
+                            .orElseThrow()
+                            .size());
+            assertTrue(queue.abortRelocation(seal).toCompletableFuture().join());
         }
     }
 

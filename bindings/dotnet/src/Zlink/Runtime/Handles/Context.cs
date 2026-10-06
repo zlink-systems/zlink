@@ -9,12 +9,6 @@ internal sealed class Context : NativeOwner, IContext
     public Context() : base(CreateHandle())
     {
         Options = new ContextOptions(this);
-        long runtimeMemoryLimit = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
-        if (runtimeMemoryLimit > 0)
-        {
-            SetUInt64Option(ContextOption.AutoHwmRuntimeMemoryLimitBytes,
-                (ulong)runtimeMemoryLimit);
-        }
     }
 
     internal IntPtr Handle => _handle;
@@ -102,7 +96,6 @@ internal sealed class Context : NativeOwner, IContext
             BudgetGeneration = native.BudgetGeneration,
             MeasurementEpoch = native.MeasurementEpoch,
             ConfiguredMemoryLimitBytes = native.ConfiguredMemoryLimitBytes,
-            RuntimeMemoryLimitBytes = native.RuntimeMemoryLimitBytes,
             ResolvedMemoryLimitBytes = native.ResolvedMemoryLimitBytes,
             ConfiguredCoreBudgetBytes = native.ConfiguredCoreBudgetBytes,
             EffectiveCoreBudgetBytes = native.EffectiveCoreBudgetBytes,

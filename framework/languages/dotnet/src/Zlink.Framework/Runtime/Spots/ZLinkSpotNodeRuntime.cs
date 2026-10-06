@@ -597,7 +597,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         }
         catch (ZlinkSubmitException failure)
         {
-            return DirectSubmitFailure(failure);
+            return ZLinkSubmitFailureMapper.ToOneWayResult(failure, "Direct MeshNode send");
         }
         catch (ObjectDisposedException)
         {
@@ -676,7 +676,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         }
         catch (ZlinkSubmitException failure)
         {
-            return DirectSubmitFailure(failure);
+            return ZLinkSubmitFailureMapper.ToOneWayResult(failure, "Direct MeshNode send");
         }
         catch (ObjectDisposedException)
         {
@@ -756,27 +756,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             ZLinkMessageParts.DisposeAll(parts);
         }
     }
-
-    private static ZLinkOneWaySubmitResult DirectSubmitFailure(ZlinkSubmitException failure) =>
-        failure.Result switch
-        {
-            ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.RouteNotConnected
-            ),
-            ZlinkSubmitException.ErrorCode.NotFound => new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.TargetNotFound
-            ),
-            ZlinkSubmitException.ErrorCode.Terminated => new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Shutdown
-            ),
-            ZlinkSubmitException.ErrorCode.Backpressured => new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Backpressured
-            ),
-            _ => throw ZLinkRequestFailureMapper.CreateSubmitException(
-                failure,
-                "Direct MeshNode send"
-            ),
-        };
 
     internal ValueTask<ZLinkServiceWireCodec.ReplyRelayAckRecord> RelayRelocationReplyAsync(
         RoutingId targetNodeRid,

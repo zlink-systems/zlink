@@ -603,19 +603,86 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                         .InstanceRouteFence
                                                                 route,
                                                         ZLinkBackendSpot backendSpot) {
+                                                    return activate(
+                                                            stableType,
+                                                            route,
+                                                            backendSpot,
+                                                            Long.MAX_VALUE);
+                                                }
+
+                                                @Override
+                                                public CompletionStage<
+                                                                systems.zlink.framework.runtime
+                                                                        .internal.service
+                                                                        .ZLinkServiceM6BWireCodec
+                                                                        .InstanceRouteFence>
+                                                        reserve(
+                                                                systems.zlink.framework.runtime
+                                                                                .internal.service
+                                                                                .ZLinkInstanceActivationRecoveryCodec
+                                                                                .RecoveryEnvelope
+                                                                        envelope) {
+                                                    return reserveInstanceSpotTarget(envelope);
+                                                }
+
+                                                @Override
+                                                public CompletionStage<Void> completed(
+                                                        systems.zlink.framework.runtime.internal
+                                                                        .service
+                                                                        .ZLinkServiceM6BWireCodec
+                                                                        .InstanceSpotMessage
+                                                                message) {
+                                                    return completeInstanceActivation(message);
+                                                }
+
+                                                @Override
+                                                public CompletionStage<Void> activate(
+                                                        String stableType,
+                                                        systems.zlink.framework.runtime.internal
+                                                                        .service
+                                                                        .ZLinkServiceM6BWireCodec
+                                                                        .InstanceRouteFence
+                                                                route,
+                                                        ZLinkBackendSpot backendSpot,
+                                                        long deadlineUnixMs) {
+                                                    return activateInstanceSpotTarget(
+                                                            nodeRegistration.meshName(),
+                                                            factory,
+                                                            route,
+                                                            backendSpot,
+                                                            deadlineUnixMs);
+                                                }
+
+                                                @Override
+                                                public CompletionStage<Void> activate(
+                                                        String stableType,
+                                                        systems.zlink.framework.runtime.internal
+                                                                        .service
+                                                                        .ZLinkServiceM6BWireCodec
+                                                                        .InstanceRouteFence
+                                                                route,
+                                                        ZLinkBackendSpot backendSpot,
+                                                        long deadlineUnixMs,
+                                                        java.util.function.Consumer<
+                                                                        ZLinkBackendSpot>
+                                                                restoreFirst) {
+                                                    return activateInstanceSpotTarget(
+                                                            nodeRegistration.meshName(),
+                                                            factory,
+                                                            route,
+                                                            backendSpot,
+                                                            deadlineUnixMs,
+                                                            restoreFirst);
+                                                }
+
+                                                @Override
+                                                public <T> CompletionStage<T> admit(
+                                                        Supplier<CompletionStage<T>> work) {
                                                     return activationAdmission(
                                                                     nodeRegistration.meshName())
                                                             .admit(
-                                                                    "Instance Spot '"
-                                                                            + route.targetSpotId()
-                                                                            + "'",
-                                                                    () ->
-                                                                            activateInstanceSpotTarget(
-                                                                                    nodeRegistration
-                                                                                            .meshName(),
-                                                                                    factory,
-                                                                                    route,
-                                                                                    backendSpot));
+                                                                    "Instance Spot activation",
+                                                                    work);
                                                 }
 
                                                 @Override
@@ -634,7 +701,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     // release ends; a route of a later generation
                                                     // belongs to the next incarnation.
                                                     return existing == null
-                                                                    || message.route()
+                                                                    || ((systems.zlink.framework
+                                                                                                    .runtime
+                                                                                                    .internal
+                                                                                                    .service
+                                                                                                    .ZLinkServiceM6BWireCodec
+                                                                                                    .InstanceRouteFence)
+                                                                                            message
+                                                                                                    .route())
                                                                                     .objectGeneration()
                                                                             > existing.context
                                                                                     .objectGeneration()
@@ -2368,14 +2442,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     String contentType,
                     Map<String, String> metadata,
                     long deadline) {
-                return activateInstanceSpot(
-                                spotId,
-                                stableType,
-                                meshName,
-                                payload,
-                                packetName,
-                                metadata,
-                                deadline)
+                return resolveInstanceSpotRoute(spotId, stableType, meshName, deadline)
                         .thenCompose(
                                 activation -> {
                                     List<Message> parts =
@@ -2434,14 +2501,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         .ZLinkFlowContext.current());
                 Supplier<CompletionStage<List<Message>>> attempt =
                         () ->
-                                activateInstanceSpot(
-                                                spotId,
-                                                stableType,
-                                                meshName,
-                                                payload,
-                                                packetName,
-                                                metadata,
-                                                deadline)
+                                resolveInstanceSpotRoute(spotId, stableType, meshName, deadline)
                                         .thenCompose(
                                                 activation ->
                                                         requestInstanceSpot(
@@ -2508,14 +2568,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         };
     }
 
-    private CompletionStage<InstanceActivation> activateInstanceSpot(
-            String spotId,
-            String requestedType,
-            String requestedMesh,
-            Message payload,
-            Optional<String> packetName,
-            Map<String, String> metadata,
-            long deadline) {
+    private CompletionStage<InstanceActivation> resolveInstanceSpotRoute(
+            String spotId, String requestedType, String requestedMesh, long deadline) {
         systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator.requireCallerAssignable(
                 spotId);
         var admissionFailure = spotHostAdmissionFailure(spotId);
@@ -2528,40 +2582,82 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .thenCompose(
                         current -> {
                             if (current instanceof ZLinkAuthoritySnapshot existing) {
-                                return awaitInstanceReady(
-                                        store, key, existing, requestedType, deadline);
+                                var authority =
+                                        userSpotAuthorities
+                                                .decode(existing.payload())
+                                                .orElseThrow();
+                                if (authority.instance().isEmpty()
+                                        || (requestedType != null
+                                                && !requestedType.equals(authority.stableType()))) {
+                                    return CompletableFuture.failedFuture(
+                                            ZLinkFrameworkErrorOrigin.framework(
+                                                    ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+                                                    "Instance Spot type does not match"));
+                                }
+                                if (existing.allocation().state()
+                                        == systems.zlink.framework.runtime.internal.locations
+                                                .ZLinkPlacementAllocationState.ACTIVE) {
+                                    return CompletableFuture.completedFuture(
+                                            new InstanceActivation(
+                                                    routeMeshNodesByName.get(authority.meshName()),
+                                                    instanceRoute(authority, existing),
+                                                    authority.stableType()));
+                                }
+                                return CompletableFuture.failedFuture(
+                                        ZLinkFrameworkErrorOrigin.framework(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                "Instance Spot creation is in progress"));
                             }
                             requireAcceptingNewState();
                             String meshName = resolveObjectMesh(requestedMesh);
-                            return resolveInstanceType(store, meshName, requestedType, deadline)
+                            return resolveInstanceType(store, meshName, requestedType)
                                     .thenCompose(
                                             stableType ->
                                                     selectInstanceSpotTarget(
-                                                            store, meshName, stableType, deadline))
-                                    .thenCompose(
+                                                            store, meshName, stableType))
+                                    .thenApply(
                                             target ->
-                                                    reserveInstanceSpot(
-                                                            store,
-                                                            meshName,
-                                                            spotId,
-                                                            target.stableType(),
-                                                            target.descriptor(),
-                                                            payload,
-                                                            packetName,
-                                                            metadata,
-                                                            deadline));
+                                                    new InstanceActivation(
+                                                            routeMeshNodesByName.get(meshName),
+                                                            new systems.zlink.framework.runtime
+                                                                    .internal.service
+                                                                    .ZLinkServiceM6BWireCodec
+                                                                    .InstanceColdActivation(
+                                                                    target.descriptor().rid(),
+                                                                    target.descriptor()
+                                                                            .lifecycleGeneration(),
+                                                                    spotId,
+                                                                    meshName,
+                                                                    target.stableType(),
+                                                                    Long.toString(
+                                                                            target.descriptor()
+                                                                                    .descriptorRevision()),
+                                                                    deadline),
+                                                            target.stableType()));
                         });
     }
 
     private CompletionStage<String> resolveInstanceType(
-            ZLinkLocationRepository store, String meshName, String requestedType, long deadline) {
+            ZLinkLocationRepository store, String meshName, String requestedType) {
         if (requestedType != null) {
             return CompletableFuture.completedFuture(requireStableType(requestedType));
         }
-        return store.listMeshNodes(meshName, new ZLinkPageRequest(1000, null))
+        return store.listMeshNodes(meshName, new ZLinkPageRequest(INSTANCE_TARGET_PAGE_SIZE, null))
                 .thenApply(
                         page ->
                                 page.items().stream()
+                                        .filter(
+                                                node ->
+                                                        node.state()
+                                                                        == systems.zlink.framework
+                                                                                .runtime.host
+                                                                                .ZLinkFrameworkRuntimeState
+                                                                                .SERVING
+                                                                && node.objectRole()
+                                                                        == systems.zlink.framework
+                                                                                .locations
+                                                                                .ZLinkMeshNodeObjectRole
+                                                                                .SERVER)
                                         .flatMap(node -> node.objectCapabilities().stream())
                                         .filter(
                                                 capability ->
@@ -2578,30 +2674,31 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .thenApply(
                         types -> {
                             if (types.size() != 1) {
+                                if (types.isEmpty())
+                                    throw ZLinkFrameworkErrorOrigin.framework(
+                                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                                            "No serving Instance Spot type is registered in Mesh: "
+                                                    + meshName);
                                 throw new IllegalStateException(
-                                        types.isEmpty()
-                                                ? "No Instance Spot type is registered in Mesh: "
-                                                        + meshName
-                                                : "Instance Spot type is required when multiple"
-                                                        + " types are registered");
+                                        "Instance Spot type is required when multiple types are registered");
                             }
                             return types.getFirst();
                         });
     }
 
     private CompletionStage<InstanceTarget> selectInstanceSpotTarget(
-            ZLinkLocationRepository store, String meshName, String stableType, long deadline) {
+            ZLinkLocationRepository store, String meshName, String stableType) {
         var admissionFailure = spotHostAdmissionFailure(stableType);
         if (admissionFailure != null) {
             return CompletableFuture.failedFuture(admissionFailure);
         }
-        return store.listMeshNodes(meshName, new ZLinkPageRequest(1000, null))
+        return store.listMeshNodes(meshName, new ZLinkPageRequest(INSTANCE_TARGET_PAGE_SIZE, null))
                 .thenCompose(
                         page -> {
                             List<
                                             systems.zlink.framework.runtime.internal.locations
                                                     .ZLinkMeshNodeDescriptor>
-                                    candidates =
+                                    typed =
                                             page.items().stream()
                                                     .filter(
                                                             node ->
@@ -2619,8 +2716,37 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                             .ZLinkMeshNodeObjectRole
                                                                                             .SERVER
                                                                             && node
-                                                                                            .placementWeight()
-                                                                                    > 0
+                                                                                    .objectCapabilities()
+                                                                                    .stream()
+                                                                                    .anyMatch(
+                                                                                            capability ->
+                                                                                                    capability
+                                                                                                                            .objectKind()
+                                                                                                                    == systems
+                                                                                                                            .zlink
+                                                                                                                            .framework
+                                                                                                                            .locations
+                                                                                                                            .ZLinkPlacementObjectKind
+                                                                                                                            .INSTANCE_SPOT
+                                                                                                            && capability
+                                                                                                                    .stableType()
+                                                                                                                    .equals(
+                                                                                                                            stableType)))
+                                                    .toList();
+                            if (typed.isEmpty())
+                                return CompletableFuture.failedFuture(
+                                        ZLinkFrameworkErrorOrigin.framework(
+                                                ZLinkFrameworkErrorKind.NOT_FOUND,
+                                                "No serving Instance Spot node provides type: "
+                                                        + stableType));
+                            List<
+                                            systems.zlink.framework.runtime.internal.locations
+                                                    .ZLinkMeshNodeDescriptor>
+                                    candidates =
+                                            typed.stream()
+                                                    .filter(
+                                                            node ->
+                                                                    node.placementWeight() > 0
                                                                             && node
                                                                                     .objectCapabilities()
                                                                                     .stream()
@@ -2643,22 +2769,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                     capability)))
                                                     .toList();
                             if (candidates.isEmpty()) {
-                                if (System.currentTimeMillis() >= deadline) {
-                                    return CompletableFuture.failedFuture(
-                                            new IllegalStateException(
-                                                    "No Ready Instance Spot placement target"));
-                                }
-                                return CompletableFuture.supplyAsync(
-                                                () -> null,
-                                                CompletableFuture.delayedExecutor(
-                                                        10, TimeUnit.MILLISECONDS))
-                                        .thenCompose(
-                                                ignored ->
-                                                        selectInstanceSpotTarget(
-                                                                store,
-                                                                meshName,
-                                                                stableType,
-                                                                deadline));
+                                return CompletableFuture.failedFuture(
+                                        ZLinkFrameworkErrorOrigin.framework(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                "No Instance Spot placement target is available"));
                             }
                             Set<RoutingId> connectedTargets = connectedInstanceTargets(meshName);
                             List<
@@ -2710,183 +2824,342 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .collect(Collectors.toUnmodifiableSet());
     }
 
-    private CompletionStage<InstanceActivation> reserveInstanceSpot(
-            ZLinkLocationRepository store,
-            String meshName,
-            String spotId,
-            String stableType,
-            ZLinkMeshNodeDescriptor target,
-            Message payload,
-            Optional<String> packetName,
-            Map<String, String> metadata,
-            long deadline) {
-        byte[] requestBytes = payload.toByteArray();
-        var owner =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken(
-                        target.ownerId(), target.leaseGeneration());
-        byte[] creating =
-                userSpotAuthorities.encodeInstance(
-                        systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec
-                                .State.CREATING,
-                        stableType,
-                        spotId,
-                        target.ownerId(),
-                        target.leaseGeneration(),
-                        meshName,
-                        target.rid(),
-                        target.lifecycleGeneration());
-        var request =
-                new systems.zlink.framework.runtime.internal.locations
-                        .ZLinkObjectReservationRequest(
-                        systems.zlink.framework.locations.ZLinkPlacementObjectKind.INSTANCE_SPOT,
-                        systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
-                                spotId),
-                        stableType,
-                        ZLinkInlineCreationContentCodec.encode(requestBytes),
-                        sha256(requestBytes),
-                        requestBytes.length,
-                        descriptorKey(target),
-                        target.lifecycleGeneration(),
-                        owner,
-                        creating,
-                        systems.zlink.framework.runtime.internal.locations
-                                .ZLinkPlacementCapacityBundle.spot(
-                                systems.zlink.framework.locations.ZLinkPlacementObjectKind
-                                        .INSTANCE_SPOT,
-                                stableType,
-                                1));
-        return store.reserve(request, () -> System.currentTimeMillis() >= deadline)
+    private static final int INSTANCE_TARGET_PAGE_SIZE = 1000;
+    private static final Duration ACTIVATION_RECOVERY_RETENTION = Duration.ofHours(24);
+
+    private CompletionStage<
+                    systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence>
+            reserveInstanceSpotTarget(
+                    systems.zlink.framework.runtime.internal.service
+                                    .ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope
+                            envelope) {
+        var store = requireUserSpotLocationStore();
+        var recoveryStore = frameworkRegistration.relocationStore();
+        if (recoveryStore == null)
+            return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                            "Instance cold activation requires a Relocation Store"));
+        var local = routeMeshNodesByName.get(envelope.targetMeshName());
+        if (local == null
+                || !local.routingId().equals(envelope.targetNodeRid())
+                || local.lifecycleGeneration() != envelope.targetNodeGeneration()) {
+            return CompletableFuture.failedFuture(
+                    ZLinkFrameworkErrorOrigin.framework(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Cold activation target descriptor changed"));
+        }
+        String key =
+                systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                        envelope.targetSpotId());
+        return store.read(key, () -> System.currentTimeMillis() >= envelope.deadlineUnixMs())
                 .thenCompose(
-                        result -> {
-                            systems.zlink.framework.runtime.internal.locations
-                                            .ZLinkObjectReservation
-                                    reservation;
-                            if (result
-                                    instanceof
-                                    systems.zlink.framework.runtime.internal.locations
-                                                    .ZLinkObjectReserved
-                                            reserved) {
-                                reservation = reserved.reservation();
-                            } else if (result
-                                    instanceof
-                                    systems.zlink.framework.runtime.internal.locations
-                                            .ZLinkObjectTypeMismatch) {
-                                return CompletableFuture.failedFuture(
-                                        ZLinkFrameworkErrorOrigin.framework(
-                                                ZLinkFrameworkErrorKind.TYPE_MISMATCH,
-                                                "Instance Spot type does not match"));
-                            } else if (result
-                                            instanceof
-                                            systems.zlink.framework.runtime.internal.locations
-                                                    .ZLinkObjectAlreadyExists
-                                    || result
-                                            instanceof
-                                            systems.zlink.framework.runtime.internal.locations
-                                                    .ZLinkObjectConflict) {
+                        read -> {
+                            if (read instanceof ZLinkAuthoritySnapshot current) {
+                                var authority =
+                                        userSpotAuthorities.decode(current.payload()).orElseThrow();
+                                if (authority.instance().isEmpty()
+                                        || !authority.stableType().equals(envelope.stableType())) {
+                                    return CompletableFuture.failedFuture(
+                                            ZLinkFrameworkErrorOrigin.framework(
+                                                    ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+                                                    "Instance Spot type does not match"));
+                                }
+                                if (current.allocation().state()
+                                                == systems.zlink.framework.runtime.internal
+                                                        .locations.ZLinkPlacementAllocationState
+                                                        .ACTIVE
+                                        && authority.nodeRid().equals(envelope.targetNodeRid())
+                                        && authority.nodeGeneration()
+                                                == envelope.targetNodeGeneration()) {
+                                    return CompletableFuture.completedFuture(
+                                            instanceRoute(authority, current));
+                                }
                                 return CompletableFuture.failedFuture(
                                         ZLinkFrameworkErrorOrigin.framework(
                                                 ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                "Instance Spot reservation lost its owner fence"));
-                            } else {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "Instance Spot reservation failed: "
-                                                        + result.getClass().getSimpleName()));
+                                                "Cold activation target is not the current owner"));
                             }
-                            var route =
-                                    new systems.zlink.framework.runtime.internal.service
-                                            .ZLinkServiceM6BWireCodec.InstanceRouteFence(
-                                            target.rid(),
-                                            target.lifecycleGeneration(),
-                                            spotId,
-                                            reservation.objectGeneration(),
-                                            target.ownerId(),
-                                            reservation.authorityOwnerGeneration(),
-                                            target.leaseGeneration(),
-                                            reservation.storeVersion());
-                            ZLinkInternalMeshNode source = routeMeshNodesByName.get(meshName);
-                            if (source == null) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "Object client Mesh is not configured: "
-                                                        + meshName));
-                            }
-                            if (source.status().routingId().equals(target.rid())) {
-                                source.registerInstanceIntent(stableType, route);
-                            }
-                            return CompletableFuture.completedFuture(
-                                    new InstanceActivation(source, route, stableType));
+                            return store.listMeshNodes(
+                                            envelope.targetMeshName(),
+                                            new ZLinkPageRequest(INSTANCE_TARGET_PAGE_SIZE, null))
+                                    .thenCompose(
+                                            page -> {
+                                                var descriptor =
+                                                        page.items().stream()
+                                                                .filter(
+                                                                        node ->
+                                                                                node.rid()
+                                                                                                .equals(
+                                                                                                        envelope
+                                                                                                                .targetNodeRid())
+                                                                                        && node
+                                                                                                        .lifecycleGeneration()
+                                                                                                == envelope
+                                                                                                        .targetNodeGeneration())
+                                                                .findFirst()
+                                                                .orElseThrow(
+                                                                        () ->
+                                                                                ZLinkFrameworkErrorOrigin
+                                                                                        .framework(
+                                                                                                ZLinkFrameworkErrorKind
+                                                                                                        .UNAVAILABLE,
+                                                                                                "Cold activation target descriptor is missing"));
+                                                byte[] root =
+                                                        new systems.zlink.framework.runtime.internal
+                                                                        .service
+                                                                        .ZLinkInstanceActivationRecoveryCodec()
+                                                                .encode(envelope);
+                                                return recoveryStore
+                                                        .put(
+                                                                root,
+                                                                ACTIVATION_RECOVERY_RETENTION,
+                                                                () ->
+                                                                        System.currentTimeMillis()
+                                                                                >= envelope
+                                                                                        .deadlineUnixMs())
+                                                        .thenCompose(
+                                                                stored -> {
+                                                                    var crc =
+                                                                            new java.util
+                                                                                    .zip
+                                                                                    .CRC32C();
+                                                                    crc.update(root);
+                                                                    if (stored.reference().isBlank()
+                                                                            || stored
+                                                                                            .checksumCrc32c()
+                                                                                    != crc
+                                                                                            .getValue()
+                                                                            || !stored.expiresAt()
+                                                                                    .isAfter(
+                                                                                            stored
+                                                                                                    .storeNow())) {
+                                                                        return CompletableFuture
+                                                                                .failedFuture(
+                                                                                        new IllegalStateException(
+                                                                                                "Invalid activation recovery receipt"));
+                                                                    }
+                                                                    var request =
+                                                                            new systems.zlink
+                                                                                    .framework
+                                                                                    .runtime
+                                                                                    .internal
+                                                                                    .locations
+                                                                                    .ZLinkObjectReservationRequest(
+                                                                                    systems.zlink
+                                                                                            .framework
+                                                                                            .locations
+                                                                                            .ZLinkPlacementObjectKind
+                                                                                            .INSTANCE_SPOT,
+                                                                                    key,
+                                                                                    envelope
+                                                                                            .stableType(),
+                                                                                    stored
+                                                                                            .reference(),
+                                                                                    sha256(root),
+                                                                                    root.length,
+                                                                                    descriptorKey(
+                                                                                            descriptor),
+                                                                                    descriptor
+                                                                                            .lifecycleGeneration(),
+                                                                                    new systems
+                                                                                            .zlink
+                                                                                            .framework
+                                                                                            .runtime
+                                                                                            .internal
+                                                                                            .locations
+                                                                                            .ZLinkLocationOwnerToken(
+                                                                                            descriptor
+                                                                                                    .ownerId(),
+                                                                                            descriptor
+                                                                                                    .leaseGeneration()),
+                                                                                    userSpotAuthorities
+                                                                                            .encodeInstance(
+                                                                                                    systems
+                                                                                                            .zlink
+                                                                                                            .framework
+                                                                                                            .runtime
+                                                                                                            .locations
+                                                                                                            .ZLinkServiceAuthorityPayloadCodec
+                                                                                                            .State
+                                                                                                            .CREATING,
+                                                                                                    envelope
+                                                                                                            .stableType(),
+                                                                                                    envelope
+                                                                                                            .targetSpotId(),
+                                                                                                    descriptor
+                                                                                                            .ownerId(),
+                                                                                                    descriptor
+                                                                                                            .leaseGeneration(),
+                                                                                                    envelope
+                                                                                                            .targetMeshName(),
+                                                                                                    envelope
+                                                                                                            .targetNodeRid(),
+                                                                                                    envelope
+                                                                                                            .targetNodeGeneration()),
+                                                                                    systems.zlink
+                                                                                            .framework
+                                                                                            .runtime
+                                                                                            .internal
+                                                                                            .locations
+                                                                                            .ZLinkPlacementCapacityBundle
+                                                                                            .spot(
+                                                                                                    systems
+                                                                                                            .zlink
+                                                                                                            .framework
+                                                                                                            .locations
+                                                                                                            .ZLinkPlacementObjectKind
+                                                                                                            .INSTANCE_SPOT,
+                                                                                                    envelope
+                                                                                                            .stableType(),
+                                                                                                    1));
+                                                                    return store.reserve(
+                                                                                    request,
+                                                                                    () ->
+                                                                                            System
+                                                                                                            .currentTimeMillis()
+                                                                                                    >= envelope
+                                                                                                            .deadlineUnixMs())
+                                                                            .thenCompose(
+                                                                                    result -> {
+                                                                                        if (result
+                                                                                                instanceof
+                                                                                                systems
+                                                                                                                .zlink
+                                                                                                                .framework
+                                                                                                                .runtime
+                                                                                                                .internal
+                                                                                                                .locations
+                                                                                                                .ZLinkObjectReserved
+                                                                                                        reserved) {
+                                                                                            var
+                                                                                                    reservation =
+                                                                                                            reserved
+                                                                                                                    .reservation();
+                                                                                            return CompletableFuture
+                                                                                                    .completedFuture(
+                                                                                                            new systems
+                                                                                                                    .zlink
+                                                                                                                    .framework
+                                                                                                                    .runtime
+                                                                                                                    .internal
+                                                                                                                    .service
+                                                                                                                    .ZLinkServiceM6BWireCodec
+                                                                                                                    .InstanceRouteFence(
+                                                                                                                    envelope
+                                                                                                                            .targetNodeRid(),
+                                                                                                                    envelope
+                                                                                                                            .targetNodeGeneration(),
+                                                                                                                    envelope
+                                                                                                                            .targetSpotId(),
+                                                                                                                    reservation
+                                                                                                                            .objectGeneration(),
+                                                                                                                    descriptor
+                                                                                                                            .ownerId(),
+                                                                                                                    reservation
+                                                                                                                            .authorityOwnerGeneration(),
+                                                                                                                    descriptor
+                                                                                                                            .leaseGeneration(),
+                                                                                                                    reservation
+                                                                                                                            .storeVersion()));
+                                                                                        }
+                                                                                        return recoveryStore
+                                                                                                .delete(
+                                                                                                        stored
+                                                                                                                .reference(),
+                                                                                                        () ->
+                                                                                                                false)
+                                                                                                .thenCompose(
+                                                                                                        ignored ->
+                                                                                                                CompletableFuture
+                                                                                                                        .failedFuture(
+                                                                                                                                ZLinkFrameworkErrorOrigin
+                                                                                                                                        .framework(
+                                                                                                                                                result
+                                                                                                                                                                instanceof
+                                                                                                                                                                systems
+                                                                                                                                                                        .zlink
+                                                                                                                                                                        .framework
+                                                                                                                                                                        .runtime
+                                                                                                                                                                        .internal
+                                                                                                                                                                        .locations
+                                                                                                                                                                        .ZLinkObjectTypeMismatch
+                                                                                                                                                        ? ZLinkFrameworkErrorKind
+                                                                                                                                                                .TYPE_MISMATCH
+                                                                                                                                                        : ZLinkFrameworkErrorKind
+                                                                                                                                                                .UNAVAILABLE,
+                                                                                                                                                "Instance cold activation reservation was refused")));
+                                                                                    });
+                                                                });
+                                            });
                         });
     }
 
-    private CompletionStage<InstanceActivation> awaitInstanceReady(
-            ZLinkLocationRepository store,
-            String key,
-            ZLinkAuthoritySnapshot snapshot,
-            String stableType,
-            long deadline) {
-        var admissionFailure = spotHostAdmissionFailure(key);
-        if (admissionFailure != null) {
-            return CompletableFuture.failedFuture(admissionFailure);
-        }
-        var authority =
-                userSpotAuthorities
-                        .decode(snapshot.payload())
-                        .orElseThrow(
-                                () -> new IllegalStateException("invalid Instance Spot authority"));
-        if (authority.instance().isEmpty()
-                || (stableType != null && !authority.stableType().equals(stableType))) {
-            return CompletableFuture.failedFuture(
-                    ZLinkFrameworkErrorOrigin.framework(
-                            ZLinkFrameworkErrorKind.TYPE_MISMATCH,
-                            "Instance Spot type does not match"));
-        }
-        if ((authority.state()
-                                == systems.zlink.framework.runtime.locations
-                                        .ZLinkServiceAuthorityPayloadCodec.State.CLOSING
-                        || authority.state()
-                                == systems.zlink.framework.runtime.locations
-                                        .ZLinkServiceAuthorityPayloadCodec.State.READY)
-                && snapshot.allocation().state()
-                        == systems.zlink.framework.runtime.internal.locations
-                                .ZLinkPlacementAllocationState.ACTIVE) {
-            ZLinkInternalMeshNode source = routeMeshNodesByName.get(authority.meshName());
-            if (source == null) {
-                return CompletableFuture.failedFuture(
-                        new ZLinkConfigurationException(
-                                "Object client Mesh is not configured: " + authority.meshName()));
-            }
-            return CompletableFuture.completedFuture(
-                    new InstanceActivation(
-                            source, instanceRoute(authority, snapshot), authority.stableType()));
-        }
-        if (System.currentTimeMillis() >= deadline) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                            "Instance Spot did not finish activation before the request deadline"));
-        }
-        return CompletableFuture.supplyAsync(
-                        () -> null, CompletableFuture.delayedExecutor(10, TimeUnit.MILLISECONDS))
-                .thenCompose(ignored -> store.read(key, () -> false))
+    private CompletionStage<Void> completeInstanceActivation(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceSpotMessage
+                    message) {
+        var store = requireUserSpotLocationStore();
+        String key =
+                systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                        message.route().targetSpotId());
+        return store.read(key, () -> false)
                 .thenCompose(
-                        read ->
-                                read
-                                                instanceof
-                                                systems.zlink.framework.runtime.internal.locations
-                                                                .ZLinkAuthoritySnapshot
-                                                        current
-                                        ? awaitInstanceReady(
-                                                store,
-                                                key,
-                                                current,
-                                                authority.stableType(),
-                                                deadline)
-                                        : CompletableFuture.failedFuture(
-                                                new ZLinkFrameworkException(
-                                                        ZLinkFrameworkErrorKind.NOT_FOUND,
-                                                        "Instance Spot authority is no longer"
-                                                                + " available")));
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot))
+                                return CompletableFuture.completedFuture(null);
+                            var authority =
+                                    userSpotAuthorities.decode(snapshot.payload()).orElseThrow();
+                            if (authority.activationRecoveryState().isEmpty())
+                                return CompletableFuture.completedFuture(null);
+                            var pointer = authority.activationRecoveryState().orElseThrow();
+                            return frameworkRegistration
+                                    .relocationStore()
+                                    .get(pointer.reference(), () -> false)
+                                    .thenCompose(
+                                            root -> {
+                                                if (!(root
+                                                        instanceof
+                                                        systems.zlink.framework.runtime.internal
+                                                                        .locations
+                                                                        .ZLinkRelocationFound
+                                                                found))
+                                                    return CompletableFuture.failedFuture(
+                                                            new IllegalStateException(
+                                                                    "Instance activation recovery root is missing"));
+                                                byte[] rootBytes = found.payload();
+                                                if (rootBytes.length != pointer.encodedSize()
+                                                        || !java.util.Arrays.equals(
+                                                                sha256(rootBytes),
+                                                                pointer.sha256()))
+                                                    return CompletableFuture.failedFuture(
+                                                            new IllegalStateException(
+                                                                    "Instance activation recovery root integrity failed"));
+                                                var envelope =
+                                                        new systems.zlink.framework.runtime.internal
+                                                                        .service
+                                                                        .ZLinkInstanceActivationRecoveryCodec()
+                                                                .decode(rootBytes);
+                                                if (envelope.operationHigh()
+                                                                != message.operationHigh()
+                                                        || envelope.operationLow()
+                                                                != message.operationLow()
+                                                        || !envelope.sourceNodeRid()
+                                                                .equals(message.sourceNodeRid())
+                                                        || envelope.sourceNodeGeneration()
+                                                                != message.sourceNodeGeneration())
+                                                    return CompletableFuture.completedFuture(null);
+                                                return systems.zlink.framework.runtime.locations
+                                                        .ZLinkStatefulAuthorityRouteRuntime
+                                                        .completeActivationRecovery(
+                                                                store,
+                                                                frameworkRegistration
+                                                                        .relocationStore(),
+                                                                key,
+                                                                snapshot)
+                                                        .thenAccept(ignored -> {});
+                                            });
+                        });
     }
 
     private CompletionStage<Void> activateInstanceSpotTarget(
@@ -2898,7 +3171,24 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .InstanceRouteFence
                     route,
-            ZLinkBackendSpot backendSpot) {
+            ZLinkBackendSpot backendSpot,
+            long deadlineUnixMs) {
+        return activateInstanceSpotTarget(
+                meshName, factory, route, backendSpot, deadlineUnixMs, ignored -> {});
+    }
+
+    private CompletionStage<Void> activateInstanceSpotTarget(
+            String meshName,
+            systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration
+                                    .RelocatableInstanceSpotFactory<
+                            ?>
+                    factory,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    route,
+            ZLinkBackendSpot backendSpot,
+            long deadlineUnixMs,
+            java.util.function.Consumer<ZLinkBackendSpot> restoreFirst) {
         var store = requireUserSpotLocationStore();
         String key =
                 systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
@@ -2964,6 +3254,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             route.leaseGeneration(),
                                                             route.authorityOwnerGeneration(),
                                                             route.targetNodeGeneration());
+                                                    restoreFirst.accept(backendSpot);
                                                     if (instanceSpotActivations.put(
                                                                     route.targetSpotId(),
                                                                     activation)
@@ -3007,12 +3298,21 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     .ZLinkLocationOwnerToken(
                                                     snapshot.ownerId(),
                                                     snapshot.ownerLeaseGeneration()));
-                            return activationFactory
-                                    .activateInstance(
-                                            meshName,
-                                            route.targetNodeRid(),
-                                            factory.spotType(),
-                                            backendSpot)
+                            return CompletableFuture.<Void>completedFuture(null)
+                                    .thenCompose(
+                                            ignored -> {
+                                                if (System.currentTimeMillis() >= deadlineUnixMs)
+                                                    return CompletableFuture.failedFuture(
+                                                            new ZLinkFrameworkException(
+                                                                    ZLinkFrameworkErrorKind
+                                                                            .DEADLINE_EXCEEDED,
+                                                                    "Instance activation deadline expired"));
+                                                return activationFactory.activateInstance(
+                                                        meshName,
+                                                        route.targetNodeRid(),
+                                                        factory.spotType(),
+                                                        backendSpot);
+                                            })
                                     .thenCompose(
                                             activation -> {
                                                 byte[] ready =
@@ -3027,8 +3327,22 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                 snapshot.ownerLeaseGeneration(),
                                                                 meshName,
                                                                 route.targetNodeRid(),
-                                                                route.targetNodeGeneration());
-                                                return store.commit(reservation, ready, () -> false)
+                                                                route.targetNodeGeneration(),
+                                                                Optional.of(
+                                                                        new systems.zlink.framework
+                                                                                .runtime.locations
+                                                                                .ZLinkServiceAuthorityPayloadCodec
+                                                                                .ActivationRecoveryState(
+                                                                                pending
+                                                                                        .requestContentReference(),
+                                                                                pending
+                                                                                        .requestSha256(),
+                                                                                pending
+                                                                                        .requestEncodedSize(),
+                                                                                1,
+                                                                                0)));
+                                                return store.commit(
+                                                                reservation, ready, deadlineUnixMs)
                                                         .thenCompose(
                                                                 result -> {
                                                                     if (result
@@ -3076,6 +3390,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                     .authorityOwnerGeneration(),
                                                                             route
                                                                                     .targetNodeGeneration());
+                                                                    restoreFirst.accept(
+                                                                            backendSpot);
                                                                     if (instanceSpotActivations.put(
                                                                                     route
                                                                                             .targetSpotId(),
@@ -3089,9 +3405,53 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                             Duration
                                                                                                     .ZERO));
                                                                     return CompletableFuture
-                                                                            .completedFuture(null);
+                                                                            .<Void>completedFuture(
+                                                                                    null);
                                                                 });
-                                            });
+                                            })
+                                    .exceptionallyCompose(
+                                            failure ->
+                                                    store.abort(reservation, () -> false)
+                                                            .thenCompose(
+                                                                    aborted -> {
+                                                                        if (aborted
+                                                                                        == systems
+                                                                                                .zlink
+                                                                                                .framework
+                                                                                                .runtime
+                                                                                                .internal
+                                                                                                .locations
+                                                                                                .ZLinkObjectAbortResult
+                                                                                                .ABORTED
+                                                                                || aborted
+                                                                                        == systems
+                                                                                                .zlink
+                                                                                                .framework
+                                                                                                .runtime
+                                                                                                .internal
+                                                                                                .locations
+                                                                                                .ZLinkObjectAbortResult
+                                                                                                .ALREADY_ABORTED) {
+                                                                            return frameworkRegistration
+                                                                                    .relocationStore()
+                                                                                    .delete(
+                                                                                            pending
+                                                                                                    .requestContentReference(),
+                                                                                            () ->
+                                                                                                    false)
+                                                                                    .thenCompose(
+                                                                                            ignored ->
+                                                                                                    CompletableFuture
+                                                                                                            .<Void>
+                                                                                                                    failedFuture(
+                                                                                                                            unwrapCompletion(
+                                                                                                                                    failure)));
+                                                                        }
+                                                                        return CompletableFuture
+                                                                                .<Void>failedFuture(
+                                                                                        unwrapCompletion(
+                                                                                                failure));
+                                                                    }));
                         });
     }
 
@@ -3122,8 +3482,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private record InstanceActivation(
             ZLinkInternalMeshNode source,
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .InstanceRouteFence
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceRoute
                     route,
             String stableType) {}
 
@@ -4978,7 +5337,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     @Override
     CompletionStage<Boolean> completeInstanceSpotClose(ZLinkInstanceSpotActivation activation) {
-        boolean hasIntent = activation.context.ownerQueue().retainsPendingOrSealClosingAdmission();
+        return activation
+                .context
+                .ownerQueue()
+                .retainsPendingOrSealClosingAdmission()
+                .thenCompose(hasIntent -> completeInstanceSpotClose(activation, hasIntent));
+    }
+
+    private CompletionStage<Boolean> completeInstanceSpotClose(
+            ZLinkInstanceSpotActivation activation, boolean hasIntent) {
         if (!hasIntent || instanceCloseReleaseFailure() != null) {
             return releaseInstanceSpotAuthority(activation)
                     .thenApply(

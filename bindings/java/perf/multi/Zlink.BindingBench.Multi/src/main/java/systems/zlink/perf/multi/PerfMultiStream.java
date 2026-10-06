@@ -35,15 +35,16 @@ final class PerfMultiStream {
             PerfUtil.configureServerTls(server, config.transport());
             server.options().recvMode(StreamRecvMode.PACKET);
             server.bind(config.endpoint());
+            Runnable awaitConnections = PerfUtil.beginMonitorEventWait(monitor,
+                MonitorEventType.CONNECTION_READY, config.clients(),
+                Duration.ofMillis(config.connectReadyTimeoutMs()),
+                "multi stream server connections ready");
             PerfControl.emitReady(config.endpoint());
             if (!PerfControl.awaitStartOrStop(config.size(),
                     "multi stream server")) {
                 return PerfUtil.Result.silent(config);
             }
-            PerfUtil.waitForMonitorEvent(monitor,
-                MonitorEventType.CONNECTION_READY, config.clients(),
-                Duration.ofMillis(config.connectReadyTimeoutMs()),
-                "multi stream server connections ready");
+            awaitConnections.run();
             PerfUtil.recalculateAutoHwm(ctx);
             // Core permits one monitor per socket. Close the connection-ready
             // monitor before opening the diagnostic snapshot monitor. C takes

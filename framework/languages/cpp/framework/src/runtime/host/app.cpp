@@ -1177,7 +1177,8 @@ void app_t::_apply_zlink_framework ()
     if (options.core_hwm_budget_bytes () != 0) {
         core_options.core_hwm_budget_bytes (
           zlink::byte_count_t::bytes (options.core_hwm_budget_bytes ()));
-    } else if (options.core_hwm_memory_limit_bytes () != 0) {
+    }
+    if (options.core_hwm_memory_limit_bytes () != 0) {
         core_options.core_hwm_memory_limit_bytes (
           zlink::byte_count_t::bytes (options.core_hwm_memory_limit_bytes ()));
     }

@@ -82,15 +82,16 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 .thenCompose(
                         preparedSpot ->
                                 prepareActors(preparedSpot, request, cancellation, preparedActors)
+                                        .thenCompose(
+                                                ignored -> backend.beginIngressHold(preparedSpot))
                                         .thenApply(
-                                                ignored ->
+                                                ingressHold ->
                                                         new Staged(
                                                                 this,
                                                                 request,
                                                                 preparedSpot,
                                                                 preparedActors,
-                                                                backend.beginIngressHold(
-                                                                        preparedSpot),
+                                                                ingressHold,
                                                                 permit))
                                         .exceptionallyCompose(
                                                 failure ->
@@ -470,18 +471,38 @@ final class ZLinkUserSpotAggregateStagingOwner {
                             .toCompletableFuture());
         }
         return CompletableFuture.allOf(replay.toArray(CompletableFuture[]::new))
-                .whenComplete(
-                        (ignored, failure) -> {
-                            inStateLane(
-                                    staged,
-                                    () -> {
-                                        backend.resumeIngress(staged.spot, staged.ingressHold);
-                                        staged.durableBacklog = null;
-                                        staged.terminal = true;
-                                        return null;
-                                    });
-                            assert backlog.debugProbe.assertDrainedResult();
-                        });
+                .handle(
+                        (ignored, failure) ->
+                                systems.zlink.framework.runtime.handlers.ZLinkHandlerStages
+                                        .fromStageSupplier(
+                                                () ->
+                                                        backend.resumeIngress(
+                                                                staged.spot, staged.ingressHold))
+                                        .thenRun(
+                                                () -> {
+                                                    inStateLane(
+                                                            staged,
+                                                            () -> {
+                                                                staged.durableBacklog = null;
+                                                                staged.terminal = true;
+                                                                return null;
+                                                            });
+                                                    assert backlog.debugProbe.assertDrainedResult();
+                                                })
+                                        .handle(
+                                                (resumed, resumeFailure) -> {
+                                                    if (failure != null) {
+                                                        if (resumeFailure != null
+                                                                && resumeFailure != failure)
+                                                            failure.addSuppressed(resumeFailure);
+                                                        throw new CompletionException(failure);
+                                                    }
+                                                    if (resumeFailure != null)
+                                                        throw new CompletionException(
+                                                                resumeFailure);
+                                                    return (Void) null;
+                                                }))
+                .thenCompose(stage -> stage);
     }
 
     private CompletionStage<Void> admitBacklogTurn(Supplier<CompletionStage<Void>> turn) {
@@ -748,11 +769,13 @@ final class ZLinkUserSpotAggregateStagingOwner {
             return CompletableFuture.completedFuture(null);
         }
 
-        default Object beginIngressHold(Object preparedSpot) {
-            return null;
+        default CompletionStage<Object> beginIngressHold(Object preparedSpot) {
+            return CompletableFuture.completedFuture(null);
         }
 
-        default void resumeIngress(Object preparedSpot, Object ingressHold) {}
+        default CompletionStage<Void> resumeIngress(Object preparedSpot, Object ingressHold) {
+            return CompletableFuture.completedFuture(null);
+        }
 
         default <T> CompletionStage<T> admitApplicationJob(Supplier<CompletionStage<T>> turn) {
             return Objects.requireNonNull(turn, "turn").get();
@@ -1042,13 +1065,14 @@ final class ZLinkUserSpotAggregateStagingOwner {
         }
 
         @Override
-        public Object beginIngressHold(Object value) {
+        public CompletionStage<Object> beginIngressHold(Object value) {
             return spots.beginReservedIngressHold((ZLinkSpotLifecycle.PreparedUserSpot) value);
         }
 
         @Override
-        public void resumeIngress(Object value, Object ingressHold) {
-            spots.resumeReservedIngress((ZLinkSpotLifecycle.PreparedUserSpot) value, ingressHold);
+        public CompletionStage<Void> resumeIngress(Object value, Object ingressHold) {
+            return spots.resumeReservedIngress(
+                    (ZLinkSpotLifecycle.PreparedUserSpot) value, ingressHold);
         }
 
         @Override

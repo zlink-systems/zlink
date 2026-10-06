@@ -525,6 +525,15 @@ void test_stream_async_send_uses_writable_retry_loop ()
 
 int main ()
 {
+    connect_monitor_state_t ready_state;
+    zlink_monitor_event_t ready_event = {};
+    ready_event.event = ZLINK_EVENT_CONNECTION_READY;
+    const uint64_t ready_values[] = {2, 2, 1, 0, 3};
+    for (size_t i = 0; i != sizeof (ready_values) / sizeof (ready_values[0]); ++i) {
+        ready_event.value = ready_values[i];
+        connect_monitor_handler (&ready_event, &ready_state);
+        assert (connect_ready_count (&ready_state) == ready_values[i]);
+    }
     set_latency_sample_cap_env (NULL);
     test_echo_failure_reports_stderr ();
     test_exact_sampler_statistics ();

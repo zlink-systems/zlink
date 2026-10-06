@@ -53,13 +53,12 @@ final class ZLinkStreamReceiveDispatcher {
     void dispatch(byte[] encodedHeader, byte[] payload) {
         ZLinkStreamWireProtocol.Header header = ZLinkStreamWireProtocol.decodeHeader(encodedHeader);
         byte[] decodedPayload;
+        ZLinkStreamActorRegistry.DefaultActor actor;
         try {
+            actor = header.actorSlot() == null ? null : actors.actor(header.actorSlot());
             if (header.kind() == ZLinkStreamWireProtocol.KIND_RESPONSE) {
                 completeResponse(header, payload);
                 return;
-            }
-            if (header.actorSlot() != null) {
-                actors.actorId(header.actorSlot());
             }
             decodedPayload = payloadCodec.decode(header, payload);
         } catch (ZLinkStreamException failure) {
@@ -78,20 +77,22 @@ final class ZLinkStreamReceiveDispatcher {
             }
             return;
         }
-        DefaultZLinkStreamConnector.trace(
-                () ->
-                        "connector read-frame endpoint="
-                                + configuration.endpoint()
-                                + " kind="
-                                + header.kind()
-                                + " name="
-                                + header.name()
-                                + " requestSeq="
-                                + header.requestSeq()
-                                + " bytes="
-                                + decodedPayload.length
-                                + " correlation="
-                                + header.correlationId());
+        if (DefaultZLinkStreamConnector.traceEnabled()) {
+            DefaultZLinkStreamConnector.trace(
+                    () ->
+                            "connector read-frame endpoint="
+                                    + configuration.endpoint()
+                                    + " kind="
+                                    + header.kind()
+                                    + " name="
+                                    + header.name()
+                                    + " requestSeq="
+                                    + header.requestSeq()
+                                    + " bytes="
+                                    + decodedPayload.length
+                                    + " correlation="
+                                    + header.correlationId());
+        }
         if (header.kind() == ZLinkStreamWireProtocol.KIND_CONTROL) {
             dispatchControl(header, decodedPayload);
             return;
@@ -102,7 +103,7 @@ final class ZLinkStreamReceiveDispatcher {
         }
         if (header.kind() == ZLinkStreamWireProtocol.KIND_SEND
                 || header.kind() == ZLinkStreamWireProtocol.KIND_REQUEST) {
-            dispatchToHandlers(header, decodedPayload);
+            dispatchToHandlers(header, decodedPayload, actor);
         }
     }
 
@@ -201,11 +202,12 @@ final class ZLinkStreamReceiveDispatcher {
         }
     }
 
-    private void dispatchToHandlers(ZLinkStreamWireProtocol.Header header, byte[] payload) {
+    private void dispatchToHandlers(
+            ZLinkStreamWireProtocol.Header header,
+            byte[] payload,
+            ZLinkStreamActorRegistry.DefaultActor actor) {
         //  The slot names the Actor when the packet arrives; the handlers of that
         //  Actor handle are read when the packet is dispatched.
-        ZLinkStreamActorRegistry.DefaultActor actor =
-                header.actorSlot() == null ? null : actors.actor(header.actorSlot());
         String actorId = actor == null ? null : actor.actorId();
         ZLinkStreamMessage<ZLinkStreamEncodedPayload> message =
                 new ZLinkStreamMessage<>(

@@ -230,7 +230,8 @@ final class ZLinkActorDispatchSerialsTest {
         ZLinkSpotSerialExecutor spot = (ZLinkSpotSerialExecutor) actorTarget();
         AtomicReference<ZLinkActorDispatchTarget> owner = new AtomicReference<>(spot);
         ZLinkActorDispatchSerials dispatches = dispatches(owner);
-        var seal = spot.trySealActorRelocation("actor-1").orElseThrow();
+        var seal =
+                spot.trySealActorRelocation("actor-1").toCompletableFuture().join().orElseThrow();
         Field laneField = ZLinkSpotSerialExecutor.class.getDeclaredField("stateLane");
         laneField.setAccessible(true);
         ZLinkStateLane lane = (ZLinkStateLane) laneField.get(spot);
@@ -251,8 +252,8 @@ final class ZLinkActorDispatchSerialsTest {
             systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit.Cut
                     cut;
             do {
-                cut = commit.cut();
-            } while (!commit.tryEstablishAndFinishCapture(cut));
+                cut = commit.cut().toCompletableFuture().join();
+            } while (!commit.tryEstablishAndFinishCapture(cut).toCompletableFuture().join());
             commit.complete();
         } finally {
             release.complete(null);
@@ -526,12 +527,16 @@ final class ZLinkActorDispatchSerialsTest {
                         .toCompletableFuture()
                         .join()
                         .trySealRelocation()
+                        .toCompletableFuture()
+                        .join()
                         .orElseThrow();
         dispatches
                 .relocationLaneAsync("actor-1")
                 .toCompletableFuture()
                 .join()
                 .commitRelocation(seal)
+                .toCompletableFuture()
+                .join()
                 .orElseThrow();
 
         owner.set(null);
@@ -557,12 +562,16 @@ final class ZLinkActorDispatchSerialsTest {
                         .toCompletableFuture()
                         .join()
                         .trySealRelocation()
+                        .toCompletableFuture()
+                        .join()
                         .orElseThrow();
         dispatches
                 .relocationLaneAsync("actor-1")
                 .toCompletableFuture()
                 .join()
                 .commitRelocation(seal)
+                .toCompletableFuture()
+                .join()
                 .orElseThrow();
 
         owner.set(null);
@@ -608,12 +617,16 @@ final class ZLinkActorDispatchSerialsTest {
                         .toCompletableFuture()
                         .join()
                         .trySealRelocation()
+                        .toCompletableFuture()
+                        .join()
                         .orElseThrow();
         dispatches
                 .relocationLaneAsync("actor-1")
                 .toCompletableFuture()
                 .join()
                 .commitRelocation(seal)
+                .toCompletableFuture()
+                .join()
                 .orElseThrow();
         dispatches
                 .beginTeardown(

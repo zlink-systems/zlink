@@ -7,6 +7,8 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobCont
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -15,11 +17,14 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -29,6 +34,19 @@ import java.util.function.Supplier;
  * control admission; this queue only orders accepted work.
  */
 public final class ZLinkSerialExecutionQueue {
+    private static final VarHandle OUTSTANDING;
+
+    static {
+        try {
+            OUTSTANDING =
+                    MethodHandles.lookup()
+                            .findVarHandle(
+                                    ZLinkSerialExecutionQueue.class, "outstanding", long.class);
+        } catch (ReflectiveOperationException failure) {
+            throw new ExceptionInInitializerError(failure);
+        }
+    }
+
     public static final int DEFAULT_LIFECYCLE_BURST_LIMIT = 8;
     public static final Duration DEFAULT_OWNER_TIME_BUDGET = Duration.ofMillis(10);
     private static final ThreadLocal<ZLinkSerialExecutionQueue> CURRENT = new ThreadLocal<>();
@@ -51,20 +69,333 @@ public final class ZLinkSerialExecutionQueue {
     // boundary without inserting at the front of the application FIFO.
     private final ArrayDeque<Entry> continuationPending = new ArrayDeque<>();
     private final ArrayDeque<Entry> lifecyclePending = new ArrayDeque<>();
+    // Only producers append here. The shared gate moves the published prefix into the
+    // corresponding owner lane before selecting a record.
+    private ConcurrentLinkedQueue<Entry> publishedApplication;
+    private ConcurrentLinkedQueue<Entry> publishedContinuation;
+    private ConcurrentLinkedQueue<Entry> publishedLifecycle;
+    private SharedSpotGate sharedSpotGate;
     private int lifecycleStreak;
-    private long outstanding;
+    private volatile long outstanding;
+
+    private void incrementOutstanding() {
+        if (sharedSpotGate == null) outstanding++;
+        else OUTSTANDING.getAndAdd(this, 1L);
+    }
+
+    private void decrementOutstanding() {
+        if (sharedSpotGate == null) outstanding--;
+        else OUTSTANDING.getAndAdd(this, -1L);
+    }
+
     private long nextSequence = 1L;
     private long nextRelocationSerial = 1L;
-    private Entry active;
+    private volatile Entry active;
     private Entry suspendedLifecycle;
     private boolean drainScheduled;
-    private int suspendedApplicationContinuations;
-    private int suspendedLifecycleContinuations;
+    private volatile int suspendedApplicationContinuations;
+    private volatile int suspendedLifecycleContinuations;
     private long turnClaimedAtNanos;
     private RelocationState relocation;
     private boolean closingAdmissionSealed;
     private boolean relocated;
     private final List<QuiescenceWaiter> quiescenceWaiters = new ArrayList<>();
+
+    /** Binds a Spot and its Actor mailboxes to one execution authority before admission starts. */
+    public void bindSharedSpotGate(SharedSpotGate gate) {
+        if (sharedSpotGate != null || nextSequence != 1 || active != null) {
+            throw new IllegalStateException("shared gate must be bound before queue admission");
+        }
+        sharedSpotGate = Objects.requireNonNull(gate, "gate");
+        publishedApplication = new ConcurrentLinkedQueue<>();
+        publishedContinuation = new ConcurrentLinkedQueue<>();
+        publishedLifecycle = new ConcurrentLinkedQueue<>();
+    }
+
+    /** One logical turn authority for a Spot and its member Actor mailboxes. */
+    public static final class SharedSpotGate {
+        private static final ThreadLocal<SharedSpotGate> CURRENT_CONTROL = new ThreadLocal<>();
+        private final ZLinkSerialExecutionQueue spot;
+        private final ConcurrentLinkedQueue<SharedTurn> ready = new ConcurrentLinkedQueue<>();
+        private final AtomicInteger owned = new AtomicInteger();
+        private volatile BoundarySet pendingBoundary;
+
+        private record BoundarySet(
+                java.util.Map<ZLinkSerialExecutionQueue, RelocationBoundary> members) {}
+
+        private record SharedTurn(
+                Supplier<CompletionStage<Void>> run, Consumer<RuntimeException> reject) {}
+
+        public SharedSpotGate(ZLinkSerialExecutionQueue spot) {
+            this.spot = Objects.requireNonNull(spot, "spot");
+            spot.bindSharedSpotGate(this);
+        }
+
+        public CompletionStage<java.util.Map<ZLinkSerialExecutionQueue, RelocationBoundary>>
+                reserveBoundary(List<ZLinkSerialExecutionQueue> mailboxes) {
+            return controlAsync(() -> reserveBoundaryOnGate(mailboxes));
+        }
+
+        private java.util.Map<ZLinkSerialExecutionQueue, RelocationBoundary> reserveBoundaryOnGate(
+                List<ZLinkSerialExecutionQueue> mailboxes) {
+            if (pendingBoundary != null) {
+                throw new IllegalStateException("shared Spot boundary already reserved");
+            }
+            java.util.LinkedHashMap<ZLinkSerialExecutionQueue, RelocationBoundary> reserved =
+                    new java.util.LinkedHashMap<>();
+            for (ZLinkSerialExecutionQueue mailbox : mailboxes) {
+                if (mailbox.sharedSpotGate != this) {
+                    throw new IllegalArgumentException("mailbox belongs to another Spot gate");
+                }
+                Optional<RelocationBoundary> boundary;
+                synchronized (mailbox) {
+                    boundary = mailbox.reserveBoundaryLocked();
+                }
+                if (boundary.isEmpty()) {
+                    reserved.values().forEach(RelocationBoundary::release);
+                    reserved.keySet().forEach(this::post);
+                    return java.util.Map.of();
+                }
+                reserved.put(mailbox, boundary.orElseThrow());
+            }
+            pendingBoundary =
+                    new BoundarySet(
+                            java.util.Collections.unmodifiableMap(
+                                    new java.util.LinkedHashMap<>(reserved)));
+            reserved.keySet().forEach(this::post);
+            return java.util.Collections.unmodifiableMap(reserved);
+        }
+
+        private CompletionStage<Void> reachBoundaryIfReady() {
+            BoundarySet reserved = pendingBoundary;
+            if (reserved == null) return null;
+            for (var member : reserved.members().entrySet()) {
+                ZLinkSerialExecutionQueue mailbox = member.getKey();
+                mailbox.materializePublished();
+                if (mailbox.active != null
+                        || mailbox.suspendedLifecycle != null
+                        || mailbox.suspendedContinuations() != 0
+                        || !mailbox.continuationPending.isEmpty()
+                        || mailbox.lifecyclePending.peekFirst() == null
+                        || mailbox.lifecyclePending.peekFirst().relocationBoundary
+                                != member.getValue()) {
+                    return null;
+                }
+            }
+            for (var member : reserved.members().entrySet()) {
+                Entry entry = member.getKey().takeNextForDrainLocked();
+                if (entry == null || entry.relocationBoundary != member.getValue()) {
+                    throw new IllegalStateException("shared Spot boundary selection changed");
+                }
+            }
+            CompletableFuture<?>[] released =
+                    reserved.members().values().stream()
+                            .map(boundary -> boundary.reach().toCompletableFuture())
+                            .toArray(CompletableFuture[]::new);
+            CompletableFuture.allOf(released)
+                    .whenComplete(
+                            (ignored, failure) ->
+                                    post(
+                                            () -> {
+                                                pendingBoundary = null;
+                                                for (ZLinkSerialExecutionQueue mailbox :
+                                                        reserved.members().keySet()) {
+                                                    mailbox.finishShared(mailbox.active);
+                                                }
+                                            }));
+            return CompletableFuture.completedFuture(null);
+        }
+
+        private void post(ZLinkSerialExecutionQueue mailbox) {
+            ready.add(new SharedTurn(() -> mailbox.runSharedHead(spot), mailbox::rejectSharedHead));
+            if (owned.compareAndSet(0, 1)) schedule();
+        }
+
+        private void post(Runnable turn) {
+            ready.add(
+                    new SharedTurn(
+                            () -> {
+                                turn.run();
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            ignored -> turn.run()));
+            if (owned.compareAndSet(0, 1)) schedule();
+        }
+
+        private void schedule() {
+            try {
+                DRAIN_EXECUTOR.execute(
+                        () -> {
+                            try {
+                                spot.executor.execute(this::drain);
+                            } catch (RuntimeException rejected) {
+                                rejectReady(rejected);
+                            }
+                        });
+            } catch (RuntimeException rejected) {
+                rejectReady(rejected);
+            }
+        }
+
+        private void rejectReady(RuntimeException failure) {
+            BoundarySet boundary = pendingBoundary;
+            if (boundary != null) {
+                pendingBoundary = null;
+                boundary.members()
+                        .values()
+                        .forEach(
+                                member -> {
+                                    member.reached.completeExceptionally(failure);
+                                    member.released.complete(null);
+                                });
+            }
+            SharedTurn turn;
+            while ((turn = ready.poll()) != null) turn.reject().accept(failure);
+            owned.set(0);
+            if (!ready.isEmpty() && owned.compareAndSet(0, 1)) schedule();
+        }
+
+        private void drain() {
+            long startedAtNanos = System.nanoTime();
+            while (true) {
+                SharedTurn turn = ready.poll();
+                if (turn == null) {
+                    owned.set(0);
+                    if (!ready.isEmpty() && owned.compareAndSet(0, 1)) schedule();
+                    return;
+                }
+                CompletionStage<Void> stage;
+                SharedSpotGate previous = CURRENT_CONTROL.get();
+                CURRENT_CONTROL.set(this);
+                try {
+                    stage = turn.run().get();
+                } catch (RuntimeException | Error failure) {
+                    owned.set(0);
+                    throw failure;
+                } finally {
+                    if (previous == null) CURRENT_CONTROL.remove();
+                    else CURRENT_CONTROL.set(previous);
+                }
+                if (!stage.toCompletableFuture().isDone()) {
+                    continueAfter(stage);
+                    return;
+                }
+                if (spot.ownerTimeBudgetNanos > 0
+                        && System.nanoTime() - startedAtNanos >= spot.ownerTimeBudgetNanos) {
+                    schedule();
+                    return;
+                }
+            }
+        }
+
+        private void continueAfter(CompletionStage<Void> stage) {
+            stage.whenComplete((ignored, failure) -> schedule());
+        }
+
+        public <T> CompletionStage<T> controlAsync(Supplier<T> operation) {
+            Objects.requireNonNull(operation, "operation");
+            if (CURRENT_CONTROL.get() == this || spot.isCurrent()) {
+                try {
+                    return CompletableFuture.completedFuture(operation.get());
+                } catch (RuntimeException | Error failure) {
+                    return CompletableFuture.failedFuture(failure);
+                }
+            }
+            CompletableFuture<T> result = new CompletableFuture<>();
+            ready.add(
+                    new SharedTurn(
+                            () -> {
+                                try {
+                                    result.complete(operation.get());
+                                } catch (RuntimeException | Error failure) {
+                                    result.completeExceptionally(failure);
+                                }
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            result::completeExceptionally));
+            if (owned.compareAndSet(0, 1)) schedule();
+            return result;
+        }
+    }
+
+    public <T> CompletionStage<T> underSharedSpotGateAsync(Supplier<T> operation) {
+        if (sharedSpotGate != null) return sharedSpotGate.controlAsync(operation);
+        try {
+            return CompletableFuture.completedFuture(operation.get());
+        } catch (RuntimeException | Error failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    private void publish(Entry entry) {
+        if (sharedSpotGate == null) {
+            switch (entry.lane) {
+                case APPLICATION -> applicationPending.addLast(entry);
+                case LIFECYCLE -> lifecyclePending.addLast(entry);
+            }
+            return;
+        }
+        if (entry.applicationJobOwnership != null) entry.applicationJobOwnership.markQueued();
+        if (entry.continuation) {
+            publishedContinuation.add(entry);
+        } else if (entry.lane == Lane.LIFECYCLE) {
+            publishedLifecycle.add(entry);
+        } else {
+            publishedApplication.add(entry);
+        }
+    }
+
+    private void materializePublished() {
+        if (sharedSpotGate == null) return;
+        Entry entry;
+        while ((entry = publishedApplication.poll()) != null) applicationPending.addLast(entry);
+        while ((entry = publishedContinuation.poll()) != null) continuationPending.addLast(entry);
+        while ((entry = publishedLifecycle.poll()) != null) lifecyclePending.addLast(entry);
+    }
+
+    private CompletionStage<Void> runSharedHead(ZLinkSerialExecutionQueue gateOwner) {
+        materializePublished();
+        SharedSpotGate.BoundarySet sharedBoundary = sharedSpotGate.pendingBoundary;
+        if (sharedBoundary != null && sharedBoundary.members().containsKey(this)) {
+            CompletionStage<Void> reached = sharedSpotGate.reachBoundaryIfReady();
+            if (reached != null) return reached;
+            if (continuationPending.isEmpty()
+                    && !lifecyclePending.isEmpty()
+                    && lifecyclePending.peekFirst().relocationBoundary
+                            == sharedBoundary.members().get(this)) {
+                return CompletableFuture.completedFuture(null);
+            }
+        }
+        Entry entry = takeNextForDrainLocked();
+        if (entry == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        if (this != gateOwner) {
+            entry.result.whenComplete(
+                    (ignored, failure) -> sharedSpotGate.post(() -> finish(entry, false)));
+        }
+        entry.ownerMailbox = this;
+        CompletionStage<Void> turn = gateOwner.invokeInline(entry);
+        if (this == gateOwner) {
+            return turn.whenComplete(
+                    (ignored, failure) -> {
+                        if (entry.lane == Lane.LIFECYCLE && !entry.result.isDone()) {
+                            suspendLifecycle(entry);
+                        } else {
+                            finish(entry, false);
+                        }
+                    });
+        }
+        return turn;
+    }
+
+    private void rejectSharedHead(RuntimeException failure) {
+        materializePublished();
+        Entry entry = takeNextForDrainLocked();
+        if (entry == null) return;
+        entry.result.completeExceptionally(failure);
+        finishShared(entry);
+    }
 
     public synchronized void sealClosingAdmission() {
         if (relocation == null) {
@@ -80,7 +411,12 @@ public final class ZLinkSerialExecutionQueue {
      *
      * @return whether a retained message waits behind the Close
      */
-    public synchronized boolean retainsPendingOrSealClosingAdmission() {
+    public CompletionStage<Boolean> retainsPendingOrSealClosingAdmission() {
+        return underSharedSpotGateAsync(this::retainsPendingOrSealClosingAdmissionDirect);
+    }
+
+    private synchronized boolean retainsPendingOrSealClosingAdmissionDirect() {
+        materializePublished();
         LifecycleTransition transition = lifecycleTransitionLocked();
         if (transition != null
                 && applicationPending.stream()
@@ -168,7 +504,12 @@ public final class ZLinkSerialExecutionQueue {
         return result.result();
     }
 
-    public synchronized List<Object> pendingMessages() {
+    public CompletionStage<List<Object>> pendingMessages() {
+        return underSharedSpotGateAsync(this::pendingMessagesDirect);
+    }
+
+    private synchronized List<Object> pendingMessagesDirect() {
+        materializePublished();
         return applicationPending.stream()
                 .map(entry -> entry.message)
                 .filter(Objects::nonNull)
@@ -194,29 +535,52 @@ public final class ZLinkSerialExecutionQueue {
 
         @Override
         public CompletionStage<Void> get() {
-            return operation
-                    .get()
-                    .whenComplete(
-                            (ignored, failure) -> {
-                                if (!committed.getAsBoolean()) return;
-                                synchronized (ZLinkSerialExecutionQueue.this) {
-                                    for (Entry entry : applicationPending) {
-                                        entry.operation =
-                                                failure == null
-                                                        ? () -> dispatchPending(entry)
-                                                        : () -> {
-                                                            entry.relocationRelease.run();
-                                                            return CompletableFuture.failedFuture(
-                                                                    failure);
-                                                        };
-                                    }
-                                }
-                            });
+            CompletionStage<Void> execution = operation.get();
+            if (sharedSpotGate == null) {
+                return execution.whenComplete((ignored, failure) -> rewritePending(failure));
+            }
+            CompletableFuture<Void> settled = new CompletableFuture<>();
+            execution.whenComplete(
+                    (ignored, failure) ->
+                            sharedSpotGate
+                                    .controlAsync(
+                                            () -> {
+                                                rewritePending(failure);
+                                                return null;
+                                            })
+                                    .whenComplete(
+                                            (done, controlFailure) -> {
+                                                if (controlFailure != null) {
+                                                    settled.completeExceptionally(controlFailure);
+                                                } else if (failure != null) {
+                                                    settled.completeExceptionally(failure);
+                                                } else {
+                                                    settled.complete(null);
+                                                }
+                                            }));
+            return settled;
+        }
+
+        private void rewritePending(Throwable failure) {
+            if (!committed.getAsBoolean()) return;
+            synchronized (ZLinkSerialExecutionQueue.this) {
+                materializePublished();
+                for (Entry entry : applicationPending) {
+                    entry.operation =
+                            failure == null
+                                    ? () -> dispatchPending(entry)
+                                    : () -> {
+                                        entry.relocationRelease.run();
+                                        return CompletableFuture.failedFuture(failure);
+                                    };
+                }
+            }
         }
 
         private void commit() {
             List<Entry> discarded;
             synchronized (ZLinkSerialExecutionQueue.this) {
+                materializePublished();
                 discarded =
                         applicationPending.stream()
                                 .filter(
@@ -253,7 +617,15 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
-    public void commitLifecycleTransition() {
+    public CompletionStage<Void> commitLifecycleTransition() {
+        return underSharedSpotGateAsync(
+                () -> {
+                    commitLifecycleTransitionDirect();
+                    return null;
+                });
+    }
+
+    private void commitLifecycleTransitionDirect() {
         LifecycleTransition transition;
         synchronized (this) {
             transition = lifecycleTransitionLocked();
@@ -433,19 +805,12 @@ public final class ZLinkSerialExecutionQueue {
      * currently executing on this queue.
      */
     public boolean isCurrent() {
-        ZLinkSerialExecutionQueue queue = CURRENT.get();
-        CompletableFuture<Void> gate = CURRENT_GATE.get();
-        if (queue != null || gate != null) {
-            return queue == this && gate != null && !gate.isDone();
-        }
-        Object propagated =
-                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                        .currentSerialExecutionTurn();
-        if (!(propagated instanceof SerialTurnCarrier carrier)) {
-            return false;
-        }
-        SerialTurn turn = carrier.turn;
-        return turn != null && turn.queue() == this && turn.gate() != null && !turn.gate().isDone();
+        SerialTurn turn = currentTurn();
+        return turn != null
+                && turn.gate() != null
+                && !turn.gate().isDone()
+                && (turn.queue() == this
+                        || turn.entry() != null && turn.entry().ownerMailbox == this);
     }
 
     /**
@@ -500,13 +865,13 @@ public final class ZLinkSerialExecutionQueue {
                         null,
                         Lane.LIFECYCLE,
                         false);
-        outstanding++;
+        incrementOutstanding();
         if (relocation != null) {
             holdRelocationEntry(entry);
             return new EnqueueResult(entry, false);
         }
-        lifecyclePending.addLast(entry);
-        return new EnqueueResult(entry, requestDrainLocked());
+        publish(entry);
+        return new EnqueueResult(entry, requestDrainLocked(entry));
     }
 
     /**
@@ -537,9 +902,9 @@ public final class ZLinkSerialExecutionQueue {
                             null,
                             Lane.LIFECYCLE,
                             false);
-            outstanding++;
-            lifecyclePending.addLast(entry);
-            result = new EnqueueResult(entry, requestDrainLocked());
+            incrementOutstanding();
+            publish(entry);
+            result = new EnqueueResult(entry, requestDrainLocked(entry));
         }
         scheduleDrainIfNeeded(result);
         return result.result();
@@ -618,10 +983,10 @@ public final class ZLinkSerialExecutionQueue {
                                     false)
                             : null;
             if (entry != null) {
-                outstanding++;
-                applicationPending.addLast(entry);
+                incrementOutstanding();
+                publish(entry);
             }
-            if (entry != null) result = new EnqueueResult(entry, requestDrainLocked());
+            if (entry != null) result = new EnqueueResult(entry, requestDrainLocked(entry));
         }
         if (result != null) scheduleDrainIfNeeded(result);
         if (admission != null) {
@@ -720,10 +1085,10 @@ public final class ZLinkSerialExecutionQueue {
                         null,
                         Lane.APPLICATION,
                         false);
-        outstanding++;
+        incrementOutstanding();
         entry.message = message;
-        applicationPending.addLast(entry);
-        return new EnqueueResult(entry, requestDrainLocked());
+        publish(entry);
+        return new EnqueueResult(entry, requestDrainLocked(entry));
     }
 
     private Entry holdRelocationIngress(
@@ -742,7 +1107,7 @@ public final class ZLinkSerialExecutionQueue {
                         null,
                         Lane.APPLICATION,
                         false);
-        outstanding++;
+        incrementOutstanding();
         entry.message = message;
         holdRelocationEntry(entry);
         return entry;
@@ -763,7 +1128,7 @@ public final class ZLinkSerialExecutionQueue {
                         null,
                         Lane.APPLICATION,
                         false);
-        outstanding++;
+        incrementOutstanding();
         holdRelocationEntry(entry);
         return entry;
     }
@@ -774,6 +1139,9 @@ public final class ZLinkSerialExecutionQueue {
         }
         if (relocation.acceptanceEpoch == Long.MAX_VALUE) {
             throw new IllegalStateException("relocation ingress epoch exhausted");
+        }
+        if (sharedSpotGate != null && entry.applicationJobOwnership != null) {
+            entry.applicationJobOwnership.markQueued();
         }
         relocation.held.addLast(entry);
         relocation.acceptanceEpoch++;
@@ -864,6 +1232,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private boolean requestDrainLocked() {
+        if (sharedSpotGate != null) return true;
         if (drainScheduled || active != null || !hasPending()) {
             return false;
         }
@@ -888,14 +1257,25 @@ public final class ZLinkSerialExecutionQueue {
         return true;
     }
 
+    private boolean requestDrainLocked(Entry published) {
+        if (sharedSpotGate == null) return requestDrainLocked();
+        if (published.continuation) return publishedContinuation.peek() == published;
+        return (published.lane == Lane.LIFECYCLE ? publishedLifecycle : publishedApplication).peek()
+                == published;
+    }
+
     private void scheduleDrainIfNeeded(EnqueueResult result) {
         scheduleDrainIfNeeded(result.scheduleDrain(), result.applicationJobOwnership());
     }
 
     private void scheduleDrainIfNeeded(
             boolean scheduleDrain, ZLinkApplicationJobContext.QueuedOwnership ownership) {
-        if (ownership != null) ownership.markQueued();
+        if (sharedSpotGate == null && ownership != null) ownership.markQueued();
         if (!scheduleDrain) {
+            return;
+        }
+        if (sharedSpotGate != null) {
+            sharedSpotGate.post(this);
             return;
         }
         try {
@@ -954,6 +1334,21 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void suspendLifecycle(Entry entry) {
+        if (sharedSpotGate != null) {
+            if (active != entry || suspendedLifecycle != null) {
+                throw new IllegalStateException("lifecycle suspension is inconsistent");
+            }
+            active = null;
+            suspendedLifecycle = entry;
+            entry.result.whenComplete(
+                    (ignored, failure) ->
+                            sharedSpotGate.post(() -> finishSuspendedLifecycle(entry)));
+            if (hasPending()
+                    || !publishedApplication.isEmpty()
+                    || !publishedContinuation.isEmpty()
+                    || !publishedLifecycle.isEmpty()) sharedSpotGate.post(this);
+            return;
+        }
         boolean scheduleDrain;
         synchronized (this) {
             if (active != entry || suspendedLifecycle != null) {
@@ -968,6 +1363,19 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void finishSuspendedLifecycle(Entry entry) {
+        if (sharedSpotGate != null) {
+            if (suspendedLifecycle != entry) return;
+            release(entry);
+            suspendedLifecycle = null;
+            decrementOutstanding();
+            if (hasPending()
+                    || !publishedApplication.isEmpty()
+                    || !publishedContinuation.isEmpty()
+                    || !publishedLifecycle.isEmpty()) sharedSpotGate.post(this);
+            completeBoundary(entry);
+            takeQuiescenceWaitersIfReady().forEach(waiter -> waiter.complete(null));
+            return;
+        }
         release(entry);
         boolean scheduleDrain;
         List<CompletableFuture<Void>> quiescent;
@@ -976,7 +1384,7 @@ public final class ZLinkSerialExecutionQueue {
                 return;
             }
             suspendedLifecycle = null;
-            outstanding--;
+            decrementOutstanding();
             scheduleDrain = requestDrainLocked();
             quiescent = takeQuiescenceWaitersIfReady();
         }
@@ -1007,6 +1415,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private Entry finish(Entry entry, boolean continueBatch) {
+        if (sharedSpotGate != null) return finishShared(entry);
         release(entry);
         List<CompletableFuture<Void>> quiescent = List.of();
         boolean scheduleDrain = false;
@@ -1016,7 +1425,7 @@ public final class ZLinkSerialExecutionQueue {
                 return null;
             }
             active = null;
-            outstanding--;
+            decrementOutstanding();
             boolean yieldToExecutor =
                     hasPending()
                             && ownerTimeBudgetNanos > 0
@@ -1037,6 +1446,29 @@ public final class ZLinkSerialExecutionQueue {
         completeBoundary(entry);
         quiescent.forEach(waiter -> waiter.complete(null));
         return next;
+    }
+
+    private Entry finishShared(Entry entry) {
+        release(entry);
+        if (active != entry) return null;
+        active = null;
+        decrementOutstanding();
+        boolean pending =
+                hasPending()
+                        || !publishedApplication.isEmpty()
+                        || !publishedContinuation.isEmpty()
+                        || !publishedLifecycle.isEmpty();
+        if (!pending
+                || ownerTimeBudgetNanos > 0
+                        && System.nanoTime() - turnClaimedAtNanos >= ownerTimeBudgetNanos) {
+            turnClaimedAtNanos = 0;
+        }
+        if (pending) {
+            sharedSpotGate.post(this);
+        }
+        completeBoundary(entry);
+        takeQuiescenceWaitersIfReady().forEach(waiter -> waiter.complete(null));
+        return null;
     }
 
     private static void completeBoundary(Entry entry) {
@@ -1068,7 +1500,16 @@ public final class ZLinkSerialExecutionQueue {
      * Completes when the accepted work that {@code scope} names has reached its terminal boundary.
      * The caller must seal external admission before using this as a lifecycle barrier.
      */
-    public synchronized CompletionStage<Void> awaitQuiescence(Quiescence scope) {
+    public CompletionStage<Void> awaitQuiescence(Quiescence scope) {
+        return sharedSpotGate == null
+                ? awaitQuiescenceDirect(scope)
+                : sharedSpotGate
+                        .controlAsync(() -> awaitQuiescenceDirect(scope))
+                        .thenCompose(waiter -> waiter);
+    }
+
+    private synchronized CompletionStage<Void> awaitQuiescenceDirect(Quiescence scope) {
+        materializePublished();
         Objects.requireNonNull(scope, "scope");
         if (isQuiescent(scope)) {
             return CompletableFuture.completedFuture(null);
@@ -1078,7 +1519,7 @@ public final class ZLinkSerialExecutionQueue {
         return waiter;
     }
 
-    public synchronized Optional<RelocationSeal> trySealRelocation() {
+    public CompletionStage<Optional<RelocationSeal>> trySealRelocation() {
         return trySealRelocation((RelocationBoundary) null);
     }
 
@@ -1091,40 +1532,55 @@ public final class ZLinkSerialExecutionQueue {
         Optional<RelocationBoundary> result;
         boolean scheduleDrain;
         synchronized (this) {
-            if (relocated || relocation != null) {
-                return Optional.empty();
-            }
-            if (nextSequence == Long.MAX_VALUE) {
-                throw new IllegalStateException("queue sequence exhausted");
-            }
-            RelocationBoundary boundary = new RelocationBoundary(this);
-            Entry entry =
-                    new Entry(
-                            nextSequence++,
-                            (byte[]) null,
-                            boundary::reach,
-                            () -> {},
-                            new CompletableFuture<>(),
-                            ZLinkFlowContext.current(),
-                            boundary,
-                            Lane.LIFECYCLE,
-                            false);
-            boundary.entry = entry;
-            outstanding++;
-            lifecyclePending.addLast(entry);
-            result = Optional.of(boundary);
-            scheduleDrain = requestDrainLocked();
-            ownership = entry.applicationJobOwnership;
+            result = reserveBoundaryLocked();
+            if (result.isEmpty()) return result;
+            ownership = result.orElseThrow().entry.applicationJobOwnership;
+            scheduleDrain = requestDrainLocked(result.orElseThrow().entry);
         }
         scheduleDrainIfNeeded(scheduleDrain, ownership);
         return result;
+    }
+
+    private Optional<RelocationBoundary> reserveBoundaryLocked() {
+        if (relocated || relocation != null) {
+            return Optional.empty();
+        }
+        if (nextSequence == Long.MAX_VALUE) {
+            throw new IllegalStateException("queue sequence exhausted");
+        }
+        RelocationBoundary boundary = new RelocationBoundary(this);
+        Entry entry =
+                new Entry(
+                        nextSequence++,
+                        (byte[]) null,
+                        boundary::reach,
+                        () -> {},
+                        new CompletableFuture<>(),
+                        ZLinkFlowContext.current(),
+                        boundary,
+                        Lane.LIFECYCLE,
+                        false);
+        boundary.entry = entry;
+        incrementOutstanding();
+        publish(entry);
+        return Optional.of(boundary);
+    }
+
+    public SharedSpotGate sharedSpotGate() {
+        return sharedSpotGate;
     }
 
     /**
      * Seals this queue while the supplied lifecycle boundary owns its active turn. Only the exact
      * reservation instance can cross that boundary.
      */
-    public synchronized Optional<RelocationSeal> trySealRelocation(RelocationBoundary boundary) {
+    public CompletionStage<Optional<RelocationSeal>> trySealRelocation(
+            RelocationBoundary boundary) {
+        return underSharedSpotGateAsync(() -> trySealRelocationDirect(boundary));
+    }
+
+    private synchronized Optional<RelocationSeal> trySealRelocationDirect(
+            RelocationBoundary boundary) {
         if (relocated || relocation != null) {
             return Optional.empty();
         }
@@ -1137,7 +1593,7 @@ public final class ZLinkSerialExecutionQueue {
         }
         if (active != null) {
             if (boundary == null) {
-                if (CURRENT.get() != this) {
+                if (!isCurrent()) {
                     return Optional.empty();
                 }
             }
@@ -1153,7 +1609,7 @@ public final class ZLinkSerialExecutionQueue {
      * itself and never reach it.
      */
     public synchronized Optional<ActiveTurnSealHandle> captureActiveTurnSealHandle() {
-        if (CURRENT.get() != this || active == null) {
+        if (!isCurrent() || active == null) {
             return Optional.empty();
         }
         return Optional.of(new ActiveTurnSealHandle(this, active));
@@ -1161,7 +1617,11 @@ public final class ZLinkSerialExecutionQueue {
 
     /** Captures the queue that owns the calling thread's current lifecycle turn. */
     public static Optional<ActiveTurnSealHandle> captureCurrentActiveTurnSealHandle() {
-        ZLinkSerialExecutionQueue current = CURRENT.get();
+        SerialTurn turn = currentTurn();
+        ZLinkSerialExecutionQueue current =
+                turn != null && turn.entry() != null && turn.entry().ownerMailbox != null
+                        ? turn.entry().ownerMailbox
+                        : CURRENT.get();
         return current == null ? Optional.empty() : current.captureActiveTurnSealHandle();
     }
 
@@ -1172,7 +1632,13 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     /** Seals this queue while the captured turn is still the active turn. */
-    public synchronized Optional<RelocationSeal> trySealRelocation(ActiveTurnSealHandle handle) {
+    public CompletionStage<Optional<RelocationSeal>> trySealRelocation(
+            ActiveTurnSealHandle handle) {
+        return underSharedSpotGateAsync(() -> trySealRelocationDirect(handle));
+    }
+
+    private synchronized Optional<RelocationSeal> trySealRelocationDirect(
+            ActiveTurnSealHandle handle) {
         if (relocated || relocation != null) {
             return Optional.empty();
         }
@@ -1193,6 +1659,9 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private Optional<RelocationSeal> sealNowLocked() {
+        // Admission and the publication tail are cut by this producer boundary.
+        // The shared gate owns the detached prefix and its capture.
+        materializePublished();
         if (suspendedContinuations() != 0
                 || !continuationPending.isEmpty()
                 || applicationPending.stream().anyMatch(entry -> !entry.hasRelocationRecord())) {
@@ -1210,7 +1679,11 @@ public final class ZLinkSerialExecutionQueue {
         return Optional.of(seal);
     }
 
-    public boolean abortRelocation(RelocationSeal seal) {
+    public CompletionStage<Boolean> abortRelocation(RelocationSeal seal) {
+        return underSharedSpotGateAsync(() -> abortRelocationDirect(seal));
+    }
+
+    private boolean abortRelocationDirect(RelocationSeal seal) {
         boolean scheduleDrain;
         synchronized (this) {
             if (!matches(seal) || relocation.retained != null) {
@@ -1238,7 +1711,13 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     /** Captures the current ingress high-water before authority prepare. */
-    public synchronized Optional<List<QueuedRecord>> freezeRelocationIngress(RelocationSeal seal) {
+    public CompletionStage<Optional<List<QueuedRecord>>> freezeRelocationIngress(
+            RelocationSeal seal) {
+        return underSharedSpotGateAsync(() -> freezeRelocationIngressDirect(seal));
+    }
+
+    private synchronized Optional<List<QueuedRecord>> freezeRelocationIngressDirect(
+            RelocationSeal seal) {
         if (!matches(seal) || relocation.frozen) {
             return Optional.empty();
         }
@@ -1250,7 +1729,12 @@ public final class ZLinkSerialExecutionQueue {
                         .toList());
     }
 
-    public Optional<List<QueuedRecord>> commitRelocation(RelocationSeal seal) {
+    public CompletionStage<Optional<List<QueuedRecord>>> commitRelocation(RelocationSeal seal) {
+        return underSharedSpotGateAsync(() -> commitRelocationOnGate(seal));
+    }
+
+    /** Internal retained adapter entry, invoked synchronously inside the owning gate turn. */
+    public Optional<List<QueuedRecord>> commitRelocationOnGate(RelocationSeal seal) {
         Optional<RetainedCommit> retained = retainRelocationCommit(seal);
         if (retained.isEmpty()) {
             return Optional.empty();
@@ -1305,7 +1789,7 @@ public final class ZLinkSerialExecutionQueue {
             } finally {
                 release(entry);
                 synchronized (this) {
-                    outstanding--;
+                    decrementOutstanding();
                 }
             }
             if (failure == null) {
@@ -1657,16 +2141,15 @@ public final class ZLinkSerialExecutionQueue {
         CompletionStage<Void> result;
         boolean scheduleDrain = false;
         synchronized (this) {
-            if (isLifecycleTurn(origin)) {
+            boolean lifecycleContinuation = isLifecycleTurn(origin);
+            if (lifecycleContinuation) {
                 if (suspendedLifecycleContinuations <= 0) {
                     throw new IllegalStateException("suspended continuation count is inconsistent");
                 }
-                suspendedLifecycleContinuations--;
             } else {
                 if (suspendedApplicationContinuations <= 0) {
                     throw new IllegalStateException("suspended continuation count is inconsistent");
                 }
-                suspendedApplicationContinuations--;
             }
             if (nextSequence == Long.MAX_VALUE) {
                 throw new IllegalStateException("queue sequence exhausted");
@@ -1683,13 +2166,16 @@ public final class ZLinkSerialExecutionQueue {
                             Lane.APPLICATION,
                             true);
             continuation.origin = origin == null ? null : origin.turnOrigin();
-            outstanding++;
+            incrementOutstanding();
             if (relocation != null) {
                 holdRelocationEntry(continuation);
             } else {
-                continuationPending.addLast(continuation);
-                scheduleDrain = requestDrainLocked();
+                if (sharedSpotGate == null) continuationPending.addLast(continuation);
+                else publish(continuation);
+                scheduleDrain = requestDrainLocked(continuation);
             }
+            if (lifecycleContinuation) suspendedLifecycleContinuations--;
+            else suspendedApplicationContinuations--;
             result = continuation.result;
             ownership = continuation.applicationJobOwnership;
         }
@@ -1728,11 +2214,6 @@ public final class ZLinkSerialExecutionQueue {
                     return true;
                 });
         return ready;
-    }
-
-    private void completeQuiescenceWaitersIfReady() {
-        List<CompletableFuture<Void>> ready = takeQuiescenceWaitersIfReady();
-        ready.forEach(waiter -> waiter.complete(null));
     }
 
     public static Executor propagateCurrent(Executor executor) {
@@ -1890,6 +2371,11 @@ public final class ZLinkSerialExecutionQueue {
         @Override
         public Object monitor() {
             return owner;
+        }
+
+        @Override
+        public SharedSpotGate gate() {
+            return owner.sharedSpotGate;
         }
 
         @Override
@@ -2073,6 +2559,7 @@ public final class ZLinkSerialExecutionQueue {
         private final boolean continuation;
         // The first entry of the turn this continuation resumes; null for that first entry.
         private Entry origin;
+        private ZLinkSerialExecutionQueue ownerMailbox;
 
         private Entry turnOrigin() {
             return origin == null ? this : origin;

@@ -486,10 +486,8 @@ public partial class CommonSocketOptions
 }
 ```
 
-입력 우선순위는 수동 Core budget, 명시 memory limit, .NET GC가 보고한 사용 가능
-memory limit hint, Core fallback 순서다. 앞의 두 값을 지정하면 GC hint를 자동 감지하지
-않는다. Binding은 hint와 Core hard limit을 직접 결합하지 않는다. 명시 입력이 Core가
-감지한 finite hard limit보다 크면 `EINVAL`에 대응하는 기존 config exception을 그대로
+명시 입력이
+Core가 감지한 finite hard limit보다 크면 `EINVAL`에 대응하는 기존 config exception을 그대로
 전달하고 clamp하지 않는다.
 
 HWM 계산·수동 override·admission과 값 투영은 [Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
@@ -506,7 +504,7 @@ Message-count overload나 alias는 없다.
 - Pending byte는 `SndPendingBytes`와 `RcvPendingBytes`로 별도 노출한다.
 - Snapshot의 `AbiVersion`이 `4`가 아니거나 `StructSize`가 binding layout과 다르면 `NotSupportedException`을 발생시킨다. 이전 monitoring layout은 받지 않는다.
 
-`CoreHwmBudgetSnapshot`은 ABI version/size, configured/runtime/resolved memory limit,
+`CoreHwmBudgetSnapshot`은 ABI version/size, configured/resolved memory limit,
 configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/current/
 peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
 monitor/instance aggregate, application/completion queue count,

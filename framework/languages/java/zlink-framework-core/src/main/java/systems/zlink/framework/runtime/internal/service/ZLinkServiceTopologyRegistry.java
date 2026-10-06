@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.internal.service;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -19,6 +21,7 @@ public final class ZLinkServiceTopologyRegistry {
     private static final int PRECOMPUTE_STEP_LIMIT = 100_000;
     private static final long PRECOMPUTE_TIME_LIMIT_NANOS = 10_000_000L;
 
+    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<RoutingId, Peer> peers = new HashMap<>();
     private final Map<RoutingId, String> readyConnections = new HashMap<>();
     private final Map<String, ChannelSelectionPlan> channelPlans = new HashMap<>();
@@ -31,8 +34,8 @@ public final class ZLinkServiceTopologyRegistry {
         this.local = Objects.requireNonNull(local, "local");
     }
 
-    private synchronized <T> T inStateLane(java.util.function.Supplier<T> work) {
-        return work.get();
+    private <T> T inStateLane(java.util.function.Supplier<T> work) {
+        return ZLinkCompletionBridge.await(stateLane.runNowOrQueue(work));
     }
 
     public ZLinkServiceNodeDescriptor localDescriptor() {
@@ -186,12 +189,14 @@ public final class ZLinkServiceTopologyRegistry {
     public Optional<Peer> selectChannel(String channelName, Predicate<Peer> isReady) {
         String requiredChannelName = requireChannelName(channelName);
         Objects.requireNonNull(isReady, "isReady");
+        Set<Peer> ready =
+                peers().stream().filter(isReady).collect(java.util.stream.Collectors.toSet());
         return inStateLane(
                 () ->
                         selectOnLane(
                                 "channel:" + requiredChannelName,
                                 eligibleChannelTargets(
-                                        requiredChannelName, isReady, peersOnLane())));
+                                        requiredChannelName, ready::contains, peersOnLane())));
     }
 
     /** Selects from the topology/liveness snapshot prepared at change time. */
@@ -202,19 +207,23 @@ public final class ZLinkServiceTopologyRegistry {
     public Optional<Peer> selectReadyChannel(
             String channelName, BiConsumer<String, ChannelSelectionFailure> onUnavailable) {
         String requiredChannelName = requireChannelName(channelName);
-        return inStateLane(
-                () -> {
-                    ChannelSelectionPlan plan = readyChannelPlans.get(requiredChannelName);
-                    Optional<Peer> selected = plan == null ? Optional.empty() : plan.next();
-                    if (selected.isEmpty() && onUnavailable != null) {
-                        onUnavailable.accept(
-                                requiredChannelName,
-                                plan == null
-                                        ? ChannelSelectionFailure.NO_MEMBER
-                                        : plan.unavailableReason);
-                    }
-                    return selected;
-                });
+        ChannelSelectionFailure[] failure =
+                onUnavailable == null ? null : new ChannelSelectionFailure[1];
+        Optional<Peer> selected =
+                inStateLane(
+                        () -> {
+                            ChannelSelectionPlan plan = readyChannelPlans.get(requiredChannelName);
+                            Optional<Peer> peer = plan == null ? Optional.empty() : plan.next();
+                            if (peer.isEmpty() && onUnavailable != null)
+                                failure[0] =
+                                        plan == null
+                                                ? ChannelSelectionFailure.NO_MEMBER
+                                                : plan.unavailableReason;
+                            return peer;
+                        });
+        if (failure != null && failure[0] != null)
+            onUnavailable.accept(requiredChannelName, failure[0]);
+        return selected;
     }
 
     public enum ChannelSelectionFailure {
@@ -291,9 +300,11 @@ public final class ZLinkServiceTopologyRegistry {
     public boolean hasSelectableChannel(String channelName, Predicate<Peer> isReady) {
         String requiredChannelName = requireChannelName(channelName);
         Objects.requireNonNull(isReady, "isReady");
+        Set<Peer> ready =
+                peers().stream().filter(isReady).collect(java.util.stream.Collectors.toSet());
         return inStateLane(
                 () ->
-                        !eligibleChannelTargets(requiredChannelName, isReady, peersOnLane())
+                        !eligibleChannelTargets(requiredChannelName, ready::contains, peersOnLane())
                                 .isEmpty());
     }
 
@@ -303,13 +314,25 @@ public final class ZLinkServiceTopologyRegistry {
 
     public Optional<Peer> selectPlacement(Predicate<Peer> isReady) {
         Objects.requireNonNull(isReady, "isReady");
-        List<WeightedPeer> eligible =
+        Set<Peer> ready =
                 peers().stream()
                         .filter(peer -> peer.descriptor().acceptsPlacement())
                         .filter(isReady)
-                        .map(peer -> new WeightedPeer(peer, peer.descriptor().placementWeight()))
-                        .toList();
-        return inStateLane(() -> selectRangeOnLane("placement", eligible));
+                        .collect(java.util.stream.Collectors.toSet());
+        return inStateLane(
+                () ->
+                        selectRangeOnLane(
+                                "placement",
+                                peersOnLane().stream()
+                                        .filter(peer -> peer.descriptor().acceptsPlacement())
+                                        .filter(ready::contains)
+                                        .map(
+                                                peer ->
+                                                        new WeightedPeer(
+                                                                peer,
+                                                                peer.descriptor()
+                                                                        .placementWeight()))
+                                        .toList()));
     }
 
     private Optional<Peer> selectRangeOnLane(String key, List<WeightedPeer> eligible) {
