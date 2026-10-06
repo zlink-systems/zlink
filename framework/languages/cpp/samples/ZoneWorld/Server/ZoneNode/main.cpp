@@ -849,25 +849,11 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
   private:
     static constexpr auto retry_delay = std::chrono::milliseconds (250);
     static constexpr int retry_attempts = 120;
-
-    std::vector<std::string> claim_order (const std::vector<std::string> &claimed) const
-    {
-        std::vector<std::string> order;
-        for (const auto &zone : claimed)
-            for (const auto &adjacent : adjacent_zones (zone))
-                if (std::find (claimed.begin (), claimed.end (), adjacent) == claimed.end ()
-                    && std::find (order.begin (), order.end (), adjacent) == order.end ())
-                    order.push_back (adjacent);
-        for (const auto &zone : all_zones ())
-            if (std::find (claimed.begin (), claimed.end (), zone) == claimed.end ()
-                && std::find (order.begin (), order.end (), zone) == order.end ())
-                order.push_back (zone);
-        return order;
-    }
+    static constexpr int replacement_ready_attempts = 8;
 
     fw::task_t<void> bootstrap (fw::spot_manager_t &spots, const std::vector<std::string> &claimed)
     {
-        for (const auto &zone : claim_order (claimed)) {
+        for (const auto &zone : all_zones ()) {
             if (_stopping.load () || g_node_state->zone_snapshot () != claimed)
                 break;
             try {
@@ -875,9 +861,12 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
                   .in_mesh (names_t::mesh)
                   .async ();
             }
-            catch (const std::exception &) {
-                // A peer may still be entering the mesh. The fixed retry budget owns
-                // the decision to surface that startup failure.
+            catch (const fw::framework_exception_t &error) {
+                if (error.kind () != fw::framework_error_kind_t::unavailable
+                    && error.kind () != fw::framework_error_kind_t::deadline_exceeded)
+                    throw;
+                std::cerr << "Zone Spot claim failed zone=" << zone << " error=" << error.what ()
+                          << '\n';
             }
         }
     }
@@ -886,11 +875,15 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
 
     void run_bootstrap (fw::spot_manager_t &spots)
     {
-        for (int attempt = 0; g_node_state->zone_snapshot ().size () != 2; ++attempt) {
+        for (int attempt = 0; _configuration.allow_empty_zone_set
+                              || g_node_state->zone_snapshot ().size ()
+                                   != static_cast<std::size_t> (_configuration.zone_capacity);
+             ++attempt) {
             if (_stopping.load ())
                 return;
             const auto claimed = g_node_state->zone_snapshot ();
-            if (!await_bootstrap (bootstrap (spots, claimed))) {
+            if (!_configuration.allow_empty_zone_set
+                && !await_bootstrap (bootstrap (spots, claimed))) {
                 if (_stopping.load ())
                     return;
                 const std::string line = std::format ("Zone Spot claim failed. node={}\n",
@@ -898,7 +891,8 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
                 std::cerr << line;
             }
             const auto zones = g_node_state->zone_snapshot ();
-            if (_configuration.allow_empty_zone_set && zones.empty () && attempt >= 8) {
+            if (_configuration.allow_empty_zone_set && zones.empty ()
+                && attempt >= replacement_ready_attempts) {
                 print_ready (zones);
                 return;
             }
@@ -996,7 +990,7 @@ int main (int argc, char **argv)
           .server ()
           .add_entry_spot<zone_entry_spot_t> ()
           .add_spot_factory<zone_spot_t, fw::actor_client_t> (names_t::zone_spot)
-          .set_stable_type_limit (2)
+          .set_stable_type_limit (configuration.zone_capacity)
           .disable_relocation ()
           .add_actor_factory<player_actor_t, player_actor_factory_t> (names_t::player_actor)
           .preserve_state_with<player_relocation_adapter_t> ();

@@ -60,6 +60,7 @@ public static class Scenarios
             StringComparer.OrdinalIgnoreCase
         )
         {
+            ["LAYOUT"] = Layout,
             ["ZW-B4"] = B4BorderSnapshotExpiry,
             ["ZW-B8"] = B8SessionRouteSealTimeoutReconnect,
             ["ZW-C2"] = C2NodeDisconnected,
@@ -965,6 +966,39 @@ public static class Scenarios
     }
 
     // --- Track C: observing the nodes ----------------------------------------
+
+    private static async ValueTask Layout(ClientOptions options, CancellationToken ct)
+    {
+        await using var ops = await OpsClient.ConnectAsync(options.OpsEndpoint, ct);
+        var observed = await ops.WatchNodesAsync(ct);
+        var zones = observed.Nodes.SelectMany(node => node.Zones).ToArray();
+        ZlinkStreamAssert.Ensure(
+            observed.Nodes.Count == 2
+                && zones.Length == ZoneTopology.Zones.Count()
+                && zones.ToHashSet(StringComparer.Ordinal).SetEquals(ZoneTopology.Zones),
+            "Ops must report every ZoneId exactly once"
+        );
+        foreach (var node in observed.Nodes)
+            Console.WriteLine(
+                $"ops-zone-owner node={node.NodeId} zones={string.Join(',', node.Zones)}"
+            );
+        foreach (
+            var pair in AdjacentZonePairs.Where(pair =>
+                CrossingCoordinates(pair.Source, pair.Target).Source.Y
+                == CrossingCoordinates(pair.Source, pair.Target).Target.Y
+            )
+        )
+        {
+            var source = observed.Nodes.Single(node => node.Zones.Contains(pair.Source)).NodeId;
+            var target = observed.Nodes.Single(node => node.Zones.Contains(pair.Target)).NodeId;
+            if (source == target)
+                continue;
+            var bot = pair.Source == ZoneIds.NorthWest ? BotIds.NorthWestX : BotIds.SouthWestX;
+            Console.WriteLine($"ops-bot-boundary bot={bot} source={source} target={target}");
+            return;
+        }
+        throw new ScenarioFailure("Ops layout has no cross-owner X boundary");
+    }
 
     private static async ValueTask C1WatchNodes(ClientOptions options, CancellationToken ct)
     {

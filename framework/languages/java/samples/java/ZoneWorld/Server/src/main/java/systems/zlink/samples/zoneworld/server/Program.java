@@ -197,7 +197,9 @@ public final class Program {
                         .addSpotFactory(
                                 ZoneWorldNames.ZONE_SPOT_TYPE,
                                 ZoneSpot.class,
-                                factory -> factory.stableTypeLimit(2).disableRelocation())
+                                factory ->
+                                        factory.stableTypeLimit(topology.zoneCapacityValue())
+                                                .disableRelocation())
                         .addActorFactory(
                                 ZoneWorldNames.PLAYER_ACTOR_TYPE,
                                 PlayerActor.class,

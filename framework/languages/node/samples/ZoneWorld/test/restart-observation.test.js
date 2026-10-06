@@ -100,9 +100,19 @@ async function fixture(diagnostics) {
   const scenario = new Module(filename, module);
   scenario.filename = filename;
   scenario.paths = Module._nodeModulePaths(path.dirname(filename));
+  const boundaryFilename = path.join(sampleRoot, 'dist/Client/boundary-route.js');
+  const boundaryModule = new Module(boundaryFilename, module);
+  boundaryModule.filename = boundaryFilename;
+  boundaryModule.paths = Module._nodeModulePaths(path.dirname(boundaryFilename));
+  boundaryModule._compile(ts.transpileModule(
+    fs.readFileSync(path.join(sampleRoot, 'Client/boundary-route.ts'), 'utf8'),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }
+  ).outputText, boundaryFilename);
   const originalRequire = scenario.require.bind(scenario);
   scenario.require = (name) =>
-    name === './join-readiness'
+    name === './boundary-route'
+      ? boundaryModule.exports
+      : name === './join-readiness'
       ? {}
       : name === '@zlink-systems/stream-connector'
         ? {

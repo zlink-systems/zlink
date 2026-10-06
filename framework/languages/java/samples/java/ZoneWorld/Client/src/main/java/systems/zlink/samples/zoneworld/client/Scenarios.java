@@ -58,6 +58,7 @@ final class Scenarios {
 
     static Map<String, Scenario> runnerDriven() {
         Map<String, Scenario> all = new LinkedHashMap<>();
+        all.put("LAYOUT", Scenarios::layout);
         all.put("ZW-B4", Scenarios::b4);
         all.put("ZW-B8", Scenarios::b8);
         all.put("ZW-C2", Scenarios::c2);
@@ -345,6 +346,57 @@ final class Scenarios {
         }
     }
 
+    private static void layout(ClientOptions options) {
+        try (Ops ops = new Ops(options)) {
+            var observed = ops.watch();
+            var nodes = observed.nodes();
+            var zones = nodes.stream().flatMap(node -> node.zones().stream()).toList();
+            ensure(
+                    nodes.size() == 2
+                            && zones.size() == ZoneWorldSpec.zones().size()
+                            && new java.util.HashSet<>(zones)
+                                    .equals(new java.util.HashSet<>(ZoneWorldSpec.zones())),
+                    "Ops must report every ZoneId exactly once");
+            for (var node : nodes)
+                System.out.println(
+                        "ops-zone-owner node="
+                                + node.nodeId()
+                                + " zones="
+                                + String.join(",", node.zones()));
+            for (var sourceZone : ZoneWorldSpec.zones()) {
+                if (!ZoneWorldSpec.isWest(sourceZone)) continue;
+                for (var targetZone : ZoneWorldSpec.adjacentZones(sourceZone)) {
+                    if (ZoneWorldSpec.isNorth(sourceZone) != ZoneWorldSpec.isNorth(targetZone))
+                        continue;
+                    String source = nodeOwning(observed, sourceZone);
+                    String target = nodeOwning(observed, targetZone);
+                    if (!source.equals(target)) {
+                        var bot =
+                                ZoneWorldSpec.bots().stream()
+                                        .filter(
+                                                value ->
+                                                        value.dirX() > 0
+                                                                && ZoneWorldSpec.zoneOf(
+                                                                                value.x(),
+                                                                                value.y())
+                                                                        .equals(sourceZone))
+                                        .findFirst()
+                                        .orElseThrow();
+                        System.out.println(
+                                "ops-bot-boundary bot="
+                                        + bot.id()
+                                        + " source="
+                                        + source
+                                        + " target="
+                                        + target);
+                        return;
+                    }
+                }
+            }
+            throw new IllegalStateException("Ops layout has no cross-owner X boundary");
+        }
+    }
+
     private static void c1(ClientOptions options) {
         try (Ops ops = new Ops(options)) {
             Messages.WatchNodesRes nodes = ops.watch();
@@ -505,11 +557,7 @@ final class Scenarios {
                             List.of("zone-nw", "zone-sw"),
                             List.of("zone-ne", "zone-se"),
                             List.of("zone-sw", "zone-se"));
-            // Registration settles asynchronously, so re-read the roster for a moment.
-            // ZoneBootstrap
-            // prefers an adjacent second claim, making this precondition satisfiable; keep the
-            // named
-            // failure as a guard against a future bootstrap regression.
+            // Read the current Ops roster until the initial reports have settled.
             long deadline = System.nanoTime() + TOPOLOGY_SETTLE_TIMEOUT.toNanos();
             Messages.WatchNodesRes nodes;
             List<String> selected;

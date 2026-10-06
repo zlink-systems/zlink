@@ -119,13 +119,31 @@ struct crossing_t
     int target_y = 0;
 };
 
-inline crossing_t crossing_from_nw (const std::string &target_zone_id)
+inline const auto &crossing_edges ()
 {
-    if (target_zone_id == "zone-ne")
-        return {target_zone_id, 48, 45, 52, 45};
-    if (target_zone_id == "zone-sw")
-        return {target_zone_id, 45, 48, 45, 52};
-    throw std::runtime_error ("ZoneWorld requires an adjacent zone-nw crossing");
+    constexpr int before = spec_t::zone_split - 2;
+    constexpr int after = spec_t::zone_split + 2;
+    constexpr int near_corner = spec_t::zone_split - spec_t::max_step;
+    constexpr int far_center = spec_t::zone_split + spec_t::zone_split / 2;
+    static const std::array<crossing_t, 4> edges{
+      {{zone_of (after, near_corner), before, near_corner, after, near_corner},
+       {zone_of (after, far_center), before, far_center, after, far_center},
+       {zone_of (near_corner, after), near_corner, before, near_corner, after},
+       {zone_of (far_center, after), far_center, before, far_center, after}}};
+    return edges;
+}
+
+inline crossing_t crossing_between (const std::string &source_zone_id,
+                                    const std::string &target_zone_id)
+{
+    for (const auto &edge : crossing_edges ())
+        if (zone_of (edge.source_x, edge.source_y) == source_zone_id
+            && edge.target_zone_id == target_zone_id)
+            return edge;
+        else if (zone_of (edge.source_x, edge.source_y) == target_zone_id
+                 && edge.target_zone_id == source_zone_id)
+            return {target_zone_id, edge.target_x, edge.target_y, edge.source_x, edge.source_y};
+    throw std::runtime_error ("ZoneWorld requires adjacent source and target zones");
 }
 
 inline const node_view_t &node_for_zone (const watch_nodes_res_t &nodes, const std::string &zone_id)
@@ -139,19 +157,15 @@ inline const node_view_t &node_for_zone (const watch_nodes_res_t &nodes, const s
     return *found;
 }
 
-inline std::string same_owner_adjacent_zone (const watch_nodes_res_t &nodes,
-                                             const std::string &source_zone_id)
+inline crossing_t same_owner_crossing (const watch_nodes_res_t &nodes)
 {
-    const auto &owner = node_for_zone (nodes, source_zone_id);
-    const auto adjacent = adjacent_zones (source_zone_id);
-    const auto found = std::find_if (
-      owner.zones.begin (), owner.zones.end (), [&] (const auto &zone) {
-          return zone != source_zone_id
-                 && std::find (adjacent.begin (), adjacent.end (), zone) != adjacent.end ();
-      });
-    if (found == owner.zones.end ())
-        throw std::runtime_error ("ZoneWorld placement has no same-owner adjacent zone");
-    return *found;
+    for (const auto &edge : crossing_edges ()) {
+        const auto &owner = node_for_zone (nodes, zone_of (edge.source_x, edge.source_y));
+        if (std::find (owner.zones.begin (), owner.zones.end (), edge.target_zone_id)
+            != owner.zones.end ())
+            return edge;
+    }
+    throw std::runtime_error ("ZoneWorld placement has no same-owner adjacent zones");
 }
 
 se::task_t<join_world_res_t> join_and_wait (se::coroutine_connector_t &game,
@@ -221,7 +235,8 @@ se::task_t<void> cross_zone (se::coroutine_connector_t &game,
                              const crossing_t &edge,
                              bool returning = false)
 {
-    const auto expected_zone = returning ? std::string ("zone-nw") : edge.target_zone_id;
+    const auto expected_zone = returning ? zone_of (edge.source_x, edge.source_y)
+                                         : edge.target_zone_id;
     const auto target_x = returning ? edge.source_x : edge.target_x;
     const auto target_y = returning ? edge.source_y : edge.target_y;
     auto changed_wait = game.wait_for<zone_changed_notify_t> ()
@@ -259,13 +274,38 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
                           nodes.nodes.end (),
                           [] (const auto &node) { return node.registered && node.connected; }),
              "ZoneNodes must be registered and connected");
+    std::vector<std::string> reported_zones;
+    for (const auto &node : nodes.nodes) {
+        reported_zones.insert (reported_zones.end (), node.zones.begin (), node.zones.end ());
+        std::cout << "ops-zone-owner node=" << node.node_id << " zones=";
+        for (std::size_t index = 0; index < node.zones.size (); ++index)
+            std::cout << (index == 0 ? "" : ",") << node.zones[index];
+        std::cout << '\n';
+    }
+    auto expected_zones = std::vector<std::string> (all_zones ().begin (), all_zones ().end ());
+    std::sort (reported_zones.begin (), reported_zones.end ());
+    std::sort (expected_zones.begin (), expected_zones.end ());
+    require (reported_zones == expected_zones, "Ops must report every ZoneId exactly once");
+    for (const auto &bot : bot_fixtures ()) {
+        if (bot.dx == 0)
+            continue;
+        const auto source_zone = zone_of (bot.x, bot.y);
+        const auto target_zone = zone_of (bot.dx > 0 ? spec_t::zone_split : spec_t::zone_split - 1,
+                                          bot.y);
+        const auto &source_owner = node_for_zone (nodes, source_zone);
+        const auto &target_owner = node_for_zone (nodes, target_zone);
+        if (source_owner.node_id == target_owner.node_id)
+            continue;
+        std::cout << "ops-bot-boundary bot=" << bot.id << " source=" << source_owner.node_id
+                  << " target=" << target_owner.node_id << '\n';
+        break;
+    }
     std::cout << "scenario ZW-C1 passed\n";
 
     const auto pair = co_await ops.request (relocation_pair_req_t{})
                         .async<relocation_pair_res_t> ();
-    require (!pair.error && pair.source_zone_id == "zone-nw",
-             "Ops did not discover the canonical cross-owner adjacent pair");
-    const auto edge = crossing_from_nw (pair.target_zone_id);
+    require (!pair.error, "Ops did not discover a cross-owner adjacent pair");
+    const auto edge = crossing_between (pair.source_zone_id, pair.target_zone_id);
     const std::regex canonical_rid (
       R"(^zn-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$)");
     require (pair.source_owner_node_rid != pair.target_owner_node_rid
@@ -362,7 +402,8 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
     require (rejection_order == expected_rejections, "A3 rejection order is not canonical");
     std::cout << "scenario ZW-A3 passed\n";
 
-    const auto &source_node = node_for_zone (nodes, "zone-nw");
+    co_await move_within (game, "player-alice", alice_x, alice_y, spec_t::spawn_x, spec_t::spawn_y);
+    const auto &source_node = node_for_zone (nodes, zone_of (spec_t::spawn_x, spec_t::spawn_y));
     const auto source_maintenance = co_await ops
                                       .request (set_maintenance_req_t{source_node.node_id, true})
                                       .async<set_maintenance_res_t> ();
@@ -385,31 +426,41 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
     co_await probe.close ().async ();
     std::cout << "scenario ZW-E2 passed\n";
 
-    const int same_zone_x = edge.source_x == 48 ? 47 : edge.source_x;
-    const int same_zone_y = edge.source_y == 48 ? 47 : edge.source_y;
+    const int same_zone_x = spec_t::spawn_x + spec_t::max_step;
+    const int same_zone_y = spec_t::spawn_y;
     co_await move_within (game, "player-alice", alice_x, alice_y, same_zone_x, same_zone_y);
     std::cout << "scenario ZW-E3 passed\n";
 
-    const auto same_owner_zone = same_owner_adjacent_zone (nodes, "zone-nw");
-    const auto same_owner_edge = crossing_from_nw (same_owner_zone);
+    const auto source_reset_for_e4 = co_await ops
+                                       .request (set_maintenance_req_t{source_node.node_id, false})
+                                       .async<set_maintenance_res_t> ();
+    require (!source_reset_for_e4.error, "maintenance cleanup before ZW-E4 failed");
+    const auto same_owner_edge = same_owner_crossing (nodes);
+    const auto &local_owner = node_for_zone (nodes, same_owner_edge.target_zone_id);
     co_await move_within (
       game, "player-alice", alice_x, alice_y, same_owner_edge.source_x, same_owner_edge.source_y);
+    const auto local_maintenance = co_await ops
+                                     .request (set_maintenance_req_t{local_owner.node_id, true})
+                                     .async<set_maintenance_res_t> ();
+    require (!local_maintenance.error, "ZW-E4 maintenance failed");
     auto e4_wait = game.wait_for<move_rejected_notify_t> ().async ();
     game.send (move_msg_t{same_owner_edge.target_x, same_owner_edge.target_y}).submit ();
     require ((co_await e4_wait).payload.reason == reject_reason_t::zone_maintenance,
              "maintenance allowed movement to a different same-node zone");
     std::cout << "scenario ZW-E4 passed\n";
 
-    const auto diagnostics = co_await ops.request (node_diagnostics_req_t{source_node.node_id})
+    const auto diagnostics = co_await ops.request (node_diagnostics_req_t{local_owner.node_id})
                                .async<node_diagnostics_res_t> ();
-    require (!diagnostics.error && diagnostics.maintenance && diagnostics.zones == source_node.zones
+    require (!diagnostics.error && diagnostics.maintenance && diagnostics.zones == local_owner.zones
                && diagnostics.player_count >= 2,
              "NodeDiagnosticsRes did not expose current zones, population and maintenance");
     std::cout << "scenario ZW-E6 passed\n";
     const auto source_reset = co_await ops
-                                .request (set_maintenance_req_t{source_node.node_id, false})
+                                .request (set_maintenance_req_t{local_owner.node_id, false})
                                 .async<set_maintenance_res_t> ();
     require (!source_reset.error && !source_reset.enabled, "maintenance cleanup failed");
+
+    co_await move_within (game, "player-alice", alice_x, alice_y, edge.source_x, edge.source_y);
 
     int bob_x = spec_t::spawn_x;
     int bob_y = spec_t::spawn_y;
@@ -418,7 +469,7 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
     auto border_wait = game.wait_for<zone_state_notify_t> ()
                          .where ([&] (const auto &state_message) {
                              const auto &state = state_message.payload;
-                             return state.zone_id == "zone-nw"
+                             return state.zone_id == pair.source_zone_id
                                     && std::any_of (state.players.begin (),
                                                     state.players.end (),
                                                     [&] (const auto &player) {
@@ -521,7 +572,7 @@ se::task_t<bool> run_transition (se::coroutine_connector_t &source,
     const auto pair = co_await ops.request (relocation_pair_req_t{})
                         .async<relocation_pair_res_t> ();
     require (!pair.error, "lifecycle lane has no cross-owner pair");
-    const auto edge = crossing_from_nw (pair.target_zone_id);
+    const auto edge = crossing_between (pair.source_zone_id, pair.target_zone_id);
     const auto target_node_id = node_for_zone (nodes, pair.target_zone_id).node_id;
 
     const auto source_join = co_await join_and_wait (source, "player-transition-source");
@@ -696,7 +747,7 @@ se::task_t<bool> run_g4_boundary (se::coroutine_connector_t &game, se::coroutine
     const auto pair = co_await ops.request (relocation_pair_req_t{})
                         .async<relocation_pair_res_t> ();
     require (!pair.error, "G4 requires a cross-owner pair");
-    const auto edge = crossing_from_nw (pair.target_zone_id);
+    const auto edge = crossing_between (pair.source_zone_id, pair.target_zone_id);
     const auto target_node_id = node_for_zone (nodes, pair.target_zone_id).node_id;
     const auto joined = co_await join_and_wait (game, "player-g4-crash");
     int x = joined.x;
@@ -730,7 +781,7 @@ se::task_t<bool> run_b8 (se::coroutine_connector_t &game,
     const auto pair = co_await ops.request (relocation_pair_req_t{})
                         .async<relocation_pair_res_t> ();
     require (!pair.error, "B8 requires a cross-owner pair");
-    const auto edge = crossing_from_nw (pair.target_zone_id);
+    const auto edge = crossing_between (pair.source_zone_id, pair.target_zone_id);
     const auto joined = co_await join_and_wait (game, "player-b8-seal");
     int x = joined.x;
     int y = joined.y;
