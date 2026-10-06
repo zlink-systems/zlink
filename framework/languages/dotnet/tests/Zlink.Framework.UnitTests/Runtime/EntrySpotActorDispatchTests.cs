@@ -2017,16 +2017,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 publicationLane = ZLinkStateLane.Current;
                 // The existing authority-reader double places old cleanup at the
                 // acceptance boundary. A single owner turn queues it after install.
-                if (publicationLane is null)
-                {
-                    state.UnbindSession("binding-old");
-                    Assert.False(state.TryGetBoundSession(out _));
-                }
-                else
-                {
-                    using (ExecutionContext.SuppressFlow())
-                        cleanup = Task.Run(() => state.UnbindSession("binding-old"));
-                }
+                using (ExecutionContext.SuppressFlow())
+                    cleanup = Task.Run(() => state.UnbindSession("binding-old"));
             };
             var response = await runtime.BindRemoteBoundSessionRouteAsync(
                 request with

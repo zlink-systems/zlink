@@ -207,70 +207,13 @@ internal sealed class ZLinkSessionActorCoordinator(
             if (ActorRefsEqual(existing.Ref, actor))
                 return existing;
 
-            if (existing is not ZLinkSessionActor existingActor)
-                throw new InvalidOperationException(
-                    "Actor ref was not created by this framework runtime."
-                );
-            if (
-                !runtime.TryGetSessionActorBinding(
-                    existing.ActorId,
-                    existingActor.BindingToken,
-                    out var previousEntry
-                )
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.InvalidOperation,
-                    $"Actor '{existing.ActorId}' replacement lost its previous binding identity."
-                );
-            var previousIdentity = new ZLinkActorBoundSession(
-                previousEntry.SessionOwnerNodeRid.IsEmpty
-                    ? (
-                        runtime.IsStarted
-                            ? runtime.GetMeshNodeRuntime(previousEntry.MeshName).Node.RoutingId
-                            : null
-                    )
-                    : previousEntry.SessionOwnerNodeRid,
-                existingActor.SessionRid,
-                previousEntry.BindingToken,
-                previousEntry.BindingGeneration,
-                previousEntry.ObjectGeneration,
-                previousEntry.AuthorityOwnerGeneration,
-                ZLinkMeshName.FromBoundary(previousEntry.MeshName, nameof(previousEntry.MeshName)),
-                previousEntry.TargetNodeGeneration,
-                previousEntry.OwnerLeaseGeneration,
-                previousEntry.SessionOwnerNodeGeneration,
-                previousEntry.AcceptedHighWater,
-                previousEntry.SessionOwnerId,
-                previousEntry.SessionOwnerLeaseGeneration
-            );
             IZLinkSessionActor replacement;
             try
             {
                 // BindAsync replaces the previous table entry only after the
                 // new exact owner has acknowledged. Until then the previous
                 // binding remains the terminal route for this session.
-                replacement = await BindActorCoreAsync(
-                        context,
-                        actor,
-                        new ZLinkRemoteSessionPreviousBinding(
-                            existing.Ref.NodeRid.ToBytes().ToArray(),
-                            previousIdentity.SessionNodeRid?.ToBytes().ToArray()
-                                ?? Array.Empty<byte>(),
-                            previousIdentity.SessionRid.ToBytes().ToArray(),
-                            previousIdentity.BindingToken,
-                            previousIdentity.BindingGeneration,
-                            previousIdentity.ObjectGeneration,
-                            previousIdentity.MeshName.Value,
-                            previousIdentity.TargetNodeGeneration,
-                            previousIdentity.AuthorityOwnerGeneration,
-                            previousIdentity.OwnerLeaseGeneration,
-                            previousIdentity.SessionOwnerNodeGeneration,
-                            previousIdentity.AcceptedHighWater,
-                            previousIdentity.SessionOwnerId,
-                            previousIdentity.SessionOwnerLeaseGeneration
-                        ),
-                        cancellationToken
-                    )
+                replacement = await BindActorCoreAsync(context, actor, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (Exception replacementFailure)
@@ -296,14 +239,12 @@ internal sealed class ZLinkSessionActorCoordinator(
             return replacement;
         }
 
-        return await BindActorCoreAsync(context, actor, null, cancellationToken)
-            .ConfigureAwait(false);
+        return await BindActorCoreAsync(context, actor, cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask<IZLinkSessionActor> BindActorCoreAsync(
         ZLinkSessionContext context,
         ActorRef actor,
-        ZLinkRemoteSessionPreviousBinding? previousBinding,
         CancellationToken cancellationToken
     )
     {
@@ -318,12 +259,7 @@ internal sealed class ZLinkSessionActorCoordinator(
             await BindNativeActorAsync(actorRef, cancellationToken).ConfigureAwait(false);
         try
         {
-            var identity = await ConfirmBindingAsync(
-                    context,
-                    actor,
-                    previousBinding,
-                    cancellationToken
-                )
+            var identity = await ConfirmBindingAsync(context, actor, cancellationToken)
                 .ConfigureAwait(false);
             confirmedIdentity = identity;
             return await _bindings
@@ -377,7 +313,6 @@ internal sealed class ZLinkSessionActorCoordinator(
     private async ValueTask<ZLinkSessionBindingIdentity> ConfirmBindingAsync(
         ZLinkSessionContext context,
         ActorRef actor,
-        ZLinkRemoteSessionPreviousBinding? previousBinding,
         CancellationToken cancellationToken
     )
     {
@@ -458,7 +393,6 @@ internal sealed class ZLinkSessionActorCoordinator(
             actor.MeshName,
             sessionOwnerNodeGeneration,
             AcceptedHighWater: 0,
-            PreviousBinding: previousBinding,
             SessionOwnerId: sessionOwnerId,
             SessionOwnerLeaseGeneration: sessionOwnerLeaseGeneration
         );

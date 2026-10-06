@@ -94,6 +94,7 @@ public sealed class ActorBoundSessionRelayTests
         var stale = Assert.Throws<ZLinkFrameworkException>(() =>
             Replace(state, "binding-a", "session-a", 1)
         );
+        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, stale.Kind);
         Assert.Equal(ZLinkRetryAdvice.DoNotRetry, stale.RetryAdvice);
         Assert.True(state.TryGetBoundSession(out var current));
         Assert.Equal("binding-b", current.BindingToken);
