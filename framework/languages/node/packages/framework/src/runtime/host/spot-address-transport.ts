@@ -576,7 +576,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     if (stableType === undefined) {
       if (distinctTypes.length === 0) return { kind: 'unsupported' };
       throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.InvalidConfiguration,
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
         'Instance Spot type is required when multiple types are registered.'
       );
     }
