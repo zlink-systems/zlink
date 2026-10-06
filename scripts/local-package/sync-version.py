@@ -504,6 +504,36 @@ FRAMEWORK_SCALAR_FIELDS = (
         "guide Unity WebGL framework-node tag",
         rf'(com\.zlink\.stream-connector\.webgl#framework-node/v)(?P<version>{SEMVER})',
     ),
+    FrameworkField(
+        "framework/perf/schema/packages.json",
+        "dotnet",
+        "perf measured dotnet package",
+        rf'("dotnet"\s*:\s*")(?P<version>{SEMVER})(")',
+    ),
+    FrameworkField(
+        "framework/perf/schema/packages.json",
+        "cpp",
+        "perf measured cpp package",
+        rf'("cpp"\s*:\s*")(?P<version>{SEMVER})(")',
+    ),
+    FrameworkField(
+        "framework/perf/schema/packages.json",
+        "java",
+        "perf measured java package",
+        rf'("java"\s*:\s*")(?P<version>{SEMVER})(")',
+    ),
+    FrameworkField(
+        "framework/perf/schema/packages.json",
+        "java",
+        "perf measured kotlin package",
+        rf'("kotlin"\s*:\s*")(?P<version>{SEMVER})(")',
+    ),
+    FrameworkField(
+        "framework/perf/schema/packages.json",
+        "node",
+        "perf measured node package",
+        rf'("node"\s*:\s*")(?P<version>{SEMVER})(")',
+    ),
 )
 
 
