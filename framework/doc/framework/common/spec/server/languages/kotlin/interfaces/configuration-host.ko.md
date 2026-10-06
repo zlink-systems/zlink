@@ -142,7 +142,6 @@ StreamNode의 Core STREAM inbound에서 client→server complete message에만 �
 별도 wire error code가 아니라 연결 종료를 관찰한다. server→client outbound에는 상한을 적용하지
 않으며 ClientServer와 RouteMesh SS에는 이 설정을 추가하지 않는다.
 
-Kotlin binding은 Java runtime의 양수 유한 `Runtime.maxMemory()`를 Core runtime memory hint로 전달한다.
 Core profile과 Application job queue profile은 Java 공개 계약의 독립된 enum과 계산을 그대로 사용한다.
 두 profile의 기본값은 `BALANCED`이고 pressure threshold 기본값은 pause `80`, resume `60`이다. Pause는
 `1..100`, resume은 `0..99`의 정수이며 resume은 pause보다 작아야 한다. Manual job cap, startup CPU

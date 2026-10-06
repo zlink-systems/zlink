@@ -6,6 +6,7 @@
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/route_handler_registry.hpp"
+#include "runtime/configuration/request_defaults.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/operations/exactly_once_table.hpp"
@@ -143,7 +144,8 @@ struct mesh_node_builder_state_t
     std::function<void (const mesh_peer_connection_t &)> runtime_peer_connect;
     std::function<void (const mesh_peer_connection_t &)> runtime_peer_disconnect;
     mesh_node_socket_config_t socket;
-    std::chrono::milliseconds default_request_timeout{std::chrono::seconds (30)};
+    std::chrono::milliseconds default_request_timeout{
+      runtime::configuration::default_request_timeout};
     zlink::auto_hwm_profile auto_hwm_profile = zlink::auto_hwm_profile::balanced;
     std::atomic<std::uint64_t> next_join_completion_operation{1};
     std::shared_ptr<spot_node_builder_state_t> spot_state;

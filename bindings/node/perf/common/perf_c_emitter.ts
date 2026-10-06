@@ -22,6 +22,7 @@ const {
   padEnd
 } = require('./perf_c_format');
 const { isEchoPattern } = require('./perf_pattern');
+const { resolveMultiConnectReadyTimeoutMs } = require('./perf_args');
 
 const STREAM_VARIANT_PATTERNS = new Set(['STREAM']);
 // The two patterns whose SENDSEND client borrows a per-socket payload over tcp
@@ -394,7 +395,7 @@ function buildMultiOptionItems(opts) {
     ['sndtimeo_ms', optionValue(opts.sendTimeoutMs, 'PERF_MULTI_SNDTIMEO_MS', 200)],
     ['rcvtimeo_ms', optionValue(opts.recvTimeoutMs, 'PERF_MULTI_RCVTIMEO_MS', 200)],
     ['connect_concurrency', connectDisplay],
-    ['connect_ready_timeout_ms', optionValue(opts.connectReadyTimeoutMs, 'PERF_MULTI_CONNECT_READY_TIMEOUT_MS', parseEnvInt('PERF_CONNECT_READY_TIMEOUT_MS', 10000))],
+    ['connect_ready_timeout_ms', String(resolveMultiConnectReadyTimeoutMs(opts.connectReadyTimeoutMs))],
     ['monitor_hwm_bytes', optionValue(opts.monitorHwm, 'PERF_MULTI_MONITOR_HWM', 4096000)],
     ['server_ready_timeout_ms', optionValue(opts.serverReadyTimeoutMs, 'PERF_MULTI_SERVER_READY_TIMEOUT_MS', parseEnvInt('PERF_SERVER_READY_TIMEOUT_MS', 10000))],
     ['server_shutdown_timeout_ms', optionValue(opts.serverShutdownTimeoutMs, 'PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS', parseEnvInt('PERF_SERVER_SHUTDOWN_TIMEOUT_MS', 5000))],
