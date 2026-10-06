@@ -426,13 +426,14 @@ final class ZLinkActorDispatchSerials {
 
     CompletionStage<Boolean> abortAsync(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return trackedTurnAsync(actorId).thenApply(turn -> turn.activation().abortRelocation(seal));
+        return trackedTurnAsync(actorId)
+                .thenCompose(turn -> turn.activation().abortRelocation(seal));
     }
 
     CompletionStage<Optional<ZLinkRetainedSerialQueueCommit.Commit>> retainCommitAsync(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return trackedTurnAsync(actorId)
-                .thenApply(turn -> turn.activation().retainRelocationCommit(seal));
+                .thenCompose(turn -> turn.activation().retainRelocationCommit(seal));
     }
 
     CompletionStage<Void> awaitQuiescence() {

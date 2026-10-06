@@ -432,12 +432,9 @@ final class ZLinkUserSpotOperationHandler
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
                                                                                     () -> {
-                                                                                        activation
+                                                                                        return activation
                                                                                                 .context
                                                                                                 .commitClose();
-                                                                                        return CompletableFuture
-                                                                                                .completedFuture(
-                                                                                                        null);
                                                                                     }),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(

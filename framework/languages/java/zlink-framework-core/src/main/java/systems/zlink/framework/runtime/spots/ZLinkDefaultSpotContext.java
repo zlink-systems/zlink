@@ -861,8 +861,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return serials.enqueueClose(() -> runLifecycleExecution(operation), committed);
     }
 
-    void commitClose() {
-        serials.commitClose();
+    CompletionStage<Void> commitClose() {
+        return serials.commitClose();
     }
 
     @Override
@@ -937,15 +937,15 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         }
     }
 
-    Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealRelocation() {
+    CompletionStage<Optional<ZLinkSerialExecutionQueue.RelocationSeal>> trySealRelocation() {
         return serials.trySealRelocation();
     }
 
-    boolean abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {
+    CompletionStage<Boolean> abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return serials.abortRelocation(seal);
     }
 
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitRelocation(
+    CompletionStage<Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>> commitRelocation(
             ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return serials.commitRelocation(seal);
     }
