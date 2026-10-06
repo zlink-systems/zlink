@@ -6101,6 +6101,44 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task LeaveActorFromContextAsync_SharedGateProgressesActorIngressBeforeResumingLeave()
+    {
+        var probe = new BlockingActorJoinProbe();
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            userSpotType: typeof(BlockingActorJoinSpot),
+            blockingActorJoinProbe: probe,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var created = await runtime.CreateAsync<BlockingActorJoinSpot>();
+            var activation = Assert.Single(
+                runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                candidate => candidate.SpotId == created.Spot.SpotId
+            );
+            probe.Release.TrySetResult();
+            Assert.True(
+                (
+                    await activation.JoinActorAsync(actor, ZLinkMessage.Empty, cancellation.Token)
+                ).Accepted
+            );
+            await activation.LeaveActorFromContextAsync(actor, cancellation.Token);
+            Assert.Equal(0, activation.JoinedActorCount);
+            Assert.Null(runtime.GetOrCreateActorState(actorRef.ActorId).LiveActivation);
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            cancellation.Cancel();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task LeaveActorFromContextAsync_EndsAfterMembershipResultIsDecided()
     {
         var probe = new BlockingActorJoinProbe();
