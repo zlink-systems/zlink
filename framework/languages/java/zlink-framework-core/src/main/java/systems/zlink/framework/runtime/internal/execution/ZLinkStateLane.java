@@ -30,6 +30,7 @@ import java.util.function.Supplier;
  */
 public final class ZLinkStateLane {
     private static final int DRAIN_BATCH_LIMIT = 100;
+    private static final int CLOSED = Integer.MIN_VALUE;
     private static final ThreadLocal<ZLinkStateLane> CURRENT = new ThreadLocal<>();
     // Lane identity and FIFO belong to the mailbox, not to an executor.
     // In particular, a request-scoped handler owner needs no private executor.
@@ -38,7 +39,8 @@ public final class ZLinkStateLane {
 
     private final ConcurrentLinkedQueue<WorkItem> mailbox = new ConcurrentLinkedQueue<>();
     private final AtomicInteger scheduled = new AtomicInteger();
-    private final AtomicInteger closed = new AtomicInteger();
+    // The sign bit seals admission; the remaining bits count submissions still publishing a turn.
+    private final AtomicInteger admission = new AtomicInteger();
     private final CompletableFuture<Void> completed = new CompletableFuture<>();
     private final Executor executor;
 
@@ -75,15 +77,19 @@ public final class ZLinkStateLane {
     private <T> CompletionStage<T> submit(Supplier<T> work, boolean runIdleTurnNow) {
         Objects.requireNonNull(work, "work");
         throwIfReentrant();
-        throwIfClosed();
-
-        CompletableFuture<T> result = new CompletableFuture<>();
-        WorkItem turn = completeWork(work, result);
-        if (runIdleTurnNow && tryRunInline(turn)) {
-            return result;
+        if (!tryAdmit()) throw new IllegalStateException("state lane is closed");
+        CompletableFuture<T> result;
+        try {
+            result = new CompletableFuture<>();
+            WorkItem turn = completeWork(work, result);
+            if (runIdleTurnNow && tryRunInline(turn)) {
+                return result;
+            }
+            mailbox.add(turn);
+            scheduleDrain();
+        } finally {
+            releaseAdmission();
         }
-        mailbox.add(turn);
-        scheduleDrain();
         // No caller can observe the private result before submission returns.
         // A completed turn needs no completion task; a pending turn must still
         // publish outside the lane so a dependent can reenter it and wait.
@@ -97,9 +103,13 @@ public final class ZLinkStateLane {
     public <T> CompletionStage<T> tryRunNow(Supplier<T> work) {
         Objects.requireNonNull(work, "work");
         throwIfReentrant();
-        throwIfClosed();
-        CompletableFuture<T> result = new CompletableFuture<>();
-        return tryRunInline(completeWork(work, result)) ? result : null;
+        if (!tryAdmit()) throw new IllegalStateException("state lane is closed");
+        try {
+            CompletableFuture<T> result = new CompletableFuture<>();
+            return tryRunInline(completeWork(work, result)) ? result : null;
+        } finally {
+            releaseAdmission();
+        }
     }
 
     private <T> WorkItem completeWork(Supplier<T> work, CompletableFuture<T> result) {
@@ -119,7 +129,7 @@ public final class ZLinkStateLane {
     private boolean tryRunInline(WorkItem turn) {
         if (!scheduled.compareAndSet(0, 1)) return false;
         try {
-            if (!mailbox.isEmpty() || closed.get() != 0) return false;
+            if (!mailbox.isEmpty()) return false;
             turn.run();
             return true;
         } finally {
@@ -140,28 +150,28 @@ public final class ZLinkStateLane {
         scheduled.set(0);
         if (!mailbox.isEmpty()) {
             scheduleDrain();
-        } else if (closed.get() != 0) {
-            completed.complete(null);
         }
+        completeCloseIfDrained();
     }
 
     public boolean tryPost(Supplier<? extends CompletionStage<Void>> work) {
         Objects.requireNonNull(work, "work");
-        if (closed.get() != 0) {
-            return false;
+        if (!tryAdmit()) return false;
+        try {
+            mailbox.add(
+                    () -> {
+                        try {
+                            return callWithCurrent(
+                                    this, () -> Objects.requireNonNull(work.get(), "work result"));
+                        } catch (RuntimeException | Error error) {
+                            return CompletableFuture.failedFuture(error);
+                        }
+                    });
+            scheduleDrain();
+            return true;
+        } finally {
+            releaseAdmission();
         }
-
-        mailbox.add(
-                () -> {
-                    try {
-                        return callWithCurrent(
-                                this, () -> Objects.requireNonNull(work.get(), "work result"));
-                    } catch (RuntimeException | Error error) {
-                        return CompletableFuture.failedFuture(error);
-                    }
-                });
-        scheduleDrain();
-        return true;
     }
 
     public void throwIfReentrant() {
@@ -174,13 +184,8 @@ public final class ZLinkStateLane {
     }
 
     public CompletionStage<Void> closeAsync() {
-        if (closed.compareAndSet(0, 1)) {
-            if (scheduled.get() == 0 && mailbox.isEmpty()) {
-                completed.complete(null);
-            } else {
-                scheduleDrain();
-            }
-        }
+        admission.getAndUpdate(state -> state | CLOSED);
+        completeCloseIfDrained();
         return completed;
     }
 
@@ -192,9 +197,23 @@ public final class ZLinkStateLane {
         };
     }
 
-    private void throwIfClosed() {
-        if (closed.get() != 0) {
-            throw new IllegalStateException("state lane is closed");
+    private boolean tryAdmit() {
+        int state = admission.get();
+        while (state >= 0) {
+            if (admission.compareAndSet(state, state + 1)) return true;
+            state = admission.get();
+        }
+        return false;
+    }
+
+    private void releaseAdmission() {
+        admission.decrementAndGet();
+        completeCloseIfDrained();
+    }
+
+    private void completeCloseIfDrained() {
+        if (admission.get() == CLOSED && scheduled.get() == 0 && mailbox.isEmpty()) {
+            completed.complete(null);
         }
     }
 
@@ -219,9 +238,8 @@ public final class ZLinkStateLane {
             scheduled.set(0);
             if (!mailbox.isEmpty()) {
                 scheduleDrain();
-            } else if (closed.get() != 0) {
-                completed.complete(null);
             }
+            completeCloseIfDrained();
             return;
         }
 
@@ -237,7 +255,7 @@ public final class ZLinkStateLane {
                         executor.execute(() -> runNext(processed + 1));
                     } catch (RuntimeException rejected) {
                         scheduled.set(0);
-                        if (closed.get() != 0) {
+                        if (admission.get() < 0) {
                             completed.completeExceptionally(rejected);
                         }
                     }

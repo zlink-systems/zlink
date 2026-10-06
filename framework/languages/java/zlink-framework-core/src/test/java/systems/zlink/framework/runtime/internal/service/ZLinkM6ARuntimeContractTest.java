@@ -19,6 +19,67 @@ import java.util.List;
 
 final class ZLinkM6ARuntimeContractTest {
     @Test
+    void topologySelectionUsesCurrentMembershipAfterTheReadinessCallback() {
+        var topology =
+                new ZLinkServiceTopologyRegistry(descriptor("mesh", "local", 1, 1, List.of(), 100));
+        topology.admit(
+                descriptor(
+                        "mesh",
+                        "peer",
+                        1,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 1)),
+                        100),
+                "pipe");
+        assertTrue(
+                topology.selectChannel(
+                                "orders",
+                                peer -> {
+                                    assertTrue(
+                                            topology.disconnect(
+                                                    peer.descriptor().nodeRoutingId(),
+                                                    peer.connectionId()));
+                                    return true;
+                                })
+                        .isEmpty());
+        assertTrue(topology.peers().isEmpty());
+    }
+
+    @Test
+    void topologyCallbacksRunOutsideItsStateOwner() {
+        var topology =
+                new ZLinkServiceTopologyRegistry(descriptor("mesh", "local", 1, 1, List.of(), 100));
+        topology.selectReadyChannel(
+                "orders",
+                (channel, failure) -> {
+                    assertFalse(Thread.holdsLock(topology));
+                    Assertions.assertNull(
+                            systems.zlink.framework.runtime.internal.execution.ZLinkStateLane
+                                    .current());
+                    assertEquals(
+                            topology.localDescriptor().nodeRoutingId(), RoutingId.from("local"));
+                });
+        topology.admit(
+                descriptor(
+                        "mesh",
+                        "peer",
+                        1,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 1)),
+                        100),
+                "pipe");
+        topology.selectChannel(
+                "orders",
+                peer -> {
+                    assertFalse(Thread.holdsLock(topology));
+                    Assertions.assertNull(
+                            systems.zlink.framework.runtime.internal.execution.ZLinkStateLane
+                                    .current());
+                    return topology.peer(peer.descriptor().nodeRoutingId()).isPresent();
+                });
+    }
+
+    @Test
     void descriptorUsesTheGeneratedV13AdmissionCapability() {
         assertEquals(
                 ServiceWireConstants.REQUIRED_CAPABILITY,

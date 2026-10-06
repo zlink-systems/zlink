@@ -1,12 +1,24 @@
 package systems.zlink.framework.runtime.internal;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 
 /** Bridges caller cancellation to waiter stages and disposes results the caller cannot accept. */
 public final class ZLinkCompletionBridge {
     private ZLinkCompletionBridge() {}
+
+    /** Preserves direct failures at existing synchronous state-registration boundaries. */
+    public static <T> T await(CompletionStage<T> completion) {
+        try {
+            return completion.toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            if (failure.getCause() instanceof RuntimeException runtime) throw runtime;
+            if (failure.getCause() instanceof Error error) throw error;
+            throw failure;
+        }
+    }
 
     public static void forwardCancellation(CompletableFuture<?> caller, CompletionStage<?> waiter) {
         forwardCancellation(caller, () -> waiter.toCompletableFuture().cancel(false));
