@@ -52,6 +52,7 @@ export interface ZLinkSerialWorkPreparation {
 type SerialWorkRecord<T> = Omit<ZLinkSerialWorkRecord<T>, 'acceptedSequence'> & {
   acceptedSequence: bigint;
   readonly operationEnvelope: boolean;
+  readonly mailbox?: ZLinkSerialExecutionQueue;
   readonly preparation?: ZLinkSerialWorkPreparation;
   preparationState: 'idle' | 'pending' | 'canceling' | 'ready' | 'failed';
   preparationController?: AbortController;
@@ -70,11 +71,13 @@ export class ZLinkSerialExecutionQueue {
   private readonly application: ZLinkSerialAdmissionLane;
   private readonly lifecycle: ZLinkSerialAdmissionLane;
   private activeLifecycle?: ZLinkSerialWorkRecord<unknown>;
+  private activeRecord?: ZLinkSerialWorkRecord<unknown>;
+  /** The admitted node itself owns ready membership; no second readiness flag. */
+  private ownerMembership?: SerialWorkRecord<unknown>;
   private readonly ownerTimeBudget: number;
   private readonly lifecycleBurstLimit: number;
   private nextAcceptedSequence = 1n;
-  private draining = false;
-  private drainScheduled = false;
+  private readonly consumer?: { running: boolean; scheduled: boolean };
   private lifecycleStreak = 0;
   private lifecycleDebt = false;
   private claimStartedAt?: number;
@@ -83,7 +86,8 @@ export class ZLinkSerialExecutionQueue {
 
   constructor(
     private readonly executeRecord: (record: ZLinkSerialWorkRecord<unknown>) => Promise<void>,
-    options: ZLinkSerialSchedulerOptions = {}
+    options: ZLinkSerialSchedulerOptions = {},
+    private readonly sharedOwner?: ZLinkSerialExecutionQueue
   ) {
     const configured = { ...ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS, ...options };
     validateNonNegative(configured.ownerTimeBudget, 'ownerTimeBudget');
@@ -92,6 +96,7 @@ export class ZLinkSerialExecutionQueue {
     this.lifecycle = createLane();
     this.ownerTimeBudget = configured.ownerTimeBudget;
     this.lifecycleBurstLimit = configured.lifecycleBurstLimit;
+    if (sharedOwner === undefined) this.consumer = { running: false, scheduled: false };
   }
 
   submit<T>(
@@ -162,12 +167,15 @@ export class ZLinkSerialExecutionQueue {
   }
 
   visitPendingApplication(visitor: (record: ZLinkSerialWorkRecord<unknown>) => void): void {
-    for (const record of this.application.records) visitor(record);
+    for (const record of this.application.records) {
+      if (record.mailbox === undefined) visitor(record);
+    }
   }
 
   get hasPendingWork(): boolean {
     return (
-      this.draining ||
+      this.consumer?.running === true ||
+      this.activeRecord !== undefined ||
       this.activeLifecycle !== undefined ||
       this.application.records.length > 0 ||
       this.lifecycle.records.length > 0
@@ -219,7 +227,7 @@ export class ZLinkSerialExecutionQueue {
         this.activeLifecycle = undefined;
         if (this.application.records.length > 0 || this.lifecycle.records.length > 0) {
           this.scheduleDrain();
-        } else if (!this.draining) {
+        } else if (this.consumer?.running !== true) {
           this.resolveIdleWaiters();
         }
       }
@@ -266,39 +274,95 @@ export class ZLinkSerialExecutionQueue {
   }
 
   private scheduleDrain(): void {
-    if (this.drainScheduled || this.draining) return;
-    this.drainScheduled = true;
+    if (this.sharedOwner !== undefined) {
+      if (this.activeRecord !== undefined) return;
+      // Ready membership in the existing owner queue is the only notification state.
+      if (this.ownerMembership !== undefined) return;
+      this.enqueueMailboxTurn(() => this.consumeMailbox());
+      return;
+    }
+    const consumer = this.consumer!;
+    if (consumer.scheduled || consumer.running) return;
+    consumer.scheduled = true;
     queueMicrotask(() => {
-      this.drainScheduled = false;
+      consumer.scheduled = false;
       void this.drain();
     });
   }
 
+  /** Notifications carry no payload, admission sequence, result Promise, or host permit. */
+  private enqueueMailboxTurn(operation: () => void): void {
+    const entry: SerialWorkRecord<unknown> = {
+      acceptedSequence: 0n,
+      lane: 'application',
+      mailbox: this,
+      operation,
+      operationEnvelope: false,
+      preparationState: 'ready',
+      resolve: unexpectedMailboxSettlement,
+      reject: unexpectedMailboxSettlement,
+      release: unexpectedMailboxSettlement,
+      fail: unexpectedMailboxSettlement
+    };
+    const owner = this.sharedOwner!;
+    owner.application.records.push(entry);
+    this.ownerMembership = entry;
+    owner.scheduleDrain();
+  }
+
+  /** Called only by the shared scheduler's consumer, never by a producer. */
+  private consumeMailbox(): void {
+    const selection = this.selectNext();
+    if (selection === undefined) {
+      if (!this.hasPendingWork) this.resolveIdleWaiters();
+      return;
+    }
+    const record = selection.record;
+    if (!this.prepareSelected(selection)) return;
+    this.takeSelected(selection);
+    if (record.preparationState === 'failed') {
+      record.preparation?.cancel();
+      record.fail(record.preparationError);
+      this.scheduleDrain();
+      return;
+    }
+    this.activeRecord = record;
+    // The operation can submit Spot turns, including Yield continuations. Its
+    // Actor claim remains held until terminal settlement returns to this gate.
+    let terminal: Promise<unknown>;
+    try {
+      terminal = Promise.resolve(record.operation());
+    } catch (error) {
+      terminal = Promise.reject(error);
+    }
+    void terminal.then(
+      (value) => this.finishMailbox(record, () => record.resolve(value)),
+      (error) => this.finishMailbox(record, () => record.reject(error))
+    );
+  }
+
+  private finishMailbox(record: SerialWorkRecord<unknown>, settle: () => void): void {
+    this.enqueueMailboxTurn(() => {
+      settle();
+      record.release();
+      record.preparation?.cancel();
+      this.activeRecord = undefined;
+      if (this.selectNext() !== undefined) this.scheduleDrain();
+      else if (!this.hasPendingWork) this.resolveIdleWaiters();
+    });
+  }
+
   private async drain(): Promise<void> {
-    if (this.draining) return;
-    this.draining = true;
+    const consumer = this.consumer!;
+    if (consumer.running) return;
+    consumer.running = true;
     let waitingForPreparation = false;
     try {
       for (;;) {
         const selection = this.selectNext();
         if (selection === undefined) break;
         const record = selection.record;
-        if (selection.lane === 'lifecycle') {
-          const applicationHead = this.application.records[0]!;
-          if (
-            this.application.records.length > 0 &&
-            !this.cancelPreparationForRearbitration(applicationHead)
-          ) {
-            waitingForPreparation = true;
-            break;
-          }
-        }
-        if (record.preparationState === 'idle') {
-          this.startPreparation(record);
-          waitingForPreparation = true;
-          break;
-        }
-        if (record.preparationState === 'pending' || record.preparationState === 'canceling') {
+        if (!this.prepareSelected(selection)) {
           waitingForPreparation = true;
           break;
         }
@@ -310,7 +374,9 @@ export class ZLinkSerialExecutionQueue {
         }
         this.claimStartedAt ??= performance.now();
         try {
-          if (record.operationEnvelope) {
+          if (record.mailbox !== undefined) {
+            record.operation();
+          } else if (record.operationEnvelope) {
             try {
               const outcome = record.operation();
               void Promise.resolve(outcome).then(
@@ -340,7 +406,7 @@ export class ZLinkSerialExecutionQueue {
         }
       }
     } finally {
-      this.draining = false;
+      consumer.running = false;
       this.claimStartedAt = undefined;
       if (!waitingForPreparation && this.selectNext() !== undefined) {
         this.scheduleDrain();
@@ -350,6 +416,21 @@ export class ZLinkSerialExecutionQueue {
         }
       }
     }
+  }
+
+  private prepareSelected(selection: {
+    readonly lane: ZLinkSerialWorkLane;
+    readonly record: SerialWorkRecord<unknown>;
+  }): boolean {
+    if (
+      selection.lane === 'lifecycle' &&
+      this.application.records.length > 0 &&
+      !this.cancelPreparationForRearbitration(this.application.records[0]!)
+    )
+      return false;
+    const record = selection.record;
+    if (record.preparationState === 'idle') this.startPreparation(record);
+    return record.preparationState !== 'pending' && record.preparationState !== 'canceling';
   }
 
   private selectNext():
@@ -389,6 +470,8 @@ export class ZLinkSerialExecutionQueue {
     if (record !== selection.record) {
       throw new Error('The selected serial work record changed before owner claim.');
     }
+    if (selection.record.mailbox !== undefined)
+      selection.record.mailbox.ownerMembership = undefined;
     return record;
   }
 
@@ -563,6 +646,10 @@ function createLane(): ZLinkSerialAdmissionLane {
   return {
     records: []
   };
+}
+
+function unexpectedMailboxSettlement(): never {
+  throw new Error('A mailbox notification has no independent terminal result.');
 }
 
 function validatePositive(value: number, field: string): void {
