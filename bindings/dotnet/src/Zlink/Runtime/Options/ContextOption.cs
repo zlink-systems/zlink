@@ -18,6 +18,5 @@ internal enum ContextOption
     AutoHwmRecalcDebounce = 14,
     AutoHwmProfile = 17,
     AutoHwmMemoryLimitBytes = 19,
-    AutoHwmRuntimeMemoryLimitBytes = 20,
     AutoHwmCoreBudgetBytes = 21
 }

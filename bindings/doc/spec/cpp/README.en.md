@@ -396,8 +396,7 @@ For `core_hwm_memory_limit_bytes(...)` and `core_hwm_budget_bytes(...)`, `0`
 means that the explicit input or manual Core budget is absent. The binding does
 not calculate profile ratios, connection counts, or per-queue HWM values; it
 passes the exact `uint64_t` values to Core context options.
-The C++ binding supplies no runtime memory hint. Input precedence is manual Core
-budget, explicit memory limit, then Core fallback. If an explicit input exceeds
+If an explicit input exceeds
 a finite hard limit Core detected, the binding preserves `EINVAL` and does not
 clamp it.
 The `core_hwm_budget_snapshot_t` value projects Core ABI v1 fields and flags without
@@ -405,7 +404,7 @@ unit conversion, and `core_hwm_budget_snapshot()` owns ABI-version and structure
 initialization. A direction on which the caller uses `send_hwm(...)` or
 `recv_hwm(...)` remains a manual override.
 
-The snapshot includes configured/runtime/resolved memory limits,
+The snapshot includes configured/resolved memory limits,
 configured/effective budgets, planned/applied/manual-reserved HWM, Core-queue/
 application/current/peak/provisional accounted bytes, completion current/peak/
 pending and total-messaging values, monitor/instance aggregates, application/

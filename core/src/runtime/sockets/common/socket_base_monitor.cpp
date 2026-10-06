@@ -495,10 +495,6 @@ void zlink::socket_base_t::event_disconnected (const endpoint_uri_pair_t &endpoi
           endpoint_uri_pair_, routing_id_, routing_id_size_, &ready_count,
           transport_pair_id_, transport_pair_generation_);
         if (!changed)
-            changed = monitor_runtime ().erase_ready_connection_for_endpoint (
-              endpoint_uri_pair_, &ready_count, transport_pair_id_,
-              transport_pair_generation_);
-        if (!changed)
             ready_count = monitor_runtime ().ready_count ();
 
         LIBZLINK_UNUSED (changed);

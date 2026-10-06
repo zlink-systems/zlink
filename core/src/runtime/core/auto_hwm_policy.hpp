@@ -41,7 +41,6 @@ struct auto_hwm_budget_input_t
     bool enabled;
     zlink_auto_hwm_profile_t profile;
     uint64_t configured_memory_limit_bytes;
-    uint64_t runtime_memory_limit_bytes;
     uint64_t configured_core_budget_bytes;
     uint64_t detected_hard_limit_bytes;
     uint64_t detected_physical_memory_bytes;
@@ -54,7 +53,6 @@ struct auto_hwm_context_plan_t
     bool enabled;
     zlink_auto_hwm_profile_t profile;
     uint64_t configured_memory_limit_bytes;
-    uint64_t runtime_memory_limit_bytes;
     uint64_t resolved_memory_limit_bytes;
     uint64_t configured_core_budget_bytes;
     uint64_t effective_core_budget_bytes;

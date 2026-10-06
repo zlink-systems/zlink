@@ -504,13 +504,41 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
         handler_context->server = &server;
         perf::multi::print_ready (endpoint);
         // CLIENT_READY means the shared raw peer connected every requested
-        // session and applied this size. Consume the server-side monitor
-        // barrier as independent proof that all target routes are usable,
-        // then recalculate on the server owner path before active traffic.
-        if (!perf::multi::wait_for_start_from_stdin (effective_msg_size))
+        // session and applied this size. Drain the bounded server monitor
+        // while waiting for START, then verify all routes and recalculate
+        // on the server owner path before active traffic.
+        zlink::poller_t ready_poller;
+        ready_poller.add (*connect_monitor.monitor,
+                          zlink::poll_event_flag_t::pollin, 0);
+        std::atomic<bool> start_received (false);
+        bool start_ok = false;
+        std::thread start_reader ([&] {
+            start_ok = perf::multi::wait_for_start_from_stdin (effective_msg_size);
+            start_received.store (true, std::memory_order_release);
+        });
+        int observed_ready = 0;
+        bool monitor_ok = true;
+        while (!start_received.load (std::memory_order_acquire)) {
+            observed_ready = perf::multi::poll_connect_ready_count (
+              connect_monitor, observed_ready);
+            if (observed_ready >= static_cast<int> (settings.clients))
+                break;
+            zlink::poll_event_t event;
+            try {
+                ready_poller.wait (&event, 1, std::chrono::milliseconds (50));
+            }
+            catch (const zlink::binding_error_t &) {
+                monitor_ok = false;
+                break;
+            }
+        }
+        start_reader.join ();
+        ready_poller.close ();
+        if (!start_ok || !monitor_ok)
             return false;
         if (!perf::multi::wait_connect_ready_count (
-              connect_monitor, settings.clients, settings.connect_ready_timeout_ms)) {
+              connect_monitor, settings.clients, settings.connect_ready_timeout_ms,
+              observed_ready)) {
             perf::multi::close_connect_monitor (connect_monitor);
             return false;
         }

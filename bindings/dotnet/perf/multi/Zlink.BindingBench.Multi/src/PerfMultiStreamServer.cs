@@ -93,6 +93,10 @@ internal static class PerfMultiStreamServer
             }
         });
 
+        Task<bool> readyTask = Task.Run(() => WaitConnectReadyCount(
+            monitor, clientCount, readyTimeoutMs, () =>
+                Volatile.Read(ref control.StopRequested) != 0 ? -1
+                : Volatile.Read(ref control.StartRequested)));
         WriteStdoutLine($"READY,{endpoint}");
         if (!await control.WaitForStartAsync(readyTimeoutMs)
                 .ConfigureAwait(false))
@@ -105,7 +109,7 @@ internal static class PerfMultiStreamServer
         {
             // Pair the raw peer's CLIENT_READY with independent server-side
             // route readiness before freezing the connected Auto-HWM state.
-            if (!WaitConnectReadyCount(monitor, clientCount, readyTimeoutMs))
+            if (!await readyTask.ConfigureAwait(false))
             {
                 Console.Error.WriteLine(
                     "multi_server_error:connect_ready_timeout");
