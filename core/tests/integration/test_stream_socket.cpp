@@ -120,6 +120,26 @@ static bool wait_monitor_ready_edge_direct (
     return false;
 }
 
+static bool wait_monitor_ready_count_direct (void *monitor_,
+                                             uint64_t expected_,
+                                             int timeout_ms_)
+{
+    for (int i = 0; i < timeout_ms_; ++i) {
+        zlink_monitor_event_t event = {};
+        const zlink_recv_result_t rc =
+          zlink_socket_monitor_recv (monitor_, &event, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA) {
+            msleep (1);
+            continue;
+        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
+        if (event.event == ZLINK_EVENT_CONNECTION_READY
+            && event.value == expected_)
+            return true;
+    }
+    return false;
+}
+
 static bool wait_monitor_event_direct_for_rid (
   void *monitor_, uint64_t expected_event_,
   const unsigned char expected_rid_[stream_routing_id_size], int timeout_ms_)
@@ -1142,20 +1162,7 @@ void test_stream_tcp_ready_count_returns_to_zero ()
     TEST_ASSERT_TRUE (wait_monitor_ready_edge_direct (monitor, routing_id, 5000));
     close_raw_fd (client);
 
-    bool reached_zero = false;
-    for (int i = 0; i < 5000 && !reached_zero; ++i) {
-        zlink_monitor_event_t event = {};
-        const zlink_recv_result_t rc =
-          zlink_socket_monitor_recv (monitor, &event, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (rc == ZLINK_RECV_NO_DATA) {
-            msleep (1);
-            continue;
-        }
-        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
-        reached_zero = event.event == ZLINK_EVENT_CONNECTION_READY
-                       && event.value == 0;
-    }
-    TEST_ASSERT_TRUE (reached_zero);
+    TEST_ASSERT_TRUE (wait_monitor_ready_count_direct (monitor, 0, 5000));
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
     test_context_socket_close_zero_linger (server);
 }
@@ -2101,6 +2108,7 @@ void test_stream_phase3_packet_maxmsgsize_contract ()
           pump_packet_until_raw_fd_closed (server, bad_fd, 3000));
         TEST_ASSERT_TRUE (wait_monitor_event_direct_for_rid (
           monitor, ZLINK_EVENT_DISCONNECTED, bad_ready_rid, 5000));
+        TEST_ASSERT_TRUE (wait_monitor_ready_count_direct (monitor, 1, 5000));
         close_raw_fd (bad_fd);
     }
 

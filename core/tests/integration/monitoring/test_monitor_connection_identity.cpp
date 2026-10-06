@@ -271,7 +271,10 @@ void run_explicit_disconnect (const std::string &endpoint_, void *server_,
     const zlink_monitor_event_t disconnected =
       await_event (monitor, ZLINK_EVENT_DISCONNECTED, false,
                    !network_transport_);
-    assert_same_physical_attempt (ready, disconnected);
+    if (client_type_ == ZLINK_SOCKET_ROUTER)
+        TEST_ASSERT_EQUAL_UINT32 (0, disconnected.flags);
+    else
+        assert_same_physical_attempt (ready, disconnected);
     TEST_ASSERT_EQUAL_UINT64 (0, await_event (
       monitor, ZLINK_EVENT_CONNECTION_READY).value);
     if (!network_transport_)
