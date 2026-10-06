@@ -12,6 +12,8 @@ import {
 import { ObjectsReadiness, runRole } from '../server-support/server-application';
 import { runAdmissionStreams, until } from '../server-support/wait';
 
+const PUBLISHER_NO_DROP = true;
+
 // §10.11 Publisher: one process issues every sequence of the run. Each logical stream awaits the public publish
 // admission (ZLinkFanoutClient.publish(...).submit()); nothing waits for a subscriber. Delivery is not observed here:
 // the Subscribers' own originals are intersected with this process's window-success set by the runner (§15.4).
@@ -128,7 +130,7 @@ export class PubSubFanoutEchoScenario {
     snapshot.provenance.fanout = {
       channelName: this.config.channelName,
       topic: FanoutMetrics.topic,
-      noDrop: true,
+      noDrop: PUBLISHER_NO_DROP,
       publisherSequenceScope: 'one counter per run; warmup and measured ranges are disjoint',
       sequenceOriginal: 'publisher-sequences.json'
     };
@@ -173,7 +175,7 @@ export async function runPubSubFanoutEcho(
           .enablePublisher(config.transportEndpoints.fanout)
           .setAdvertiseHost('127.0.0.1')
           .setRoutingIdPrefix('perf-publisher')
-          .setNoDrop(true);
+          .setNoDrop(PUBLISHER_NO_DROP);
       },
       workload: () => scenario?.run,
       prepare: async (app) => {
