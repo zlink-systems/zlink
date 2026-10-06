@@ -536,10 +536,43 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     @FunctionalInterface
     interface InstanceSpotActivationHandler {
+        default <T> CompletionStage<T> admit(java.util.function.Supplier<CompletionStage<T>> work) {
+            return work.get();
+        }
+
         CompletionStage<Void> activate(
                 String stableType,
                 ZLinkServiceM6BWireCodec.InstanceRouteFence route,
                 ZLinkBackendSpot backendSpot);
+
+        default CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
+                ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
+            return CompletableFuture.failedFuture(
+                    new UnsupportedOperationException("Cold activation is unavailable"));
+        }
+
+        default CompletionStage<Void> completed(
+                ZLinkServiceM6BWireCodec.InstanceSpotMessage message) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        default CompletionStage<Void> activate(
+                String stableType,
+                ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+                ZLinkBackendSpot backendSpot,
+                long deadlineUnixMs) {
+            return activate(stableType, route, backendSpot);
+        }
+
+        default CompletionStage<Void> activate(
+                String stableType,
+                ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+                ZLinkBackendSpot backendSpot,
+                long deadlineUnixMs,
+                java.util.function.Consumer<ZLinkBackendSpot> restoreFirst) {
+            return activate(stableType, route, backendSpot, deadlineUnixMs)
+                    .thenRun(() -> restoreFirst.accept(backendSpot));
+        }
 
         default CompletionStage<Void> admitExisting(
                 ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
@@ -549,7 +582,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     }
 
     default CompletionStage<Void> submitInstanceSpotSend(
-            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
             String stableType,
             String sourceSpotId,
             byte[] metadata,
@@ -559,7 +592,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     }
 
     default CompletionStage<List<Message>> requestInstanceSpot(
-            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
             String stableType,
             String sourceSpotId,
             byte[] metadata,

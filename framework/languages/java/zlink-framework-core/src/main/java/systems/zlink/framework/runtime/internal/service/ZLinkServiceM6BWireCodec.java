@@ -390,38 +390,49 @@ public final class ZLinkServiceM6BWireCodec {
         Objects.requireNonNull(message, "message");
         if ((message.flags() & ~ServiceWireConstants.FLAG_METADATA) != 0
                 || message.sourceNodeGeneration() == 0
-                || (message.request()
+                || ((message.request() || message.route() instanceof InstanceColdActivation)
                         != (message.operationHigh() != 0 || message.operationLow() != 0))
                 || message.request() != (message.replyRouteId() != null)
                 || (message.replyRouteId() != null && message.replyRouteId() <= 0)) {
             throw protocol("invalid Instance Spot message header");
         }
         byte[] routeBytes;
-        var route = message.route();
         try {
-            routeBytes =
-                    ServiceWireCodec.encodeInstanceRouteV1(
-                            new ServiceWireCodec.InstanceRouteV1Ready(
-                                    ServiceWireCodec.InstanceRouteKind.READY,
-                                    new ServiceWireCodec.Rid(route.targetNodeRid().toBytes()),
-                                    new ServiceWireCodec.NonzeroU64(route.targetNodeGeneration()),
-                                    new ServiceWireCodec.Text8(route.targetSpotId()),
-                                    new ServiceWireCodec.AuthorityGenerationFence(
-                                            new ServiceWireCodec.NonzeroU64(
-                                                    route.objectGeneration()),
-                                            new ServiceWireCodec.Text8(route.ownerId()),
-                                            new ServiceWireCodec.NonzeroU64(
-                                                    route.authorityOwnerGeneration()),
-                                            new ServiceWireCodec.NonzeroU64(
-                                                    route.leaseGeneration()),
-                                            new ServiceWireCodec.AuthorityStoreVersion(
-                                                    route.storeVersion())),
-                                    message.instanceIntent()
-                                            ? ServiceWireCodec.Bool8.TRUE
-                                            : ServiceWireCodec.Bool8.FALSE),
-                            null);
+            ServiceWireCodec.InstanceRouteV1 generated;
+            if (message.route() instanceof InstanceColdActivation cold) {
+                generated =
+                        new ServiceWireCodec.InstanceRouteV1ColdActivation(
+                                ServiceWireCodec.InstanceRouteKind.COLD_ACTIVATION,
+                                new ServiceWireCodec.Rid(cold.targetNodeRid().toBytes()),
+                                new ServiceWireCodec.NonzeroU64(cold.targetNodeGeneration()),
+                                new ServiceWireCodec.Text8(cold.targetSpotId()),
+                                new ServiceWireCodec.Text8(cold.targetMeshName()),
+                                new ServiceWireCodec.Text8(cold.stableType()),
+                                new ServiceWireCodec.Text8(cold.targetDescriptorVersion()),
+                                new ServiceWireCodec.NonzeroU64(cold.deadlineUnixMs()));
+            } else {
+                var route = (InstanceRouteFence) message.route();
+                generated =
+                        new ServiceWireCodec.InstanceRouteV1Ready(
+                                ServiceWireCodec.InstanceRouteKind.READY,
+                                new ServiceWireCodec.Rid(route.targetNodeRid().toBytes()),
+                                new ServiceWireCodec.NonzeroU64(route.targetNodeGeneration()),
+                                new ServiceWireCodec.Text8(route.targetSpotId()),
+                                new ServiceWireCodec.AuthorityGenerationFence(
+                                        new ServiceWireCodec.NonzeroU64(route.objectGeneration()),
+                                        new ServiceWireCodec.Text8(route.ownerId()),
+                                        new ServiceWireCodec.NonzeroU64(
+                                                route.authorityOwnerGeneration()),
+                                        new ServiceWireCodec.NonzeroU64(route.leaseGeneration()),
+                                        new ServiceWireCodec.AuthorityStoreVersion(
+                                                route.storeVersion())),
+                                message.instanceIntent()
+                                        ? ServiceWireCodec.Bool8.TRUE
+                                        : ServiceWireCodec.Bool8.FALSE);
+            }
+            routeBytes = ServiceWireCodec.encodeInstanceRouteV1(generated, null);
         } catch (IOException failure) {
-            throw protocol("invalid Ready Instance route: " + failure.getMessage());
+            throw protocol("invalid Instance route: " + failure.getMessage());
         }
 
         Writer writer = prefix(ServiceWireConstants.COMMAND_INSTANCE_SPOT, message.flags());
@@ -453,29 +464,41 @@ public final class ZLinkServiceM6BWireCodec {
         int routeLength = reader.u16("instanceRoute.length");
         int routeEnd = reader.position() + routeLength;
         reader.skip(routeLength);
-        ServiceWireCodec.InstanceRouteV1Ready ready;
+        InstanceRoute route;
+        boolean instanceIntent;
         try {
             var decoded =
                     ServiceWireCodec.decodeInstanceRouteV1(
                             java.util.Arrays.copyOfRange(frame, routeStart, routeEnd), null);
-            if (!(decoded instanceof ServiceWireCodec.InstanceRouteV1Ready selected)) {
-                throw protocol("command is not a Ready Instance Spot");
+            if (decoded instanceof ServiceWireCodec.InstanceRouteV1Ready ready) {
+                var authority = ready.authority();
+                route =
+                        new InstanceRouteFence(
+                                RoutingId.from(ready.targetNodeRid().value()),
+                                ready.targetNodeGeneration().value(),
+                                ready.targetSpotId().value(),
+                                authority.objectGeneration().value(),
+                                authority.ownerId().value(),
+                                authority.authorityOwnerGeneration().value(),
+                                authority.leaseGeneration().value(),
+                                authority.storeVersion().value());
+                instanceIntent = ready.instanceIntent() == ServiceWireCodec.Bool8.TRUE;
+            } else {
+                var cold = (ServiceWireCodec.InstanceRouteV1ColdActivation) decoded;
+                route =
+                        new InstanceColdActivation(
+                                RoutingId.from(cold.targetNodeRid().value()),
+                                cold.targetNodeGeneration().value(),
+                                cold.targetSpotId().value(),
+                                cold.targetMeshName().value(),
+                                cold.stableType().value(),
+                                cold.targetDescriptorVersion().value(),
+                                cold.deadlineUnixMs().value());
+                instanceIntent = true;
             }
-            ready = selected;
         } catch (IOException failure) {
-            throw protocol("invalid Ready Instance route: " + failure.getMessage());
+            throw protocol("invalid Instance route: " + failure.getMessage());
         }
-        var authority = ready.authority();
-        InstanceRouteFence route =
-                new InstanceRouteFence(
-                        RoutingId.from(ready.targetNodeRid().value()),
-                        ready.targetNodeGeneration().value(),
-                        ready.targetSpotId().value(),
-                        authority.objectGeneration().value(),
-                        authority.ownerId().value(),
-                        authority.authorityOwnerGeneration().value(),
-                        authority.leaseGeneration().value(),
-                        authority.storeVersion().value());
         long sourceNodeGeneration = reader.nonzeroU64("sourceNodeGeneration");
         RoutingId sourceNodeRid = reader.rid("sourceNodeRid");
         String sourceSpotId = reader.optionalText8("sourceSpotId");
@@ -487,8 +510,8 @@ public final class ZLinkServiceM6BWireCodec {
         long operationHigh = reader.bits64("operation.high");
         long operationLow = reader.bits64("operation.low");
         boolean request = operationKind == ServiceWireCodec.InstanceOperationKind.REQUEST.wire;
-        if ((!request && (operationHigh != 0 || operationLow != 0))
-                || (request && operationHigh == 0 && operationLow == 0)) {
+        if ((request || route instanceof InstanceColdActivation)
+                != (operationHigh != 0 || operationLow != 0)) {
             throw protocol("invalid Instance operation identity");
         }
         Long replyRouteId = request ? reader.nonzeroU64("replyRouteId") : null;
@@ -496,7 +519,7 @@ public final class ZLinkServiceM6BWireCodec {
         return new InstanceSpotMessage(
                 header.flags(),
                 route,
-                ready.instanceIntent() == ServiceWireCodec.Bool8.TRUE,
+                instanceIntent,
                 sourceNodeGeneration,
                 sourceNodeRid,
                 sourceSpotId,
@@ -908,7 +931,7 @@ public final class ZLinkServiceM6BWireCodec {
         throw protocol("unknown failureCode");
     }
 
-    private static ServiceWireCodec.DecoderContext generatedContext() {
+    static ServiceWireCodec.DecoderContext generatedContext() {
         return new ServiceWireCodec.DecoderContext(
                 null, null, null, MAX_U32_VALUE, GENERATED_MAX_PAYLOAD_BYTES);
     }
@@ -1476,6 +1499,35 @@ public final class ZLinkServiceM6BWireCodec {
     public record LogicalMulticast(
             int flags, String channelName, String topic, String sourceSpotId) {}
 
+    public sealed interface InstanceRoute permits InstanceRouteFence, InstanceColdActivation {
+        RoutingId targetNodeRid();
+
+        long targetNodeGeneration();
+
+        String targetSpotId();
+    }
+
+    public record InstanceColdActivation(
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            String targetSpotId,
+            String targetMeshName,
+            String stableType,
+            String targetDescriptorVersion,
+            long deadlineUnixMs)
+            implements InstanceRoute {
+        public InstanceColdActivation {
+            Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+            Objects.requireNonNull(targetSpotId, "targetSpotId");
+            Objects.requireNonNull(targetMeshName, "targetMeshName");
+            Objects.requireNonNull(stableType, "stableType");
+            Objects.requireNonNull(targetDescriptorVersion, "targetDescriptorVersion");
+            if (targetNodeGeneration == 0 || deadlineUnixMs <= 0) {
+                throw protocol("invalid cold activation lifecycle or deadline");
+            }
+        }
+    }
+
     public record InstanceRouteFence(
             RoutingId targetNodeRid,
             long targetNodeGeneration,
@@ -1484,7 +1536,8 @@ public final class ZLinkServiceM6BWireCodec {
             String ownerId,
             long authorityOwnerGeneration,
             long leaseGeneration,
-            String storeVersion) {
+            String storeVersion)
+            implements InstanceRoute {
         public InstanceRouteFence {
             Objects.requireNonNull(targetNodeRid, "targetNodeRid");
             Objects.requireNonNull(targetSpotId, "targetSpotId");
@@ -1505,7 +1558,7 @@ public final class ZLinkServiceM6BWireCodec {
 
     public record InstanceSpotMessage(
             int flags,
-            InstanceRouteFence route,
+            InstanceRoute route,
             boolean instanceIntent,
             long sourceNodeGeneration,
             RoutingId sourceNodeRid,

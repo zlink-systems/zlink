@@ -280,6 +280,10 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
                         ZLinkLocationRepository.class.getClassLoader(),
                         new Class<?>[] {ZLinkLocationRepository.class},
                         (proxy, method, arguments) -> {
+                            if (method.getName().equals("read")) {
+                                return CompletableFuture.completedFuture(
+                                        entries.get().getFirst().snapshot());
+                            }
                             if (method.getName().equals("list")) {
                                 return CompletableFuture.completedFuture(
                                         new ZLinkAuthorityPage(entries.get(), Optional.empty()));
@@ -300,6 +304,10 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
                         ZLinkLocationRepository.class.getClassLoader(),
                         new Class<?>[] {ZLinkLocationRepository.class},
                         (proxy, method, arguments) -> {
+                            if (method.getName().equals("read")) {
+                                return CompletableFuture.completedFuture(
+                                        entries.get().getFirst().snapshot());
+                            }
                             if (method.getName().equals("list")) {
                                 return CompletableFuture.completedFuture(
                                         new ZLinkAuthorityPage(entries.get(), Optional.empty()));
