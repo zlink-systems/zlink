@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applySocketPolicy, appendMeasurement, benchmarkEndpoint, closeSenderWorker, configureTlsClient, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, releaseSenderWorker, spawnSenderWorker, waitForPostReadySettle, waitForMonitorConnectionReady, waitForWorkerStatus, workerBindEndpoint, workerBoundEndpoint, } = require('./perf_single_common');
+const { applyContextPolicy, applySocketPolicy, appendMeasurement, benchmarkEndpoint, closeSenderWorker, configureTlsClient, drainRecvSocket, emitSingleSocketHwmDetail, measurementPayload, parseSingleBinaryArgs, releaseSenderWorker, spawnSenderWorker, waitForPostReadySettle, waitForMonitorConnectionReady, waitForWorkerStatus, workerBindEndpoint, workerBoundEndpoint, } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 // Read once per process: PERF_NODE_TRACE is a launch-time knob and this
 // guard is on the per-message path.
@@ -75,55 +75,7 @@ function drainPubSubPayloadInto(socket, buffer, onHeader, options = {}) {
     }
 }
 async function runPubSubBenchmark(msgSize, options) {
-    if (options.transport === 'inproc') {
-        // inproc is context-local (doc/guide/04-transports.md) so the Worker
-        // sender path cannot reach it. Run PUB+SUB in one shared context with
-        // the C-faithful blocking-equivalent one-way model (same adaptation
-        // as PAIR/DEALER inproc). C perf_pubsub.cpp: PUB binds, SUB connects
-        // + subscribes; wire stop token on the topic ends the phase.
-        const TOPIC = 'bench';
-        return runLocalSocketOneWayBenchmark({
-            pattern: 'PUBSUB',
-            msgSize,
-            options,
-            endpointToken: 'pubsub',
-            createReceiver: (ctx) => zlink.createSubSocket(ctx),
-            createSender: (ctx) => zlink.createPubSocket(ctx),
-            configureReceiver: (socket) => socket.setSubscription(TOPIC),
-            senderBinds: true,
-            drainViaSubscribe: true,
-            // C perf_pubsub.cpp emits AUTO_HWM_DETAIL for the PUB as
-            // `publisher` and the SUB as `subscriber`; mirror those labels so
-            // the `## Auto-HWM Detail` PUBSUB block is byte-identical to C
-            // (receiver=SUB=subscriber, sender=PUB=publisher).
-            receiverHwmComponent: 'subscriber',
-            senderHwmComponent: 'publisher',
-            sendActive: (socket, payload) => {
-                try {
-                    appendMeasurement(socket.publish(TOPIC), payload).submit();
-                    return true;
-                }
-                catch (error) {
-                    if (error instanceof zlink.SubmitError
-                        && (error.result === zlink.SubmitResult.Backpressured
-                            || error.result === zlink.SubmitResult.NotConnected
-                            || error.result === zlink.SubmitResult.NotFound)) {
-                        return false;
-                    }
-                    const text = String(error && error.message ? error.message : error);
-                    if ((error && error.code === 'EAGAIN')
-                        || text.includes('Resource temporarily unavailable')) {
-                        return false;
-                    }
-                    throw error;
-                }
-            },
-            sendStop: (socket) => {
-                socket.publish(TOPIC).message(STOP_TOKEN_BYTES).submit();
-            },
-        });
-    }
-    const ctx = zlink.createContext();
+    const ctx = options.transport === 'inproc' ? zlink.sharedContext() : zlink.createContext();
     applyContextPolicy(ctx);
     const sub = zlink.createSubSocket(ctx);
     const subMonitor = sub.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
@@ -204,7 +156,8 @@ async function runPubSubBenchmark(msgSize, options) {
         subMonitor.close();
         sub.close();
         trace('sub closed');
-        ctx.close();
+        if (options.transport !== 'inproc')
+            ctx.close();
         trace('ctx closed');
     }
 }
@@ -213,10 +166,6 @@ if (require.main === module) {
     (async () => {
         const options = parseSingleBinaryArgs(process.argv.slice(2));
         const result = await runPubSubBenchmark(options.msgSize, options);
-        if (result.unsupported) {
-            console.log(`UNSUPPORTED,${options.libName},PUBSUB,${options.transport}`);
-            return;
-        }
         for (const line of summarizeMetrics('PUBSUB', options.transport, options.msgSize, result.latenciesNs, options.duration, options.libName, result.accepted, result.latencyMeanNs)) {
             console.log(line);
         }

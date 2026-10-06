@@ -91,19 +91,47 @@ test('removing a monitor suppresses poll delivery without consuming its event', 
         ctx.close();
     }
 });
-test('monitor reports the Core result for unsupported poll events', () => {
+test('monitor forwards Core poll mask results and preserves registration state', () => {
     const ctx = zlink.createContext();
     const dealer = zlink.createDealerSocket(ctx);
     const monitor = dealer.monitorOpen();
     const poller = zlink.createPoller();
-    const isNotSupported = (error) => error instanceof zlink.ConfigError
-        && error.result === zlink.ConfigResult.NotSupported
-        && error.nativeErrno === 95;
+    const matches = (result, nativeErrno) => (error) => error instanceof zlink.ConfigError &&
+        error.result === result &&
+        error.nativeErrno === nativeErrno;
     try {
-        assert.throws(() => poller.add(monitor, [zlink.PollEventFlag.PollPri], 43), isNotSupported);
+        const cases = [
+            [zlink.PollEventFlag.PollOut, zlink.ConfigResult.NotSupported, 95],
+            [
+                zlink.PollEventFlag.PollCompletion,
+                zlink.ConfigResult.InvalidArgument,
+                22
+            ],
+            [
+                zlink.PollEventFlag.PollIn | zlink.PollEventFlag.PollOut,
+                zlink.ConfigResult.NotSupported,
+                95
+            ],
+            [
+                zlink.PollEventFlag.PollIn | zlink.PollEventFlag.PollCompletion,
+                zlink.ConfigResult.InvalidArgument,
+                22
+            ],
+            [
+                zlink.PollEventFlag.PollOut | zlink.PollEventFlag.PollCompletion,
+                zlink.ConfigResult.InvalidArgument,
+                22
+            ]
+        ];
+        for (const [events, result, nativeErrno] of cases) {
+            assert.throws(() => poller.add(monitor, [events], 43), matches(result, nativeErrno));
+            assert.equal(poller.size, 0);
+        }
         poller.add(monitor, [zlink.PollEventFlag.PollIn], 43);
-        assert.throws(() => poller.modify(monitor, [zlink.PollEventFlag.PollPri]), isNotSupported);
-        assert.equal(poller.size, 1);
+        for (const [events, result, nativeErrno] of cases) {
+            assert.throws(() => poller.modify(monitor, [events]), matches(result, nativeErrno));
+            assert.equal(poller.size, 1);
+        }
     }
     finally {
         poller.close();

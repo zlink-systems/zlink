@@ -20,6 +20,8 @@ napi_value message_frame_size (napi_env env, napi_callback_info info);
 napi_value message_frame_close (napi_env env, napi_callback_info info);
 
 napi_value ctx_new (napi_env env, napi_callback_info info);
+napi_value ctx_shared (napi_env env, napi_callback_info info);
+bool init_shared_context_env (napi_env env);
 napi_value ctx_shutdown (napi_env env, napi_callback_info info);
 napi_value ctx_term (napi_env env, napi_callback_info info);
 napi_value ctx_setopt (napi_env env, napi_callback_info info);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import type { BaseSocket, Context } from '../contracts';
+import type { BaseSocket, Context, SharedContext } from '../contracts';
 import type { RuntimeContext } from './core/context';
 import { NativeHandle } from './handles/native_handle';
 import type { RuntimeBaseSocket } from './sockets';
@@ -11,7 +11,7 @@ function assertRuntimeHandle(value: unknown, name: string): asserts value is Nat
   }
 }
 
-export function asRuntimeContext(ctx: Context): RuntimeContext {
+export function asRuntimeContext(ctx: Context | SharedContext): RuntimeContext {
   assertRuntimeHandle(ctx, 'context');
   return ctx as RuntimeContext;
 }

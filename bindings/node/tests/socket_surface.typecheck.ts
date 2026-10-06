@@ -1,6 +1,13 @@
 import * as zlink from '@zlink-systems/zlink';
 
 const ctx = zlink.createContext();
+const shared = zlink.sharedContext();
+const sharedPair: zlink.PairSocket = zlink.createPairSocket(shared);
+// @ts-expect-error A Worker cannot terminate the process-wide context.
+shared.close();
+// @ts-expect-error A Worker cannot shut down the process-wide context.
+shared.shutdown();
+void sharedPair;
 const routingId = zlink.RoutingId.from(Buffer.from('peer'));
 const pair = zlink.createPairSocket(ctx);
 const pub = zlink.createPubSocket(ctx);

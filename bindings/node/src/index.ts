@@ -12,7 +12,7 @@ import {
   strerror as runtimeStrerror,
   version as runtimeVersion,
 } from './zlink/runtime/core/runtime_info';
-import { RuntimeContext } from './zlink/runtime/core/context';
+import { Context as OwnedContext, SharedContext as RuntimeSharedContext } from './zlink/runtime/core/context';
 import {
   RuntimeAtomicCounter,
   RuntimePoller,
@@ -39,6 +39,7 @@ import {
 import type {
   AtomicCounter,
   Context,
+  SharedContext,
   DealerSocket,
   PairSocket,
   Poller,
@@ -69,38 +70,45 @@ configureMessageNativeOperations({
 });
 
 export function createContext(): Context {
-  return asPublicContract<Context>(new RuntimeContext());
+  return asPublicContract<Context>(new OwnedContext());
 }
 
-export function createPairSocket(ctx: Context): PairSocket {
+let sharedContextInstance: RuntimeSharedContext | undefined;
+
+export function sharedContext(): SharedContext {
+  return asPublicContract<SharedContext>(
+    sharedContextInstance ??= new RuntimeSharedContext());
+}
+
+export function createPairSocket(ctx: Context | SharedContext): PairSocket {
   return asPublicContract<PairSocket>(new RuntimePairSocket(asRuntimeContext(ctx)));
 }
 
-export function createPubSocket(ctx: Context): PubSocket {
+export function createPubSocket(ctx: Context | SharedContext): PubSocket {
   return asPublicContract<PubSocket>(new RuntimePubSocket(asRuntimeContext(ctx)));
 }
 
-export function createSubSocket(ctx: Context): SubSocket {
+export function createSubSocket(ctx: Context | SharedContext): SubSocket {
   return asPublicContract<SubSocket>(new RuntimeSubSocket(asRuntimeContext(ctx)));
 }
 
-export function createXPubSocket(ctx: Context): XPubSocket {
+export function createXPubSocket(ctx: Context | SharedContext): XPubSocket {
   return asPublicContract<XPubSocket>(new RuntimeXPubSocket(asRuntimeContext(ctx)));
 }
 
-export function createXSubSocket(ctx: Context): XSubSocket {
+export function createXSubSocket(ctx: Context | SharedContext): XSubSocket {
   return asPublicContract<XSubSocket>(new RuntimeXSubSocket(asRuntimeContext(ctx)));
 }
 
-export function createDealerSocket(ctx: Context): DealerSocket {
+export function createDealerSocket(ctx: Context | SharedContext): DealerSocket {
   return asPublicContract<DealerSocket>(new RuntimeDealerSocket(asRuntimeContext(ctx)));
 }
 
-export function createRouterSocket(ctx: Context): RouterSocket {
+export function createRouterSocket(ctx: Context | SharedContext): RouterSocket {
   return asPublicContract<RouterSocket>(new RuntimeRouterSocket(asRuntimeContext(ctx)));
 }
 
-export function createStreamSocket(ctx: Context): StreamSocket {
+export function createStreamSocket(ctx: Context | SharedContext): StreamSocket {
   return asPublicContract<StreamSocket>(new RuntimeStreamSocket(asRuntimeContext(ctx)));
 }
 

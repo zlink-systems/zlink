@@ -3,19 +3,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerStatus, } = require('./perf_single_common');
+const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, spawnSenderWorker, waitForWorkerStatus, } = require('./perf_single_common');
 async function runDealerRouterBenchmark(msgSize, options) {
-    if (options.transport === 'inproc') {
-        return runLocalSocketOneWayBenchmark({
-            pattern: 'DEALER_ROUTER',
-            msgSize,
-            options,
-            endpointToken: 'dealer-router',
-            createReceiver: (ctx) => zlink.createRouterSocket(ctx),
-            createSender: (ctx) => zlink.createDealerSocket(ctx),
-        });
-    }
-    const ctx = zlink.createContext();
+    const ctx = options.transport === 'inproc' ? zlink.sharedContext() : zlink.createContext();
     applyContextPolicy(ctx);
     const router = zlink.createRouterSocket(ctx);
     const routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
@@ -63,7 +53,8 @@ async function runDealerRouterBenchmark(msgSize, options) {
         await closeSenderWorker(worker);
         routerMonitor.close();
         router.close();
-        ctx.close();
+        if (options.transport !== 'inproc')
+            ctx.close();
     }
 }
 module.exports = { runDealerRouterBenchmark };
@@ -71,10 +62,6 @@ if (require.main === module) {
     (async () => {
         const options = parseSingleBinaryArgs(process.argv.slice(2));
         const result = await runDealerRouterBenchmark(options.msgSize, options);
-        if (result.unsupported) {
-            console.log(`UNSUPPORTED,${options.libName},DEALER_ROUTER,${options.transport}`);
-            return;
-        }
         for (const line of summarizeMetrics('DEALER_ROUTER', options.transport, options.msgSize, result.latenciesNs, options.duration, options.libName, result.accepted, result.latencyMeanNs)) {
             console.log(line);
         }

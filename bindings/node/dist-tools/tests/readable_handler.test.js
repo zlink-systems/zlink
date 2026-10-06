@@ -11,8 +11,17 @@ const node_os_1 = require("node:os");
 const node_path_1 = __importDefault(require("node:path"));
 const promises_1 = require("node:timers/promises");
 const zlink = require('@zlink-systems/zlink');
-const { completionOwnerOf } = require('../../dist/zlink/runtime/messaging/completion_owner');
+const { CompletionOwner, completionOwnerOf } = require('../../dist/zlink/runtime/messaging/completion_owner');
 const completion_poller_1 = require("./completion_poller");
+(0, node_test_1.default)('readable watch preserves Core configuration result and errno', () => {
+    const owner = new CompletionOwner(null);
+    owner.readableWatch = {};
+    owner.stopReadableWatch = () => { owner.readableWatch = null; };
+    owner.notifyReadable(zlink.ConfigResult.NotSupported, 22);
+    strict_1.default.throws(() => owner.throwReceiveError(), (error) => error instanceof zlink.ConfigError
+        && error.result === zlink.ConfigResult.NotSupported
+        && error.nativeErrno === 22);
+});
 (0, node_test_1.default)('readable handler replaces its predecessor and drains a queued batch through no data', async () => {
     const ctx = zlink.createContext();
     const sender = zlink.createPairSocket(ctx);

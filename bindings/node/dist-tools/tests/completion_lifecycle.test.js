@@ -51,7 +51,11 @@ function intercept(method, replacement) {
     const restore = intercept('pollerDestroy', (...args) => {
         if (busy) {
             busy = false;
-            throw Object.assign(new Error('poller busy'), { nativeErrno: 16 });
+            // The addon reports the Core close result with the errno it read.
+            throw Object.assign(new Error('poller busy'), {
+                nativeErrno: 16,
+                nativeResult: zlink.CloseResult.Busy,
+            });
         }
         return original.pollerDestroy(...args);
     });
