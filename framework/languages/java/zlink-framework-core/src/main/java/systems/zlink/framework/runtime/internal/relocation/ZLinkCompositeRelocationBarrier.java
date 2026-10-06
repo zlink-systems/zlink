@@ -182,15 +182,61 @@ public final class ZLinkCompositeRelocationBarrier {
         }
         LinkedHashMap<String, ZLinkSerialExecutionQueue.RelocationBoundary> boundaries =
                 new LinkedHashMap<>();
-        for (Map.Entry<String, ZLinkSerialExecutionQueue> lane : lanes.entrySet()) {
+        return reserveTurnBoundaries(lanes, new ArrayList<>(lanes.entrySet()), 0, boundaries)
+                .thenCompose(
+                        reserved ->
+                                reserved
+                                        ? sealAtBoundaries(lanes, boundaries, cancelled)
+                                        : CompletableFuture.completedFuture(Optional.empty()));
+    }
+
+    private CompletionStage<Boolean> reserveTurnBoundaries(
+            LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes,
+            List<Map.Entry<String, ZLinkSerialExecutionQueue>> entries,
+            int index,
+            LinkedHashMap<String, ZLinkSerialExecutionQueue.RelocationBoundary> boundaries) {
+        if (index == entries.size()) return CompletableFuture.completedFuture(true);
+        Map.Entry<String, ZLinkSerialExecutionQueue> lane = entries.get(index);
+        if (boundaries.containsKey(lane.getKey())) {
+            return reserveTurnBoundaries(lanes, entries, index + 1, boundaries);
+        }
+        ZLinkSerialExecutionQueue.SharedSpotGate gate = lane.getValue().sharedSpotGate();
+        if (gate == null) {
             Optional<ZLinkSerialExecutionQueue.RelocationBoundary> boundary =
                     lane.getValue().reserveRelocationTurnBoundary();
             if (boundary.isEmpty()) {
                 release(boundaries);
-                return awaitFinished(boundaries).thenApply(ignored -> Optional.empty());
+                return awaitFinished(boundaries).thenApply(ignored -> false);
             }
             boundaries.put(lane.getKey(), boundary.orElseThrow());
+            return reserveTurnBoundaries(lanes, entries, index + 1, boundaries);
         }
+        List<ZLinkSerialExecutionQueue> members =
+                lanes.values().stream()
+                        .filter(queue -> queue.sharedSpotGate() == gate)
+                        .distinct()
+                        .toList();
+        return gate.reserveBoundary(members)
+                .thenCompose(
+                        shared -> {
+                            if (shared.isEmpty()) {
+                                release(boundaries);
+                                return awaitFinished(boundaries).thenApply(ignored -> false);
+                            }
+                            lanes.forEach(
+                                    (laneId, queue) -> {
+                                        if (queue.sharedSpotGate() == gate) {
+                                            boundaries.put(laneId, shared.get(queue));
+                                        }
+                                    });
+                            return reserveTurnBoundaries(lanes, entries, index + 1, boundaries);
+                        });
+    }
+
+    private CompletionStage<Optional<Seal>> sealAtBoundaries(
+            LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes,
+            LinkedHashMap<String, ZLinkSerialExecutionQueue.RelocationBoundary> boundaries,
+            BooleanSupplier cancelled) {
         CompletableFuture<?>[] reached =
                 boundaries.values().stream()
                         .map(boundary -> boundary.reached().toCompletableFuture())

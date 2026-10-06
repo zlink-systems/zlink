@@ -29,6 +29,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     private final ZLinkSerialExecutionQueue infrastructureQueue;
     private final Executor serialExecutor;
     private final boolean sharedSpotGate;
+    private final ZLinkSerialExecutionQueue.SharedSpotGate sharedExecution;
     private final AtomicBoolean closed = new AtomicBoolean();
     // Named child queues are C2 state: clearing this map and completing its
     // queues must happen as one state-lane turn when Spot shutdown is wired.
@@ -62,6 +63,8 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                 Objects.requireNonNull(infrastructureQueue, "infrastructureQueue");
         this.serialExecutor = Objects.requireNonNull(serialExecutor, "serialExecutor");
         this.sharedSpotGate = instanceSpot || executionMode == ZLinkUserSpotExecutionMode.SPOT_WIDE;
+        this.sharedExecution =
+                sharedSpotGate ? new ZLinkSerialExecutionQueue.SharedSpotGate(spotQueue) : null;
     }
 
     CompletionStage<Void> executeSpot(
@@ -120,7 +123,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
-        return activation.executeActor(payloadBytes, throughSpotGate(operation), admission);
+        return activation.executeActor(payloadBytes, operation, admission);
     }
 
     @Override
@@ -169,7 +172,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
             Runnable relocationRelease,
             CompletableFuture<Void> admission) {
         return activation.executeActor(
-                acceptedJournalRecord, throughSpotGate(operation), relocationRelease, admission);
+                acceptedJournalRecord, operation, relocationRelease, admission);
     }
 
     @Override
@@ -225,15 +228,9 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return activation.executeActorLazyRecord(
                 acceptedJournalRecord,
                 acceptedJournalRecordSizeHint,
-                throughSpotGate(operation),
+                operation,
                 relocationRelease,
                 admission);
-    }
-
-    private Supplier<CompletionStage<Void>> throughSpotGate(
-            Supplier<CompletionStage<Void>> operation) {
-        Objects.requireNonNull(operation, "operation");
-        return sharedSpotGate ? () -> spotQueue.enqueuePreviouslyAccepted(operation) : operation;
     }
 
     private CompletionStage<Void> submitActor(
@@ -636,7 +633,11 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
 
     private ZLinkActorSerialExecutor actorQueueOnLane(String actorId) {
         return actorQueues.computeIfAbsent(
-                actorId, ignored -> new ZLinkActorSerialExecutor(serialExecutor));
+                actorId,
+                ignored ->
+                        sharedSpotGate
+                                ? new ZLinkActorSerialExecutor(serialExecutor, sharedExecution)
+                                : new ZLinkActorSerialExecutor(serialExecutor));
     }
 
     private Optional<ZLinkActorSerialExecutor> actorQueueIfPresent(String actorId) {

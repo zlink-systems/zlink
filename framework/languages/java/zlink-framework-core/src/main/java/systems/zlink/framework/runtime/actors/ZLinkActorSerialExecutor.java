@@ -23,6 +23,12 @@ public final class ZLinkActorSerialExecutor {
                                 executor, ZLinkExecutionLanePolicy.actorDelivery());
     }
 
+    public ZLinkActorSerialExecutor(
+            Executor executor, ZLinkSerialExecutionQueue.SharedSpotGate sharedGate) {
+        this(executor);
+        queue.bindSharedSpotGate(sharedGate);
+    }
+
     public CompletionStage<Void> executeActor(
             Supplier<CompletionStage<Void>> operation, CompletableFuture<Void> admission) {
         return queue.enqueue(operation, admission);

@@ -22,6 +22,26 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ZLinkCompositeRelocationBarrierTest {
     @Test
+    void sharedSpotBoundaryReachesSpotAndActorInOneGateTurn() throws Exception {
+        ZLinkSerialExecutionQueue spot =
+                new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.spot());
+        ZLinkSerialExecutionQueue actor =
+                new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.actorDelivery());
+        var gate = new ZLinkSerialExecutionQueue.SharedSpotGate(spot);
+        actor.bindSharedSpotGate(gate);
+        ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
+
+        var seal =
+                barrier.sealAtTurnBoundary(
+                                java.util.Map.of("spot", spot, "actor:a", actor), () -> false)
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS)
+                        .orElseThrow();
+        assertEquals(2, seal.laneIds().size());
+        assertTrue(barrier.abort(seal).toCompletableFuture().get(5, TimeUnit.SECONDS));
+    }
+
+    @Test
     void sealAndAbortCompleteAfterTransitionStateClears() throws Exception {
         ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
         var transition = ZLinkCompositeRelocationBarrier.class.getDeclaredField("transition");

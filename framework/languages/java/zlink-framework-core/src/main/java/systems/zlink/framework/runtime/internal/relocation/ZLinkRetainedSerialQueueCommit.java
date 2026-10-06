@@ -20,6 +20,11 @@ public final class ZLinkRetainedSerialQueueCommit {
     public static Optional<Commit> retain(
             ZLinkSerialExecutionQueue queue, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         Objects.requireNonNull(queue, "queue");
+        return queue.underSharedSpotGate(() -> retainOnGate(queue, seal));
+    }
+
+    private static Optional<Commit> retainOnGate(
+            ZLinkSerialExecutionQueue queue, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         if (CURRENT.get() != null) {
             throw new IllegalStateException("nested retained serial queue commit is not supported");
         }
@@ -62,6 +67,8 @@ public final class ZLinkRetainedSerialQueueCommit {
     /** Framework-private retained owner implemented by the serial queue. */
     public interface Owner {
         Object monitor();
+
+        ZLinkSerialExecutionQueue.SharedSpotGate gate();
 
         Cut cut();
 
@@ -126,7 +133,7 @@ public final class ZLinkRetainedSerialQueueCommit {
         }
 
         public Cut cut() {
-            return owner.cut();
+            return owner.gate() == null ? owner.cut() : owner.gate().control(owner::cut);
         }
 
         public boolean tryFinishCapture(Cut cut) {
@@ -154,7 +161,14 @@ public final class ZLinkRetainedSerialQueueCommit {
 
         public void complete() {
             if (completed.compareAndSet(false, true)) {
-                owner.complete();
+                if (owner.gate() == null) owner.complete();
+                else
+                    owner.gate()
+                            .control(
+                                    () -> {
+                                        owner.complete();
+                                        return null;
+                                    });
             }
         }
     }
@@ -171,7 +185,7 @@ public final class ZLinkRetainedSerialQueueCommit {
             throw new IllegalArgumentException(
                     "retained lane commits and cuts must have the same size");
         }
-        return withLocks(owners, snapshots, 0, false);
+        return underGate(owners, () -> withLocks(owners, snapshots, 0, false));
     }
 
     public static boolean establishDurableCut(List<Commit> commits, List<Cut> cuts) {
@@ -181,7 +195,7 @@ public final class ZLinkRetainedSerialQueueCommit {
             throw new IllegalArgumentException(
                     "retained lane commits and cuts must have the same size");
         }
-        return withLocks(owners, snapshots, 0, true);
+        return underGate(owners, () -> withLocks(owners, snapshots, 0, true));
     }
 
     /** Establishes and detaches one cut under the same lane-lock set. */
@@ -192,7 +206,7 @@ public final class ZLinkRetainedSerialQueueCommit {
             throw new IllegalArgumentException(
                     "retained lane commits and cuts must have the same size");
         }
-        return withLocks(owners, snapshots, 0, true, true);
+        return underGate(owners, () -> withLocks(owners, snapshots, 0, true, true));
     }
 
     public static boolean abortRetained(List<Commit> commits) {
@@ -200,7 +214,18 @@ public final class ZLinkRetainedSerialQueueCommit {
         if (owners.isEmpty() || owners.stream().anyMatch(commit -> commit.completed.get())) {
             return false;
         }
-        return withAbortLocks(owners, 0);
+        return underGate(owners, () -> withAbortLocks(owners, 0));
+    }
+
+    private static boolean underGate(
+            List<Commit> commits, java.util.function.Supplier<Boolean> work) {
+        ZLinkSerialExecutionQueue.SharedSpotGate gate =
+                commits.stream()
+                        .map(commit -> commit.owner.gate())
+                        .filter(Objects::nonNull)
+                        .findFirst()
+                        .orElse(null);
+        return gate == null ? work.get() : gate.control(work);
     }
 
     private static boolean withAbortLocks(List<Commit> commits, int index) {
