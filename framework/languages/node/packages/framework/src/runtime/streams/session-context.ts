@@ -33,7 +33,6 @@ import { ZLinkFrameworkInternalErrorKind } from '../framework-errors-internal';
 import { type ZLinkSubmitResult, requireOneWayCompletion } from '../messaging/submission-result';
 
 import {
-  messageToBytes,
   ZLinkStreamHeaderFlags,
   ZLinkStreamMessageKind,
   type ZLinkStreamFrameHeader,
@@ -45,7 +44,6 @@ import {
   DefaultZLinkSessionSendCall
 } from './session-calls';
 import { ZLinkSessionLocalActorBindings } from './session-local-actors';
-import { ZLinkSessionRequestTracker, type ZLinkPendingSessionRequest } from './session-requests';
 
 export interface ZLinkSessionContextStream extends ZLinkStream {
   writeRaw(payload: Message, flags?: number): boolean;
@@ -119,7 +117,6 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
   private readonly handlerRegistry: DefaultZLinkSessionHandlerRegistry;
   readonly handlers: ZLinkSessionHandlerRegistry;
   private readonly localActors = new ZLinkSessionLocalActorBindings<DefaultZLinkSessionActor>();
-  private readonly requests = new ZLinkSessionRequestTracker();
   private currentDispatchHeader: ZLinkStreamFrameHeader | undefined;
   private currentReplyClaimed = false;
   private actorBindingReplacementHandler?: ZLinkActorBindingReplacementHandler;
@@ -316,23 +313,6 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
       throw new Error('The current stream request already has a reply submission.');
     }
     this.currentReplyClaimed = true;
-  }
-
-  startRequest(timeoutMs?: number): ZLinkPendingSessionRequest {
-    return this.requests.start(timeoutMs);
-  }
-
-  tryCompleteResponse(header: ZLinkStreamFrameHeader, payload: Message): boolean {
-    if (header.requestSeq === undefined) {
-      return false;
-    }
-    if (header.kind === ZLinkStreamMessageKind.Response) {
-      return this.requests.complete(header.requestSeq, payload);
-    }
-    if (header.kind === ZLinkStreamMessageKind.Error) {
-      return this.requests.fail(header.requestSeq, decodeStreamErrorPayload(payload));
-    }
-    return false;
   }
 
   payloadForHeader(header: ZLinkStreamFrameHeader, payload: Message): Message {
@@ -620,18 +600,6 @@ export class DefaultZLinkBoundSessionFactory implements ZLinkBoundSessionFactory
 
   create(actorId: string): DefaultZLinkBoundSession {
     return new DefaultZLinkBoundSession(this.runtime, actorId);
-  }
-}
-
-function decodeStreamErrorPayload(payload: Message): Error {
-  try {
-    const value = JSON.parse(Buffer.from(messageToBytes(payload)).toString()) as {
-      readonly code?: unknown;
-      readonly message?: unknown;
-    };
-    return new Error(typeof value.message === 'string' ? value.message : 'Stream request failed.');
-  } catch {
-    return new Error('Stream request failed.');
   }
 }
 
