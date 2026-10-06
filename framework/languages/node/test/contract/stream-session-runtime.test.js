@@ -611,14 +611,23 @@ test('Actor binding replacement callback can send before close and does not bloc
   await runtime.dispose();
 });
 
-test('Actor replacement retains the session turn until callback terminal', async () => {
+test('Actor replacement retains the session turn until callback terminal', async (t) => {
+  const { ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS } = require(
+    '../../packages/framework/dist/runtime/execution/serial-execution-queue'
+  );
+  let schedulerNow = 0;
+  t.mock.method(performance, 'now', () => schedulerNow);
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
+  const actorA = { nodeRid: 'owner', actorId: 'actor-a', generation: 1n };
+  const actorB = { nodeRid: 'owner', actorId: 'actor-b', generation: 1n };
   const events = [];
   let release;
   let entered;
+  let secondEntered;
   const terminal = new Promise(resolve => { release = resolve; });
   const started = new Promise(resolve => { entered = resolve; });
+  const secondStarted = new Promise(resolve => { secondEntered = resolve; });
   const runtime = createStreamRuntime({
     socket,
     livenessClock: clock,
@@ -627,7 +636,8 @@ test('Actor replacement retains the session turn until callback terminal', async
         context,
         async onActorBindingReplaced(ctx, actorId) {
           events.push(actorId);
-          if (actorId === 'actor-a') { entered(); await terminal; }
+          if (actorId === actorA.actorId) { entered(); await terminal; }
+          if (actorId === actorB.actorId) secondEntered();
         }
       };
     }
@@ -640,17 +650,21 @@ test('Actor replacement retains the session turn until callback terminal', async
     sessionOwnerId: 'session-runtime', sessionOwnerLeaseGeneration: 1n,
     sessionRid: 'replacement-turn', retiredBindingGeneration: 7n
   };
-  session.enqueueActorBindingReplaced({ nodeRid: 'owner', actorId: 'actor-a', generation: 1n }, retired);
+  session.enqueueActorBindingReplaced(actorA, retired);
   await started;
-  session.enqueueActorBindingReplaced({ nodeRid: 'owner', actorId: 'actor-b', generation: 1n }, retired);
+  // Exercise the existing fairness boundary after the first callback's terminal.
+  schedulerNow += ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.ownerTimeBudget;
+  session.enqueueActorBindingReplaced(actorB, retired);
   try {
     await clock.flush();
-    assert.deepEqual(events, ['actor-a']);
+    assert.deepEqual(events, [actorA.actorId]);
     await clock.advance(99);
     assert.deepEqual(socket.disconnects, []);
     release();
+    // A clock flush does not complete work that yields at the session gate.
+    await secondStarted;
     await clock.flush();
-    assert.deepEqual(events, ['actor-a', 'actor-b']);
+    assert.deepEqual(events, [actorA.actorId, actorB.actorId]);
     await clock.advance(99);
     assert.deepEqual(socket.disconnects, []);
     await clock.advance(1);
