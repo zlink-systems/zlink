@@ -12,19 +12,31 @@ public final class Program {
 
     public static void main(String[] args) {
         RoleConfig config = ServerApplication.readConfig(args);
-        if (!"cs-local-session-actor-echo".equals(config.scenario()) || !"session-actor-local".equals(config.role())) {
-            throw new IllegalArgumentException("session-actor-local-server runs the cs-local-session-actor-echo role.");
+        if (!"cs-local-session-actor-echo".equals(config.scenario())
+                || !"session-actor-local".equals(config.role())) {
+            throw new IllegalArgumentException(
+                    "session-actor-local-server runs the cs-local-session-actor-echo role.");
         }
         // §10.1: the STREAM session and the Actors it binds live on this one Object Server node.
-        ServerApplication app = ServerApplication.create(config).configure(options -> {
-            PerfActorType.addPerfActors(
-                    ServerApplication.routeMesh(options, config, "perf-session-actor-local").objects().server());
-            options.addStreamNode("perf-session")
-                    .bind(config.transportEndpoints().get("stream"))
-                    .enableActorDispatch()
-                    .registerSession(PerfActorRelaySession.class);
-        });
-        app.bean(ObjectsReadiness.class, () -> new ObjectsReadiness(true, ""));
+        ServerApplication app =
+                ServerApplication.create(config)
+                        .configure(
+                                options -> {
+                                    PerfActorType.addPerfActors(
+                                            ServerApplication.routeMesh(
+                                                            options,
+                                                            config,
+                                                            "perf-session-actor-local")
+                                                    .objects()
+                                                    .server());
+                                    options.addStreamNode("perf-session")
+                                            .bind(config.transportEndpoints().get("stream"))
+                                            .enableActorDispatch()
+                                            .registerSession(PerfActorRelaySession.class);
+                                });
+        app.bean(
+                ObjectsReadiness.class,
+                () -> new ObjectsReadiness(false, "No Actor is bound to a Session yet."));
         app.bean(SessionActorSetup.class);
         app.start();
     }

@@ -8,6 +8,7 @@ import systems.zlink.stream.connector.ZLinkStreamException;
 import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -27,15 +28,20 @@ import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
-// Application cohort accounting only (§4, §13, §14). No socket state, retry, transport polling or completion pump.
-// The window, reset epoch, in-flight slots and outcome counters of one process live here; every scenario reports its
-// operations through beginOperation/completeOperation and reads nothing from the Framework's internals.
+// Application cohort accounting only (§4, §13, §14). No socket state, retry, transport polling or
+// completion pump.
+// The window, reset epoch, in-flight slots and outcome counters of one process live here; every
+// scenario reports its
+// operations through beginOperation/completeOperation and reads nothing from the Framework's
+// internals.
 public final class Measurement {
-    private static final ExecutorService PHASES = Executors.newCachedThreadPool(runnable -> {
-        Thread thread = new Thread(runnable, "perf-phase");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private static final ExecutorService PHASES =
+            Executors.newCachedThreadPool(
+                    runnable -> {
+                        Thread thread = new Thread(runnable, "perf-phase");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
 
     private final Object gate = new Object();
     private final RoleConfig config;
@@ -50,20 +56,23 @@ public final class Measurement {
     private final List<Object> publicStateSamples = new ArrayList<>();
     private final Map<String, Long> directional = new HashMap<>();
     private long maxInflight;
+    private long outstandingOperations;
     private int activeHandlers;
-    private long start;
-    private long end;
+    private volatile long start;
+    private volatile long end;
     private String startUnix;
     private String endUnix;
     private String phase = "setup";
     private String resetSeq = "0";
-    private boolean sealedResults;
+    private volatile boolean sealedResults;
     private ResetReply resetAck;
     private final Map<String, PerfTriggerReply> starts = new HashMap<>();
     private CompletableFuture<Void> phaseTask = CompletableFuture.completedFuture(null);
+    private CompletableFuture<Void> operationsDrained;
     private final PayloadPattern pattern;
 
-    // A scenario's own counters: cleared with the window at reset, and added to every snapshot (family metrics, §14).
+    // A scenario's own counters: cleared with the window at reset, and added to every snapshot
+    // (family metrics, §14).
     private volatile Runnable onReset;
     private volatile Consumer<PerfSnapshot> enrichSnapshot;
     private volatile Supplier<Object> samplePublicState;
@@ -71,9 +80,12 @@ public final class Measurement {
     private volatile long connected;
     private volatile long connectionFailures;
     private volatile List<Object> setupEvidence = List.of();
-    // The typed messages this scenario's measured path carries, one serializedMessageBytes row each (§15.2).
-    private volatile List<String[]> messageTypes = List.of(
-            new String[] {"request", "PerfEchoRequest"}, new String[] {"reply", "PerfEchoReply"});
+    // The typed messages this scenario's measured path carries, one serializedMessageBytes row each
+    // (§15.2).
+    private volatile List<String[]> messageTypes =
+            List.of(
+                    new String[] {"request", "PerfEchoRequest"},
+                    new String[] {"reply", "PerfEchoReply"});
 
     public Measurement(RoleConfig config, boolean primary) {
         this.config = config;
@@ -107,6 +119,47 @@ public final class Measurement {
         }
     }
 
+    /**
+     * The deadline for every public call owned by this measurement, in its monotonic clock domain.
+     */
+    public long callDeadlineTicks() {
+        long phaseEnd = end;
+        return phaseEnd == 0
+                ? PerfClock.now()
+                        + TimeUnit.MILLISECONDS.toNanos(config.workload().setupTimeoutMs())
+                : phaseEnd + TimeUnit.MILLISECONDS.toNanos(config.workload().drainTimeoutMs());
+    }
+
+    /**
+     * A local driver wraps the measured call and gets one additional drain interval to observe its
+     * result.
+     */
+    public Duration callTimeout() {
+        return callTimeout(false);
+    }
+
+    public Duration callTimeout(boolean localDriver) {
+        long remaining = Math.max(1, callDeadlineTicks() - PerfClock.now());
+        Duration timeout = Duration.ofNanos(remaining);
+        return localDriver ? timeout.plusMillis(config.workload().drainTimeoutMs()) : timeout;
+    }
+
+    /**
+     * Completes when all operations this measurement has started have reached their public
+     * terminal.
+     */
+    public CompletableFuture<Void> operationsDrained() {
+        synchronized (gate) {
+            if (outstandingOperations == 0) {
+                return CompletableFuture.completedFuture(null);
+            }
+            if (operationsDrained == null) {
+                operationsDrained = new CompletableFuture<>();
+            }
+            return operationsDrained;
+        }
+    }
+
     public CompletableFuture<Void> phaseTask() {
         synchronized (gate) {
             return phaseTask;
@@ -114,12 +167,13 @@ public final class Measurement {
     }
 
     public boolean canIssue() {
-        synchronized (gate) {
-            return !sealedResults && containsWindowTicks(PerfClock.now());
-        }
+        long now = PerfClock.now();
+        return !sealedResults && start != 0 && now >= start && now < end;
     }
 
-    /** The owning process's measured or warmup window is half-open: {@code start <= ticks < end}. */
+    /**
+     * The owning process's measured or warmup window is half-open: {@code start <= ticks < end}.
+     */
     public boolean windowContainsTicks(long ticks) {
         synchronized (gate) {
             return containsWindowTicks(ticks);
@@ -130,7 +184,10 @@ public final class Measurement {
         return start != 0 && ticks >= start && ticks < end;
     }
 
-    /** The connector range assigned by the runner's q/r split, shared by load and connection metrics. */
+    /**
+     * The connector range assigned by the runner's q/r split, shared by load and connection
+     * metrics.
+     */
     public record ConnectionRange(int first, int count) {}
 
     public ConnectionRange connectionRange() {
@@ -202,27 +259,51 @@ public final class Measurement {
         String currentReset = resetSeq();
         boolean warmup = probe || "warmup".equals(phase());
         String name = warmup ? "warmup" : "measured";
-        return new PerfEchoRequest(config.runId(), config.cellId(), probe ? "0" : currentReset, name, stream,
-                DecimalText.of(sequence), config.cellId() + "/" + name + "/" + stream + "/" + sequence,
-                DecimalText.of(PerfClock.now()), PerfClock.DOMAIN, null, null, pattern.base64());
+        return new PerfEchoRequest(
+                config.runId(),
+                config.cellId(),
+                probe ? "0" : currentReset,
+                name,
+                stream,
+                DecimalText.of(sequence),
+                config.cellId() + "/" + name + "/" + stream + "/" + sequence,
+                DecimalText.of(PerfClock.now()),
+                PerfClock.DOMAIN,
+                null,
+                null,
+                pattern.base64());
     }
 
     /** A send/send request names its return address (§10.4, §10.6); an echo request names none. */
-    public void validateRequest(PerfEchoRequest request, String returnChannel, String returnSpotId) {
-        if (!config.runId().equals(request.runId()) || !config.cellId().equals(request.cellId())
-                || request.clientId() < 0 || !("warmup".equals(request.phase()) || "measured".equals(request.phase()))
+    public void validateRequest(
+            PerfEchoRequest request, String returnChannel, String returnSpotId) {
+        if (!config.runId().equals(request.runId())
+                || !config.cellId().equals(request.cellId())
+                || request.clientId() < 0
+                || !("warmup".equals(request.phase()) || "measured".equals(request.phase()))
                 || !java.util.Objects.equals(request.returnSpotId(), returnSpotId)
                 || !java.util.Objects.equals(request.returnChannel(), returnChannel)
-                || !(request.cellId() + "/" + request.phase() + "/" + request.clientId() + "/" + request.sequence())
+                || !(request.cellId()
+                                + "/"
+                                + request.phase()
+                                + "/"
+                                + request.clientId()
+                                + "/"
+                                + request.sequence())
                         .equals(request.correlationId())
-                || request.clockDomainId() == null || request.clockDomainId().isEmpty()) {
-            throw new PerfValidationException("IdentityMismatch", "Request identity does not match the cell.");
+                || request.clockDomainId() == null
+                || request.clockDomainId().isEmpty()) {
+            throw new PerfValidationException(
+                    "IdentityMismatch", "Request identity does not match the cell.");
         }
         DecimalText.u64(request.sequence());
         DecimalText.i64(request.sentTicks());
         long seq = DecimalText.u64(request.resetSeq());
-        if ("warmup".equals(request.phase()) ? seq != 0 : seq == 0 || !request.resetSeq().equals(resetSeq())) {
-            throw new PerfValidationException("PhaseMismatch", "Request reset sequence does not match the phase.");
+        if ("warmup".equals(request.phase())
+                ? seq != 0
+                : seq == 0 || !request.resetSeq().equals(resetSeq())) {
+            throw new PerfValidationException(
+                    "PhaseMismatch", "Request reset sequence does not match the phase.");
         }
         pattern.validate(request.payload());
     }
@@ -231,12 +312,16 @@ public final class Measurement {
         validateRequest(request, null, null);
     }
 
-    public PerfTriggerReply start(PerfTriggerRequest trigger, Supplier<CompletionStage<Void>> workload) {
+    public PerfTriggerReply start(
+            PerfTriggerRequest trigger, Supplier<CompletionStage<Void>> workload) {
         synchronized (gate) {
-            if (!config.runId().equals(trigger.runId()) || !config.cellId().equals(trigger.cellId())
+            if (!config.runId().equals(trigger.runId())
+                    || !config.cellId().equals(trigger.cellId())
                     || !("warmup".equals(trigger.phase()) || "measured".equals(trigger.phase()))
                     || !trigger.resetSeq().equals(resetSeq)
-                    || ("warmup".equals(trigger.phase()) ? !"0".equals(resetSeq) : "0".equals(resetSeq))) {
+                    || ("warmup".equals(trigger.phase())
+                            ? !"0".equals(resetSeq)
+                            : "0".equals(resetSeq))) {
                 return ack(trigger, false, "rejected", "Identity, resetSeq or phase is invalid.");
             }
             String key = trigger.phase() + "/" + trigger.resetSeq();
@@ -244,35 +329,51 @@ public final class Measurement {
             if (previous != null) {
                 return previous.withState("alreadyStarted");
             }
-            if (!phaseTask.isDone() || ("0".equals(resetSeq) && get(counts, "sent") != settledCount())
+            if (!phaseTask.isDone()
+                    || ("0".equals(resetSeq) && outstandingOperations != 0)
                     || activeHandlers != 0
-                    || ("warmup".equals(trigger.phase()) ? !"setup".equals(phase) : !"reset".equals(phase))) {
+                    || ("warmup".equals(trigger.phase())
+                            ? !"setup".equals(phase)
+                            : !"reset".equals(phase))) {
                 return ack(trigger, false, "rejected", "Previous phase has not drained and reset.");
             }
             phase = trigger.phase();
             sealedResults = false;
             start = PerfClock.now();
-            double seconds = "warmup".equals(phase) ? config.workload().warmupSeconds() : config.workload().durationSeconds();
+            double seconds =
+                    "warmup".equals(phase)
+                            ? config.workload().warmupSeconds()
+                            : config.workload().durationSeconds();
             end = Math.addExact(start, (long) (seconds * 1e9));
             startUnix = PerfClock.unixMs();
             sampler.start();
             PerfTriggerReply started = ack(trigger, true, "started", null);
             starts.put(key, started);
-            // Launching on its own thread lets the HTTP/control acknowledgement leave before load starts.
+            // Launching on its own thread lets the HTTP/control acknowledgement leave before load
+            // starts.
             phaseTask = CompletableFuture.runAsync(() -> runPhase(workload), PHASES);
             return started;
         }
     }
 
-    private PerfTriggerReply ack(PerfTriggerRequest trigger, boolean accepted, String state, String reason) {
-        return new PerfTriggerReply(trigger.runId(), trigger.cellId(), trigger.resetSeq(), trigger.phase(), accepted,
-                state, config.configHash(), reason);
+    private PerfTriggerReply ack(
+            PerfTriggerRequest trigger, boolean accepted, String state, String reason) {
+        return new PerfTriggerReply(
+                trigger.runId(),
+                trigger.cellId(),
+                trigger.resetSeq(),
+                trigger.phase(),
+                accepted,
+                state,
+                config.configHash(),
+                reason);
     }
 
     private void runPhase(Supplier<CompletionStage<Void>> workload) {
         CompletionStage<Void> operations;
         try {
-            operations = workload == null ? CompletableFuture.completedFuture(null) : workload.get();
+            operations =
+                    workload == null ? CompletableFuture.completedFuture(null) : workload.get();
         } catch (Throwable error) {
             recordDiagnostic(error);
             operations = CompletableFuture.completedFuture(null);
@@ -295,7 +396,8 @@ public final class Measurement {
                 Thread.currentThread().interrupt();
                 break;
             }
-            // Public runtime status may marshal to a runtime lane; never call it under the counter lock.
+            // Public runtime status may marshal to a runtime lane; never call it under the counter
+            // lock.
             Object publicState = stateSampler == null ? null : stateSampler.get();
             synchronized (gate) {
                 sampler.sample();
@@ -331,22 +433,46 @@ public final class Measurement {
     public ResetReply reset(ResetRequest request, LongSupplier resetCapacity) {
         long requested = DecimalText.u64(request.resetSeq());
         synchronized (gate) {
-            boolean drained = phaseTask.isDone() && (start == 0 || PerfClock.now() >= end)
-                    && activeHandlers == 0;
-            if (config.runId().equals(request.runId()) && config.cellId().equals(request.cellId()) && resetAck != null
-                    && resetAck.resetSeq().equals(request.resetSeq()) && drained) {
+            boolean drained =
+                    phaseTask.isDone()
+                            && (start == 0 || PerfClock.now() >= end)
+                            && outstandingOperations == 0
+                            && activeHandlers == 0;
+            if (config.runId().equals(request.runId())
+                    && config.cellId().equals(request.cellId())
+                    && resetAck != null
+                    && resetAck.resetSeq().equals(request.resetSeq())
+                    && drained) {
                 return resetAck;
             }
-            String reason = !config.runId().equals(request.runId()) || !config.cellId().equals(request.cellId())
-                    ? "Different run or cell."
-                    : requested == 0 || Long.compareUnsigned(requested, DecimalText.u64(resetSeq)) <= 0
-                            ? "resetSeq must advance."
-                            : !drained || "setup".equals(phase)
-                                    ? "Warmup or measured operations have not drained."
-                                    : (!byKind.isEmpty() || !harness.isEmpty() || !language.isEmpty()) ? "Previous phase failed." : null;
+            String reason =
+                    !config.runId().equals(request.runId())
+                                    || !config.cellId().equals(request.cellId())
+                            ? "Different run or cell."
+                            : requested == 0
+                                            || Long.compareUnsigned(
+                                                            requested, DecimalText.u64(resetSeq))
+                                                    <= 0
+                                    ? "resetSeq must advance."
+                                    : !drained || "setup".equals(phase)
+                                            ? "Warmup or measured operations have not drained."
+                                            : (!byKind.isEmpty()
+                                                            || !harness.isEmpty()
+                                                            || !language.isEmpty())
+                                                    ? "Previous phase failed."
+                                                    : null;
             if (reason != null) {
-                return new ResetReply(false, request.runId(), request.cellId(), config.role(), config.roleInstance(),
-                        request.resetSeq(), PerfClock.unixMs(), null, reason, Map.of());
+                return new ResetReply(
+                        false,
+                        request.runId(),
+                        request.cellId(),
+                        config.role(),
+                        config.roleInstance(),
+                        request.resetSeq(),
+                        PerfClock.unixMs(),
+                        null,
+                        reason,
+                        Map.of());
             }
             counts.clear();
             byKind.clear();
@@ -372,23 +498,39 @@ public final class Measurement {
             Long epoch = resetCapacity == null ? null : resetCapacity.getAsLong();
             Map<String, NullReason> reasons = new LinkedHashMap<>();
             if (epoch == null) {
-                reasons.put("/capacityEpoch", new NullReason("NOT_APPLICABLE", "The client owns no Framework host."));
+                reasons.put(
+                        "/capacityEpoch",
+                        new NullReason("NOT_APPLICABLE", "The client owns no Framework host."));
             }
-            resetAck = new ResetReply(true, config.runId(), config.cellId(), config.role(), config.roleInstance(),
-                    resetSeq, resetAt, epoch == null ? null : DecimalText.of(epoch), null, reasons);
+            resetAck =
+                    new ResetReply(
+                            true,
+                            config.runId(),
+                            config.cellId(),
+                            config.role(),
+                            config.roleInstance(),
+                            resetSeq,
+                            resetAt,
+                            epoch == null ? null : DecimalText.of(epoch),
+                            null,
+                            reasons);
             return resetAck;
         }
     }
 
-    /** Starts one measured logical operation; returns its start ticks, or -1 when the window is closed. */
+    /**
+     * Starts one measured logical operation; returns its start ticks, or -1 when the window is
+     * closed.
+     */
     public long beginOperation(String direction) {
         synchronized (gate) {
             long started = PerfClock.now();
             if (sealedResults || !containsWindowTicks(started)) {
                 return -1;
             }
+            outstandingOperations++;
             increment(counts, "sent");
-            maxInflight = Math.max(maxInflight, get(counts, "sent") - settledCount());
+            maxInflight = Math.max(maxInflight, outstandingOperations);
             increment(directional, direction);
             return started;
         }
@@ -409,22 +551,34 @@ public final class Measurement {
     /** Counts a terminal before sealing and before the measured window ends. */
     public boolean completeOperation(long started, Throwable error, Long completedTicks) {
         long terminal = completedTicks == null ? PerfClock.now() : completedTicks;
+        CompletableFuture<Void> drained = null;
+        boolean counted = false;
         synchronized (gate) {
+            outstandingOperations--;
+            if (outstandingOperations == 0) {
+                drained = operationsDrained;
+                operationsDrained = null;
+            }
             if (sealedResults || terminal >= end) {
-                return false;
-            }
-            if (error != null) {
+                counted = false;
+            } else if (error != null) {
                 recordError(error, true);
-                return false;
+            } else {
+                increment(counts, "completed");
+                latency.record(terminal - started);
+                counted = true;
             }
-            increment(counts, "completed");
-            latency.record(terminal - started);
-            return true;
         }
+        if (drained != null) {
+            drained.complete(null);
+        }
+        return counted;
     }
 
     private long settledCount() {
-        return get(counts, "completed") + get(counts, "failed") + get(counts, "timeout")
+        return get(counts, "completed")
+                + get(counts, "failed")
+                + get(counts, "timeout")
                 + get(counts, "cancelled");
     }
 
@@ -444,10 +598,14 @@ public final class Measurement {
         recordApplicationCall(request, "reply");
     }
 
-    /** A public call this process starts (send) or a typed reply it returns, counted once inside its own window. */
+    /**
+     * A public call this process starts (send) or a typed reply it returns, counted once inside its
+     * own window.
+     */
     public void recordApplicationCall(PerfEchoRequest request, String direction) {
         synchronized (gate) {
-            if (request.resetSeq().equals(resetSeq) && containsWindowTicks(PerfClock.now())
+            if (request.resetSeq().equals(resetSeq)
+                    && containsWindowTicks(PerfClock.now())
                     && request.phase().equals("0".equals(resetSeq) ? "warmup" : "measured")) {
                 increment(directional, direction);
             }
@@ -463,7 +621,8 @@ public final class Measurement {
     /** The public exception behind a completion stage's wrapper. */
     public static Throwable unwrap(Throwable error) {
         Throwable current = error;
-        while ((current instanceof CompletionException || current instanceof ExecutionException) && current.getCause() != null) {
+        while ((current instanceof CompletionException || current instanceof ExecutionException)
+                && current.getCause() != null) {
             current = current.getCause();
         }
         return current;
@@ -472,7 +631,8 @@ public final class Measurement {
     private static String kindName(ZLinkFrameworkErrorKind kind) {
         StringBuilder name = new StringBuilder();
         for (String part : kind.name().split("_")) {
-            name.append(part.charAt(0)).append(part.substring(1).toLowerCase(java.util.Locale.ROOT));
+            name.append(part.charAt(0))
+                    .append(part.substring(1).toLowerCase(java.util.Locale.ROOT));
         }
         return name.toString();
     }
@@ -547,9 +707,19 @@ public final class Measurement {
             MetricCatalog.baselineNulls(metrics, histograms, reasons);
             for (String key : MetricCatalog.OUTCOMES) {
                 if (primary) {
-                    metrics.put("messages." + key, DecimalText.of("inflightAtEnd".equals(key) ? get(counts, "sent") - settledCount() : get(counts, key)));
+                    metrics.put(
+                            "messages." + key,
+                            DecimalText.of(
+                                    "inflightAtEnd".equals(key)
+                                            ? get(counts, "sent") - settledCount()
+                                            : get(counts, key)));
                 } else {
-                    MetricCatalog.nullValue(metrics, reasons, "metrics", "messages." + key, "NOT_APPLICABLE",
+                    MetricCatalog.nullValue(
+                            metrics,
+                            reasons,
+                            "metrics",
+                            "messages." + key,
+                            "NOT_APPLICABLE",
                             "Echo outcomes belong to the source process.");
                 }
             }
@@ -557,11 +727,21 @@ public final class Measurement {
                 latency.export("latencyMs", "latency", metrics, histograms, reasons);
             } else {
                 for (String suffix : MetricCatalog.LATENCY_SUFFIXES) {
-                    MetricCatalog.nullValue(metrics, reasons, "metrics", "latency." + suffix, "NOT_APPLICABLE",
+                    MetricCatalog.nullValue(
+                            metrics,
+                            reasons,
+                            "metrics",
+                            "latency." + suffix,
+                            "NOT_APPLICABLE",
                             "RTT belongs to the source process.");
                 }
                 for (String key : List.of("latencyMs")) {
-                    MetricCatalog.nullValue(histograms, reasons, "histograms", key, "NOT_APPLICABLE",
+                    MetricCatalog.nullValue(
+                            histograms,
+                            reasons,
+                            "histograms",
+                            key,
+                            "NOT_APPLICABLE",
                             "RTT belongs to the source process.");
                 }
             }
@@ -569,83 +749,155 @@ public final class Measurement {
             boolean csClient = "client".equals(config.role()) && workload.connections() != null;
             for (String key : List.of("requested", "connected", "failed")) {
                 if (csClient) {
-                    long value = switch (key) {
-                        case "requested" -> connectionRange().count();
-                        case "connected" -> connected;
-                        default -> connectionFailures;
-                    };
+                    long value =
+                            switch (key) {
+                                case "requested" -> connectionRange().count();
+                                case "connected" -> connected;
+                                default -> connectionFailures;
+                            };
                     metrics.put("connections." + key, DecimalText.of(value));
                 } else {
-                    MetricCatalog.nullValue(metrics, reasons, "metrics", "connections." + key, "NOT_APPLICABLE",
+                    MetricCatalog.nullValue(
+                            metrics,
+                            reasons,
+                            "metrics",
+                            "connections." + key,
+                            "NOT_APPLICABLE",
                             "This process owns no physical connector pool.");
                 }
             }
-            for (String key : List.of("logicalStreams", "inflightPerStream", "inflight.max")) {
+            for (String key : List.of("logicalStreams", "inflight.max")) {
                 if (primary && (!"logicalStreams".equals(key) || !csClient)) {
-                    long value = switch (key) {
-                        case "logicalStreams" -> workload.logicalStreams();
-                        case "inflightPerStream" -> workload.inflight();
-                        default -> maxInflight;
-                    };
+                    long value =
+                            switch (key) {
+                                case "logicalStreams" -> workload.logicalStreams();
+                                default -> maxInflight;
+                            };
                     metrics.put("load." + key, DecimalText.of(value));
                 } else {
-                    MetricCatalog.nullValue(metrics, reasons, "metrics", "load." + key, "NOT_APPLICABLE",
+                    MetricCatalog.nullValue(
+                            metrics,
+                            reasons,
+                            "metrics",
+                            "load." + key,
+                            "NOT_APPLICABLE",
                             "No server logical streams are owned here; CS slots are connector based.");
                 }
             }
             for (String direction : List.of("request", "send", "reply", "event")) {
                 long count = get(directional, direction);
                 metrics.put("applicationMessages." + direction, DecimalText.of(count));
-                metrics.put("applicationPayloadBytes." + direction, DecimalText.of(Math.multiplyExact(count, (long) workload.payloadSize())));
+                metrics.put(
+                        "applicationPayloadBytes." + direction,
+                        DecimalText.of(Math.multiplyExact(count, (long) workload.payloadSize())));
             }
             Double seconds = start == 0 ? null : (end - start) / 1e9;
             long applicationCount = 0;
             for (long value : directional.values()) {
                 applicationCount = Math.addExact(applicationCount, value);
             }
-            metrics.put("throughput.kops", primary && seconds != null && seconds > 0 ? get(counts, "completed") / seconds / 1000 : null);
-            metrics.put("throughput.messagesPerSec", seconds != null && seconds > 0 ? applicationCount / seconds : null);
-            metrics.put("throughput.megabytesPerSec",
-                    seconds != null && seconds > 0 ? applicationCount * (double) workload.payloadSize() / seconds / 1048576 : null);
+            metrics.put(
+                    "throughput.kops",
+                    primary && seconds != null && seconds > 0
+                            ? get(counts, "completed") / seconds / 1000
+                            : null);
+            metrics.put(
+                    "throughput.messagesPerSec",
+                    seconds != null && seconds > 0 ? applicationCount / seconds : null);
+            metrics.put(
+                    "throughput.megabytesPerSec",
+                    seconds != null && seconds > 0
+                            ? applicationCount * (double) workload.payloadSize() / seconds / 1048576
+                            : null);
             metrics.put("errors.byKind", texts(byKind));
             metrics.put("errors.harness", texts(harness));
             metrics.put("errors.language", texts(language));
-            for (String key : List.of("throughput.kops", "throughput.messagesPerSec", "throughput.megabytesPerSec")) {
+            for (String key :
+                    List.of(
+                            "throughput.kops",
+                            "throughput.messagesPerSec",
+                            "throughput.megabytesPerSec")) {
                 if (metrics.get(key) == null) {
-                    reasons.put("/metrics/" + key, new NullReason(start == 0 ? "PHASE_NOT_STARTED" : "NOT_APPLICABLE",
-                            "No applicable completed measurement window."));
+                    reasons.put(
+                            "/metrics/" + key,
+                            new NullReason(
+                                    start == 0 ? "PHASE_NOT_STARTED" : "NOT_APPLICABLE",
+                                    "No applicable completed measurement window."));
                 }
             }
             if ("complete".equals(phase)) {
                 sampler.export(metrics, runtime, reasons);
             } else {
-                for (String key : List.of("process.cpuPercent", "process.rssMb", "process.allocatedMb", "gc.gen0", "gc.gen1", "gc.gen2")) {
-                    MetricCatalog.nullValue(metrics, reasons, "metrics", key, "PHASE_NOT_STARTED",
+                for (String key :
+                        List.of(
+                                "process.cpuPercent",
+                                "process.rssMb",
+                                "process.allocatedMb",
+                                "gc.gen0",
+                                "gc.gen1",
+                                "gc.gen2")) {
+                    MetricCatalog.nullValue(
+                            metrics,
+                            reasons,
+                            "metrics",
+                            key,
+                            "PHASE_NOT_STARTED",
                             "Process window sampling has not completed.");
                 }
             }
-            runtime.put("setupEvidence", ProcessSampler.named("setupEvidence", "observation", "array", setupEvidence));
-            runtime.put("publicReadinessSamples", ProcessSampler.named("public host readiness and pressure samples",
-                    "observation", "array", List.copyOf(publicStateSamples)));
-            runtime.put("errors", ProcessSampler.named("firstErrors", "observation", "array", List.copyOf(errors)));
-            runtime.put("activeHandlers", ProcessSampler.named("application active handlers", "count", "integer",
-                    DecimalText.of(activeHandlers)));
+            runtime.put(
+                    "setupEvidence",
+                    ProcessSampler.named("setupEvidence", "observation", "array", setupEvidence));
+            runtime.put(
+                    "publicReadinessSamples",
+                    ProcessSampler.named(
+                            "public host readiness and pressure samples",
+                            "observation",
+                            "array",
+                            List.copyOf(publicStateSamples)));
+            runtime.put(
+                    "errors",
+                    ProcessSampler.named(
+                            "firstErrors", "observation", "array", List.copyOf(errors)));
+            runtime.put(
+                    "activeHandlers",
+                    ProcessSampler.named(
+                            "application active handlers",
+                            "count",
+                            "integer",
+                            DecimalText.of(activeHandlers)));
             Map<String, Object> window = new LinkedHashMap<>();
             window.put("startedAtUnixMs", startUnix);
             window.put("endedAtUnixMs", endUnix);
             window.put("startTicks", start == 0 ? null : DecimalText.of(start));
             window.put("endTicks", end == 0 ? null : DecimalText.of(end));
             window.put("measuredSeconds", seconds);
-            window.forEach((key, value) -> {
-                if (value == null) {
-                    reasons.put("/window/" + key, new NullReason("PHASE_NOT_STARTED", "Measurement window has not completed."));
-                }
-            });
-            for (String key : List.of("alignmentMethod", "maxErrorNs", "validFromTicks", "validThroughTicks")) {
-                reasons.put("/clock/" + key, new NullReason("NOT_APPLICABLE", "RTT uses the caller process clock only."));
+            window.forEach(
+                    (key, value) -> {
+                        if (value == null) {
+                            reasons.put(
+                                    "/window/" + key,
+                                    new NullReason(
+                                            "PHASE_NOT_STARTED",
+                                            "Measurement window has not completed."));
+                        }
+                    });
+            for (String key :
+                    List.of(
+                            "alignmentMethod",
+                            "maxErrorNs",
+                            "validFromTicks",
+                            "validThroughTicks")) {
+                reasons.put(
+                        "/clock/" + key,
+                        new NullReason(
+                                "NOT_APPLICABLE", "RTT uses the caller process clock only."));
             }
             if (publicStatus == null) {
-                reasons.put("/publicStatus", new NullReason("NOT_APPLICABLE", "The client has no Framework host runtime."));
+                reasons.put(
+                        "/publicStatus",
+                        new NullReason(
+                                "NOT_APPLICABLE", "The client has no Framework host runtime."));
             }
             List<Map<String, Object>> serialized = new ArrayList<>();
             int index = 0;
@@ -656,9 +908,11 @@ public final class Measurement {
                 row.put("logicalPayloadBytes", DecimalText.of(workload.payloadSize()));
                 row.put("observedSerializedBytes", null);
                 serialized.add(row);
-                reasons.put("/serializedMessageBytes/" + index + "/observedSerializedBytes", new NullReason(
-                        "PUBLIC_OBSERVATION_UNSUPPORTED",
-                        "No public per-DTO serialized byte observation; the measured message is serialized once by the Framework."));
+                reasons.put(
+                        "/serializedMessageBytes/" + index + "/observedSerializedBytes",
+                        new NullReason(
+                                "PUBLIC_OBSERVATION_UNSUPPORTED",
+                                "No public per-DTO serialized byte observation; the measured message is serialized once by the Framework."));
                 index++;
             }
             Map<String, Object> provenance = new LinkedHashMap<>(config.provenance());
@@ -677,11 +931,28 @@ public final class Measurement {
             executor.put("commonPoolParallelism", ForkJoinPool.commonPool().getParallelism());
             executor.put("maxHeapBytes", DecimalText.of(Runtime.getRuntime().maxMemory()));
             executor.put("liveThreadCount", ManagementFactory.getThreadMXBean().getThreadCount());
-            executor.put("inputArguments", ManagementFactory.getRuntimeMXBean().getInputArguments());
+            executor.put(
+                    "inputArguments", ManagementFactory.getRuntimeMXBean().getInputArguments());
             provenance.put("executor", executor);
-            PerfSnapshot snapshot = new PerfSnapshot(config.runId(), config.cellId(), resetSeq, config.language(), config.role(),
-                    config.roleInstance(), config.configHash(), phase, window, PerfClock.metadata(), serialized,
-                    metrics, histograms, reasons, publicStatus, runtime, provenance);
+            PerfSnapshot snapshot =
+                    new PerfSnapshot(
+                            config.runId(),
+                            config.cellId(),
+                            resetSeq,
+                            config.language(),
+                            config.role(),
+                            config.roleInstance(),
+                            config.configHash(),
+                            phase,
+                            window,
+                            PerfClock.metadata(),
+                            serialized,
+                            metrics,
+                            histograms,
+                            reasons,
+                            publicStatus,
+                            runtime,
+                            provenance);
             Consumer<PerfSnapshot> enrich = enrichSnapshot;
             if (enrich != null) {
                 enrich.accept(snapshot);
@@ -697,5 +968,4 @@ public final class Measurement {
             return "unknown";
         }
     }
-
 }
