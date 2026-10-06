@@ -260,9 +260,10 @@ Subscriber는 `role=subscriber`, `roleInstance=subscriberId`로 각각 한 항�
   queue 대기는 latency에 들어가야 하고, 고정된 짧은 deadline으로 실패를 만들면 포화 상태를 잴 수 없기
   때문이다. Measured window가 끝날 때 terminal이 아닌 operation은 §4.1대로 `inflightAtEnd`로만 센다.
 - Setup 값은 공통 runner와 준비 caller, admin 값은 HTTP client가 소비한다. Send에는 시간 상한이 없다.
-- Classic fanout publisher의 public socket 송신 timeout은 `drainTimeoutMs`로 설정하고 실제 값을
-  기록한다([설정 소유 계약][submit]). `NoDrop` publish의 admission 대기도 위와 같은 이유로 실패가 아니라
-  latency로 재기 때문이다.
+- Classic fanout publisher의 public socket 송신 timeout은 warmup·measured 시간과 `drainTimeoutMs`를 더한
+  값으로 설정하고 실제 값을 기록한다([설정 소유 계약][submit]). Socket 설정은 호출마다 바꿀 수 없으므로,
+  가장 먼저 시작한 publish도 측정 call deadline 전에 timeout되지 않게 하는 값이다. `NoDrop` publish의
+  admission 대기도 위와 같은 이유로 실패가 아니라 latency로 잰다.
 
 Worker config에는 `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
 `idleTimeoutMs=60000`과 executor의 실효 제한을 기록한다. Worker call의 timeout은 위의 측정 call deadline이다.
@@ -1199,7 +1200,7 @@ Application latency histogram은 다음 형식을 사용한다. Public provider�
 {
   "unit": "ms",
   "ticksUnit": "ns",
-  "bounds": [0.01, 0.0125, 0.016, 0.02, 0.025, 0.0315, 0.04, 0.05, 0.063, 0.08, 0.1, …, 800, 1000],
+  "bounds": [0.01, 0.0125, 0.016, 0.02, 0.025, 0.0315, 0.04, 0.05, 0.063, 0.08, 0.1, …, 80000, 100000],
   "counts": ["0", …],
   "overflow": "0",
   "count": "0",
@@ -1210,7 +1211,9 @@ Application latency histogram은 다음 형식을 사용한다. Public provider�
 ```
 
 - **Bounds는 `framework/perf/schema/histogram-bounds.json` 한 곳이 소유한다.** 0.01ms부터 decade마다
-  R10 수열 `1, 1.25, 1.6, 2, 2.5, 3.15, 4, 5, 6.3, 8`배로 800ms까지 두고 마지막 상한은 1000ms다(51개). 이웃 상한의
+  R10 수열 `1, 1.25, 1.6, 2, 2.5, 3.15, 4, 5, 6.3, 8`배로 80000ms까지 두고 마지막 상한은 100000ms다(71개).
+  §5.2의 측정 call deadline 아래에서 queue 대기를 포함한 성공 latency가 측정 구간과 drain 한도만큼 길어질 수
+  있으므로 상한이 그 길이를 넘어야 한다. 이웃 상한의
   비는 최대 약 1.28이므로 bucket 상한 추정값은 그 bucket의 실제 값보다 최대 약 28% 클 수 있다.
   Runner와 언어 role은 이 파일을 읽고 값을 다시 적지 않는다.
 - **Bucket는 `[0,b0]`, 이후 `(b[i-1],b[i]]`이며 누적 count가 아니다.** 같은 sample이

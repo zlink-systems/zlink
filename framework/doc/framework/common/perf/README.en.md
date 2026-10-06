@@ -272,9 +272,11 @@ config.
   window ends count only as `inflightAtEnd`, per §4.1.
 - Setup values are consumed by the shared runner and setup callers, and admin values by HTTP clients.
   Sends have no time limit.
-- Set the Classic fanout publisher's public socket send timeout to `drainTimeoutMs` and record the
-  actual value ([owning contract][submit]). For the same reason, `NoDrop` publish admission waiting is
-  measured as latency rather than turned into failures.
+- Set the Classic fanout publisher's public socket send timeout to the warmup and measured durations
+  plus `drainTimeoutMs`, and record the actual value ([owning contract][submit]). A socket setting cannot
+  change per call, so this value keeps even the first publish from timing out before the measured-call
+  deadline. For the same reason, `NoDrop` publish admission waiting is measured as latency rather than
+  turned into failures.
 
 Worker config records `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
 `idleTimeoutMs=60000` and effective executor limits. The worker call timeout is the measured-call
