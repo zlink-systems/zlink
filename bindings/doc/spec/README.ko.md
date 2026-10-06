@@ -1066,17 +1066,13 @@ Raw builder는 `routerSocket.request(rid).message(part).submit()`처럼 사용�
   모든 바인딩에서 typed context option으로 노출한다. Byte 입력 `0`은 각각 명시 memory
   limit 또는 수동 Core budget이 없다는 뜻이며 binding은 profile 비율이나 queue별 HWM을
   계산하지 않는다.
-- 입력 우선순위는 수동 Core budget, 명시 memory limit, binding이 감지한 runtime memory
-  limit, Core fallback 순서다. 앞의 두 값을 사용자가 지정하면 binding은 runtime hint를
-  자동 감지하지 않는다. .NET은 GC의 사용 가능 메모리 한도, Java는 JVM 최대 heap,
-  Node.js는 V8 heap limit, Go는 유한한 runtime memory limit을 hint 후보로 사용한다.
-  C++와 Rust는 별도 runtime hint를 만들지 않고, Python은 별도 VM hard limit을 명확히
-  얻을 수 있을 때만 전달한다. Binding은 hint와 Core hard limit을 직접 합치거나 profile
-  비율을 적용하지 않는다.
+- Binding은 managed heap 한도(GC·JVM·V8 등)를 Core에 전달하지 않는다. Memory 입력의
+  우선순위와 연결 수용 기준은 [Core Auto HWM §2](../../../core/doc/spec/core/systems/06-auto-hwm.ko.md#2-auto-hwm-budget-계산)를
+  따른다. Binding은 profile 비율을 적용하지 않는다.
 - Core가 finite hard limit을 감지했을 때 명시 memory limit 또는 수동 Core budget이 이를
   넘으면 binding은 Core의 `EINVAL`을 그대로 전달하고 값을 clamp하지 않는다.
 - Context budget snapshot은 Core ABI v1의 version과 struct size를 포함해 다음 canonical
-  범위를 단위 변환 없이 노출한다: configured/runtime/resolved memory limit, configured/effective
+  범위를 단위 변환 없이 노출한다: configured/resolved memory limit, configured/effective
   Core budget, planned/applied/manual-reserved HWM, Core queue/application/current/peak/provisional
   accounted byte, completion current/peak/pending과 total messaging byte, monitor queue와 instance
   aggregate, active application/completion queue count, outstanding application lease count,
@@ -1090,7 +1086,7 @@ Raw builder는 `routerSocket.request(rid).message(part).submit()`처럼 사용�
 
   ```text
   abiVersion, structSize
-  configuredMemoryLimitBytes, runtimeMemoryLimitBytes, resolvedMemoryLimitBytes
+  configuredMemoryLimitBytes, resolvedMemoryLimitBytes
   configuredCoreBudgetBytes, effectiveCoreBudgetBytes
   totalPlannedHwmBytes, totalAppliedHwmBytes, manualReservedHwmBytes
   coreQueueAccountedBytes, applicationAccountedBytes

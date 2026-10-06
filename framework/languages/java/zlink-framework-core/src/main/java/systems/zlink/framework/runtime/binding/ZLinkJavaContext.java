@@ -25,11 +25,6 @@ record ZLinkJavaContext(Context nativeContext) implements ZLinkBackendContext {
             nativeContext
                     .options()
                     .coreHwmMemoryLimitBytes(options.coreHwmMemoryLimitBytes().getAsLong());
-        } else {
-            long runtimeMemoryHint = Runtime.getRuntime().maxMemory();
-            if (runtimeMemoryHint > 0 && runtimeMemoryHint < Long.MAX_VALUE) {
-                nativeContext.options().coreHwmMemoryLimitBytes(runtimeMemoryHint);
-            }
         }
         if (options.coreHwmBudgetBytes().isPresent()) {
             nativeContext.options().coreHwmBudgetBytes(options.coreHwmBudgetBytes().getAsLong());

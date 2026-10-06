@@ -60,8 +60,9 @@ bool is_request_dispatch (handler_dispatch_kind_t kind)
 
 struct filter_next_state_t
 {
-    runtime::offload_executor_t lane_executor;
-    runtime::state_lane_t lane{lane_executor};
+    std::shared_ptr<runtime::offload_executor_t> lane_executor{
+      detail::handler_invocation_executor ()};
+    runtime::state_lane_t lane{*lane_executor};
     bool called = false;
     bool duplicate = false;
     std::optional<result_t<zlink::message_t>> downstream;

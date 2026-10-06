@@ -248,10 +248,6 @@ struct socket_monitor_runtime_t
                                  uint32_t *ready_count_out_,
                                  uint64_t transport_pair_id_ = 0,
                                  uint64_t transport_pair_generation_ = 0);
-    bool erase_ready_connection_for_endpoint (const endpoint_uri_pair_t &endpoint_uri_pair_,
-                                              uint32_t *ready_count_out_,
-                                              uint64_t transport_pair_id_ = 0,
-                                              uint64_t transport_pair_generation_ = 0);
     bool mark_transport_pair_lane_ready (
       const endpoint_uri_pair_t &endpoint_uri_pair_,
       transport_lane_t lane_,

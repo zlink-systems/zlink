@@ -686,7 +686,7 @@ handoff payload는 source memory에서 target으로 직접 전송한다. Store�
 `configure_inbound_dispatch()`는 Core HWM과 Application Job Queue 설정을 반환한다. C++의 기존
 `configure_core_hwm()`은 Core-only 설정 surface로 유지되지만 job profile·manual cap·80/60 pressure
 threshold는 inbound-dispatch surface만 소유한다. Core memory limit·manual budget·profile은 Core에
-그대로 전달하며 C++은 managed-runtime hint를 만들지 않는다. 두 surface의 Core HWM 항목은 동일한
+그대로 전달한다. 두 surface의 Core HWM 항목은 동일한
 startup 상태를 보는 호환 view이며 별도 profile이나 controller를 만들지 않는다. Core profile과 job
 queue profile의 기본값은 각각 `balanced`지만 서로 독립된 enum과 계산이다. Manual job cap은
 `1..2,147,483,647`이고 생략하면 common spec의 startup CPU snapshot과 32/64/128/256 계수로 계산한다.

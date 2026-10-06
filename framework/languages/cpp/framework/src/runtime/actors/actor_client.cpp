@@ -7,6 +7,7 @@
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/execution/task_result.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/handlers/handler_registry_runtime.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
@@ -91,8 +92,8 @@ class actor_create_call_state_t
     bool request_set = false;
     bool timeout_set = false;
     bool submitted = false;
-    runtime::offload_executor_t lane_executor;
-    runtime::state_lane_t lane{lane_executor};
+    std::shared_ptr<runtime::offload_executor_t> lane_executor{handler_invocation_executor ()};
+    runtime::state_lane_t lane{*lane_executor};
 };
 } // namespace detail
 

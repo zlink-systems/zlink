@@ -795,8 +795,7 @@ timeout. Both options can be changed only before host start.
 `configure_inbound_dispatch()` returns the Core HWM and application-job-queue settings. The
 existing C++ `configure_core_hwm()` remains a Core-only surface, while the job profile, manual
 cap, and 80/60 pressure thresholds are owned only by the inbound-dispatch surface. Core memory
-limit, manual budget, and profile are forwarded unchanged; C++ supplies no managed-runtime
-hint. The Core HWM fields on the two surfaces are compatibility views of the same startup state;
+limit, manual budget, and profile are forwarded unchanged. The Core HWM fields on the two surfaces are compatibility views of the same startup state;
 they do not create separate profiles or controllers. The Core and job-queue profiles both default
 to `balanced` but are independent enums and calculations. Manual job cap is `1..2,147,483,647`;
 omission uses the common startup CPU snapshot
