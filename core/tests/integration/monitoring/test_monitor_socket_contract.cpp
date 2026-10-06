@@ -15,15 +15,109 @@
 #include <winsock2.h>
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
 #endif
 
-SETUP_TEARDOWN_TESTCONTEXT
+namespace
+{
+bool restore_subscriber_fd_budget ();
+}
+
+void setUp ()
+{
+    setup_test_context ();
+}
+
+void tearDown ()
+{
+    const bool restored = restore_subscriber_fd_budget ();
+    teardown_test_context ();
+    TEST_ASSERT_TRUE_MESSAGE (restored, "failed to restore RLIMIT_NOFILE");
+}
 
 namespace
 {
+#if !defined(ZLINK_HAVE_WINDOWS)
+struct subscriber_fd_budget_t
+{
+    subscriber_fd_budget_t () : changed (false)
+    {
+        memset (&original, 0, sizeof (original));
+    }
+
+    bool restore ()
+    {
+        if (!changed)
+            return true;
+        if (setrlimit (RLIMIT_NOFILE, &original) != 0)
+            return false;
+        changed = false;
+        return true;
+    }
+
+    int raise_for_pubsub_subscribers (size_t subscriber_count_,
+                                      rlim_t *required_out_)
+    {
+        if (getrlimit (RLIMIT_NOFILE, &original) != 0)
+            return -1;
+
+        // Each SUB uses one mailbox eventfd and one TCP client fd. The PUB
+        // owns one accepted TCP fd per subscriber; 64 more slots cover the
+        // context, PUB, monitor, listener, and test process.
+        const rlim_t fixed_reserve = 64;
+        const rlim_t subscriber_fds =
+          static_cast<rlim_t> (subscriber_count_) * 3;
+        const rlim_t required_fds = subscriber_fds + fixed_reserve;
+        rlim_t required_soft = required_fds;
+        for (;;) {
+            rlim_t open_fds = 0;
+            for (rlim_t fd = 0; fd < required_soft; ++fd) {
+                errno = 0;
+                if (fcntl (static_cast<int> (fd), F_GETFD) != -1)
+                    ++open_fds;
+                else if (errno != EBADF)
+                    return -1;
+            }
+            const rlim_t next_required_soft = required_fds + open_fds;
+            if (next_required_soft == required_soft)
+                break;
+            required_soft = next_required_soft;
+        }
+
+        *required_out_ = required_soft;
+        if (required_soft > original.rlim_max)
+            return 1;
+        if (required_soft <= original.rlim_cur)
+            return 0;
+
+        struct rlimit raised = original;
+        raised.rlim_cur = required_soft;
+        if (setrlimit (RLIMIT_NOFILE, &raised) != 0)
+            return -1;
+        changed = true;
+        return 0;
+    }
+
+    struct rlimit original;
+    bool changed;
+};
+subscriber_fd_budget_t subscriber_fd_budget;
+
+bool restore_subscriber_fd_budget ()
+{
+    return subscriber_fd_budget.restore ();
+}
+#else
+bool restore_subscriber_fd_budget ()
+{
+    return true;
+}
+#endif
+
 static const size_t stream_routing_id_size = 4;
 
 
@@ -1042,6 +1136,23 @@ void test_pubsub_delivery_ready_reaches_1000_subscribers ()
 {
     const size_t expected_subscribers = 1000;
     const int timeout_ms = 60000;
+#if !defined(ZLINK_HAVE_WINDOWS)
+    rlim_t required_soft = 0;
+    const int limit_result =
+      subscriber_fd_budget.raise_for_pubsub_subscribers (
+        expected_subscribers, &required_soft);
+    if (limit_result == 1) {
+        const std::string skip_reason =
+          "requires RLIMIT_NOFILE soft limit " + std::to_string (required_soft)
+          + ", hard limit is "
+          + std::to_string (subscriber_fd_budget.original.rlim_max);
+        TEST_IGNORE_MESSAGE (skip_reason.c_str ());
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE (0, limit_result,
+                                   "failed to raise RLIMIT_NOFILE");
+#else
+    TEST_IGNORE_MESSAGE ("1000-subscriber test requires POSIX RLIMIT_NOFILE");
+#endif
     void *ctx = zlink_ctx_new ();
     TEST_ASSERT_NOT_NULL (ctx);
     TEST_ASSERT_SUCCESS_ERRNO (
@@ -1095,6 +1206,8 @@ void test_pubsub_delivery_ready_reaches_1000_subscribers ()
         close_zero_linger (subs[i]);
     close_zero_linger (pub);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
+    TEST_ASSERT_TRUE_MESSAGE (restore_subscriber_fd_budget (),
+                              "failed to restore RLIMIT_NOFILE");
 }
 
 void test_stream_ready_with_monitor_recv_and_socket_recv ()
