@@ -552,14 +552,15 @@ inline int poll_connect_ready_count (connect_monitor_t &mon, int ready = 0)
     return ready;
 }
 
-inline bool wait_connect_ready_count (connect_monitor_t &mon, size_t expected_ready, int timeout_ms)
+inline bool wait_connect_ready_count (connect_monitor_t &mon, size_t expected_ready,
+                                      int timeout_ms, int already_ready = 0)
 {
     if (expected_ready == 0)
         return true;
     if (!mon.monitor.get ())
         return false;
 
-    size_t ready = static_cast<size_t> (poll_connect_ready_count (mon));
+    size_t ready = static_cast<size_t> (poll_connect_ready_count (mon, already_ready));
     if (ready >= expected_ready)
         return true;
     if (timeout_ms <= 0)

@@ -152,18 +152,27 @@ final class PerfTransport {
                                     MonitorEventType expectedEvent,
                                     int expectedCount, Duration timeout,
                                     String label) {
-        waitForMonitorEventWithActivity(monitor, null, expectedEvent,
-            expectedCount, timeout, label);
+        beginMonitorEventWait(monitor, expectedEvent, expectedCount)
+            .await(timeout, label);
     }
 
-    static void waitForMonitorEventWithActivity(SocketMonitor monitor,
-                                                Socket activitySocket,
-                                                MonitorEventType expectedEvent,
-                                                int expectedCount,
-                                                Duration timeout,
-                                                String label) {
-        CountDownLatch done = new CountDownLatch(1);
-        AtomicReference<Throwable> failure = new AtomicReference<>();
+    static final class MonitorEventWait {
+        final CountDownLatch done = new CountDownLatch(1);
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        void await(Duration timeout, String label) {
+            PerfTransport.await(done, label, timeout);
+            Throwable error = failure.get();
+            if (error != null) {
+                throw new IllegalStateException(label + " failed", error);
+            }
+        }
+    }
+
+    static MonitorEventWait beginMonitorEventWait(SocketMonitor monitor,
+                                                   MonitorEventType expectedEvent,
+                                                   int expectedCount) {
+        MonitorEventWait wait = new MonitorEventWait();
         Thread waiter = new Thread(() -> {
             try {
                 long seen = 0;
@@ -175,30 +184,42 @@ final class PerfTransport {
                     seen = event.value();
                 }
             } catch (Throwable ex) {
-                failure.compareAndSet(null, ex);
+                wait.failure.compareAndSet(null, ex);
             } finally {
-                done.countDown();
+                wait.done.countDown();
             }
         }, "perf-monitor-wait");
         waiter.setDaemon(true);
         waiter.start();
+        return wait;
+    }
+
+    static void waitForMonitorEventWithActivity(SocketMonitor monitor,
+                                                Socket activitySocket,
+                                                MonitorEventType expectedEvent,
+                                                int expectedCount,
+                                                Duration timeout,
+                                                String label) {
+        MonitorEventWait wait = beginMonitorEventWait(monitor, expectedEvent,
+            expectedCount);
         if (activitySocket == null) {
-            await(done, label, timeout);
+            wait.await(timeout, label);
+            return;
         } else {
             long deadline = System.nanoTime() + Math.max(1L, timeout.toNanos());
             try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(List.of(activitySocket),
                      systems.zlink.contracts.eventing.PollEventFlags.POLLIN)) {
-                while (done.getCount() != 0 && System.nanoTime() < deadline) {
+                while (wait.done.getCount() != 0 && System.nanoTime() < deadline) {
                     long remainingMillis = Math.max(1L,
                         (deadline - System.nanoTime()) / 1_000_000L);
                     pollSet.poll((int) Math.min(10L, remainingMillis));
                 }
             }
-            if (done.getCount() != 0) {
+            if (wait.done.getCount() != 0) {
                 throw new IllegalStateException(label + " timed out");
             }
         }
-        Throwable error = failure.get();
+        Throwable error = wait.failure.get();
         if (error != null) {
             throw new IllegalStateException(label + " failed", error);
         }
