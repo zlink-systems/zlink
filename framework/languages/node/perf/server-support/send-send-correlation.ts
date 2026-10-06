@@ -10,7 +10,12 @@ import { ScenarioMetrics } from './scenario-metrics';
 //
 // Order of one operation: register (right before the first public send, fixing the expiry deadline), then
 // firstSendEnded with that send's terminal, then completeAsync for the final result. The return handler calls reply.
-enum State { Pending, Succeeded, Failed, Expired }
+enum State {
+  Pending,
+  Succeeded,
+  Failed,
+  Expired
+}
 
 export class CorrelationEntry {
   state = State.Pending;
@@ -19,9 +24,15 @@ export class CorrelationEntry {
   readonly result: Promise<Error | undefined>;
   private resolveResult!: (error: Error | undefined) => void;
 
-  constructor(request: PerfEchoRequest, readonly startedTicks: bigint, readonly expiresAtTicks: bigint) {
+  constructor(
+    request: PerfEchoRequest,
+    readonly startedTicks: bigint,
+    readonly expiresAtTicks: bigint
+  ) {
     this.request = request;
-    this.result = new Promise((resolve) => { this.resolveResult = resolve; });
+    this.result = new Promise((resolve) => {
+      this.resolveResult = resolve;
+    });
   }
 
   close(state: State, error: Error | undefined, closedTicks = PerfClock.now()): boolean {
@@ -37,15 +48,25 @@ export class CorrelationEntry {
 export class SendSendCorrelation {
   private entries = new Map<string, CorrelationEntry>();
 
-  constructor(private readonly measurement: Measurement, private readonly metrics: ScenarioMetrics) {
-    metrics.counters('messages.admitted', 'messages.expired', 'messages.duplicateReply', 'messages.lateReply', 'messages.unknownCorrelation');
+  constructor(
+    private readonly measurement: Measurement,
+    private readonly metrics: ScenarioMetrics
+  ) {
+    metrics.counters(
+      'messages.admitted',
+      'messages.expired',
+      'messages.duplicateReply',
+      'messages.lateReply',
+      'messages.unknownCorrelation'
+    );
     metrics.onReset(() => this.entries.clear());
   }
 
   register(request: PerfEchoRequest, startedTicks: bigint): CorrelationEntry {
-    const expires = PerfClock.now() + BigInt(this.measurement.config.workload.correlationExpiryMs) * 1_000_000n;
+    const expires = this.measurement.callDeadlineTicks();
     const entry = new CorrelationEntry(request, startedTicks, expires);
-    if (this.entries.has(request.correlationId)) throw new PerfValidationException('IdentityMismatch', 'A correlationId was issued twice.');
+    if (this.entries.has(request.correlationId))
+      throw new PerfValidationException('IdentityMismatch', 'A correlationId was issued twice.');
     this.entries.set(request.correlationId, entry);
     return entry;
   }
@@ -61,13 +82,17 @@ export class SendSendCorrelation {
     if (this.expireIfDue(entry, now)) return;
     if (error === undefined || error === null) {
       if (this.measurement.phase !== 'setup') this.metrics.count('messages.admitted');
-    } else entry.close(State.Failed, error instanceof Error ? error : new Error(String(error)), now);
+    } else
+      entry.close(State.Failed, error instanceof Error ? error : new Error(String(error)), now);
   }
 
   // The return handler's one call: the reply's identity and payload decide the first result.
   reply(reply: PerfEchoReply): void {
     const entry = this.entries.get(reply.correlationId);
-    if (!entry) { this.metrics.count('messages.unknownCorrelation'); return; }
+    if (!entry) {
+      this.metrics.count('messages.unknownCorrelation');
+      return;
+    }
     const request = entry.request;
     let invalid: Error | undefined;
     if (request !== undefined) {
@@ -82,20 +107,26 @@ export class SendSendCorrelation {
     const now = PerfClock.now();
     this.expireIfDue(entry, now);
     if (!entry.close(invalid === undefined ? State.Succeeded : State.Failed, invalid, now))
-      this.metrics.count(entry.state === State.Succeeded ? 'messages.duplicateReply' : 'messages.lateReply');
+      this.metrics.count(
+        entry.state === State.Succeeded ? 'messages.duplicateReply' : 'messages.lateReply'
+      );
   }
 
   // The final result once the first send has ended: the first result of the correlation, or its expiry. The time is
   // when that result was fixed, so an echo seen before the first send's terminal keeps its own time.
-  async completeAsync(entry: CorrelationEntry): Promise<{ error: Error | undefined; completedTicks: bigint }> {
+  async completeAsync(
+    entry: CorrelationEntry
+  ): Promise<{ error: Error | undefined; completedTicks: bigint }> {
     const now = PerfClock.now();
     this.expireIfDue(entry, now);
     const remainingMs = Math.max(0, Number(entry.expiresAtTicks - now) / 1e6);
     let timer: NodeJS.Timeout | undefined;
-    const expired = new Promise<'expired'>((resolve) => { timer = setTimeout(() => {
-      this.expireIfDue(entry, PerfClock.now());
-      resolve('expired');
-    }, Math.ceil(remainingMs)); });
+    const expired = new Promise<'expired'>((resolve) => {
+      timer = setTimeout(() => {
+        this.expireIfDue(entry, PerfClock.now());
+        resolve('expired');
+      }, Math.ceil(remainingMs));
+    });
     const winner = await Promise.race([entry.result.then(() => 'closed' as const), expired]);
     clearTimeout(timer);
     if (winner === 'expired') this.expireIfDue(entry, PerfClock.now());
@@ -104,7 +135,16 @@ export class SendSendCorrelation {
 
   private expireIfDue(entry: CorrelationEntry, now: bigint): boolean {
     if (entry.state !== State.Pending || now < entry.expiresAtTicks) return false;
-    if (entry.close(State.Expired, new PerfValidationException('CorrelationExpired', 'No return send arrived before the correlation deadline.'), now))
+    if (
+      entry.close(
+        State.Expired,
+        new PerfValidationException(
+          'CorrelationExpired',
+          'No return send arrived before the correlation deadline.'
+        ),
+        now
+      )
+    )
       this.metrics.count('messages.expired');
     return true;
   }

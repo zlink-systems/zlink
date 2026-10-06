@@ -102,7 +102,12 @@ export interface NullReason {
   lowerBoundMs: number | null;
 }
 
-export function nullReason(code: string, reason: string, owner = 'perf/README.ko.md', lowerBoundMs: number | null = null): NullReason {
+export function nullReason(
+  code: string,
+  reason: string,
+  owner = 'perf/README.ko.md',
+  lowerBoundMs: number | null = null
+): NullReason {
   return { code, reason, owner, lowerBoundMs };
 }
 
@@ -137,14 +142,11 @@ export interface Workload {
   payloadSize: number;
   durationSeconds: number;
   warmupSeconds: number;
-  inflight: number;
   connections: number | null;
   logicalStreams: number | null;
   clientCount: number;
   connectConcurrency: number | null;
-  requestTimeoutMs: number;
-  correlationExpiryMs: number;
-  driverTimeoutMs: number;
+  drainTimeoutMs: number;
   setupTimeoutMs: number;
   adminTimeoutMs: number;
   socketSendTimeoutMs: number;
@@ -165,7 +167,6 @@ export interface WorkerConfig {
   minThreads: number;
   maxThreads: number;
   idleTimeoutMs: number;
-  workerTimeoutMs: number;
 }
 
 export interface DiagnosticsConfig {
@@ -247,20 +248,26 @@ export class PerfValidationException extends Error {
 export const DecimalText = {
   of: (value: number | bigint): string => value.toString(),
   u64(text: unknown): bigint {
-    if (typeof text !== 'string' || !/^(0|[1-9][0-9]*)$/.test(text)) throw new PerfValidationException('SchemaMismatch', 'Noncanonical U64 decimal string.');
+    if (typeof text !== 'string' || !/^(0|[1-9][0-9]*)$/.test(text))
+      throw new PerfValidationException('SchemaMismatch', 'Noncanonical U64 decimal string.');
     const value = BigInt(text);
-    if (value > 18446744073709551615n) throw new PerfValidationException('SchemaMismatch', 'U64 overflow.');
+    if (value > 18446744073709551615n)
+      throw new PerfValidationException('SchemaMismatch', 'U64 overflow.');
     return value;
   },
   i64(text: unknown): bigint {
-    if (typeof text !== 'string' || !/^(0|-?[1-9][0-9]*)$/.test(text)) throw new PerfValidationException('SchemaMismatch', 'Noncanonical I64 decimal string.');
+    if (typeof text !== 'string' || !/^(0|-?[1-9][0-9]*)$/.test(text))
+      throw new PerfValidationException('SchemaMismatch', 'Noncanonical I64 decimal string.');
     const value = BigInt(text);
-    if (value > 9223372036854775807n || value < -9223372036854775808n) throw new PerfValidationException('SchemaMismatch', 'I64 overflow.');
+    if (value > 9223372036854775807n || value < -9223372036854775808n)
+      throw new PerfValidationException('SchemaMismatch', 'I64 overflow.');
     return value;
   }
 };
 
 // Application admin/config/result JSON: bigint and Date are written as the §15.2 text, never a JSON number.
 export function toJson(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => (typeof item === 'bigint' ? item.toString() : item));
+  return JSON.stringify(value, (_key, item: unknown) =>
+    typeof item === 'bigint' ? item.toString() : item
+  );
 }
