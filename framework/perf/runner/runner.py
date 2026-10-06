@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+from urllib.parse import urlsplit
 import urllib.request
 import uuid
 
@@ -377,6 +378,34 @@ def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell:
     return list(observed.values())
 
 
+def publish_listener_endpoints(role: dict, ready: dict) -> None:
+    """Replace wildcard listener addresses with the role's public bound endpoints."""
+    configured = role["transportEndpoints"]
+    event = next(
+        (
+            item
+            for item in ready.get("evidence", [])
+            if item.get("kind") == "boundTransportEndpoints"
+        ),
+        None,
+    )
+    actual = event.get("observedValue") if event is not None else {}
+    identity = f"{role['role']}-{role['roleInstance']}"
+    if not isinstance(actual, dict) or set(actual) != set(configured):
+        raise RuntimeError(f"Role {identity} reported an incomplete transport endpoint map.")
+    for key, endpoint in actual.items():
+        if not isinstance(endpoint, str):
+            raise RuntimeError(f"Role {identity} reported a non-text {key} endpoint.")
+        try:
+            port = urlsplit(endpoint).port
+        except ValueError as error:
+            raise RuntimeError(f"Role {identity} reported an invalid {key} endpoint.") from error
+        if port is None or port == 0:
+            raise RuntimeError(f"Role {identity} did not report the bound {key} endpoint.")
+    role["transportEndpoints"] = actual
+    role["streamEndpoint"] = actual.get("stream")
+
+
 def wait_roles_complete(owned: OwnedProcesses, roles: list[dict], workload: dict, deadline: float, stage: str) -> None:
     """Poll each role until its phase is complete, sharing the phase drain deadline (§4.1)."""
     pending = list(roles)
@@ -462,20 +491,68 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
                   if args.operation == "diagnostic" else None,
                   "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
                                  "loadedArtifactsFile": "loaded-artifacts.json", "commit": env["commit"], "serializer": env["serializer"],
-                                 "listenerReservation": "OS bind(127.0.0.1,0), held until this exact process starts"}}
+                                 "listenerReservation": "control HTTP ports are OS-reserved; Framework listeners bind wildcard ports"}}
         planned = plan_roles(cell_spec, values(scenario, args), common, language.stream_scheme, owned.reserve)
+        manifests = {}
         for role in planned:
-            write_json(cell / role.config_file, role.config)
             server_files.append(role.name + ".json")
-            roles.append({**role.manifest, "configFile": role.config_file})
-            owned.start(role.name, [*language.command(args.perf_dir, role.executable), "--config", str(cell / role.config_file)], role.ports)
+            manifest = {**role.manifest, "configFile": role.config_file}
+            manifests[role.name] = manifest
+            roles.append(manifest)
+
+        def start_role(role):
+            write_json(cell / role.config_file, role.config)
+            owned.start(
+                role.name,
+                [
+                    *language.command(args.perf_dir, role.executable),
+                    "--config",
+                    str(cell / role.config_file),
+                ],
+                role.ports,
+            )
+
+        peer_targets = {role.peer_target for role in planned if role.peer_target is not None}
+        for target in planned:
+            if target.name not in peer_targets:
+                continue
+            start_role(target)
+            target_manifest = manifests[target.name]
+            target_ready = wait_ready(
+                owned,
+                [target_manifest],
+                False,
+                cell,
+                "peer-" + target.name,
+                language,
+                config["workload"],
+            )[0]
+            publish_listener_endpoints(target_manifest, target_ready)
+            for dependent in planned:
+                if dependent.peer_target != target.name:
+                    continue
+                endpoint = target_manifest["transportEndpoints"].get(dependent.peer_endpoint_key)
+                if endpoint is None:
+                    raise RuntimeError(
+                        f"Role {target.name} did not publish peer listener "
+                        f"{dependent.peer_endpoint_key}."
+                    )
+                dependent.config["peerEndpoint"] = endpoint
+
+        for role in planned:
+            if role.name not in peer_targets:
+                start_role(role)
         manifest = {"runId": args.run_id, "cellId": cell_id, "configHash": config_hash, "language": args.language,
                     "workload": config["workload"],
                     "roles": roles, "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
                                                   "loadedArtifactsFile": "loaded-artifacts.json",
                                                   "commit": env["commit"], "serializer": env["serializer"]}}
+        readiness = wait_ready(owned, roles, False, cell, "infrastructure", language, config["workload"])
+        readiness_by_role = {(item["role"], item["roleInstance"]): item for item in readiness}
+        for role in roles:
+            identity = (role["role"], role["roleInstance"])
+            publish_listener_endpoints(role, readiness_by_role[identity])
         write_json(cell / "endpoints.json", manifest)
-        wait_ready(owned, roles, False, cell, "infrastructure", language, config["workload"])
         for index in range(config["workload"]["clientCount"]):
             name = f"client-{index}"
             process = owned.start(name, [*language.command(args.perf_dir, CLIENT), "--endpoint-config", str(cell / "endpoints.json"),

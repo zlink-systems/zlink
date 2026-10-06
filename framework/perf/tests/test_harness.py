@@ -17,7 +17,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runner"))
 from launchers import declared_framework_version, launcher
 from results import BOUNDS, MAX_U64, _validate_null_reasons, aggregate, export_latency, histogram_merge, u64, write_json
 from roles import plan_roles
-from runner import agreed_core_version, agreed_framework_version, build, comparison, options, role_executables, run_exit_code
+from runner import (
+    agreed_core_version,
+    agreed_framework_version,
+    build,
+    comparison,
+    options,
+    publish_listener_endpoints,
+    role_executables,
+    run_exit_code,
+)
 from scenarios import BY_NAME, ROLE_KINDS, SCENARIOS, expand
 from store import RunStore
 
@@ -264,6 +273,54 @@ class HarnessTests(unittest.TestCase):
         self.assertIn("libzlink.so", launcher("kotlin").loaded_artifact_markers)
         self.assertIn(".jar", launcher("kotlin").loaded_artifact_markers)
         self.assertIn("libzlink_framework.so", launcher("cpp").loaded_artifact_markers)
+
+    def test_framework_listener_uses_os_assigned_port_without_runner_rebind(self):
+        args = options(["single", "--scenario", "session-echo-only", *COMMON])
+        cell = expand(args, False)[0]
+        common = {
+            "runId": "r",
+            "cellId": "c",
+            "configHash": "a" * 64,
+            "language": "dotnet",
+            "workload": {},
+            "worker": None,
+            "store": None,
+            "diagnostics": lambda name: None,
+            "provenance": {},
+        }
+        ports = iter(range(20000, 30000))
+        role = plan_roles(
+            cell,
+            {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4},
+            common,
+            "tcp",
+            lambda: next(ports),
+        )[0]
+
+        self.assertEqual(role.config["transportEndpoints"]["stream"], "tcp://127.0.0.1:*")
+        self.assertEqual(role.ports, [20000, 20001])
+
+    def test_role_manifest_uses_publicly_reported_bound_endpoint(self):
+        role = {
+            "role": "session",
+            "roleInstance": 0,
+            "transportEndpoints": {"stream": "tcp://127.0.0.1:*"},
+            "streamEndpoint": "tcp://127.0.0.1:*",
+        }
+        ready = {
+            "evidence": [
+                {
+                    "kind": "boundTransportEndpoints",
+                    "source": "public Framework listener status",
+                    "observedValue": {"stream": "tcp://127.0.0.1:41005"},
+                }
+            ]
+        }
+
+        publish_listener_endpoints(role, ready)
+
+        self.assertEqual(role["transportEndpoints"], {"stream": "tcp://127.0.0.1:41005"})
+        self.assertEqual(role["streamEndpoint"], "tcp://127.0.0.1:41005")
 
     def test_planned_stream_endpoint_uses_the_launcher_scheme(self):
         args = options(["single", "--scenario", "session-echo-only", *COMMON])
