@@ -18,14 +18,12 @@ class ctx_auto_hwm_state_t
     void set_recalc_debounce_ms (int debounce_ms_);
     void set_profile (zlink_auto_hwm_profile_t profile_);
     bool set_memory_limit_bytes (uint64_t memory_limit_bytes_);
-    void set_runtime_memory_limit_bytes (uint64_t memory_limit_bytes_);
     bool set_core_budget_bytes (uint64_t budget_bytes_);
 
     bool enabled () const;
     int recalc_debounce_ms () const;
     zlink_auto_hwm_profile_t profile () const;
     uint64_t memory_limit_bytes () const;
-    uint64_t runtime_memory_limit_bytes () const;
     uint64_t core_budget_bytes () const;
     auto_hwm_budget_input_t budget_input () const;
 

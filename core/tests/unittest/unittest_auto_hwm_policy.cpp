@@ -26,13 +26,12 @@ void test_budget_input_priority_and_profile_ratio ()
     input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
     input.detected_physical_memory_bytes = 2000;
     input.detected_hard_limit_bytes = 800;
-    input.runtime_memory_limit_bytes = 600;
 
     zlink::auto_hwm_context_plan_t plan;
     zlink::auto_hwm_context_plan_make (input, &plan);
-    TEST_ASSERT_EQUAL_UINT64 (600, plan.resolved_memory_limit_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (800, plan.resolved_memory_limit_bytes);
     //  Balanced is 5%; the fixed cap (512 MiB) is far above the share.
-    TEST_ASSERT_EQUAL_UINT64 (30, plan.effective_core_budget_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (40, plan.effective_core_budget_bytes);
 
     input.configured_memory_limit_bytes = 700;
     zlink::auto_hwm_context_plan_make (input, &plan);

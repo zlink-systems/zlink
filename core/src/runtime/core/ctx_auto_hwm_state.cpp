@@ -132,8 +132,6 @@ zlink::ctx_auto_hwm_state_t::ctx_auto_hwm_state_t () :
     _input.profile = ZLINK_CTX_AUTO_HWM_PROFILE_DFLT;
     _input.configured_memory_limit_bytes =
       ZLINK_CTX_AUTO_HWM_MEMORY_LIMIT_BYTES_DFLT;
-    _input.runtime_memory_limit_bytes =
-      ZLINK_CTX_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES_DFLT;
     _input.configured_core_budget_bytes =
       ZLINK_CTX_AUTO_HWM_CORE_BUDGET_BYTES_DFLT;
     _input.detected_physical_memory_bytes = detected_physical_memory_bytes ();
@@ -171,11 +169,6 @@ bool zlink::ctx_auto_hwm_state_t::set_memory_limit_bytes (uint64_t memory_limit_
     return true;
 }
 
-void zlink::ctx_auto_hwm_state_t::set_runtime_memory_limit_bytes (uint64_t memory_limit_bytes_)
-{
-    _input.runtime_memory_limit_bytes = memory_limit_bytes_;
-}
-
 bool zlink::ctx_auto_hwm_state_t::set_core_budget_bytes (uint64_t budget_bytes_)
 {
     if (!valid_explicit_limit (budget_bytes_))
@@ -202,11 +195,6 @@ zlink_auto_hwm_profile_t zlink::ctx_auto_hwm_state_t::profile () const
 uint64_t zlink::ctx_auto_hwm_state_t::memory_limit_bytes () const
 {
     return _input.configured_memory_limit_bytes;
-}
-
-uint64_t zlink::ctx_auto_hwm_state_t::runtime_memory_limit_bytes () const
-{
-    return _input.runtime_memory_limit_bytes;
 }
 
 uint64_t zlink::ctx_auto_hwm_state_t::core_budget_bytes () const
@@ -305,8 +293,6 @@ void zlink::ctx_auto_hwm_state_t::record_applied_plan (
         _applied_plan.profile = plan_.profile;
         _applied_plan.configured_memory_limit_bytes =
           plan_.configured_memory_limit_bytes;
-        _applied_plan.runtime_memory_limit_bytes =
-          plan_.runtime_memory_limit_bytes;
         _applied_plan.resolved_memory_limit_bytes =
           plan_.resolved_memory_limit_bytes;
         _applied_plan.configured_core_budget_bytes =
@@ -351,7 +337,7 @@ void zlink::ctx_auto_hwm_state_t::copy_budget_snapshot (
     out_->budget_generation = _budget_generation;
     out_->measurement_epoch = _measurement_epoch;
     out_->configured_memory_limit_bytes = _applied_plan.configured_memory_limit_bytes;
-    out_->runtime_memory_limit_bytes = _applied_plan.runtime_memory_limit_bytes;
+    out_->runtime_memory_limit_bytes = 0;
     out_->resolved_memory_limit_bytes = _applied_plan.resolved_memory_limit_bytes;
     out_->configured_core_budget_bytes = _applied_plan.configured_core_budget_bytes;
     out_->effective_core_budget_bytes = _applied_plan.effective_core_budget_bytes;

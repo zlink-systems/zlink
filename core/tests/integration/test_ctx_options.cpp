@@ -272,10 +272,6 @@ void test_ctx_option_auto_hwm_defaults ()
       get_u64_context_option (
         get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES));
     TEST_ASSERT_EQUAL_UINT64 (
-      ZLINK_CTX_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES_DFLT,
-      get_u64_context_option (
-        get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES));
-    TEST_ASSERT_EQUAL_UINT64 (
       ZLINK_CTX_AUTO_HWM_CORE_BUDGET_BYTES_DFLT,
       get_u64_context_option (
         get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES));
@@ -313,18 +309,30 @@ void test_ctx_option_auto_hwm_round_trip ()
       zlink_ctx_get (get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_PROFILE, NULL));
 }
 
+void test_removed_runtime_memory_hint_option_is_unknown ()
+{
+    void *ctx = get_test_context ();
+    uint64_t value = 4096;
+    size_t size = sizeof (value);
+    const zlink_ctx_option_t removed = static_cast<zlink_ctx_option_t> (20);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INVALID_ARGUMENT,
+                          zlink_ctx_set_data (ctx, removed, &value, size));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INVALID_ARGUMENT,
+                          zlink_ctx_get_data (ctx, removed, &value, &size));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, read_auto_hwm_budget_snapshot (ctx).runtime_memory_limit_bytes);
+}
+
 void test_ctx_option_auto_hwm_memory_budget_round_trip_and_snapshot ()
 {
     void *ctx = get_test_context ();
     const uint64_t memory_limit = 16ull * 1024ull * 1024ull;
-    const uint64_t runtime_memory_limit = 8ull * 1024ull * 1024ull;
     const uint64_t core_budget = 4ull * 1024ull * 1024ull;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_ctx_set_data (ctx, ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES,
                           &memory_limit, sizeof (memory_limit)));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_ctx_set_data (ctx, ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES,
-                          &runtime_memory_limit, sizeof (runtime_memory_limit)));
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_ctx_set_data (ctx, ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES,
                           &core_budget, sizeof (core_budget)));
@@ -333,16 +341,12 @@ void test_ctx_option_auto_hwm_memory_budget_round_trip_and_snapshot ()
       memory_limit,
       get_u64_context_option (ctx, ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES));
     TEST_ASSERT_EQUAL_UINT64 (
-      runtime_memory_limit,
-      get_u64_context_option (
-        ctx, ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES));
-    TEST_ASSERT_EQUAL_UINT64 (
       core_budget,
       get_u64_context_option (ctx, ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES));
 
     zlink_auto_hwm_budget_snapshot_t snapshot = read_auto_hwm_budget_snapshot (ctx);
     TEST_ASSERT_EQUAL_UINT64 (memory_limit, snapshot.configured_memory_limit_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (runtime_memory_limit, snapshot.runtime_memory_limit_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0, snapshot.runtime_memory_limit_bytes);
     TEST_ASSERT_EQUAL_UINT64 (memory_limit, snapshot.resolved_memory_limit_bytes);
     TEST_ASSERT_EQUAL_UINT64 (core_budget, snapshot.configured_core_budget_bytes);
     TEST_ASSERT_EQUAL_UINT64 (core_budget, snapshot.effective_core_budget_bytes);
@@ -1201,6 +1205,7 @@ int main (void)
     UNITY_BEGIN ();
     RUN_TEST (test_thread_priority_has_independent_context_option);
     RUN_TEST (test_ctx_option_max_sockets);
+    RUN_TEST (test_removed_runtime_memory_hint_option_is_unknown);
     RUN_TEST (test_ctx_option_socket_limit);
     RUN_TEST (test_ctx_option_io_threads);
     RUN_TEST (test_ctx_option_msg_t_size);
