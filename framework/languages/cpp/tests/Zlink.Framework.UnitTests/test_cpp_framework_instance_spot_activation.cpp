@@ -9,6 +9,8 @@
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/provider_location_repository.hpp"
+#include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
@@ -318,6 +320,144 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     EXPECT_EQ (0, sends.load ());
     EXPECT_EQ (0, requests.load ());
     EXPECT_EQ (1, ready_requests.load ());
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, StoreReadFailureHasUnavailablePublicKind)
+{
+    namespace fw = zlink::framework;
+    class failing_store_t final : public fw::location_store_t
+    {
+      public:
+        fw::task_t<fw::store_read_result_t> read (fw::store_key_t) override
+        {
+            ++reads;
+            throw std::runtime_error ("private provider command/key details");
+        }
+        fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t) override
+        {
+            throw std::logic_error ("unexpected Store write");
+        }
+        fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t) override
+        {
+            throw std::logic_error ("unexpected Store scan");
+        }
+        int reads = 0;
+    } store;
+    fw::runtime::provider_location_repository_t repository (store);
+    fw::runtime::store_location_resolvers_t resolver (repository);
+    fw::serializer_registry_t serializers;
+    auto builder = fw::test::runtime_failure_builder ();
+    auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    runtime.bind_spot_address_resolver (resolver);
+    auto client = builder.route_client (serializers);
+    const auto send = client.send_to_spot ("uncached-spot", event_t{1}).async ().result ();
+    EXPECT_FALSE (send.has_value ());
+    EXPECT_NE (nullptr, send.error ());
+    if (send.error ()) {
+        EXPECT_EQ (fw::framework_error_kind_t::unavailable, send.error_kind ());
+        EXPECT_EQ (std::string::npos, std::string (send.error ()->what ()).find ("command"));
+    }
+    const auto request = client.request_to_spot ("uncached-spot", request_t{1})
+                           .timeout (std::chrono::minutes (1))
+                           .async<reply_t> ()
+                           .result ();
+    EXPECT_FALSE (request.has_value ());
+    EXPECT_NE (nullptr, request.error ());
+    if (request.error ()) {
+        EXPECT_EQ (fw::framework_error_kind_t::unavailable, request.error_kind ());
+        EXPECT_EQ (std::string::npos, std::string (request.error ()->what ()).find ("command"));
+    }
+    EXPECT_EQ (2, store.reads);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, RepositoryClassifiesEveryProviderOperation)
+{
+    namespace fw = zlink::framework;
+    class fault_store_t final : public fw::location_store_t
+    {
+      public:
+        explicit fault_store_t (std::string operation) : operation (std::move (operation)) {}
+        fw::task_t<fw::store_read_result_t> read (fw::store_key_t) override
+        {
+            if (operation == "read")
+                throw std::runtime_error ("private provider failure");
+            return fw::task_t<fw::store_read_result_t> (
+              fw::result_t<fw::store_read_result_t>::success (
+                fw::store_read_result_t{fw::store_missing_t{std::chrono::system_clock::now ()}}));
+        }
+        fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t) override
+        {
+            throw std::runtime_error ("private provider failure");
+        }
+        fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t) override
+        {
+            throw std::runtime_error ("private provider failure");
+        }
+        std::string operation;
+    };
+    const auto verify = [] (const auto &result) {
+        ASSERT_FALSE (result.has_value ());
+        ASSERT_NE (nullptr, result.error ());
+        EXPECT_EQ (fw::framework_error_kind_t::unavailable, result.error_kind ());
+        try {
+            std::rethrow_exception (result.exception ());
+        }
+        catch (const fw::framework_exception_t &error) {
+            EXPECT_EQ (std::string::npos, std::string (error.what ()).find ("private"));
+            try {
+                std::rethrow_if_nested (error);
+                FAIL () << "provider cause was lost";
+            }
+            catch (const std::runtime_error &cause) {
+                EXPECT_STREQ ("private provider failure", cause.what ());
+            }
+        }
+    };
+    fault_store_t read_store ("read");
+    fw::runtime::provider_location_repository_t read_repository (read_store);
+    verify (read_repository.read_owner_lease ("owner").result ());
+    fault_store_t write_store ("write");
+    fw::runtime::provider_location_repository_t write_repository (write_store);
+    verify (write_repository.claim_owner_lease ("owner", std::chrono::seconds (30)).result ());
+    fault_store_t scan_store ("scan");
+    fw::runtime::provider_location_repository_t scan_repository (scan_store);
+    verify (scan_repository.list_mesh_nodes ("mesh").result ());
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, RepositoryPreservesExcludedProviderFailures)
+{
+    namespace fw = zlink::framework;
+    class fault_store_t final : public fw::location_store_t
+    {
+      public:
+        fw::task_t<fw::store_read_result_t> read (fw::store_key_t) override
+        {
+            std::rethrow_exception (failure);
+        }
+        fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t) override
+        {
+            throw std::logic_error ("unexpected write");
+        }
+        fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t) override
+        {
+            throw std::logic_error ("unexpected scan");
+        }
+        std::exception_ptr failure;
+    } store;
+    fw::runtime::provider_location_repository_t repository (store);
+    for (const auto &failure :
+         {std::make_exception_ptr (fw::framework_exception_t (
+            fw::framework_error_kind_t::protocol_error, "typed failure")),
+          std::make_exception_ptr (std::invalid_argument ("caller validation")),
+          std::make_exception_ptr (std::out_of_range ("caller range")),
+          std::make_exception_ptr (
+            std::system_error (std::make_error_code (std::errc::operation_canceled)))}) {
+        store.failure = failure;
+        const auto result = repository.read_owner_lease ("owner").result ();
+        EXPECT_FALSE (result.has_value ());
+        EXPECT_EQ (failure, result.exception ());
+    }
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation, MissingWithoutIntentDoesNotActivate)
