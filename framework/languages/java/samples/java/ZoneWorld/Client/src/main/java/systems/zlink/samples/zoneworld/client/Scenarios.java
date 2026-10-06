@@ -815,30 +815,47 @@ final class Scenarios {
     private static void e5(ClientOptions options) {
         try (Ops ops = new Ops(options)) {
             String nodeId = "zone-node-2";
-            // Status payloads have no incarnation token, so accept ready only after this
-            // connection observes the old node leave.
+            // Consume status in arrival order so readiness before the stop cannot be reused.
             ops.watch();
+            Duration observationTimeout = Duration.ofSeconds(20);
+            long deadline = System.nanoTime() + observationTimeout.toNanos();
             CompletionStage<ZLinkStreamMessage<Messages.NodeStatusNotify>> targetStopped =
-                    waitFor(
-                            ops.connector,
-                            Messages.NodeStatusNotify.class,
-                            value ->
-                                    value.nodeId().equals(nodeId)
-                                            && (!value.registered() || !value.connected()),
-                            Duration.ofSeconds(20));
+                    ops.connector
+                            .waitFor(Messages.NodeStatusNotify.class)
+                            .timeout(observationTimeout)
+                            .submit(Messages.NodeStatusNotify.class);
             System.out.println("scenario ZW-E5 restore armed");
-            targetStopped.toCompletableFuture().join();
+            for (; ; ) {
+                Messages.NodeStatusNotify node =
+                        targetStopped.toCompletableFuture().join().payload();
+                if (node.nodeId().equals(nodeId) && !node.connected()) break;
+                long remaining = deadline - System.nanoTime();
+                ensure(remaining > 0, "E5 stopped status observation timed out");
+                targetStopped =
+                        ops.connector
+                                .waitFor(Messages.NodeStatusNotify.class)
+                                .timeout(Duration.ofNanos(remaining))
+                                .submit(Messages.NodeStatusNotify.class);
+            }
+            deadline = System.nanoTime() + observationTimeout.toNanos();
             CompletionStage<ZLinkStreamMessage<Messages.NodeStatusNotify>> replacementReady =
-                    waitFor(
-                            ops.connector,
-                            Messages.NodeStatusNotify.class,
-                            value ->
-                                    value.nodeId().equals(nodeId)
-                                            && value.registered()
-                                            && value.connected(),
-                            Duration.ofSeconds(20));
+                    ops.connector
+                            .waitFor(Messages.NodeStatusNotify.class)
+                            .timeout(observationTimeout)
+                            .submit(Messages.NodeStatusNotify.class);
             System.out.println("scenario ZW-E5 replacement waiting");
-            replacementReady.toCompletableFuture().join();
+            for (; ; ) {
+                Messages.NodeStatusNotify node =
+                        replacementReady.toCompletableFuture().join().payload();
+                if (node.nodeId().equals(nodeId) && node.registered() && node.connected()) break;
+                long remaining = deadline - System.nanoTime();
+                ensure(remaining > 0, "E5 replacement status observation timed out");
+                replacementReady =
+                        ops.connector
+                                .waitFor(Messages.NodeStatusNotify.class)
+                                .timeout(Duration.ofNanos(remaining))
+                                .submit(Messages.NodeStatusNotify.class);
+            }
             Messages.NodeDiagnosticsRes diagnostics =
                     request(
                             ops.connector,

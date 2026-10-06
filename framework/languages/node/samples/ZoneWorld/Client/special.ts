@@ -363,30 +363,40 @@ async function runMaintenanceRestore(opsEndpoint: string, targetNodeId: string):
   const ops = connector(opsEndpoint);
   try {
     await ops.connect();
-    // Status payloads have no incarnation token, so accept ready only after this connection observes the old node leave.
-    const targetStopped = ops
+    // Consume status in arrival order so readiness before the stop cannot be reused.
+    const observationTimeoutMs = 20_000;
+    let deadline = performance.now() + observationTimeoutMs;
+    let targetStopped = ops
       .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-      .where(
-        (message) =>
-          message.payload.nodeId === targetNodeId &&
-          (!message.payload.registered || !message.payload.connected)
-      )
-      .timeout(20_000)
+      .timeout(observationTimeoutMs)
       .submit();
     console.log('scenario ZW-E5 restore armed');
-    await targetStopped;
-    const replacementReady = ops
+    for (;;) {
+      const node = (await targetStopped).payload;
+      if (node.nodeId === targetNodeId && !node.connected) break;
+      const remaining = deadline - performance.now();
+      zlinkStreamAssert.ensure(remaining > 0, 'ZW-E5 stopped status observation timed out.');
+      targetStopped = ops
+        .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+        .timeout(remaining)
+        .submit();
+    }
+    deadline = performance.now() + observationTimeoutMs;
+    let replacementReady = ops
       .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-      .where(
-        (message) =>
-          message.payload.nodeId === targetNodeId &&
-          message.payload.registered &&
-          message.payload.connected
-      )
-      .timeout(20_000)
+      .timeout(observationTimeoutMs)
       .submit();
     console.log('scenario ZW-E5 replacement waiting');
-    await replacementReady;
+    for (;;) {
+      const node = (await replacementReady).payload;
+      if (node.nodeId === targetNodeId && node.registered && node.connected) break;
+      const remaining = deadline - performance.now();
+      zlinkStreamAssert.ensure(remaining > 0, 'ZW-E5 replacement status observation timed out.');
+      replacementReady = ops
+        .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+        .timeout(remaining)
+        .submit();
+    }
     const diagnostics = await diagnose(ops, targetNodeId);
     zlinkStreamAssert.ensure(
       diagnostics.error === null,

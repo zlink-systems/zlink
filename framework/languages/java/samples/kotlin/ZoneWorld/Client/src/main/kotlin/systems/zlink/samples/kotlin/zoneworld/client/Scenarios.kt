@@ -767,33 +767,48 @@ internal object Scenarios {
         withResources(ops) {
             coroutineScope {
                 val nodeId = "zone-node-2"
-                // Status payloads have no incarnation token, so accept ready only after this
-                // connection observes the old node leave.
+                // Consume status in arrival order so readiness before the stop cannot be reused.
                 ops.watch()
+                val observationTimeout = Duration.ofSeconds(20)
                 val targetStopped =
                     async(start = CoroutineStart.UNDISPATCHED) {
-                        ops.connector
-                            .waitFor<Messages.NodeStatusNotify>()
-                            .where {
-                                it.payload().nodeId == nodeId &&
-                                    (!it.payload().registered || !it.payload().connected)
-                            }
-                            .timeout(Duration.ofSeconds(20))
-                            .await()
+                        val deadline = System.nanoTime() + observationTimeout.toNanos()
+                        var remaining = observationTimeout
+                        while (true) {
+                            val node =
+                                ops.connector
+                                    .waitFor<Messages.NodeStatusNotify>()
+                                    .timeout(remaining)
+                                    .await()
+                                    .payload()
+                            if (node.nodeId == nodeId && !node.connected) break
+                            remaining = Duration.ofNanos(deadline - System.nanoTime())
+                            ensure(
+                                !remaining.isNegative && !remaining.isZero,
+                                "E5 stopped status observation timed out",
+                            )
+                        }
                     }
                 println("scenario ZW-E5 restore armed")
                 targetStopped.await()
                 val replacementReady =
                     async(start = CoroutineStart.UNDISPATCHED) {
-                        ops.connector
-                            .waitFor<Messages.NodeStatusNotify>()
-                            .where {
-                                it.payload().nodeId == nodeId &&
-                                    it.payload().registered &&
-                                    it.payload().connected
-                            }
-                            .timeout(Duration.ofSeconds(20))
-                            .await()
+                        val deadline = System.nanoTime() + observationTimeout.toNanos()
+                        var remaining = observationTimeout
+                        while (true) {
+                            val node =
+                                ops.connector
+                                    .waitFor<Messages.NodeStatusNotify>()
+                                    .timeout(remaining)
+                                    .await()
+                                    .payload()
+                            if (node.nodeId == nodeId && node.registered && node.connected) break
+                            remaining = Duration.ofNanos(deadline - System.nanoTime())
+                            ensure(
+                                !remaining.isNegative && !remaining.isZero,
+                                "E5 replacement status observation timed out",
+                            )
+                        }
                     }
                 println("scenario ZW-E5 replacement waiting")
                 replacementReady.await()

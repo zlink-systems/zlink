@@ -624,28 +624,37 @@ se::task_t<bool> run_e5_arm (se::coroutine_connector_t &ops, const std::string &
     co_return true;
 }
 
-se::task_t<bool> run_e5_restore (se::coroutine_connector_t &ops, const std::string &target_node_id)
+se::task_t<bool> run_e5_restore (se::coroutine_connector_t &ops,
+                                 const std::string &target_node_id,
+                                 std::chrono::milliseconds observation_timeout)
 {
     require (!target_node_id.empty (), "E5 restore requires --target-node-id");
     co_await ops.connect ().async ();
     (void) co_await ops.request (watch_nodes_req_t{}).async<watch_nodes_res_t> ();
-    auto stopped_wait = ops.wait_for<node_status_notify_t> ()
-                          .where ([target_node_id] (const auto &node_message) {
-                              const auto &node = node_message.payload;
-                              return node.node_id == target_node_id && !node.connected;
-                          })
-                          .async ();
+    auto deadline = std::chrono::steady_clock::now () + observation_timeout;
+    auto stopped_wait = ops.wait_for<node_status_notify_t> (observation_timeout).async ();
     std::cout << "scenario ZW-E5 restore armed" << std::endl;
-    (void) co_await stopped_wait;
-    auto replacement_wait = ops.wait_for<node_status_notify_t> ()
-                              .where ([target_node_id] (const auto &node_message) {
-                                  const auto &node = node_message.payload;
-                                  return node.node_id == target_node_id && node.registered
-                                         && node.connected;
-                              })
-                              .async ();
+    for (;;) {
+        const auto node = (co_await stopped_wait).payload;
+        if (node.node_id == target_node_id && !node.connected)
+            break;
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+          deadline - std::chrono::steady_clock::now ());
+        require (remaining.count () > 0, "E5 stopped status observation timed out");
+        stopped_wait = ops.wait_for<node_status_notify_t> (remaining).async ();
+    }
+    deadline = std::chrono::steady_clock::now () + observation_timeout;
+    auto replacement_wait = ops.wait_for<node_status_notify_t> (observation_timeout).async ();
     std::cout << "scenario ZW-E5 replacement waiting" << std::endl;
-    (void) co_await replacement_wait;
+    for (;;) {
+        const auto node = (co_await replacement_wait).payload;
+        if (node.node_id == target_node_id && node.registered && node.connected)
+            break;
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+          deadline - std::chrono::steady_clock::now ());
+        require (remaining.count () > 0, "E5 replacement status observation timed out");
+        replacement_wait = ops.wait_for<node_status_notify_t> (remaining).async ();
+    }
     const auto diagnostics = co_await ops.request (node_diagnostics_req_t{target_node_id})
                                .async<node_diagnostics_res_t> ();
     require (!diagnostics.error && diagnostics.maintenance,
@@ -788,7 +797,9 @@ int main (int argc, char **argv)
                                 : topology.scenario == "E5-arm"
                                   ? run_e5_arm (ops, topology.target_node_id)
                                 : topology.scenario == "E5"
-                                  ? run_e5_restore (ops, topology.target_node_id)
+                                  ? run_e5_restore (ops,
+                                                    topology.target_node_id,
+                                                    ops_core.options ().wait_timeout)
                                 : topology.scenario == "G3" || topology.scenario == "G4-fresh"
                                   ? run_fresh_actor_probes (game, topology.scenario)
                                 : topology.scenario == "G4" ? run_g4_boundary (game, ops)
