@@ -1585,7 +1585,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (!metadata.IsEmpty)
             wireParts.Add(metadata);
         wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
-        var messages = wireParts.Select(Message.From).ToArray();
         PendingOperation? pending = null;
         if (request)
         {
@@ -1597,7 +1596,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             );
             pending.DeadlineUnixMs = deadlineUnixMs;
         }
-        var submit = SubmitInstanceSpotSend(peer, messages);
+        var submit = pending is null
+            ? SubmitInstanceSpotSend(peer, wireParts)
+            : SubmitNativeServiceRequest(peer, wireParts, pending);
         if (submit != SubmitResult.Ok)
         {
             if (pending is not null)
@@ -1608,8 +1609,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             operationId = default;
             return submit;
         }
-        if (pending is not null)
-            StartColdOperationDeadline(correlation, pending);
         return SubmitResult.Ok;
     }
 
@@ -1654,6 +1653,54 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (metadata is { IsEmpty: false } value)
             wire.Add(value);
         wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
+        if (operation.IsRequest)
+        {
+            var remaining =
+                checked((long)operation.DeadlineUnixMs)
+                - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (remaining <= 0)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DeadlineExceeded,
+                    "The forwarded activation deadline has expired."
+                );
+            var replies = await RequestDirectWireAsync(
+                    peer.PhysicalRoutingId,
+                    wire,
+                    TimeSpan.FromMilliseconds(remaining),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            try
+            {
+                using var decoded = DecodeDirectApplicationReply(operation.ReplyRouteId, replies);
+                var view = decoded.ApplicationPayloadView!;
+                var payload = new ReadOnlyMemory<byte>[view.Count];
+                for (var index = 0; index < payload.Length; index++)
+                    payload[index] = view.GetMemory(index).ToArray();
+                return new InstanceSpotActivationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    payload
+                );
+            }
+            catch (ZLinkRequestTerminalException terminal)
+            {
+                return new InstanceSpotActivationTerminal(
+                    terminal.Result,
+                    (ServiceWireConstants.FrameworkErrorCode)terminal.FailureErrno,
+                    []
+                );
+            }
+            catch (ZlinkRequestException error)
+                when (error.Result == ZlinkRequestException.ErrorCode.ProtocolError)
+            {
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ProtocolError,
+                    "The forwarded activation reply is invalid.",
+                    innerException: error
+                );
+            }
+        }
         await SendRoutedAsync(peer.PhysicalRoutingId, wire, cancellationToken)
             .ConfigureAwait(false);
         return new InstanceSpotActivationTerminal(
@@ -1664,20 +1711,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
     }
 
-    private void StartColdOperationDeadline(ulong correlation, PendingOperation pending)
+    private SubmitResult SubmitInstanceSpotSend(Peer peer, IReadOnlyList<ReadOnlyMemory<byte>> wire)
     {
-        var remaining = TimeSpan.FromMilliseconds(
-            pending.DeadlineUnixMs
-                - Math.Min(
-                    pending.DeadlineUnixMs,
-                    checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-                )
-        );
-        StartDetached(() => ExpireOperationAsync(correlation, pending, remaining));
-    }
-
-    private SubmitResult SubmitInstanceSpotSend(Peer peer, IReadOnlyList<Message> messages)
-    {
+        var messages = wire.Select(Message.From).ToArray();
         var transferred = false;
         try
         {
@@ -4754,6 +4790,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             wire.Add(metadata);
         wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
 
+        return SubmitNativeServiceRequest(peer, wire, pending);
+    }
+
+    private SubmitResult SubmitNativeServiceRequest(
+        Peer peer,
+        IReadOnlyList<ReadOnlyMemory<byte>> wire,
+        PendingOperation pending
+    )
+    {
         var remainingMilliseconds =
             pending.DeadlineUnixMs
             - Math.Min(
@@ -7220,6 +7265,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         var operation = record.Operation;
         var request = operation.IsRequest;
+        if (
+            request
+            && (received.MessageType != ReceivedMessageType.Request || received.ReplyToken is null)
+        )
+        {
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+            return;
+        }
+        var nativeReply = request ? received.Reply() : null;
         SubmitResult Reply(
             RequestResult result,
             uint failureCode,
@@ -7235,7 +7289,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ReplyInstanceSpotActivationAsync(
                         operation,
                         terminal,
-                        _stop?.Token ?? CancellationToken.None
+                        _stop?.Token ?? CancellationToken.None,
+                        nativeReply
                     )
                     .AsTask()
             )
@@ -7303,7 +7358,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             .ToArray();
         DisposeParts(decodedPayload);
         RunInboundOperation(() =>
-            CompleteInstanceSpotActivationAsync(operation, target, metadata, payload)
+            CompleteInstanceSpotActivationAsync(operation, target, metadata, payload, nativeReply)
         );
     }
 
@@ -7311,7 +7366,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         InstanceSpotActivationOperation operation,
         IInstanceSpotActivationTarget target,
         ReadOnlyMemory<byte>? metadata,
-        IReadOnlyList<ReadOnlyMemory<byte>> payload
+        IReadOnlyList<ReadOnlyMemory<byte>> payload,
+        ReplyOperation? nativeReply
     )
     {
         var remaining =
@@ -7379,7 +7435,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         await ReplyInstanceSpotActivationAsync(
                 operation,
                 terminal,
-                _stop?.Token ?? CancellationToken.None
+                _stop?.Token ?? CancellationToken.None,
+                nativeReply
             )
             .ConfigureAwait(false);
     }
@@ -7387,7 +7444,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     internal async ValueTask ReplyInstanceSpotActivationAsync(
         InstanceSpotActivationOperation operation,
         InstanceSpotActivationTerminal terminal,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ReplyOperation? nativeReply = null
     )
     {
         if (!operation.IsRequest || terminal.Forwarded)
@@ -7404,6 +7462,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             wire.Add(
                 ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(terminal.ReplyParts)
             );
+        if (nativeReply is not null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var prepared = PrepareNativeReply(operation.SourceNodeRid, nativeReply, wire);
+            var submitted = SubmitPreparedNativeReply(prepared);
+            if (submitted != SubmitResult.Ok)
+                throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submitted);
+            return;
+        }
         var peer = await _lane
             .RunAsync(() =>
             {

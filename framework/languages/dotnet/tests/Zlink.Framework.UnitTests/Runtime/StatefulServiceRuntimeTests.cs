@@ -4847,7 +4847,126 @@ public sealed partial class StatefulServiceRuntimeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ColdTerminalCompletesSourceOperationAcrossTargetReconnect(bool reconnect)
+    public async Task NormalColdReplyCompletesWhileAllSourceApplicationPermitsAreHeld(
+        bool rejectBeforeHandler
+    )
+    {
+        using var queue = new ZLinkApplicationJobQueue(
+            new ZLinkApplicationJobQueueCapacity(
+                Zlink.Framework.Contracts.Configuration.ZLinkApplicationJobQueueProfile.Balanced,
+                ConfiguredManualMax: 1,
+                EffectiveProcessorCount: 1,
+                EffectiveMaxQueuedApplicationJobs: 1
+            )
+        );
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            applicationJobQueue: queue
+        );
+        source.SetRoutingId(RoutingId.From("cold-permit-source"));
+        await using var target = NewNode(context, "cold-permit-target");
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetBind($"inproc://cold-permit-source-{suffix}");
+        var endpoint = $"inproc://cold-permit-target-{suffix}";
+        target.SetBind(endpoint);
+        source.ConnectPeer(endpoint, target.RoutingId);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!rejectBeforeHandler)
+            target.SetInstanceSpotActivationTarget(
+                new PermitHeldColdActivationTarget(entered, release)
+            );
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
+        using var held = await queue
+            .AcquireAsync(CancellationToken.None)
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
+        using var first = Message.From([1, 2]);
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.ActivateInstanceSpot(
+                new InstanceSpotActivationTarget(
+                    "objects",
+                    target.RoutingId,
+                    target.Status().LifecycleGeneration,
+                    "cold",
+                    "sample",
+                    "descriptor"
+                ),
+                "caller",
+                [first],
+                true,
+                out var operationId,
+                checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds()),
+                TimeSpan.FromSeconds(5)
+            )
+        );
+        if (!rejectBeforeHandler)
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            release.SetResult();
+        }
+        await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
+        var completion = DrainCompletion(source, operationId);
+        try
+        {
+            if (rejectBeforeHandler)
+            {
+                Assert.Equal((int)RequestResult.InternalError, completion.Record.TerminalResult);
+                Assert.Equal(
+                    (int)ServiceWireConstants.FrameworkErrorCode.RequestFailed,
+                    completion.Record.FailureErrno
+                );
+                Assert.Empty(completion.Parts);
+            }
+            else
+            {
+                Assert.Equal((int)RequestResult.Ok, completion.Record.TerminalResult);
+                Assert.Equal(new byte[] { 7, 6 }, Assert.Single(completion.Parts).ToArray());
+            }
+            Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(completion.Parts);
+        }
+    }
+
+    private sealed class PermitHeldColdActivationTarget(
+        TaskCompletionSource entered,
+        TaskCompletionSource release
+    ) : IInstanceSpotActivationTarget
+    {
+        public async ValueTask<InstanceSpotActivationTerminal> ActivateAsync(
+            InstanceSpotActivationOperation operation,
+            ReadOnlyMemory<byte>? metadata,
+            IReadOnlyList<ReadOnlyMemory<byte>> payload,
+            CancellationToken cancellationToken
+        )
+        {
+            entered.SetResult();
+            await release.Task.WaitAsync(cancellationToken);
+            return new InstanceSpotActivationTerminal(
+                RequestResult.Ok,
+                ServiceWireConstants.FrameworkErrorCode.None,
+                [new byte[] { 7, 6 }]
+            );
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ColdRecoveryReplyPreservesSourceTerminalAcrossConnectionIntentRemoval(
+        bool removeIntent
+    )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = NewNode(context, "cold-terminal-source");
@@ -4887,9 +5006,10 @@ public sealed partial class StatefulServiceRuntimeTests
             )
         );
         var operation = await admitted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        if (reconnect)
+        if (removeIntent)
         {
             source.RemovePeerConnection(Assert.Single(source.Peers()).ConnectionIntentId);
+            await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
             source.ConnectPeer(targetEndpoint, target.RoutingId);
             await WaitUntilAsync(() =>
                 source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
@@ -4908,8 +5028,21 @@ public sealed partial class StatefulServiceRuntimeTests
         var completion = DrainCompletion(source, operationId);
         try
         {
-            Assert.Equal((int)RequestResult.Ok, completion.Record.TerminalResult);
-            Assert.Equal(new byte[] { 7, 6 }, Assert.Single(completion.Parts).ToArray());
+            if (removeIntent)
+            {
+                // An explicit connection intent removal ends the admitted Core request.
+                // A later recovery reply cannot replace that source-owned terminal.
+                Assert.Contains(
+                    (RequestResult)completion.Record.TerminalResult,
+                    new[] { RequestResult.NotConnected, RequestResult.NotFound }
+                );
+                Assert.Empty(completion.Parts);
+            }
+            else
+            {
+                Assert.Equal((int)RequestResult.Ok, completion.Record.TerminalResult);
+                Assert.Equal(new byte[] { 7, 6 }, Assert.Single(completion.Parts).ToArray());
+            }
         }
         finally
         {
