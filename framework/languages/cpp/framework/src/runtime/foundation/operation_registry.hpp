@@ -48,6 +48,10 @@ class operation_registry_t
                    std::vector<std::uint8_t> payload,
                    before_dispatch_t before_dispatch,
                    operation_terminal_t request_terminal = operation_terminal_t::completed);
+    bool complete_from_target (const call_id_t &id,
+                               const std::vector<std::uint8_t> &target_routing_id,
+                               std::vector<std::uint8_t> payload,
+                               operation_terminal_t request_terminal);
     bool cancel (const call_id_t &id);
     bool fail (const call_id_t &id,
                operation_terminal_t terminal,
@@ -73,7 +77,9 @@ class operation_registry_t
         std::vector<std::uint8_t> target_routing_id;
     };
 
-    bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);
+    bool take (const call_id_t &id,
+               std::unique_ptr<operation_completion_item_t> &completion,
+               const std::vector<std::uint8_t> *expected_target = nullptr);
 
     std::shared_ptr<operation_completion_dispatcher_t> _completion_dispatcher;
     std::shared_ptr<operation_registry_drain_state_t> _drain_state;

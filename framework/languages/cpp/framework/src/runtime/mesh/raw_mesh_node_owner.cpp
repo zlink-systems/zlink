@@ -2212,7 +2212,8 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     parts.push_back (protocol::encode_application_payload (application_payload));
     const auto id = operation_id (local.lifecycle_generation, correlation);
     if (!_operations->register_operation (
-          id, foundation::operation_registry_t::clock_t::now () + timeout, std::move (callback), {},
+          id, foundation::operation_registry_t::clock_t::now () + timeout, std::move (callback),
+          target_routing_id,
           mesh_request_metric_t (_request_metrics, request.request
                                                      ? mesh_request_surface_t::instance_spot
                                                      : mesh_request_surface_t::none))) {
@@ -2228,69 +2229,12 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
             signal_activity ();
         co_return accepted;
     }
-    const auto operations = _operations;
     trace_mesh ("infrastructure-request-submit correlation=" + std::to_string (correlation)
                 + " targetBytes=" + std::to_string (target_routing_id.size ()));
-    auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-      port->request (target_routing_id, std::move (parts), timeout));
-    detail::observe_task_completion (
-      *running, [operations, id, correlation,
-                 running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
-          if (!settled) {
-              (void) operations->fail (id, foundation::operation_terminal_t::transport_failed);
-              return;
-          }
-          const auto &completion = settled.value ();
-          if (completion.terminal != zlink::request_result_t::ok) {
-              if (const auto terminal = messaging::request_failure_mapper_t{}.transport_terminal (
-                    completion.terminal)) {
-                  (void) operations->fail (id, *terminal);
-              } else {
-                  (void) operations->complete (
-                    id, protocol::pack_infrastructure_reply (
-                          request_failure_reply_parts (correlation, completion.terminal)));
-              }
-              return;
-          }
-          try {
-              constexpr std::size_t header_part_count = 1;
-              constexpr std::size_t reply_with_payload_part_count = 2;
-              const auto &reply_parts = completion.parts;
-              if (reply_parts.empty () || reply_parts.size () > reply_with_payload_part_count)
-                  throw protocol::service_wire_error_t (
-                    "Instance Spot activation reply has an invalid part count");
-              const auto reply = protocol::decode_reply_header (reply_parts.front ());
-              if (reply.correlation != correlation)
-                  throw protocol::service_wire_error_t (
-                    "Instance Spot activation reply correlation does not match");
-              if (reply.terminal_result
-                    != static_cast<std::uint32_t> (protocol::request_terminal_result::ok)
-                  && reply_parts.size () != header_part_count)
-                  throw protocol::service_wire_error_t (
-                    "failed Instance Spot activation reply carries a payload");
-              if (reply_parts.size () == reply_with_payload_part_count)
-                  (void) protocol::decode_application_payload (reply_parts[header_part_count],
-                                                               false);
-              (void) operations->complete (id, protocol::pack_infrastructure_reply (reply_parts),
-                                           {}, request_metric_terminal (reply));
-          }
-          catch (const protocol::service_wire_error_t &) {
-              //  Spec 32-framework-error-model:91-92 — a reply that can't be
-              //  processed is ProtocolError, not a transport failure. Complete
-              //  with a synthesized protocolError header so the upper adapter
-              //  and sink classify it via reply_header_exception.
-              (void) operations->complete (
-                id,
-                protocol::pack_infrastructure_reply (
-                  detail::backend::raw_message_t{protocol::encode_reply_header (
-                    correlation,
-                    static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
-                    static_cast<std::uint32_t> (
-                      protocol::framework_error_code::requestProtocolError))}),
-                {}, foundation::operation_terminal_t::protocol_error);
-          }
-      });
-    co_return true;
+    const auto sent = co_await port->send (target_routing_id, std::move (parts));
+    if (!sent)
+        (void) _operations->fail (id, foundation::operation_terminal_t::transport_failed);
+    co_return sent;
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_user_spot_close (
@@ -2500,25 +2444,46 @@ bool raw_mesh_node_owner_t::reply_instance_spot_activation (
   std::uint32_t failure_code,
   std::optional<protocol::application_payload_t> application_reply)
 {
-    if (!request.correlation) {
+    if (!request.correlation)
         return true;
-    }
+    const auto activation =
+      protocol::decode_instance_spot_activation_header (request.parts.front ());
+    if (activation.reply_route_id != *request.correlation
+        || activation.source_node_routing_id != request.source_routing_id)
+        throw std::invalid_argument ("Instance Spot reply route does not match request");
+    return reply_instance_spot_activation (activation, terminal_result, failure_code,
+                                           std::move (application_reply));
+}
+
+bool raw_mesh_node_owner_t::reply_instance_spot_activation (
+  const protocol::instance_spot_activation_header_t &activation,
+  std::uint32_t terminal_result,
+  std::uint32_t failure_code,
+  std::optional<protocol::application_payload_t> application_reply)
+{
+    if (!activation.request)
+        return true;
     if (terminal_result != 0 && application_reply) {
         throw std::invalid_argument (
           "failed Instance Spot activation reply cannot carry a payload");
     }
     detail::backend::raw_message_t parts{
-      protocol::encode_reply_header (*request.correlation, terminal_result, failure_code)};
+      protocol::encode_reply_header (activation.reply_route_id, terminal_result, failure_code)};
     if (application_reply) {
         parts.push_back (protocol::encode_application_payload (*application_reply));
     }
     const auto local = _topology.local_descriptor ();
-    if (request.source_routing_id == local.node_routing_id) {
-        return _operations->complete (
-          operation_id (local.lifecycle_generation, *request.correlation),
-          protocol::pack_infrastructure_reply (parts), {},
-          request_metric_terminal ({*request.correlation, terminal_result, failure_code}));
+    if (activation.source_node_routing_id == local.node_routing_id) {
+        if (activation.source_node_generation != local.lifecycle_generation)
+            return false;
+        return _operations->complete_from_target (
+          operation_id (local.lifecycle_generation, activation.reply_route_id),
+          local.node_routing_id, protocol::pack_infrastructure_reply (parts),
+          request_metric_terminal ({activation.reply_route_id, terminal_result, failure_code}));
     }
+    const auto peer = _topology.peer (activation.source_node_routing_id);
+    if (!peer || peer->descriptor.lifecycle_generation != activation.source_node_generation)
+        return false;
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -2526,9 +2491,13 @@ bool raw_mesh_node_owner_t::reply_instance_spot_activation (
     }
     if (!port)
         return false;
-    return port->reply (
-      detail::backend::raw_received_t{request.source_routing_id, request.reply_token, {}},
-      std::move (parts));
+    auto running = std::make_shared<task_t<bool>> (
+      port->send (activation.source_node_routing_id, std::move (parts)));
+    detail::observe_task_completion (*running, [running] (const result_t<bool> &settled) {
+        if (!settled || !settled.value ())
+            trace_mesh ("Instance Spot activation reply submission failed");
+    });
+    return true;
 }
 
 bool raw_mesh_node_owner_t::reply_user_spot_close (const service_mailbox_record_t &request,
@@ -2812,6 +2781,22 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                         + " sourceBytes=" + std::to_string (received->source_routing_id.size ()));
             co_return raw_mesh_pump_result_t::protocol_error;
         }
+        if (header.kind == protocol::command::reply) {
+            if (header.flags != 0 || received->reply_token || received->parts.empty ()
+                || received->parts.size () > 2 || received->parts.front ().size () != 21)
+                co_return raw_mesh_pump_result_t::protocol_error;
+            const auto reply = protocol::decode_reply_header (received->parts.front ());
+            if (reply.terminal_result != 0 && received->parts.size () != 1)
+                co_return raw_mesh_pump_result_t::protocol_error;
+            if (received->parts.size () == 2)
+                (void) protocol::decode_application_payload (received->parts.back (), false);
+            const auto local = _topology.local_descriptor ();
+            (void) _operations->complete_from_target (
+              operation_id (local.lifecycle_generation, reply.correlation),
+              received->source_routing_id, protocol::pack_infrastructure_reply (received->parts),
+              request_metric_terminal (reply));
+            co_return raw_mesh_pump_result_t::infrastructure;
+        }
         if (header.kind == protocol::command::livenessProbe
             || header.kind == protocol::command::livenessAck) {
             if (received->parts.size () != 1) {
@@ -2976,7 +2961,7 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             const auto local = _topology.local_descriptor ();
             if (activation.target.target_node_routing_id != local.node_routing_id
                 || activation.target.target_node_generation != local.lifecycle_generation
-                || (activation.request != received->reply_token.has_value ())
+                || received->reply_token
                 || (!activation.request && activation.reply_route_id != 0)) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }

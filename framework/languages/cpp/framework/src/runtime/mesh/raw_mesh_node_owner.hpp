@@ -295,6 +295,11 @@ class raw_mesh_node_owner_t
       std::uint32_t terminal_result,
       std::uint32_t failure_code,
       std::optional<protocol::application_payload_t> application_reply = std::nullopt);
+    bool reply_instance_spot_activation (
+      const protocol::instance_spot_activation_header_t &activation,
+      std::uint32_t terminal_result,
+      std::uint32_t failure_code,
+      std::optional<protocol::application_payload_t> application_reply = std::nullopt);
     bool reply_user_spot_close (const service_mailbox_record_t &request,
                                 const protocol::user_spot_close_reply_t &reply);
     task_t<bool> send_session_relocation_route (const std::vector<std::uint8_t> &target_routing_id,

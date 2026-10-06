@@ -287,11 +287,13 @@ bool operation_registry_t::register_operation (call_id_t id,
 }
 
 bool operation_registry_t::take (const call_id_t &id,
-                                 std::unique_ptr<operation_completion_item_t> &completion)
+                                 std::unique_ptr<operation_completion_item_t> &completion,
+                                 const std::vector<std::uint8_t> *expected_target)
 {
     std::lock_guard lock (_mutex);
     const auto found = _pending.find (id);
-    if (found == _pending.end ()) {
+    if (found == _pending.end ()
+        || (expected_target && found->second.target_routing_id != *expected_target)) {
         return false;
     }
     completion = std::move (found->second.completion);
@@ -323,6 +325,19 @@ bool operation_registry_t::complete (const call_id_t &id,
                 operation_terminal_t::transport_failed, {});
         return true;
     }
+    notify (_completion_dispatcher, std::move (completion), operation_terminal_t::completed,
+            std::move (payload), request_terminal);
+    return true;
+}
+
+bool operation_registry_t::complete_from_target (const call_id_t &id,
+                                                 const std::vector<std::uint8_t> &target_routing_id,
+                                                 std::vector<std::uint8_t> payload,
+                                                 operation_terminal_t request_terminal)
+{
+    std::unique_ptr<operation_completion_item_t> completion;
+    if (!take (id, completion, &target_routing_id))
+        return false;
     notify (_completion_dispatcher, std::move (completion), operation_terminal_t::completed,
             std::move (payload), request_terminal);
     return true;

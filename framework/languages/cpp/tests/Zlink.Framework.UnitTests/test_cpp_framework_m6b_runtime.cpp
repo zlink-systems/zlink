@@ -4993,6 +4993,141 @@ void verify_atomic_raw_stateful_ingress_commit ()
     target.close ();
 }
 
+void verify_cold_reply_uses_original_logical_route ()
+{
+    using namespace zlink::framework;
+    mesh::raw_mesh_node_owner_t source ({descriptor ("cold-reply-source")});
+    mesh::raw_mesh_node_owner_t target ({descriptor ("cold-reply-target")});
+    source.start ();
+    target.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    assert (source.connect_peer (target.endpoint (), target_descriptor));
+    const auto deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    while ((!source.topology ().peer (target_descriptor.node_routing_id)
+            || !target.topology ().peer (source_descriptor.node_routing_id))
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        assert (source.pump_one (now).result ().value ()
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (target.pump_one (now).result ().value ()
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+    }
+    assert (source.topology ().peer (target_descriptor.node_routing_id));
+    assert (target.topology ().peer (source_descriptor.node_routing_id));
+
+    protocol::instance_spot_activation_header_t activation{
+      {target_descriptor.node_routing_id, target_descriptor.lifecycle_generation, "cold-reply-spot",
+       "m6b-mesh", "quest", "descriptor-1",
+       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                     std::chrono::system_clock::now ().time_since_epoch () + 5s)
+                                     .count ())},
+      source_descriptor.lifecycle_generation,
+      source_descriptor.node_routing_id,
+      std::string ("entry"),
+      true,
+      {123, 456},
+      0,
+      false};
+    std::promise<std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>> done;
+    auto future = done.get_future ();
+    assert (
+      source
+        .request_instance_spot_activation (
+          target_descriptor.node_routing_id, activation, std::nullopt,
+          {"quest.start", "application/json", bytes ("request")}, 5s,
+          [&done] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> packed) {
+              done.set_value ({terminal, std::move (packed)});
+          })
+        .result ()
+        .value ());
+    std::optional<mesh::service_mailbox_claim_t> claim;
+    while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        assert (source.pump_one (now).result ().value ()
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (target.pump_one (now).result ().value ()
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        claim =
+          target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+    }
+    assert (claim && claim->records.size () == 1);
+    auto recovered = claim->records.front ();
+    assert (protocol::decode_header (recovered.parts.front ()).kind
+            == protocol::command::instanceSpot);
+    assert (recovered.correlation && *recovered.correlation != activation.operation.low);
+    recovered.reply_token.reset ();
+    assert (target.reply_instance_spot_activation (
+      recovered, 0, 0,
+      protocol::application_payload_t{"quest.reply", "application/json", bytes ("reply")}));
+    assert (target.mailbox ().release (*claim));
+    while (future.wait_for (0ms) != std::future_status::ready
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        assert (
+          source.pump_one (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ()
+          != mesh::raw_mesh_pump_result_t::protocol_error);
+    }
+    assert (future.wait_for (0ms) == std::future_status::ready);
+    const auto [terminal, packed] = future.get ();
+    assert (terminal == foundation::operation_terminal_t::completed);
+    const auto parts = protocol::unpack_infrastructure_reply (packed);
+    assert (parts.size () == 2);
+    assert (protocol::decode_application_payload (parts.back ()).payload_bytes ()
+            == bytes ("reply"));
+
+    activation.target.spot_id = "cold-reply-failure";
+    activation.operation = {123, 457};
+    std::promise<std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>>
+      failed_done;
+    auto failed_future = failed_done.get_future ();
+    assert (source
+              .request_instance_spot_activation (
+                target_descriptor.node_routing_id, activation, std::nullopt,
+                {"quest.start", "application/json", bytes ("request")}, 5s,
+                [&failed_done] (foundation::operation_terminal_t result,
+                                std::vector<std::uint8_t> reply) {
+                    failed_done.set_value ({result, std::move (reply)});
+                })
+              .result ()
+              .value ());
+    claim.reset ();
+    while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        assert (target.pump_one (now).result ().value ()
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        claim =
+          target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+    }
+    assert (claim && claim->records.size () == 1);
+    const auto restored =
+      protocol::decode_instance_spot_activation_header (claim->records.front ().parts.front ());
+    assert (restored.operation == activation.operation);
+    assert (restored.reply_route_id != restored.operation.low);
+    assert (target.reply_instance_spot_activation (
+      restored, 105, static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)));
+    assert (target.mailbox ().release (*claim));
+    while (failed_future.wait_for (0ms) != std::future_status::ready
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        assert (
+          source.pump_one (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ()
+          != mesh::raw_mesh_pump_result_t::protocol_error);
+    }
+    assert (failed_future.wait_for (0ms) == std::future_status::ready);
+    const auto [failure_terminal, failure_packed] = failed_future.get ();
+    assert (failure_terminal == foundation::operation_terminal_t::completed);
+    const auto failure_parts = protocol::unpack_infrastructure_reply (failure_packed);
+    assert (failure_parts.size () == 1);
+    const auto failure_header = protocol::decode_reply_header (failure_parts.front ());
+    assert (failure_header.terminal_result == 105);
+    assert (failure_header.failure_code
+            == static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed));
+    auto stale_source = restored;
+    ++stale_source.source_node_generation;
+    assert (!target.reply_instance_spot_activation (stale_source, 0, 0));
+    source.close ();
+    target.close ();
+}
+
 void verify_node_request_requires_remote_admission ()
 {
     mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
@@ -7331,6 +7466,7 @@ void verify_relocation_failure_code_classification_is_distinct ()
 
 int main (int argc, char **argv)
 {
+    verify_cold_reply_uses_original_logical_route ();
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
     if (argc == 2 && std::string_view (argv[1]) == "--owner-request-rejection") {
