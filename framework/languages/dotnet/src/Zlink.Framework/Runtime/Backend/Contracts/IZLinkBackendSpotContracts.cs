@@ -342,22 +342,6 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
             "This MeshNode backend does not support Instance Spot activation."
         );
 
-    ValueTask ReplyInstanceSpotActivationAsync(
-        InstanceSpotActivationOperation operation,
-        InstanceSpotActivationTerminal terminal,
-        CancellationToken cancellationToken
-    ) => throw new NotSupportedException("This MeshNode backend does not support cold terminals.");
-
-    ValueTask<InstanceSpotActivationTerminal> ForwardInstanceSpotActivationAsync(
-        InstanceSpotActivationOperation operation,
-        IReadOnlyList<ReadOnlyMemory<byte>> parts,
-        ReadOnlyMemory<byte>? metadata,
-        CancellationToken cancellationToken
-    ) =>
-        throw new NotSupportedException(
-            "This MeshNode backend does not support Instance Spot activation forwarding."
-        );
-
     ValueTask<(
         UserSpotCreateCompletion Completion,
         IReadOnlyList<Message> Reply

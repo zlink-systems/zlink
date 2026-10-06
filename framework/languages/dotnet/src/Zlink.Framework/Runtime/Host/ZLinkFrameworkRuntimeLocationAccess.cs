@@ -83,18 +83,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         TimeSpan timeout,
         ReadOnlyMemory<byte> metadata,
         CancellationToken cancellationToken,
-        InstanceSpotActivationOperation? originalOperation = null,
         ulong? activationDeadlineUnixMs = null
     )
     {
-        if (
-            originalOperation is { } admitted
-            && admitted.DeadlineUnixMs
-                <= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-        )
-            throw ZLinkRequestFailureMapper.CreateTimedOutRequestException(
-                "Instance Spot activation"
-            );
         var source = ResolveActorCreationSource(address.MeshName);
         _ =
             Registration.Locations.ResolveStore()
@@ -157,8 +148,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkRetryAdvice.RetryAfterBackoff
             );
         var deadlineUnixMs =
-            originalOperation?.DeadlineUnixMs
-            ?? activationDeadlineUnixMs
+            activationDeadlineUnixMs
             ?? checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds());
         var target = new InstanceSpotActivationTarget(
             address.MeshName,
@@ -169,10 +159,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             selected.DescriptorRevision.ToString(System.Globalization.CultureInfo.InvariantCulture)
         );
         var sourceStatus = source.Node.MeshStatus();
-        var sourceSpotId =
-            originalOperation?.SourceSpotId
-            ?? ZLinkSpotAmbientContext.CurrentOrDefault?.SpotId
-            ?? string.Empty;
+        var sourceSpotId = ZLinkSpotAmbientContext.CurrentOrDefault?.SpotId ?? string.Empty;
         var state =
             _state
             ?? throw new ZLinkFrameworkException(
@@ -181,12 +168,12 @@ internal sealed partial class ZLinkFrameworkRuntime
             );
         if (state.FindSpotNodeByRoutingId(selected.Rid) is { } localTarget)
         {
-            var operationId = originalOperation?.OperationId ?? source.Node.AllocateOperationId();
+            var operationId = source.Node.AllocateOperationId();
             var local = await localTarget
                 .ActivateInstanceSpotLocalAsync(
                     target,
-                    originalOperation?.SourceNodeRid ?? source.Node.RoutingId,
-                    originalOperation?.SourceNodeGeneration ?? sourceStatus.LifecycleGeneration,
+                    source.Node.RoutingId,
+                    sourceStatus.LifecycleGeneration,
                     operationId,
                     sourceSpotId,
                     parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray(),
@@ -203,27 +190,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                     "Local Instance Spot activation"
                 );
             return local.ReplyParts.Select(Message.From).ToArray();
-        }
-        if (originalOperation is { } pending)
-        {
-            var terminal = await source
-                .Node.ForwardInstanceSpotActivationAsync(
-                    pending with
-                    {
-                        Target = target,
-                    },
-                    parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray(),
-                    metadata.IsEmpty ? null : metadata,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (terminal.Result != RequestResult.Ok)
-                throw ZLinkRequestFailureMapper.CreateCompletionException(
-                    terminal.Result,
-                    (int)terminal.FailureCode,
-                    "Forwarded Instance Spot activation"
-                );
-            return terminal.ReplyParts.Select(Message.From).ToArray();
         }
         return await source
             .Node.ActivateInstanceSpotAsync(

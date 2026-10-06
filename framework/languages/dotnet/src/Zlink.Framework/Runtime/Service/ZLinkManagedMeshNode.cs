@@ -1612,106 +1612,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return SubmitResult.Ok;
     }
 
-    internal async ValueTask<InstanceSpotActivationTerminal> ForwardInstanceSpotActivationAsync(
-        InstanceSpotActivationOperation operation,
-        IReadOnlyList<ReadOnlyMemory<byte>> parts,
-        ReadOnlyMemory<byte>? metadata,
-        CancellationToken cancellationToken
-    )
-    {
-        ArgumentNullException.ThrowIfNull(parts);
-        if (parts.Count == 0)
-            throw new ArgumentException(
-                "The first Instance Spot message is required.",
-                nameof(parts)
-            );
-        if (operation.Target.TargetNodeRid == _routingId)
-            throw new ArgumentException(
-                "An Instance Spot activation cannot be forwarded to the current node.",
-                nameof(operation)
-            );
-
-        var peer = await _lane
-            .RunAsync(() =>
-            {
-                _peersByRid.TryGetValue(operation.Target.TargetNodeRid, out var value);
-                return value;
-            })
-            .ConfigureAwait(false);
-        if (
-            peer is null
-            || !peer.Admitted
-            || peer.LifecycleGeneration != operation.Target.TargetNodeGeneration
-        )
-            throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
-
-        var head = ZLinkServiceWireCodec.EncodeInstanceSpotActivation(
-            operation,
-            metadata.HasValue && !metadata.Value.IsEmpty
-        );
-        var wire = new List<ReadOnlyMemory<byte>>(metadata.HasValue ? 3 : 2) { head };
-        if (metadata is { IsEmpty: false } value)
-            wire.Add(value);
-        wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
-        if (operation.IsRequest)
-        {
-            var remaining =
-                checked((long)operation.DeadlineUnixMs)
-                - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            if (remaining <= 0)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DeadlineExceeded,
-                    "The forwarded activation deadline has expired."
-                );
-            var replies = await RequestDirectWireAsync(
-                    peer.PhysicalRoutingId,
-                    wire,
-                    TimeSpan.FromMilliseconds(remaining),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            try
-            {
-                using var decoded = DecodeDirectApplicationReply(operation.ReplyRouteId, replies);
-                var view = decoded.ApplicationPayloadView!;
-                var payload = new ReadOnlyMemory<byte>[view.Count];
-                for (var index = 0; index < payload.Length; index++)
-                    payload[index] = view.GetMemory(index).ToArray();
-                return new InstanceSpotActivationTerminal(
-                    RequestResult.Ok,
-                    ServiceWireConstants.FrameworkErrorCode.None,
-                    payload
-                );
-            }
-            catch (ZLinkRequestTerminalException terminal)
-            {
-                return new InstanceSpotActivationTerminal(
-                    terminal.Result,
-                    (ServiceWireConstants.FrameworkErrorCode)terminal.FailureErrno,
-                    []
-                );
-            }
-            catch (ZlinkRequestException error)
-                when (error.Result == ZlinkRequestException.ErrorCode.ProtocolError)
-            {
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.ProtocolError,
-                    "The forwarded activation reply is invalid.",
-                    innerException: error
-                );
-            }
-        }
-        var submit = SubmitRoutedApplicationSend(peer, wire);
-        if (submit != SubmitResult.Ok)
-            throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
-        return new InstanceSpotActivationTerminal(
-            RequestResult.Ok,
-            ServiceWireConstants.FrameworkErrorCode.None,
-            [],
-            Forwarded: true
-        );
-    }
-
     private SubmitResult SubmitRoutedApplicationSend(
         Peer peer,
         IReadOnlyList<ReadOnlyMemory<byte>> wire
@@ -7418,15 +7318,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask ReplyInstanceSpotActivationAsync(
+    private ValueTask ReplyInstanceSpotActivationAsync(
         InstanceSpotActivationOperation operation,
         InstanceSpotActivationTerminal terminal,
         CancellationToken cancellationToken,
-        ReplyOperation? nativeReply = null
+        ReplyOperation? nativeReply
     )
     {
-        if (!operation.IsRequest || terminal.Forwarded)
-            return;
+        if (!operation.IsRequest)
+            return ValueTask.CompletedTask;
+        ArgumentNullException.ThrowIfNull(nativeReply);
         var wire = new List<ReadOnlyMemory<byte>>(2)
         {
             ZLinkServiceWireCodec.EncodeReply(
@@ -7439,37 +7340,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             wire.Add(
                 ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(terminal.ReplyParts)
             );
-        if (nativeReply is not null)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var prepared = PrepareNativeReply(operation.SourceNodeRid, nativeReply, wire);
-            var submitted = SubmitPreparedNativeReply(prepared);
-            if (submitted != SubmitResult.Ok)
-                throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submitted);
-            return;
-        }
-        var peer = await _lane
-            .RunAsync(() =>
-            {
-                _peersByRid.TryGetValue(operation.SourceNodeRid, out var value);
-                return value;
-            })
-            .ConfigureAwait(false);
-        if (peer is null || peer.LifecycleGeneration != operation.SourceNodeGeneration)
-        {
-            if (_logicalMulticastDispatchErrors is { Enabled: false })
-                return;
-            var error = new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                "The Instance Spot activation reply source is unavailable."
-            );
-            if (_logicalMulticastDispatchErrors is not { } reporter)
-                throw error;
-            reporter.ReportRuntimeTaskException(nameof(ReplyInstanceSpotActivationAsync), error);
-            return;
-        }
         cancellationToken.ThrowIfCancellationRequested();
-        await SendServiceTerminalAsync(operation.SourceNodeRid, wire).ConfigureAwait(false);
+        var prepared = PrepareNativeReply(operation.SourceNodeRid, nativeReply, wire);
+        var submitted = SubmitPreparedNativeReply(prepared);
+        if (submitted != SubmitResult.Ok)
+            throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submitted);
+        return ValueTask.CompletedTask;
     }
 
     private bool ProcessStateful(
@@ -10915,7 +10791,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             is MeshOperationKind.ActorJoin
                 or MeshOperationKind.UserSpotCreate
                 or MeshOperationKind.UserSpotClose
-                or MeshOperationKind.ActorCreate;
+                or MeshOperationKind.ActorCreate
+                or MeshOperationKind.InstanceSpotRequest;
 
     private void ProcessReplyRelayAck(
         RoutingId sourceNodeRid,

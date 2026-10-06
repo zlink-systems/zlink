@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.LocationProvider;
@@ -22,7 +23,7 @@ public sealed partial class EntrySpotActorDispatchTests
         bool failHandler
     )
     {
-        var node = new RecoveryColdNode();
+        var node = new CapturingSpotNode();
         var blobs = new InMemoryRelocationStore();
         var repository = new ZLinkProviderRelocationRepository(blobs);
         var (runtime, _) = await CreateStartedRuntimeAsync(
@@ -59,7 +60,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 700,
                 checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds())
             );
-            var message = new ProbeRouteMessage(failHandler ? "fail" : "first");
+            var message = new ProbeRouteMessage(
+                (failHandler ? "fail:" : "first:") + Guid.NewGuid().ToString("N")
+            );
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                 ZLinkClientCallCodec.CreateEnvelope(
                     ZLinkMessageKind.Request,
@@ -81,7 +84,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.Registration.SpotNodes["entry"],
                 owner
             );
-            InstanceSpotActivationTerminal terminal;
+            InstanceSpotActivationTerminal? terminal = null;
             if (recovered)
             {
                 var root = ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
@@ -129,9 +132,28 @@ public sealed partial class EntrySpotActorDispatchTests
                     )
                 );
                 await target.RecoverAsync(CancellationToken.None);
-                Assert.Equal(operation.ReplyRouteId, node.RecoveredOperation.ReplyRouteId);
-                Assert.Equal(operation.OperationId, node.RecoveredOperation.OperationId);
-                terminal = node.RecoveredTerminal!;
+                Assert.Equal(
+                    1,
+                    RecoveryColdHandler.Received.Count(value => value == message.Value)
+                );
+                var authority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                    await store.ReadAuthorityAsync(
+                        ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(
+                            operation.Target.TargetSpotId
+                        )
+                    )
+                );
+                Assert.True(
+                    ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                        authority.Snapshot.Payload.Span,
+                        out var cleared
+                    )
+                );
+                Assert.Null(cleared.ActivationRecovery);
+                Assert.IsType<ZLinkRelocationReadResult.Missing>(
+                    await repository.GetRelocationAsync(stored.Reference)
+                );
+                return;
             }
             else
                 terminal = await target.ActivateAsync(
@@ -140,7 +162,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     payload,
                     CancellationToken.None
                 );
-            Assert.Equal(RequestResult.Ok, terminal.Result);
+            Assert.Equal(RequestResult.Ok, terminal!.Result);
             if (failHandler)
             {
                 var error = Assert.Throws<ZLinkFrameworkException>(() =>
@@ -155,7 +177,7 @@ public sealed partial class EntrySpotActorDispatchTests
             }
             else
                 Assert.Equal(
-                    "first-reply",
+                    message.Value + "-reply",
                     ZLinkClientCallCodec
                         .DecodeEnvelopeReplyAndDispose<ProbeReply>(
                             terminal.ReplyParts.Select(Message.From).ToArray(),
@@ -172,20 +194,86 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    private sealed class RecoveryColdNode : CapturingSpotNode, IZLinkBackendSpotNode
+    [Fact]
+    public async Task ReserveLoserReturnsUnavailableWithoutDispatchingItsPayload()
     {
-        internal InstanceSpotActivationOperation RecoveredOperation;
-        internal InstanceSpotActivationTerminal? RecoveredTerminal;
-
-        public ValueTask ReplyInstanceSpotActivationAsync(
-            InstanceSpotActivationOperation operation,
-            InstanceSpotActivationTerminal terminal,
-            CancellationToken cancellationToken
-        )
+        var node = new CapturingSpotNode();
+        var blobs = new InMemoryRelocationStore();
+        var repository = new ZLinkProviderRelocationRepository(blobs);
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            instanceSpotType: typeof(RecoveryColdSpot),
+            relocationStore: blobs
+        );
+        try
         {
-            RecoveredOperation = operation;
-            RecoveredTerminal = terminal;
-            return ValueTask.CompletedTask;
+            var store = RequireLocationStore(runtime);
+            var descriptor = Assert.Single(
+                await store.ListAllMeshNodesAsync("entry", CancellationToken.None),
+                row => row.Rid == node.RoutingId
+            );
+            var operation = new InstanceSpotActivationOperation(
+                new InstanceSpotActivationTarget(
+                    "entry",
+                    node.RoutingId,
+                    descriptor.LifecycleGeneration,
+                    "reserve-loser",
+                    "Tests.InstanceSpot",
+                    descriptor.DescriptorRevision.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture
+                    )
+                ),
+                node.RoutingId,
+                descriptor.LifecycleGeneration,
+                "source",
+                new MeshOperationId(201, 203),
+                true,
+                900,
+                checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds())
+            );
+            var target = new ZLinkInstanceSpotActivationTarget(
+                store,
+                repository,
+                runtime.GetSpotNodeRuntime("entry").Catalog,
+                node,
+                runtime.Registration.SpotNodes["entry"],
+                new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
+            );
+            var message = new ProbeRouteMessage(Guid.NewGuid().ToString("N"));
+            var encoded = ZLinkClientCallCodec.EncodeEnvelopeParts(
+                ZLinkClientCallCodec.CreateEnvelope(
+                    ZLinkMessageKind.Request,
+                    "entry",
+                    ZLinkMessageNameResolver.ResolveFromMessage(message)
+                ),
+                message,
+                runtime.Registration.Codecs
+            );
+            var payload = encoded.Select(part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray();
+            ZLinkMessageParts.DisposeAll(encoded);
+            Assert.Equal(
+                RequestResult.Ok,
+                (
+                    await target.ActivateAsync(operation, null, payload, CancellationToken.None)
+                ).Result
+            );
+            Assert.Equal(1, RecoveryColdHandler.Received.Count(value => value == message.Value));
+            var loser = operation with
+            {
+                OperationId = new MeshOperationId(211, 213),
+                ReplyRouteId = 901,
+            };
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                target.ActivateAsync(loser, null, payload, CancellationToken.None).AsTask()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+            Assert.Equal(1, RecoveryColdHandler.Received.Count(value => value == message.Value));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
         }
     }
 
@@ -199,17 +287,22 @@ public sealed partial class EntrySpotActorDispatchTests
     private sealed class RecoveryColdHandler
         : IZLinkSpotRequestHandler<RecoveryColdSpot, ProbeRouteMessage, ProbeReply>
     {
+        internal static readonly ConcurrentQueue<string> Received = new();
+
         public ValueTask<ProbeReply> HandleAsync(
             RecoveryColdSpot spot,
             ProbeRouteMessage request,
             CancellationToken cancellationToken
-        ) =>
-            request.Value == "fail"
+        )
+        {
+            Received.Enqueue(request.Value);
+            return request.Value.StartsWith("fail:", StringComparison.Ordinal)
                 ? throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.NotFound,
                     "handler failure"
                 )
                 : ValueTask.FromResult(new ProbeReply(request.Value + "-reply"));
+        }
     }
 
     [Theory]
