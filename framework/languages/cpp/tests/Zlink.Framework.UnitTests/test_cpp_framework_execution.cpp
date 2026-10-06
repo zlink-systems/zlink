@@ -1811,6 +1811,56 @@ bool verify_spot_wide_two_actors_are_serial ()
     return accepted_b && !ran_too_early && ran_after_release;
 }
 
+bool verify_spot_wide_consumer_waits_for_shared_gate ()
+{
+    using namespace zlink::framework::runtime;
+
+    serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide (), {}, 1);
+    serial_test_blocker_t owner;
+    if (!fixture.serial.execute_spot ("gate-owner", owner.work ()) || !owner.wait_for_entry ())
+        return false;
+
+    bool accepted = true;
+    std::atomic_int started{0};
+    for (const auto *actor : {"actor-a", "actor-b"}) {
+        serial_work_options_t options;
+        options.retained_message = std::make_shared<int> (7);
+        accepted = fixture.serial.execute_actor (
+                     actor, "waiting-actor",
+                     [&] (auto complete) {
+                         started.fetch_add (1, std::memory_order_release);
+                         complete ([] {});
+                     },
+                     options)
+                   && accepted;
+    }
+    // One worker makes this marker follow the existing independent Actor drains.
+    // Admission must finish while the ordinary asynchronous Spot turn is held.
+    serial_test_signal_t marker;
+    const auto marked = fixture.worker->try_submit_internal ([&] { marker.set (); });
+    const auto observed = marked && marker.wait_for ();
+    std::size_t waiting_messages = 0;
+    for (const auto *actor : {"actor-a", "actor-b"})
+        waiting_messages +=
+          fixture.serial.actor_executor (actor)->queue ()->pending_messages ().size ();
+    bool retained = waiting_messages == 2;
+    const auto started_while_held = started.load (std::memory_order_acquire);
+    owner.release ();
+    fixture.spot_queue->drain ();
+    for (const auto *actor : {"actor-a", "actor-b"}) {
+        const auto queue = fixture.serial.actor_executor (actor)->queue ();
+        queue->drain ();
+        retained = queue->pending_messages ().empty () && retained;
+    }
+    const auto started_after_release = started.load (std::memory_order_acquire);
+    std::cout << "SpotWide consumer probe: accepted=" << accepted << " marker=" << observed
+              << " retained-while-held=" << waiting_messages
+              << " handlers-while-held=" << started_while_held
+              << " handlers-after-release=" << started_after_release << '\n';
+    return accepted && observed && retained && started_while_held == 0
+           && started_after_release == 2;
+}
+
 bool verify_same_actor_fifo_in_both_modes ()
 {
     using namespace zlink::framework::runtime;
@@ -7362,6 +7412,11 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--spotwide-consumer-gate") {
+        const bool passed = verify_spot_wide_consumer_waits_for_shared_gate ();
+        std::cout << "SpotWide consumer waits for shared gate=" << passed << '\n';
+        return passed ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--relocation-ready-state-lane") {
         const bool passed = verify_relocation_ready_keeps_registering_turn_across_state_lane ();
         std::cout << "relocation readiness registering turn retained=" << passed << '\n';
@@ -8777,5 +8832,8 @@ int main (int argc, char **argv)
         return 24;
     }
 
+    if (!verify_spot_wide_consumer_waits_for_shared_gate ()) {
+        return EXIT_FAILURE;
+    }
     return 0;
 }
