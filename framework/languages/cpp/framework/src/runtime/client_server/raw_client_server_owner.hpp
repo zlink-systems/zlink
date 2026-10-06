@@ -65,6 +65,14 @@ enum class client_server_pump_result_t
     protocol_error
 };
 
+// A received application record and its permit. The permit becomes a queued job only
+// when the owner mailbox admits the record, so admission is the one acceptance point.
+struct received_application_record_t
+{
+    mesh::service_mailbox_record_t record;
+    std::shared_ptr<application_job_queue_t::permit_t> permit;
+};
+
 struct raw_client_server_server_options_t
 {
     protocol::client_server_server_admission_t descriptor;
@@ -98,9 +106,9 @@ class raw_client_server_server_t
     pump_one (mesh::service_liveness_registry_t::clock_t::time_point now,
               std::shared_ptr<application_job_queue_t::permit_t> application_permit = {},
               receive_batch_budget_t *budget = nullptr,
-              std::vector<mesh::service_mailbox_record_t> *application_records = nullptr);
+              std::vector<received_application_record_t> *application_records = nullptr);
     task_t<client_server_pump_result_t>
-    enqueue_application_records (std::vector<mesh::service_mailbox_record_t> &records);
+    enqueue_application_records (std::vector<received_application_record_t> &records);
     task_t<mesh::service_liveness_tick_t>
     tick_liveness (mesh::service_liveness_registry_t::clock_t::time_point now);
     task_t<std::optional<mesh::service_liveness_registry_t::clock_t::time_point>>
@@ -117,7 +125,7 @@ class raw_client_server_server_t
       detail::backend::raw_received_t received,
       messaging::envelope_header_t envelope,
       std::shared_ptr<application_job_queue_t::permit_t> application_permit,
-      std::vector<mesh::service_mailbox_record_t> *application_records);
+      std::vector<received_application_record_t> *application_records);
 
   public:
   private:

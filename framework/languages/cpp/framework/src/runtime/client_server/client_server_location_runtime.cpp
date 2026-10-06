@@ -265,7 +265,7 @@ pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        receive_batch_budget_t budget)
 {
     bool progressed = (co_await server->drain_monitor_events_task (now)) != 0;
-    std::vector<mesh::service_mailbox_record_t> application_records;
+    std::vector<received_application_record_t> application_records;
     while (application_permit && budget.can_receive ()) {
         const auto result = co_await server->pump_one (now, std::move (application_permit), &budget,
                                                        &application_records);

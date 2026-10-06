@@ -393,7 +393,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
   mesh::service_liveness_registry_t::clock_t::time_point now,
   std::shared_ptr<application_job_queue_t::permit_t> application_permit,
   receive_batch_budget_t *budget,
-  std::vector<mesh::service_mailbox_record_t> *application_records)
+  std::vector<received_application_record_t> *application_records)
 {
     // start() publishes these before receive; updates preserve channel_name,
     // and close() retains _port while in-flight receives finish.
@@ -547,7 +547,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
   detail::backend::raw_received_t received,
   messaging::envelope_header_t envelope,
   std::shared_ptr<application_job_queue_t::permit_t> application_permit,
-  std::vector<mesh::service_mailbox_record_t> *application_records)
+  std::vector<received_application_record_t> *application_records)
 {
     trace_client_server_lazy ("server-received", [&] {
         return "channel=" + envelope.channel_name
@@ -556,8 +556,6 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                + " client=" + routing_id_label (received.source_routing_id) + " reply_token="
                + (received.reply_token ? std::string ("present") : std::string ("-"));
     });
-    if (application_permit)
-        application_permit->mark_queued ();
     mesh::service_mailbox_record_t record{envelope.channel_name,
                                           mesh::service_mailbox_domain_t::application,
                                           std::move (received.parts),
@@ -567,23 +565,25 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                                           0,
                                           std::nullopt,
                                           std::nullopt,
-                                          [permit = std::move (application_permit)] () mutable {
+                                          [permit = application_permit] () mutable {
                                               if (!permit)
                                                   return;
                                               permit->release_for_handler_entry ();
                                               permit.reset ();
                                           }};
+    received_application_record_t received_record{std::move (record),
+                                                  std::move (application_permit)};
     if (application_records) {
-        application_records->push_back (std::move (record));
+        application_records->push_back (std::move (received_record));
         co_return client_server_pump_result_t::application;
     }
-    std::vector<mesh::service_mailbox_record_t> one;
-    one.push_back (std::move (record));
+    std::vector<received_application_record_t> one;
+    one.push_back (std::move (received_record));
     co_return co_await enqueue_application_records (one);
 }
 
 task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_application_records (
-  std::vector<mesh::service_mailbox_record_t> &records)
+  std::vector<received_application_record_t> &records)
 {
     if (records.empty ())
         co_return client_server_pump_result_t::no_data;
@@ -591,13 +591,16 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
     auto results = co_await _lane.run_task ([this, &records] {
         std::vector<client_server_pump_result_t> results;
         results.reserve (records.size ());
-        for (auto &record : records) {
-            if (_connections.find (record.source_routing_id) == _connections.end ())
+        for (auto &received : records) {
+            if (_connections.find (received.record.source_routing_id) == _connections.end ()) {
                 results.push_back (client_server_pump_result_t::protocol_error);
-            else
-                results.push_back (_mailbox.try_enqueue (std::move (record))
-                                     ? client_server_pump_result_t::application
-                                     : client_server_pump_result_t::backpressured);
+            } else if (_mailbox.try_enqueue (std::move (received.record))) {
+                if (received.permit)
+                    received.permit->mark_queued ();
+                results.push_back (client_server_pump_result_t::application);
+            } else {
+                results.push_back (client_server_pump_result_t::backpressured);
+            }
         }
         return results;
     });
@@ -607,11 +610,11 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
             result = client_server_pump_result_t::protocol_error;
         } else if (results[index] == client_server_pump_result_t::backpressured) {
             result = client_server_pump_result_t::backpressured;
-            if (records[index].reply_token) {
+            if (records[index].record.reply_token) {
                 const framework_exception_t error (
                   framework_error_kind_t::shutting_down,
                   "ClientServer is shutting down and rejects application work");
-                (void) co_await reply (records[index], error);
+                (void) co_await reply (records[index].record, error);
             }
         }
     }
