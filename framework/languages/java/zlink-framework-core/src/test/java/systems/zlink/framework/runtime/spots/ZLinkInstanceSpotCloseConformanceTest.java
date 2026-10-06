@@ -563,7 +563,13 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                 }
                 long deadline = System.nanoTime() + WAIT.toNanos();
                 while (!terminal.isDone()
-                        && activation.context.ownerQueue().pendingMessages().isEmpty()) {
+                        && activation
+                                .context
+                                .ownerQueue()
+                                .pendingMessages()
+                                .toCompletableFuture()
+                                .join()
+                                .isEmpty()) {
                     if (System.nanoTime() > deadline)
                         throw new TimeoutException("late Instance intent message was not decided");
                     Thread.sleep(2);
