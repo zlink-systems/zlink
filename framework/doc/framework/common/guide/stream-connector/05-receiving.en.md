@@ -22,7 +22,7 @@ These registrations come from the tutorial. The .NET, Java, Kotlin, and C++ exam
 `NicknameChanged` in the existing JSON flow. The Node example receives the generated Protobuf
 class `Ping`. Each tutorial README provides the execution procedure.
 
-<iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push-en.html" title="Node fixed-type Protobuf receiving example" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push-en.html" title="Node typed Protobuf receiving example" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/stream-protobuf-push-en.html" target="_blank">↗ Open larger</a></p>
 
 === "C++"
@@ -87,13 +87,11 @@ separately. This is useful when the type name differs from the server's packet n
     `on(name, handler)` supplies no type. Writing `<T>` alone supplies no runtime type information.
     When only a name is supplied, the decoding result depends on the configured codec.
 
-!!! warning "Type Handling in the Node Protobuf Helpers"
+!!! note "Node Protobuf Codec"
 
-    Currently, `createZlinkStreamProtobufCodec(Type)` always uses the type selected at creation.
-    `createZlinkStreamProtobufEnvelopeCodec` also does not forward the handler type to the supplied decoder.
-    Registering `on(..., Type)` alone does not automatically select between Protobuf message types.
-    This difference is being reviewed in [#1503](https://github.com/zlink-systems/zlink/issues/1503).
-    [Node Protobuf Messaging](../../../node/guide/stream-connector/40-protobuf.en.md) contains the runnable example.
+    The patched codec decodes with the constructor supplied by `on(Type, handler)` and uses the factory fallback when no type is supplied.
+    The envelope codec also forwards the handler type. [Node Protobuf Messaging](../../../node/guide/stream-connector/40-protobuf.en.md)
+    describes the difference from released 0.28.0 and the execution steps.
 
 ## 2. Releasing a Registration
 
@@ -105,31 +103,31 @@ error.
 === "C++"
 
     ```cpp
-    subscription.unsubscribe ();   // The registration also ends when the value goes away.
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:receiving-unsubscribe"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    subscription.Dispose();
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-unsubscribe"
     ```
 
 === "Java"
 
     ```java
-    subscription.close();
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/ReceivingProgram.java:receiving-unsubscribe"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    subscription.close()
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-unsubscribe"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    subscription.dispose();
+    --8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-unsubscribe"
     ```
 
 **Whether the value's lifetime is the registration's lifetime is decided by the language.** In a
@@ -153,47 +151,31 @@ blocks that path and delays the receive work behind it.
 === "C++"
 
     ```cpp
-    while (running) {
-        connector.dispatch ();
-        render_frame ();
-    }
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:receiving-pump"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    while (running)
-    {
-        await connector.Dispatch.Async();
-        RenderFrame();
-    }
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-pump"
     ```
 
 === "Java"
 
     ```java
-    while (running) {
-        connector.dispatch().submit().toCompletableFuture().join();
-        renderFrame();
-    }
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/ReceivingProgram.java:receiving-pump"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    while (running) {
-        connector.dispatch().await()
-        renderFrame()
-    }
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-pump"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    while (running) {
-      await connector.dispatch();
-      renderFrame();
-    }
+    --8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-pump"
     ```
 
 The wait surfaces below observe the receive queue directly rather than running registered handlers,
@@ -233,51 +215,31 @@ The example below waits for one packet by payload type.
 === "C++"
 
     ```cpp
-    auto found = connector.wait_for<match_found_t> ()
-                   .where ([] (const auto &message) {
-                       return message.payload.match_id == "match-7f3a";
-                   })
-                   .timeout (std::chrono::seconds (30))
-                   .submit ();
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:receiving-wait"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    var found = await connector.WaitFor<MatchFound>()
-        .Where(message => message.Payload!.MatchId == "match-7f3a")
-        .Timeout(TimeSpan.FromSeconds(30))
-        .Async();
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-wait"
     ```
 
 === "Java"
 
     ```java
-    ZLinkStreamMessage<MatchFound> found = connector.waitFor(MatchFound.class)
-        .where(MatchFound.class, message -> "match-7f3a".equals(message.payload().matchId()))
-        .timeout(Duration.ofSeconds(30))
-        .submit(MatchFound.class)
-        .toCompletableFuture()
-        .join();
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/ReceivingProgram.java:receiving-wait"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val found = connector.waitFor<MatchFound>()
-        .where { it.payload.matchId == "match-7f3a" }
-        .timeout(Duration.ofSeconds(30))
-        .await()
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-wait"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    const found = await connector
-      .waitFor<MatchFound>('match.found')
-      .where(message => message.payload.matchId === 'match-7f3a')
-      .timeout(30_000)
-      .submit();
+    --8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-wait"
     ```
 
 **Predicates and returns deal in messages, not payloads.** A predicate given the payload alone
@@ -294,74 +256,31 @@ arrived in that order, and returns the list of messages.
 === "C++"
 
     ```cpp
-    auto quiet = connector.expect_none<order_changed_t> ()
-                   .within (std::chrono::milliseconds (100))
-                   .submit ();
-
-    auto steps = connector.wait_for_sequence<order_changed_t> ()
-                   .expect ([] (const auto &m) { return m.payload.status == status_t::paid; })
-                   .expect ([] (const auto &m) { return m.payload.status == status_t::shipped; })
-                   .timeout (std::chrono::seconds (2))
-                   .submit ();
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:receiving-sequence"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    await connector.ExpectNone<OrderChanged>()
-        .Within(TimeSpan.FromMilliseconds(100))
-        .Async();
-
-    var steps = await connector.WaitForSequence<OrderChanged>()
-        .Expect(message => message.Payload!.Status == OrderStatus.Paid)
-        .Expect(message => message.Payload!.Status == OrderStatus.Shipped)
-        .Timeout(TimeSpan.FromSeconds(2))
-        .Async();
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-sequence"
     ```
 
 === "Java"
 
     ```java
-    connector.expectNone(OrderChanged.class)
-        .within(Duration.ofMillis(100))
-        .submit()
-        .toCompletableFuture()
-        .join();
-
-    List<ZLinkStreamMessage<OrderChanged>> steps = connector.waitForSequence(OrderChanged.class)
-        .expect(OrderChanged.class, m -> m.payload().status() == OrderStatus.PAID)
-        .expect(OrderChanged.class, m -> m.payload().status() == OrderStatus.SHIPPED)
-        .timeout(Duration.ofSeconds(2))
-        .submit(OrderChanged.class)
-        .toCompletableFuture()
-        .join();
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/ReceivingProgram.java:receiving-sequence"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    connector.expectNone<OrderChanged>("order.changed")
-        .within(Duration.ofMillis(100))
-        .await()
-
-    val steps = connector.waitForSequence<OrderChanged>("order.changed")
-        .expect { it.payload.status == OrderStatus.PAID }
-        .expect { it.payload.status == OrderStatus.SHIPPED }
-        .timeout(Duration.ofSeconds(2))
-        .await()
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-sequence"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    await connector.expectNone<OrderChanged>('order.changed').within(100).run();
-
-    const steps = await connector
-      .waitForSequence<OrderChanged>('order.changed')
-      .expect(message => message.payload.status === 'paid')
-      .expect(message => message.payload.status === 'shipped')
-      .timeout(2_000)
-      .run();
+    --8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-sequence"
     ```
 
 A failed observation — nothing arrived in time, something arrived that should not have, the order
@@ -378,31 +297,31 @@ pump. The count also rises when the packet arrives, whatever the setting for whe
 === "C++"
 
     ```cpp
-    auto count = connector.received_count ("leaderboard.update");
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:receiving-count"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    var count = connector.ReceivedCount("leaderboard.update");
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-count"
     ```
 
 === "Java"
 
     ```java
-    int count = connector.receivedCount("leaderboard.update");
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/ReceivingProgram.java:receiving-count"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val count = connector.receivedCount("leaderboard.update")
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-count"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    const count = connector.receivedCount('leaderboard.update');
+    --8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-count"
     ```
 
 The reference point is the moment the connection is established. The count starts at zero then, and
@@ -591,7 +510,21 @@ An unbound handle is closed. Sending through a closed handle doesn't send and en
 the server doesn't hand it to another Actor — a request ends with an `InvalidOperation` error reply,
 and a one-way send is dropped.
 
-## 9. Next Chapters
+## 9. Tutorial Execution Result
+
+The unsubscribe, pump, predicate wait, sequence, and count examples run in each language's StreamClient `--receiving` mode.
+`STREAM_RECEIVING_ENDPOINT` is the address of a server sending JSON packets. Node uses WebSocket; the other examples use TCP.
+The verification peer sends `LeaderboardUpdate` twice, followed by `MatchFound` and ordered `OrderChanged` messages.
+All five language programs produced the same result.
+
+```text
+receiving: handler=1, frames=1, match=match-7f3a, sequence=paid,shipped, count=2
+```
+
+The pump runs the handler once. After unsubscribe, the second packet still increases the received count without invoking the handler.
+The program checks the matching message, the paid/shipped sequence, and the absence of OrderChanged before the sequence starts.
+
+## 10. Next Chapters
 
 - Connection state, reconnection, close reasons — [Connection Lifecycle](06-lifecycle.en.md)
 - Errors raised on the receive path — [Error Handling](07-error-handling.en.md)

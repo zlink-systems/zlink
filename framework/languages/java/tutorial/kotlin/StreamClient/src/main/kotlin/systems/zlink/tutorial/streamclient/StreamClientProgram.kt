@@ -21,7 +21,11 @@ import systems.zlink.tutorial.shared.NicknameChanged
 import systems.zlink.tutorial.shared.Ping
 import systems.zlink.tutorial.shared.Pong
 
-fun main() = runBlocking {
+fun main(args: Array<String>) = runBlocking {
+    if (args.firstOrNull() == "--receiving") {
+        runReceiving(requireNotNull(System.getenv("STREAM_RECEIVING_ENDPOINT")))
+        return@runBlocking
+    }
     // --8<-- [start:stream-client]
     // A game client outside the mesh. It references the connector only, never the
     // Framework, and speaks to the port the stream node opened.

@@ -40,7 +40,7 @@ These registrations come from the tutorial. The .NET, Java, Kotlin, and C++ exam
 `NicknameChanged` in the existing JSON flow. The Node example receives the generated Protobuf
 class `Ping`. Each tutorial README provides the execution procedure.
 
-<iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push-en.html" title="Node fixed-type Protobuf receiving example" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push-en.html" title="Node typed Protobuf receiving example" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/stream-protobuf-push-en.html" target="_blank">↗ Open larger</a></p>
 
 ```csharp
@@ -56,13 +56,11 @@ separately. This is useful when the type name differs from the server's packet n
 The `T` in `On<T>(handler)` and `On<T>(name, handler)` reaches `PayloadCodec.Decode<T>(payload)`.
 Set the `PayloadCodec` option to `ZLinkProtobufCodec.Default` for Protobuf.
 
-!!! warning "Type Handling in the Node Protobuf Helpers"
+!!! note "Node Protobuf Codec"
 
-    Currently, `createZlinkStreamProtobufCodec(Type)` always uses the type selected at creation.
-    `createZlinkStreamProtobufEnvelopeCodec` also does not forward the handler type to the supplied decoder.
-    Registering `on(..., Type)` alone does not automatically select between Protobuf message types.
-    This difference is being reviewed in [#1503](https://github.com/zlink-systems/zlink/issues/1503).
-    [Node Protobuf Messaging](../../../node/guide/stream-connector/40-protobuf.en.md) contains the runnable example.
+    The patched codec decodes with the constructor supplied by `on(Type, handler)` and uses the factory fallback when no type is supplied.
+    The envelope codec also forwards the handler type. [Node Protobuf Messaging](../../../node/guide/stream-connector/40-protobuf.en.md)
+    describes the difference from released 0.28.0 and the execution steps.
 
 ## 2. Releasing a Registration
 
@@ -72,7 +70,7 @@ closes. A released handler does not run afterwards, and releasing the same value
 error.
 
 ```csharp
-subscription.Dispose();
+--8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-unsubscribe"
 ```
 
 **Whether the value's lifetime is the registration's lifetime is decided by the language.** In a
@@ -94,11 +92,7 @@ Switching to immediate execution runs handlers on the receive path with no pump.
 blocks that path and delays the receive work behind it.
 
 ```csharp
-while (running)
-{
-    await connector.Dispatch.Async();
-    RenderFrame();
-}
+--8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-pump"
 ```
 
 The wait surfaces below observe the receive queue directly rather than running registered handlers,
@@ -118,10 +112,7 @@ Use `WaitFor<T>()` or `WaitFor<T>(name)`.
 The example below waits for one packet by payload type.
 
 ```csharp
-var found = await connector.WaitFor<MatchFound>()
-    .Where(message => message.Payload!.MatchId == "match-7f3a")
-    .Timeout(TimeSpan.FromSeconds(30))
-    .Async();
+--8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-wait"
 ```
 
 **Predicates and returns deal in messages, not payloads.** A predicate given the payload alone
@@ -136,15 +127,7 @@ not arrive during it. The second applies predicates in order, confirms packets o
 arrived in that order, and returns the list of messages.
 
 ```csharp
-await connector.ExpectNone<OrderChanged>()
-    .Within(TimeSpan.FromMilliseconds(100))
-    .Async();
-
-var steps = await connector.WaitForSequence<OrderChanged>()
-    .Expect(message => message.Payload!.Status == OrderStatus.Paid)
-    .Expect(message => message.Payload!.Status == OrderStatus.Shipped)
-    .Timeout(TimeSpan.FromSeconds(2))
-    .Async();
+--8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-sequence"
 ```
 
 A failed observation — nothing arrived in time, something arrived that should not have, the order
@@ -159,7 +142,7 @@ it, so the count still answers how many arrived under that name after a handler 
 pump. The count also rises when the packet arrives, whatever the setting for when handlers run.
 
 ```csharp
-var count = connector.ReceivedCount("leaderboard.update");
+--8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-count"
 ```
 
 The reference point is the moment the connection is established. The count starts at zero then, and
@@ -232,7 +215,21 @@ An unbound handle is closed. Sending through a closed handle doesn't send and en
 the server doesn't hand it to another Actor — a request ends with an `InvalidOperation` error reply,
 and a one-way send is dropped.
 
-## 9. Next Chapters
+## 9. Tutorial Execution Result
+
+The unsubscribe, pump, predicate wait, sequence, and count examples run in each language's StreamClient `--receiving` mode.
+`STREAM_RECEIVING_ENDPOINT` is the address of a server sending JSON packets. Node uses WebSocket; the other examples use TCP.
+The verification peer sends `LeaderboardUpdate` twice, followed by `MatchFound` and ordered `OrderChanged` messages.
+All five language programs produced the same result.
+
+```text
+receiving: handler=1, frames=1, match=match-7f3a, sequence=paid,shipped, count=2
+```
+
+The pump runs the handler once. After unsubscribe, the second packet still increases the received count without invoking the handler.
+The program checks the matching message, the paid/shipped sequence, and the absence of OrderChanged before the sequence starts.
+
+## 10. Next Chapters
 
 - Connection state, reconnection, close reasons — [Connection Lifecycle](06-lifecycle.en.md)
 - Errors raised on the receive path — [Error Handling](07-error-handling.en.md)

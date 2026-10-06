@@ -16,6 +16,13 @@ import {
 } from '../Shared/contracts.js';
 
 async function main(): Promise<void> {
+  if (process.argv.includes('--receiving')) {
+    const endpoint = process.env.STREAM_RECEIVING_ENDPOINT;
+    if (!endpoint) throw new Error('STREAM_RECEIVING_ENDPOINT is required for --receiving.');
+    const { runReceiving } = await import('./receiving.js');
+    console.log(await runReceiving(endpoint));
+    return;
+  }
   if (process.argv.includes('--protobuf')) {
     const endpoint = process.env.STREAM_PROTOBUF_ENDPOINT;
     if (!endpoint) throw new Error('STREAM_PROTOBUF_ENDPOINT is required for --protobuf.');

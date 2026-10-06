@@ -11,5 +11,5 @@
     "rootDir": "..",
     "types": ["node"]
   },
-  "include": ["main.ts", "../Shared/**/*.ts", "protobuf.ts"]
+  "include": ["main.ts", "../Shared/**/*.ts", "protobuf.ts", "receiving.ts"]
 }

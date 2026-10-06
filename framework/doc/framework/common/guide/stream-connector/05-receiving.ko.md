@@ -21,7 +21,7 @@ message는 packet 이름, payload, metadata와 Actor ID를 함께 전달한다. 
 `NicknameChanged`를 받고, Node 예제는 Protobuf 흐름의 생성 클래스 `Ping`을 받는다.
 각 예제의 실행 절차는 해당 tutorial README가 설명한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push.html" title="Node 고정 타입 Protobuf 수신 예제" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push.html" title="Node 타입 지정 Protobuf 수신 예제" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/stream-protobuf-push.html" target="_blank">↗ 크게 보기</a></p>
 
 === "C++"
@@ -86,13 +86,11 @@ message는 packet 이름, payload, metadata와 Actor ID를 함께 전달한다. 
     `on(name, handler)`는 타입을 전달하지 않는다. `<T>`만 적으면 실행 시점의 타입 정보는 생기지 않는다.
     이름만 지정했을 때의 디코딩 결과는 등록된 codec에 달려 있다.
 
-!!! warning "Node Protobuf helper의 타입 처리"
+!!! note "Node Protobuf codec"
 
-    현재 `createZlinkStreamProtobufCodec(Type)`는 생성할 때 지정한 타입만 사용한다.
-    `createZlinkStreamProtobufEnvelopeCodec`도 handler 타입을 사용자 decoder로 전달하지 않는다.
-    `on(..., Type)`만으로 여러 Protobuf 타입이 자동 선택되지는 않는다.
-    이 차이는 [#1503](https://github.com/zlink-systems/zlink/issues/1503)에서 확인 중이다.
-    현재 실행되는 예제는 [Node Protobuf 송수신](../../../node/guide/stream-connector/40-protobuf.ko.md)에 있다.
+    수정한 codec은 `on(Type, handler)`의 생성자로 디코딩한다. 타입이 없으면 factory의 기본 타입을 쓴다.
+    envelope codec도 handler 타입을 decoder에 전달한다. 배포된 0.28.0과의 차이와 실행 절차는
+    [Node Protobuf 송수신](../../../node/guide/stream-connector/40-protobuf.ko.md)이 설명한다.
 
 ## 2. 등록 해제
 
@@ -103,31 +101,31 @@ message는 packet 이름, payload, metadata와 Actor ID를 함께 전달한다. 
 === "C++"
 
     ```cpp
-    subscription.unsubscribe ();   // 값이 사라질 때도 등록이 해제된다
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:receiving-unsubscribe"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    subscription.Dispose();
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-unsubscribe"
     ```
 
 === "Java"
 
     ```java
-    subscription.close();
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/ReceivingProgram.java:receiving-unsubscribe"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    subscription.close()
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-unsubscribe"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    subscription.dispose();
+    --8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-unsubscribe"
     ```
 
 **돌려받은 값의 수명이 등록의 수명인지는 언어가 정한다.** 소유권을 값으로 나타내는 언어에서는
@@ -149,47 +147,31 @@ message는 packet 이름, payload, metadata와 Actor ID를 함께 전달한다. 
 === "C++"
 
     ```cpp
-    while (running) {
-        connector.dispatch ();
-        render_frame ();
-    }
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:receiving-pump"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    while (running)
-    {
-        await connector.Dispatch.Async();
-        RenderFrame();
-    }
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-pump"
     ```
 
 === "Java"
 
     ```java
-    while (running) {
-        connector.dispatch().submit().toCompletableFuture().join();
-        renderFrame();
-    }
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/ReceivingProgram.java:receiving-pump"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    while (running) {
-        connector.dispatch().await()
-        renderFrame()
-    }
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-pump"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    while (running) {
-      await connector.dispatch();
-      renderFrame();
-    }
+    --8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-pump"
     ```
 
 아래 대기 표면은 등록된 handler가 아니라 수신 큐를 직접 관측한다. 그래서 pump를 호출하지 않는
@@ -228,51 +210,31 @@ packet 이름은 명시하거나 payload 타입에서 정할 수 있다.
 === "C++"
 
     ```cpp
-    auto found = connector.wait_for<match_found_t> ()
-                   .where ([] (const auto &message) {
-                       return message.payload.match_id == "match-7f3a";
-                   })
-                   .timeout (std::chrono::seconds (30))
-                   .submit ();
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:receiving-wait"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    var found = await connector.WaitFor<MatchFound>()
-        .Where(message => message.Payload!.MatchId == "match-7f3a")
-        .Timeout(TimeSpan.FromSeconds(30))
-        .Async();
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-wait"
     ```
 
 === "Java"
 
     ```java
-    ZLinkStreamMessage<MatchFound> found = connector.waitFor(MatchFound.class)
-        .where(MatchFound.class, message -> "match-7f3a".equals(message.payload().matchId()))
-        .timeout(Duration.ofSeconds(30))
-        .submit(MatchFound.class)
-        .toCompletableFuture()
-        .join();
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/ReceivingProgram.java:receiving-wait"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val found = connector.waitFor<MatchFound>()
-        .where { it.payload.matchId == "match-7f3a" }
-        .timeout(Duration.ofSeconds(30))
-        .await()
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-wait"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    const found = await connector
-      .waitFor<MatchFound>('match.found')
-      .where(message => message.payload.matchId === 'match-7f3a')
-      .timeout(30_000)
-      .submit();
+    --8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-wait"
     ```
 
 **술어와 반환은 payload가 아니라 message를 다룬다.** payload만 받으면 술어가 packet 이름과
@@ -288,74 +250,31 @@ metadata를 보지 못하기 때문이다. 걸러야 하는 값이 payload 안�
 === "C++"
 
     ```cpp
-    auto quiet = connector.expect_none<order_changed_t> ()
-                   .within (std::chrono::milliseconds (100))
-                   .submit ();
-
-    auto steps = connector.wait_for_sequence<order_changed_t> ()
-                   .expect ([] (const auto &m) { return m.payload.status == status_t::paid; })
-                   .expect ([] (const auto &m) { return m.payload.status == status_t::shipped; })
-                   .timeout (std::chrono::seconds (2))
-                   .submit ();
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:receiving-sequence"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    await connector.ExpectNone<OrderChanged>()
-        .Within(TimeSpan.FromMilliseconds(100))
-        .Async();
-
-    var steps = await connector.WaitForSequence<OrderChanged>()
-        .Expect(message => message.Payload!.Status == OrderStatus.Paid)
-        .Expect(message => message.Payload!.Status == OrderStatus.Shipped)
-        .Timeout(TimeSpan.FromSeconds(2))
-        .Async();
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-sequence"
     ```
 
 === "Java"
 
     ```java
-    connector.expectNone(OrderChanged.class)
-        .within(Duration.ofMillis(100))
-        .submit()
-        .toCompletableFuture()
-        .join();
-
-    List<ZLinkStreamMessage<OrderChanged>> steps = connector.waitForSequence(OrderChanged.class)
-        .expect(OrderChanged.class, m -> m.payload().status() == OrderStatus.PAID)
-        .expect(OrderChanged.class, m -> m.payload().status() == OrderStatus.SHIPPED)
-        .timeout(Duration.ofSeconds(2))
-        .submit(OrderChanged.class)
-        .toCompletableFuture()
-        .join();
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/ReceivingProgram.java:receiving-sequence"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    connector.expectNone<OrderChanged>("order.changed")
-        .within(Duration.ofMillis(100))
-        .await()
-
-    val steps = connector.waitForSequence<OrderChanged>("order.changed")
-        .expect { it.payload.status == OrderStatus.PAID }
-        .expect { it.payload.status == OrderStatus.SHIPPED }
-        .timeout(Duration.ofSeconds(2))
-        .await()
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-sequence"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    await connector.expectNone<OrderChanged>('order.changed').within(100).run();
-
-    const steps = await connector
-      .waitForSequence<OrderChanged>('order.changed')
-      .expect(message => message.payload.status === 'paid')
-      .expect(message => message.payload.status === 'shipped')
-      .timeout(2_000)
-      .run();
+    --8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-sequence"
     ```
 
 관찰 조건이 어긋난 실패 — 시간 안에 오지 않음, 오지 않아야 할 것이 도착함, 순서가 어긋남 — 는
@@ -371,31 +290,31 @@ packet 이름별로 **받은 개수**를 읽는다. 소비해도 값이 줄지 �
 === "C++"
 
     ```cpp
-    auto count = connector.received_count ("leaderboard.update");
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:receiving-count"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    var count = connector.ReceivedCount("leaderboard.update");
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Receiving.cs:receiving-count"
     ```
 
 === "Java"
 
     ```java
-    int count = connector.receivedCount("leaderboard.update");
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/ReceivingProgram.java:receiving-count"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val count = connector.receivedCount("leaderboard.update")
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/ReceivingProgram.kt:receiving-count"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    const count = connector.receivedCount('leaderboard.update');
+    --8<-- "framework/languages/node/tutorial/StreamClient/receiving.ts:receiving-count"
     ```
 
 기준점은 연결이 성립한 시점이다. 연결이 성립하면 0에서 시작하고, 재연결하면 새 연결이므로 다시
@@ -580,7 +499,21 @@ unbind된 handle은 닫힌다. 닫힌 handle로 보내면 connector가 보내지
 unbind 직전에 이미 보낸 packet이 서버에 늦게 도착하면 서버는 그 packet을 다른 Actor로 넘기지
 않는다 — request는 `InvalidOperation` 오류 응답으로 끝나고, 단방향 send는 버려진다.
 
-## 9. 다음 장
+## 9. tutorial 실행 확인
+
+등록 해제·pump·조건 대기·순서·수신 개수 예제는 각 언어 StreamClient의 `--receiving` 모드에 있다.
+`STREAM_RECEIVING_ENDPOINT`는 JSON packet을 보내는 서버 주소다. Node는 WebSocket 주소를, 나머지 예제는 TCP 주소를 사용한다.
+검증용 peer는 `LeaderboardUpdate`를 두 번 보내고 `MatchFound`, `OrderChanged`를 정해진 순서로 보낸다.
+다섯 언어에서 실제로 확인한 결과는 같다.
+
+```text
+receiving: handler=1, frames=1, match=match-7f3a, sequence=paid,shipped, count=2
+```
+
+handler는 pump에서 한 번 실행되고 해제 뒤에는 실행되지 않는다. 두 번째 packet도 수신 개수에는 포함된다.
+조건에 맞는 match와 paid·shipped 순서를 확인하며, 순서 검증 전에는 OrderChanged가 오지 않는지 확인한다.
+
+## 10. 다음 장
 
 - 연결 상태와 재연결, 종료 사유 — [연결 생명주기](06-lifecycle.ko.md)
 - 수신 경로에서 나는 오류 — [오류 처리](07-error-handling.ko.md)

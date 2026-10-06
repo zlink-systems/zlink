@@ -17,6 +17,11 @@ public final class StreamClientProgram {
     private StreamClientProgram() {}
 
     public static void main(String[] args) throws Exception {
+        if (args.length > 0 && args[0].equals("--receiving")) {
+            ReceivingProgram.run(
+                    java.util.Objects.requireNonNull(System.getenv("STREAM_RECEIVING_ENDPOINT")));
+            return;
+        }
         // --8<-- [start:stream-client]
         // A game client outside the mesh. It references the connector only, never
         // the Framework, and speaks to the port the stream node opened.

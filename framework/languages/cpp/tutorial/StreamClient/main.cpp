@@ -4,6 +4,7 @@
 #include <zlink/stream_connector/codecs/auto_codec.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <future>
 #include <iostream>
 #include <stdexcept>
@@ -36,9 +37,130 @@ template <typename TMessage> TMessage value_of (sc::result_t<TMessage> result, c
 
 } // namespace
 
-int main ()
+namespace receiving_tutorial
+{
+namespace sc = zlink::stream_connector;
+struct leaderboard_update_t
+{
+    static constexpr const char *packet_name = "LeaderboardUpdate";
+    int rank = 0;
+};
+struct ready_t
+{
+    static constexpr const char *packet_name = "Ready";
+    std::string stage;
+};
+struct match_found_t
+{
+    static constexpr const char *packet_name = "MatchFound";
+    std::string match_id;
+};
+struct order_changed_t
+{
+    static constexpr const char *packet_name = "OrderChanged";
+    std::string status;
+};
+struct receiving_stage_t
+{
+    static constexpr const char *packet_name = "ReceivingStage";
+    std::string stage;
+};
+inline void from_json (const nlohmann::json &j, leaderboard_update_t &v)
+{
+    v.rank = j.at ("rank");
+}
+inline void from_json (const nlohmann::json &j, ready_t &v)
+{
+    v.stage = j.at ("stage");
+}
+inline void from_json (const nlohmann::json &j, match_found_t &v)
+{
+    v.match_id = j.at ("matchId");
+}
+inline void from_json (const nlohmann::json &j, order_changed_t &v)
+{
+    v.status = j.at ("status");
+}
+inline void to_json (nlohmann::json &j, const receiving_stage_t &v)
+{
+    j = {{"stage", v.stage}};
+}
+
+inline void run (const std::string &endpoint)
+{
+    sc::connector_options_t options;
+    options.endpoint = endpoint;
+    options.typed_codec = sc::json_typed_codec ();
+    options.dispatch_mode = sc::dispatch_mode_t::manual;
+    auto connector = sc::connector_factory_t::create (options);
+    int handled = 0, frames = 0;
+    bool running = true;
+    auto render_frame = [&] {
+        ++frames;
+        running = false;
+    };
+    auto subscription = connector.on<leaderboard_update_t> ([&] (const auto &) { ++handled; });
+    require (connector.connect (), "connect");
+    connector.send (receiving_stage_t{"pump"}).submit ();
+    value_of (connector.wait_for<ready_t> ().submit (), "ready");
+    // --8<-- [start:receiving-pump]
+    while (running) {
+        connector.dispatch ();
+        render_frame ();
+    }
+    // --8<-- [end:receiving-pump]
+    // --8<-- [start:receiving-unsubscribe]
+    subscription.unsubscribe ();
+    // --8<-- [end:receiving-unsubscribe]
+    connector.send (receiving_stage_t{"unsubscribed"}).submit ();
+    value_of (connector.wait_for<ready_t> ().submit (), "ready");
+    connector.dispatch ();
+    connector.send (receiving_stage_t{"match"}).submit ();
+    // --8<-- [start:receiving-wait]
+    auto found = connector.wait_for<match_found_t> ()
+                   .where (
+                     [] (const auto &message) { return message.payload.match_id == "match-7f3a"; })
+                   .timeout (std::chrono::seconds (30))
+                   .submit ();
+    // --8<-- [end:receiving-wait]
+    // --8<-- [start:receiving-sequence]
+    auto quiet = connector.expect_none<order_changed_t> ()
+                   .within (std::chrono::milliseconds (100))
+                   .submit ();
+    require (quiet, "quiet");
+    connector.send (receiving_stage_t{"orders"}).submit ();
+    auto steps = connector.wait_for_sequence<order_changed_t> ()
+                   .expect ([] (const auto &m) { return m.payload.status == "paid"; })
+                   .expect ([] (const auto &m) { return m.payload.status == "shipped"; })
+                   .timeout (std::chrono::seconds (2))
+                   .submit ();
+    // --8<-- [end:receiving-sequence]
+    // --8<-- [start:receiving-count]
+    auto count = connector.received_count ("LeaderboardUpdate");
+    // --8<-- [end:receiving-count]
+    auto match = value_of (std::move (found), "match");
+    auto orders = value_of (std::move (steps), "orders");
+    if (handled != 1 || frames != 1 || count != 2 || match.payload.match_id != "match-7f3a"
+        || orders.size () != 2)
+        throw std::runtime_error ("Receiving tutorial result did not match expected messages.");
+    std::cout << "receiving: handler=" << handled << ", frames=" << frames
+              << ", match=" << match.payload.match_id << ", sequence=" << orders[0].payload.status
+              << "," << orders[1].payload.status << ", count=" << count << std::endl;
+    require (connector.close (), "close");
+}
+}
+
+
+int main (int argc, char **argv)
 {
     try {
+        if (argc > 1 && std::string (argv[1]) == "--receiving") {
+            const char *endpoint = std::getenv ("STREAM_RECEIVING_ENDPOINT");
+            if (!endpoint)
+                throw std::runtime_error ("STREAM_RECEIVING_ENDPOINT is required.");
+            receiving_tutorial::run (endpoint);
+            return 0;
+        }
         // --8<-- [start:stream-client]
         // A game client outside the mesh. It references the connector only, never
         // the Framework, and speaks to the port the stream node opened. Every call
