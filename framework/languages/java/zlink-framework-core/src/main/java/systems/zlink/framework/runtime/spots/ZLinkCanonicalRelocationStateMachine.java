@@ -763,7 +763,7 @@ final class ZLinkCanonicalRelocationStateMachine
         attempt.ready()
                 .thenCompose(ignored -> sendReady(source, attempt.prepare()))
                 .thenRun(() -> acceptRelayReady(fence, attempt))
-                .exceptionallyCompose(failure -> rollbackReadySubmission(attempt, unwrap(failure)))
+                .exceptionallyCompose(failure -> failed(unwrap(failure)))
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure == null) {
@@ -773,17 +773,6 @@ final class ZLinkCanonicalRelocationStateMachine
                             }
                         });
         return publication;
-    }
-
-    private CompletionStage<Void> rollbackReadySubmission(
-            TargetAttempt attempt, Throwable readyFailure) {
-        if (attempt.relayReadyAccepted()) {
-            return failed(readyFailure);
-        }
-        //  Do not abort here.  This is a retryable READY submission failure,
-        //  not an explicit pre-relay-ready abort: target.abort removes the
-        //  Actor target stage that the exact retry must publish.
-        return failed(readyFailure);
     }
 
     private static <T> T completedValue(CompletableFuture<T> future) {
