@@ -110,8 +110,8 @@ inline void add_perf_actors (fw::mesh_node_builder_t &mesh)
       .disable_relocation ();
 }
 
-// The Actor role's objectsReady (§16.1): the Actors this process hosts, read from the public RouteMesh placement
-// status by a background poll during setup, never from inside a handler turn.
+// The Actor role's objectsReady (§16.1): every expected Actor of the cell is active on this process, read from the public
+// RouteMesh placement status by a background poll during setup, never from inside a handler turn.
 class actor_placement_watcher_t final : public fw::hosted_service_t
 {
   public:
@@ -123,11 +123,14 @@ class actor_placement_watcher_t final : public fw::hosted_service_t
             while (!_stop.load () && _role.measurement.phase () == "setup") {
                 {
                     const auto placement = mesh->snapshot (*_role.config.mesh_name).placement;
-                    _role.objects->set (placement.is_available && placement.active_actor_count > 0, "No Actor is active on this Object Server.",
+                    const auto expected = _role.config.actor_ids.size ();
+                    _role.objects->set (placement.is_available && placement.active_actor_count == expected,
+                                        std::to_string (placement.active_actor_count) + " of " + std::to_string (expected)
+                                          + " expected Actors are active on this Object Server.",
                                         json::array ({{{"kind", "actorPlacement"}, {"source", "route_mesh_runtime_t.snapshot.placement"},
                                                        {"observedValue", {{"isAvailable", placement.is_available},
                                                                           {"activeActorCount", placement.active_actor_count},
-                                                                          {"expectedActors", _role.config.actor_ids.size ()}}}}}));
+                                                                          {"expectedActors", expected}}}}}));
                 }
                 std::this_thread::sleep_for (std::chrono::milliseconds (100));
             }
@@ -225,7 +228,10 @@ class session_actor_setup_t
                                                           {"createMaxMs", static_cast<double> (_create_max_ns) / 1e6},
                                                           {"bindMeanMs", _bound == 0 ? 0.0 : static_cast<double> (_bind_ns) / 1e6 / static_cast<double> (_bound)},
                                                           {"bindMaxMs", static_cast<double> (_bind_max_ns) / 1e6}}}}});
-        _role.objects->set (true, "", std::move (evidence));
+        const auto expected = _role.config.actor_ids.size ();
+        _role.objects->set (_bound == expected,
+                            std::to_string (_bound) + " of " + std::to_string (expected) + " expected Actors are bound to a session.",
+                            std::move (evidence));
         if (_relay_probes > 0)
             _role.measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeRelay"}, {"source", "session_actor_t.relay_request.async -> stream.reply_packet.async"},
                                                                {"observedValue", {{"completed", _relay_probes}}}}}));
@@ -271,11 +277,11 @@ class perf_actor_relay_session_t final : public fw::packet_stream_session_t
                 if (dispatch.actor)
                     _binding = *dispatch.actor;
                 // Called before any suspension: this overload takes the dispatch state of the packet being handled.
-                reply = co_await _binding->relay_request (payload).async ();
+                reply = co_await _binding->relay_request (payload).timeout (measurement.call_timeout ()).async ();
             }
             else {
                 _binding = co_await _setup.prepare (stream, payload);
-                reply = co_await _binding->relay_request (dispatch.packet_name, payload).async ();
+                reply = co_await _binding->relay_request (dispatch.packet_name, payload).timeout (measurement.call_timeout ()).async ();
             }
             co_await stream.reply_packet (reply).async ();
             if (setup_probe)

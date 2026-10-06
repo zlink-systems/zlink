@@ -13,7 +13,6 @@ int main (int argc, char **argv)
             && config.scenario != "actor-no-bind-send-send-echo"))
         throw std::invalid_argument ("ActorServer runs the actor role of §10.2, §10.9 and §10.10.");
     auto role = std::make_unique<perf::role_t> (std::move (config), true);
-    role->objects->set (false, "No typed probe has reached an Actor yet.", perf::json::array ());
     auto &role_ref = *role;
     const auto &settings = role->config;
     return perf::run_role (std::move (role), [&] (fw::zlink_framework_options_t &options, fw::app_t &app) {

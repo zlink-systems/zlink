@@ -57,7 +57,8 @@ int main (int argc, char **argv)
     if (config.role != "session" || config.source || (config.scenario != "session-echo-only" && config.scenario != "cs-remote-session-actor-echo"))
         throw std::invalid_argument ("SessionServer supports the session receiver roles of §10.2 and §11.1.");
     const bool baseline = config.scenario == "session-echo-only";
-    auto role = std::make_unique<perf::role_t> (std::move (config), false);
+    // §16.1: the §10.2 Session binds the cell's Actors, so its objectsReady is that create/bind result.
+    auto role = std::make_unique<perf::role_t> (std::move (config), !baseline);
     const auto &settings = role->config;
     const auto stream_endpoint = settings.transport_endpoints.at ("stream");
     return perf::run_role (std::move (role), [&] (fw::zlink_framework_options_t &options, fw::app_t &) {
