@@ -52,6 +52,7 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_METHOD ("messageFrameSize", message_frame_size),
       ZLINK_METHOD ("messageFrameClose", message_frame_close),
       ZLINK_METHOD ("ctxNew", ctx_new),
+      ZLINK_METHOD ("ctxShared", ctx_shared),
       ZLINK_METHOD ("ctxShutdown", ctx_shutdown),
       ZLINK_METHOD ("ctxTerm", ctx_term),
       ZLINK_METHOD ("ctxSetOpt", ctx_setopt),

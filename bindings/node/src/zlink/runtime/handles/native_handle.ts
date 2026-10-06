@@ -19,7 +19,4 @@ export class NativeHandle {
     nativeHandles.set(this, native);
   }
 
-  close(): void {
-    this._native = null;
-  }
 }

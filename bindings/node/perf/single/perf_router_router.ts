@@ -20,7 +20,6 @@ const {
   drainRouterRecvInto,
   emitSingleSocketHwmDetail,
   parseSingleBinaryArgs,
-  runLocalSocketOneWayBenchmark,
   releaseSenderWorker,
   spawnSenderWorker,
   waitForWorkerStatus,
@@ -97,65 +96,7 @@ function handshakeRouterReceiverWithRetry(receiver) {
 }
 
 async function runRouterRouterBenchmark(msgSize, options) {
-  if (options.transport === 'inproc') {
-    // inproc is context-local so the Worker sender path cannot reach it.
-    // Run both ROUTER sockets in one shared context with the C-faithful
-    // blocking-equivalent one-way model + the PING/PONG routing-id gate
-    // (C perf_router_router.cpp does the same handshake before active).
-    return runLocalSocketOneWayBenchmark({
-      pattern: 'ROUTER_ROUTER',
-      msgSize,
-      options,
-      endpointToken: 'router-router',
-      createReceiver: (ctx) => zlink.createRouterSocket(ctx),
-      createSender: (ctx) => zlink.createRouterSocket(ctx),
-      configureReceiver: (socket) => socket.setRoutingId(RECEIVER_ROUTING_ID),
-      configureSender: (socket) => socket.setRoutingId(zlink.RoutingId.from(SENDER_ID)),
-      handshake: (sender, receiver) => {
-        sender.send(RECEIVER_ROUTING_ID)
-          .message(Buffer.from('PING')).submit_sync();
-        const senderRid = handshakeRouterReceiver(receiver);
-        const reply = new zlink.Received();
-        sender.recv(reply);
-        try {
-          if (partStrings(reply).join(',') !== 'PONG') {
-            throw new Error('router-router handshake reply failed');
-          }
-        } finally {
-          reply.close();
-        }
-        // Receiver replies/active are addressed by the sender's routing
-        // id; the sender addresses the receiver by RECEIVER_ROUTING_ID.
-        return RECEIVER_ROUTING_ID;
-      },
-      sendActive: (socket, payload, routingId) => {
-        try {
-          appendMeasurement(socket.send(routingId), payload)
-            .submit_sync();
-          return true;
-        } catch (error) {
-          if (error instanceof zlink.SubmitError
-            && (error.result === zlink.SubmitResult.Backpressured
-              || error.result === zlink.SubmitResult.NotConnected
-              || error.result === zlink.SubmitResult.NotFound)) {
-            return false;
-          }
-          const text = String(error && error.message ? error.message : error);
-          if ((error && error.code === 'EAGAIN')
-            || text.includes('Resource temporarily unavailable')) {
-            return false;
-          }
-          throw error;
-        }
-      },
-      sendStop: (socket, routingId) => {
-        socket.send(routingId).message(STOP_TOKEN_BYTES)
-          .submit_sync();
-      },
-    });
-  }
-
-  const ctx = zlink.createContext();
+  const ctx = options.transport === 'inproc' ? zlink.sharedContext() : zlink.createContext();
   applyContextPolicy(ctx);
   const receiver = zlink.createRouterSocket(ctx);
   const receiverMonitor = receiver.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
@@ -218,7 +159,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
     receiverMonitor.close();
     receiver.close();
     trace('receiver closed');
-    ctx.close();
+    if (options.transport !== 'inproc') ctx.close();
     trace('ctx closed');
   }
 }
@@ -229,10 +170,7 @@ if (require.main === module) {
   (async () => {
     const options = parseSingleBinaryArgs(process.argv.slice(2));
     const result = await runRouterRouterBenchmark(options.msgSize, options);
-    if (result.unsupported) {
-      console.log(`UNSUPPORTED,${options.libName},ROUTER_ROUTER,${options.transport}`);
-      return;
-    }
+
     for (const line of summarizeMetrics(
       'ROUTER_ROUTER',
       options.transport,

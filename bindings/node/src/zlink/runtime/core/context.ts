@@ -23,11 +23,10 @@ const OPTION_CREATE_TOKEN = Symbol('OptionFacade.create');
 
 export class ContextOptions {
   /** @internal */
-  protected readonly _context: Context;
-  private _threadNamePrefix = '';
+  protected readonly _context: ContextBase;
 
   /** @internal */
-  private constructor(token: symbol, context: Context) {
+  private constructor(token: symbol, context: ContextBase) {
     if (token !== OPTION_CREATE_TOKEN) {
       throw new TypeError('context options are created by contexts');
     }
@@ -35,7 +34,7 @@ export class ContextOptions {
   }
 
   /** @internal */
-  static create(context: Context): ContextOptions {
+  static create(context: ContextBase): ContextOptions {
     return new ContextOptions(OPTION_CREATE_TOKEN, context);
   }
 
@@ -61,23 +60,28 @@ export class ContextOptions {
   set coreHwmMemoryLimitBytes(value: bigint) { setContextUInt64(this._context, ContextOption.AUTO_HWM_MEMORY_LIMIT_BYTES, value, 'coreHwmMemoryLimitBytes'); }
   get coreHwmBudgetBytes(): bigint { return getContextUInt64(this._context, ContextOption.AUTO_HWM_CORE_BUDGET_BYTES, 'coreHwmBudgetBytes'); }
   set coreHwmBudgetBytes(value: bigint) { setContextUInt64(this._context, ContextOption.AUTO_HWM_CORE_BUDGET_BYTES, value, 'coreHwmBudgetBytes'); }
-  get threadNamePrefix(): string { return this._threadNamePrefix; }
+  get threadNamePrefix(): string {
+    const value = configCall('context option get failed', () =>
+      requireNative().ctxGetOptData(getNativeHandle(this._context), ContextOption.THREAD_NAME_PREFIX) as Buffer);
+    const end = value.indexOf(0);
+    return value.subarray(0, end < 0 ? value.length : end).toString();
+  }
   set threadNamePrefix(value: string) {
-    const normalized = validateCString(value, 'threadNamePrefix');
-    setContextOptionRaw(this._context, ContextOption.THREAD_NAME_PREFIX, Buffer.from(normalized));
-    this._threadNamePrefix = normalized;
+    const normalized = validateCString(value, 'threadNamePrefix', 15);
+    setContextOptionRaw(this._context, ContextOption.THREAD_NAME_PREFIX,
+      Buffer.from(`${normalized}\0`));
   }
   addThreadAffinity(cpu: number): void { setContextOptionRaw(this._context, ContextOption.THREAD_AFFINITY_CPU_ADD, cpu | 0); }
   removeThreadAffinity(cpu: number): void { setContextOptionRaw(this._context, ContextOption.THREAD_AFFINITY_CPU_REMOVE, cpu | 0); }
 }
 
-function setContextOptionRaw(context: Context, option: number, value: Buffer | number): void {
+function setContextOptionRaw(context: ContextBase, option: number, value: Buffer | number): void {
   configCall('context option set failed', () => {
     requireNative().ctxSetOpt(getNativeHandle(context), option | 0, typeof value === 'number' ? value | 0 : value);
   });
 }
 
-function getContextOptionRaw(context: Context, option: number): number {
+function getContextOptionRaw(context: ContextBase, option: number): number {
   try {
     return requireNative().ctxGetOpt(getNativeHandle(context), option | 0);
   } catch (error) {
@@ -91,7 +95,7 @@ function getContextOptionRaw(context: Context, option: number): number {
   }
 }
 
-function getContextOptionRawStrict(context: Context, option: number): number {
+function getContextOptionRawStrict(context: ContextBase, option: number): number {
   try {
     return requireNative().ctxGetOpt(getNativeHandle(context), option | 0);
   } catch (error) {
@@ -102,38 +106,23 @@ function getContextOptionRawStrict(context: Context, option: number): number {
   }
 }
 
-function getContextUInt64(context: Context, option: number, name: string): bigint {
+function getContextUInt64(context: ContextBase, option: number, name: string): bigint {
   const value = configCall('context option get failed', () =>
     requireNative().ctxGetOptData(getNativeHandle(context), option | 0) as Buffer);
   if (value.length !== 8) throw new Error(`${name} option returned an invalid payload`);
   return value.readBigUInt64LE(0);
 }
 
-function setContextUInt64(context: Context, option: number, value: bigint, name: string): void {
+function setContextUInt64(context: ContextBase, option: number, value: bigint, name: string): void {
   setContextOptionRaw(context, option, uint64Buffer(value, name));
 }
 
-export class Context extends NativeHandle {
+export class ContextBase extends NativeHandle {
   readonly options: ContextOptions;
 
-  constructor() {
-    super(configCall('context creation failed', () => requireNative().ctxNew()));
+  protected constructor(native: unknown) {
+    super(native);
     this.options = ContextOptions.create(this);
-    const heapLimitBytes = BigInt(Math.trunc(getHeapStatistics().heap_size_limit));
-    if (heapLimitBytes > 0n) {
-      setContextUInt64(
-        this,
-        ContextOption.AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES,
-        heapLimitBytes,
-        'runtimeMemoryLimitBytes'
-      );
-    }
-  }
-
-  shutdown(): void {
-    closeCall('context shutdown failed', () => {
-      requireNative().ctxShutdown(this._native);
-    });
   }
 
   recalculateAutoHwm(): void {
@@ -161,6 +150,21 @@ export class Context extends NativeHandle {
       requireNative().ctxResetAutoHwmBudgetMetrics(this._native);
     });
   }
+}
+
+export class Context extends ContextBase {
+  constructor() {
+    super(configCall('context creation failed', () => requireNative().ctxNew()));
+    const heapLimitBytes = BigInt(Math.trunc(getHeapStatistics().heap_size_limit));
+    if (heapLimitBytes > 0n) {
+      setContextUInt64(this, ContextOption.AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES,
+        heapLimitBytes, 'runtimeMemoryLimitBytes');
+    }
+  }
+
+  shutdown(): void {
+    closeCall('context shutdown failed', () => requireNative().ctxShutdown(this._native));
+  }
 
   close(): void {
     if (!this._native) return;
@@ -170,7 +174,13 @@ export class Context extends NativeHandle {
   }
 }
 
+export class SharedContext extends ContextBase {
+  constructor() {
+    super(configCall('shared context creation failed', () => requireNative().ctxShared()));
+  }
+}
+
 export {
-  Context as RuntimeContext,
+  ContextBase as RuntimeContext,
   ContextOptions as RuntimeContextOptions,
 };
