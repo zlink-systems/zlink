@@ -9,6 +9,12 @@
 
 namespace zlink
 {
+#if defined ZLINK_HAVE_LINUX
+// Internal filesystem seam for process-cgroup detection tests.
+uint64_t detected_cgroup_memory_limit_bytes (const char *process_cgroup_path_,
+                                            const char *cgroup_root_,
+                                            uint64_t physical_memory_);
+#endif
 class ctx_auto_hwm_state_t
 {
   public:
