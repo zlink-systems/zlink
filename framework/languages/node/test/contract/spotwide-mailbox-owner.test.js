@@ -7,6 +7,9 @@ const {
 const {
   ZLinkSpotSerialTurnExecutor
 } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+const {
+  ZLinkSerialExecutionQueue
+} = require('../../packages/framework/dist/runtime/execution/serial-execution-queue');
 
 function deferred() {
   let resolve;
@@ -15,6 +18,26 @@ function deferred() {
   });
   return { promise, resolve };
 }
+
+test('a mailbox control failure retains its original cause', async () => {
+  const owner = new ZLinkSerialExecutionQueue(async () => {});
+  const mailbox = new ZLinkSerialExecutionQueue(async () => {}, {}, owner);
+  const failure = new Error('mailbox control failed');
+  const drain = owner.drain.bind(owner);
+  let observed;
+  owner.drain = async () => {
+    try {
+      await drain();
+    } catch (error) {
+      observed = error;
+    }
+  };
+  mailbox.enqueueMailboxTurn(() => {
+    throw failure;
+  });
+  await new Promise(setImmediate);
+  assert.equal(observed, failure);
+});
 
 async function assertConsumerOwnership(injectIndependentConsumer = false) {
   const spot = new ZLinkSpotSerialTurnExecutor();

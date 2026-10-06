@@ -396,6 +396,7 @@ export class ZLinkSerialExecutionQueue {
             await this.executeRecord(record);
           }
         } catch (error) {
+          if (record.mailbox !== undefined) throw error;
           record.fail(error);
         } finally {
           record.preparation?.cancel();
