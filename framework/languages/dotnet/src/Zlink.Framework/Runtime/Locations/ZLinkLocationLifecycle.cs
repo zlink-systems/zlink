@@ -58,46 +58,6 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
         CancellationToken cancellationToken = default
     ) => _runtime.Store.ListAllMeshNodesAsync(meshName, cancellationToken);
 
-    internal async ValueTask<ZLinkFrameworkErrorKind> ClassifyMeshNodeClaimConflictAsync(
-        string meshName,
-        RoutingId routingId,
-        string entrySpotId,
-        CancellationToken cancellationToken = default
-    )
-    {
-        try
-        {
-            var descriptors = await _runtime
-                .Store.ListAllMeshNodesAsync(meshName, cancellationToken)
-                .ConfigureAwait(false);
-            if (descriptors.Any(descriptor => descriptor.Rid.Equals(routingId)))
-                return ZLinkFrameworkErrorKind.AlreadyExists;
-            if (
-                descriptors.Any(descriptor =>
-                    string.Equals(descriptor.EntrySpotId, entrySpotId, StringComparison.Ordinal)
-                )
-            )
-                return ZLinkFrameworkErrorKind.AlreadyExists;
-
-            var authority = await _runtime
-                .Store.ReadAuthorityAsync(
-                    ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(entrySpotId),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (authority is ZLinkAuthorityReadResult.Found)
-                return ZLinkFrameworkErrorKind.AlreadyExists;
-        }
-        catch when (!cancellationToken.IsCancellationRequested)
-        {
-            // Conflict classification is diagnostic only. A failed follow-up
-            // read must not turn the already terminal claim conflict into a
-            // second store operation or a retry.
-        }
-
-        return ZLinkFrameworkErrorKind.AlreadyExists;
-    }
-
     public ValueTask DisposeAsync()
     {
         return new ValueTask(

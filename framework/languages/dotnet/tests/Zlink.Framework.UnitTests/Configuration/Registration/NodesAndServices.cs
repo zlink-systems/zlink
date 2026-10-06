@@ -14,6 +14,45 @@ namespace Zlink.Framework.UnitTests;
 public sealed class NodesAndServicesTests : RegistrationValidationSupport
 {
     [Fact]
+    public async Task HostStartup_RoutingIdConflict_FailsStartAsync()
+    {
+        var store = new ZLinkInMemoryProviderLocationStore();
+        IHost CreateHost()
+        {
+            var builder = Host.CreateApplicationBuilder();
+            builder.Services.AddZLinkFramework(options =>
+            {
+                options.DisableImplicitHandlerAutoRegistration();
+                options.AddLocationStore(store);
+                options
+                    .AddRouteMesh("startup-conflict")
+                    .Listen("tcp://127.0.0.1:*")
+                    .SetRoutingId(RoutingId.From("startup-conflict"));
+            });
+            return builder.Build();
+        }
+
+        using var owner = CreateHost();
+        using var conflict = CreateHost();
+        await owner.StartAsync();
+        try
+        {
+            var failure = await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
+                conflict.StartAsync()
+            );
+            Assert.Contains(
+                nameof(ZLinkLocationWriteStatus.RejectedConflict),
+                failure.Message,
+                StringComparison.Ordinal
+            );
+        }
+        finally
+        {
+            await owner.StopAsync();
+        }
+    }
+
+    [Fact]
     public void AddZLinkFramework_Uses_ServiceWire_ForSessionRelocationBarriers()
     {
         var services = new ServiceCollection();

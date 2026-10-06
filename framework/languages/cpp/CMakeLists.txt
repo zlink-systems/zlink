@@ -1337,6 +1337,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-m6-runtime;maintenance;relocation;termination"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_host_startup_failure
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_host_startup_failure.cpp)
+  target_compile_features(test_cpp_framework_host_startup_failure PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_host_startup_failure PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_link_libraries(test_cpp_framework_host_startup_failure PRIVATE
+    zlink_framework Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_host_startup_failure
+    COMMAND test_cpp_framework_host_startup_failure
+    LABELS "framework-unit;framework-contract;termination"
+    TIER unit
+    TIMEOUT 30)
+
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)

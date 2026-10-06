@@ -532,13 +532,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) {
-                                startupReady.completeExceptionally(
-                                        unwrapCompletionFailure(failure));
                                 publishRuntimeState(ZLinkFrameworkRuntimeState.ERROR);
                                 Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
                                         .warning(
                                                 "Framework startup failed: "
                                                         + failure.getMessage());
+                                startupReady.completeExceptionally(
+                                        unwrapCompletionFailure(failure));
                             }
                         });
     }
@@ -649,6 +649,22 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             if (partial != null) {
                 partial.rollBackStartup(failure);
             }
+            throw failure;
+        }
+    }
+
+    static ZLinkFrameworkRuntime startHost(
+            DefaultZLinkFrameworkOptions options,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher) {
+        ZLinkFrameworkRuntime runtime =
+                start(options, backendFactory, handlerFactory, eventDispatcher);
+        try {
+            runtime.startupCompletion().toCompletableFuture().join();
+            return runtime;
+        } catch (RuntimeException | Error failure) {
+            runtime.rollBackStartup(failure);
             throw failure;
         }
     }

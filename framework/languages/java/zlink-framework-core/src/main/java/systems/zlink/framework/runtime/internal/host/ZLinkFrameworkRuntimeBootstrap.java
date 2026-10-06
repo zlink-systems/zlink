@@ -38,7 +38,7 @@ public final class ZLinkFrameworkRuntimeBootstrap {
                             ZLinkFrameworkRuntime.class, MethodHandles.lookup());
             return hostLookup.findStatic(
                     ZLinkFrameworkRuntime.class,
-                    "start",
+                    "startHost",
                     MethodType.methodType(
                             ZLinkFrameworkRuntime.class,
                             DefaultZLinkFrameworkOptions.class,
