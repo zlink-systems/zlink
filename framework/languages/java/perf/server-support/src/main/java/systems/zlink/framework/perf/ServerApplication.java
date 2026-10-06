@@ -20,6 +20,7 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.monitoring.ZLinkClientServerStatus;
 import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
@@ -452,6 +453,8 @@ public final class ServerApplication {
             infrastructure &=
                     runtime.routeMeshRuntime().snapshot(config.meshName()).readyPeerCount() > 0;
         }
+        Map<String, String> transportEndpoints =
+                infrastructure ? boundTransportEndpoints(runtime) : Map.of();
         boolean probe = !measurement.setupEvidence().isEmpty();
         // A role without this cell's public create/bind result registers ObjectsReadiness;
         // baselines have none.
@@ -463,13 +466,11 @@ public final class ServerApplication {
         statusEvidence.put("source", "public Framework runtime status");
         statusEvidence.put("observedValue", publicStatus());
         evidence.add(statusEvidence);
-        if (!config.transportEndpoints().isEmpty()) {
+        if (!transportEndpoints.isEmpty()) {
             Map<String, Object> listeners = new LinkedHashMap<>();
-            listeners.put("kind", "verifiedListenerReservation");
-            listeners.put(
-                    "source",
-                    "role config; coordinator OS bind reservation and public host startup");
-            listeners.put("observedValue", config.transportEndpoints());
+            listeners.put("kind", "boundTransportEndpoints");
+            listeners.put("source", "public Framework listener status");
+            listeners.put("observedValue", transportEndpoints);
             evidence.add(listeners);
         }
         if (objects != null) {
@@ -501,5 +502,35 @@ public final class ServerApplication {
                 PerfClock.unixMs(),
                 evidence,
                 reasons);
+    }
+
+    private Map<String, String> boundTransportEndpoints(ZLinkFrameworkRuntime runtime) {
+        Map<String, String> endpoints = new LinkedHashMap<>();
+        for (String key : config.transportEndpoints().keySet()) {
+            ZLinkListenerKind kind;
+            String name;
+            switch (key) {
+                case "stream" -> {
+                    kind = ZLinkListenerKind.STREAM;
+                    name = "perf-session";
+                }
+                case "mesh" -> {
+                    kind = ZLinkListenerKind.ROUTE_MESH;
+                    name = config.meshName();
+                }
+                case "clientserver" -> {
+                    kind = ZLinkListenerKind.CLIENT_SERVER;
+                    name = config.channelName();
+                }
+                case "fanout" -> {
+                    kind = ZLinkListenerKind.FANOUT;
+                    name = config.channelName();
+                }
+                default ->
+                        throw new IllegalStateException("Unknown perf listener key '" + key + "'.");
+            }
+            endpoints.put(key, runtime.listenerStatus(kind, name).endpoint());
+        }
+        return endpoints;
     }
 }
