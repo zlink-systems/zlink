@@ -19,6 +19,57 @@ public sealed class ChannelOutboundTerminalTests
     private const string MalformedFlowId = "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz";
 
     [Fact]
+    public async Task ChannelRequestReturnsFirstShutdownReplyWithoutResubmission()
+    {
+        var activities = CaptureActivities(out var listener);
+        using (listener)
+        {
+            await using var server = CreateTerminalServer(0);
+            var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+            await serverRuntime.StartAsync(CancellationToken.None);
+            var state = await serverRuntime.GetStartedStateForRoutingAsync(CancellationToken.None);
+            var endpoint = (
+                await state
+                    .ClientServerServerBundles.Values.Single()
+                    .ClientServerServer!.ReadAsync()
+            ).AdvertisedEndpoint;
+            await using var client = CreateTerminalClient(endpoint);
+            var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+            client
+                .GetRequiredService<ZLinkFrameworkRegistration>()
+                .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            await clientRuntime.StartAsync(CancellationToken.None);
+            try
+            {
+                await WaitUntilAsync(
+                    () => clientRuntime.GetClientServerClientRuntime("term-work").ReadyCount == 1,
+                    TimeSpan.FromSeconds(10)
+                );
+                var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                    await client
+                        .GetRequiredService<IZLinkRouteClient>()
+                        .RequestToChannel("term-work", new TerminalEchoRequest("shutdown"))
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Async<TerminalEchoReply>()
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
+                Assert.Equal("first terminal", failure.Message);
+                Assert.Equal(1, server.GetRequiredService<TerminalProbe>().RequestCount);
+            }
+            finally
+            {
+                await clientRuntime.StopAsync(CancellationToken.None);
+                await serverRuntime.StopAsync(CancellationToken.None);
+            }
+        }
+        var flows = FlowActivities(activities, nameof(TerminalEchoRequest)).ToArray();
+        Assert.Single(flows.Where(activity => Equals(activity.GetTagItem("phase"), "sent")));
+        Assert.Single(
+            flows.Where(activity => Equals(activity.GetTagItem("phase"), "reply_received"))
+        );
+    }
+
+    [Fact]
     public void ChannelRequestTerminalEmitsExactlyOnceWithClientServerAttributes()
     {
         var activities = CaptureActivities(out var listener);
@@ -496,6 +547,7 @@ public sealed class ChannelOutboundTerminalTests
 
     private sealed class TerminalProbe
     {
+        public int RequestCount;
         public TaskCompletionSource<string> Received { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -515,7 +567,7 @@ public sealed class ChannelOutboundTerminalTests
         }
     }
 
-    private sealed class TerminalEchoHandler
+    private sealed class TerminalEchoHandler(TerminalProbe probe)
         : IZLinkRequestHandler<TerminalEchoRequest, TerminalEchoReply>
     {
         public ValueTask<TerminalEchoReply> HandleAsync(
@@ -525,6 +577,12 @@ public sealed class ChannelOutboundTerminalTests
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref probe.RequestCount);
+            if (request.Value == "shutdown")
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ShuttingDown,
+                    "first terminal"
+                );
             return ValueTask.FromResult(new TerminalEchoReply(request.Value));
         }
     }

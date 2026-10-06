@@ -193,32 +193,15 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
             .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
     }
 
-    //  Spec 06 §13.1 lets a select-one ChannelName choose another eligible
-    //  member until an admission succeeds. A member that sealed application
-    //  admission for shutdown answers `ShuttingDown` before the handler runs
-    //  (spec 28 §11 step 1), so nothing was accepted and choosing another
-    //  member is not a resubmit of accepted work. The bound keeps a mesh whose
-    //  members are all draining from spinning until the deadline.
-    private const int ShuttingDownReselectionLimit = 4;
-
-    //  A retry needs enough budget left to complete, not merely a positive
-    //  remainder. A near-zero timeout reaching the submit path would either
-    //  expire at once or, where zero means "no deadline", wait forever.
-    private static readonly TimeSpan ShuttingDownReselectionFloor = TimeSpan.FromMilliseconds(50);
-
     private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
     {
         var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
         var timeout = _timeout ?? runtime.Registration.ResolveChannelRequestTimeout(channelName);
-        var started = Stopwatch.GetTimestamp();
-        var remaining = timeout;
         using var encodedBody = ZLinkClientCallCodec.EncodeEnvelopeBody(
             request,
             runtime.Registration.Codecs,
             out var contentType
         );
-        //  One logical request owns one `reply_received` terminal, even when the
-        //  ShuttingDown reselection loop below submits more than once.
         var terminal = runtime.Flow.CaptureEnabled
             ? new ZLinkChannelRequestTerminalTrace(
                 runtime.Flow,
@@ -229,61 +212,32 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
                 channelName
             )
             : null;
-        IReadOnlyDictionary<string, string>? headerMetadata = null;
-        ReadOnlyMemory<byte> metadata = default;
         try
         {
-            (headerMetadata, metadata) = _metadata.EncodeChannel(
+            var (headerMetadata, metadata) = _metadata.EncodeChannel(
                 runtime.IsClientServerClientChannel(channelName)
             );
-            for (var attempt = 0; ; attempt++)
-            {
-                var header = ZLinkClientCallCodec.CreateEnvelope(
-                    ZLinkMessageKind.Request,
-                    channelName,
-                    packetName,
-                    remaining
-                );
-                header = header with { Metadata = headerMetadata };
-                terminal?.SetCorrelation(header.CorrelationId);
-                var parts = ZLinkClientCallCodec.CopyEnvelopeParts(
-                    header,
-                    encodedBody,
-                    contentType
-                );
-                var reply = await runtime
-                    .RequestToChannelAsync(
-                        channelName,
-                        parts,
-                        remaining,
-                        cancellationToken,
-                        metadata
-                    )
-                    .ConfigureAwait(false);
-                try
-                {
-                    var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
-                        reply,
-                        "Channel request reply is empty.",
-                        $"Channel request failed for '{packetName}'.",
-                        runtime.Registration.Codecs,
-                        runtime.Flow.CaptureEnabled
-                    );
-                    terminal?.Succeeded();
-                    return decoded;
-                }
-                catch (ZLinkFrameworkException failure)
-                    when (failure.Kind == ZLinkFrameworkErrorKind.ShuttingDown
-                        && attempt < ShuttingDownReselectionLimit
-                        && timeout - Stopwatch.GetElapsedTime(started)
-                            >= ShuttingDownReselectionFloor
-                    )
-                {
-                    remaining = timeout - Stopwatch.GetElapsedTime(started);
-                    if (remaining < ShuttingDownReselectionFloor)
-                        throw;
-                }
-            }
+            var header = ZLinkClientCallCodec.CreateEnvelope(
+                ZLinkMessageKind.Request,
+                channelName,
+                packetName,
+                timeout
+            );
+            header = header with { Metadata = headerMetadata };
+            terminal?.SetCorrelation(header.CorrelationId);
+            var parts = ZLinkClientCallCodec.CopyEnvelopeParts(header, encodedBody, contentType);
+            var reply = await runtime
+                .RequestToChannelAsync(channelName, parts, timeout, cancellationToken, metadata)
+                .ConfigureAwait(false);
+            var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
+                reply,
+                "Channel request reply is empty.",
+                $"Channel request failed for '{packetName}'.",
+                runtime.Registration.Codecs,
+                runtime.Flow.CaptureEnabled
+            );
+            terminal?.Succeeded();
+            return decoded;
         }
         catch (Exception failure)
         {
