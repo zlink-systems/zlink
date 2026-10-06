@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locations.*;
 
 import java.time.Duration;
@@ -8,20 +10,22 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 
 /** Keeps the public opaque provider boundary separate from Framework-owned location records. */
 public final class ZLinkProviderLocationRepository implements ZLinkLocationRepository {
-    private final ZLinkLocationStore provider;
+    private final ProviderBoundary provider;
     private final ZLinkProviderOwnerLeaseRepository owners;
     private final ZLinkProviderDescriptorRepository descriptors;
     private final ZLinkProviderAuthorityRepository authority;
 
     public ZLinkProviderLocationRepository(ZLinkLocationStore provider) {
-        this.provider = Objects.requireNonNull(provider, "provider");
-        this.owners = new ZLinkProviderOwnerLeaseRepository(provider);
-        this.descriptors = new ZLinkProviderDescriptorRepository(provider);
-        this.authority = new ZLinkProviderAuthorityRepository(provider, this.descriptors);
+        this.provider = new ProviderBoundary(Objects.requireNonNull(provider, "provider"));
+        this.owners = new ZLinkProviderOwnerLeaseRepository(this.provider);
+        this.descriptors = new ZLinkProviderDescriptorRepository(this.provider);
+        this.authority = new ZLinkProviderAuthorityRepository(this.provider, this.descriptors);
     }
 
     @Override
@@ -234,10 +238,75 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     }
 
     public ZLinkLocationStore provider() {
-        return provider;
+        return provider.delegate();
     }
 
     private ZLinkProviderAuthorityRepository authority() {
         return authority;
+    }
+
+    /** Classifies only SPI failures; record decoding remains outside this boundary. */
+    private record ProviderBoundary(ZLinkLocationStore delegate) implements ZLinkLocationStore {
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+                ZLinkStoreKey key,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            try {
+                return observe(delegate.read(key, cancellation), cancellation);
+            } catch (RuntimeException error) {
+                throw failure(error, cancellation);
+            }
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+                ZLinkStoreWriteRequest request,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            try {
+                return observe(delegate.write(request, cancellation), cancellation);
+            } catch (RuntimeException error) {
+                throw failure(error, cancellation);
+            }
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+                ZLinkStoreScanRequest request,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            try {
+                return observe(delegate.scan(request, cancellation), cancellation);
+            } catch (RuntimeException error) {
+                throw failure(error, cancellation);
+            }
+        }
+
+        private static <T> CompletionStage<T> observe(
+                CompletionStage<T> operation,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            return operation.handle(
+                    (value, error) -> {
+                        if (error != null) throw failure(error, cancellation);
+                        return value;
+                    });
+        }
+
+        private static RuntimeException failure(
+                Throwable error,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            while ((error instanceof CompletionException || error instanceof ExecutionException)
+                    && error.getCause() != null) error = error.getCause();
+            if (error instanceof ZLinkFrameworkException
+                    || error instanceof IllegalArgumentException
+                    || (cancellation != null && cancellation.isCancellationRequested())) {
+                return error instanceof RuntimeException runtime
+                        ? runtime
+                        : new CompletionException(error);
+            }
+            if (error instanceof Error fatal) throw fatal;
+            return new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Location Store provider is unavailable.",
+                    error);
+        }
     }
 }
