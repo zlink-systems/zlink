@@ -133,7 +133,7 @@ public sealed class test_perf_multi_runner_contract
         string server = ReadSource(StreamServerSourcePath());
         Assert.Contains("int clientCount = ResolveMultiClients(options);",
             server, StringComparison.Ordinal);
-        Assert.Contains("WaitConnectReadyCount(monitor, clientCount",
+        Assert.Contains("monitor, clientCount, readyTimeoutMs",
             server, StringComparison.Ordinal);
     }
 

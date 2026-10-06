@@ -295,7 +295,7 @@ exact interface에서 확인한다.
 
 | 설정 | 용도 |
 | --- | --- |
-| `CoreHwmMemoryLimitBytes` | Core budget 계산에 전달할 finite process/runtime memory limit hint |
+| `CoreHwmMemoryLimitBytes` | Core budget 계산과 연결 수용 판정에 쓰는 양수 memory limit(byte). 생략하면 Core가 감지한 process·container hard limit 또는 physical memory를 쓴다 |
 | `CoreHwmBudgetBytes` | profile 계산보다 우선하는 양수 manual Core budget |
 | `CoreHwmProfile` | Core Auto-budget profile. 기본값은 `Balanced` |
 

@@ -19,10 +19,6 @@ class core_hwm_budget_snapshot_t
     {
         return _configured_memory_limit_bytes;
     }
-    std::uint64_t runtime_memory_limit_bytes () const noexcept
-    {
-        return _runtime_memory_limit_bytes;
-    }
     std::uint64_t resolved_memory_limit_bytes () const noexcept
     {
         return _resolved_memory_limit_bytes;
@@ -162,7 +158,6 @@ class core_hwm_budget_snapshot_t
     std::uint64_t _budget_generation = 0;
     std::uint64_t _measurement_epoch = 0;
     std::uint64_t _configured_memory_limit_bytes = 0;
-    std::uint64_t _runtime_memory_limit_bytes = 0;
     std::uint64_t _resolved_memory_limit_bytes = 0;
     std::uint64_t _configured_core_budget_bytes = 0;
     std::uint64_t _effective_core_budget_bytes = 0;

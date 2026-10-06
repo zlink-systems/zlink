@@ -63,7 +63,7 @@ class HarnessContractTest {
         Histogram histogram = new Histogram();
         histogram.record(100_000);
         histogram.record(100_001);
-        histogram.record(1_024_000_001L);
+        histogram.record(100_024_000_001L);
         Map<String, Object> metrics = new LinkedHashMap<>();
         Map<String, Object> histograms = new LinkedHashMap<>();
         Map<String, NullReason> reasons = new LinkedHashMap<>();
@@ -75,12 +75,12 @@ class HarnessContractTest {
         assertEquals("1", counts.get(11));
         assertEquals("1", snapshot.get("overflow"));
         assertEquals("3", snapshot.get("count"));
-        assertEquals("1024200002", snapshot.get("sumNs"));
+        assertEquals("100024200002", snapshot.get("sumNs"));
         assertEquals(0.125, metrics.get("latency.p50Ms"));
         assertNull(metrics.get("latency.p95Ms"));
         assertEquals("HISTOGRAM_OVERFLOW", reasons.get("/metrics/latency.p95Ms").code());
-        assertEquals(1000.0, reasons.get("/metrics/latency.p95Ms").lowerBoundMs());
-        assertEquals(1024.000001, (Double) metrics.get("latency.maxMs"), 1e-9);
+        assertEquals(100000.0, reasons.get("/metrics/latency.p95Ms").lowerBoundMs());
+        assertEquals(100024.000001, (Double) metrics.get("latency.maxMs"), 1e-9);
         assertEquals("nearest-rank-bucket-upper-bound-capped-by-max", snapshot.get("percentileMethod"));
     }
 

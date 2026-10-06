@@ -14,6 +14,7 @@ const {
   resolveMultiStreamClientCount
 } = require('./perf_multi_common');
 const { monotonicMs } = require('../common/perf_metrics');
+const { resolveMultiConnectReadyTimeoutMs } = require('../common/perf_args');
 
 type ManagedProcess = ChildProcessWithoutNullStreams;
 type LineWaiter = (line: string) => boolean;
@@ -520,9 +521,8 @@ function childEnv(args, component) {
   if (Number.isFinite(args.recvTimeoutMs)) {
     env.PERF_MULTI_RCVTIMEO_MS = String(args.recvTimeoutMs);
   }
-  if (Number.isFinite(args.connectReadyTimeoutMs)) {
-    env.PERF_MULTI_CONNECT_READY_TIMEOUT_MS = String(args.connectReadyTimeoutMs);
-  }
+  env.PERF_MULTI_CONNECT_READY_TIMEOUT_MS =
+    String(resolveMultiConnectReadyTimeoutMs(args.connectReadyTimeoutMs));
   env.PERF_MULTI_MONITOR_HWM = String(
     Number.isSafeInteger(args.monitorHwm) && args.monitorHwm >= 0
       ? args.monitorHwm
@@ -629,9 +629,7 @@ function resolveMultiTimeoutSeconds(args) {
 }
 
 function resolveClientReadyTimeoutMs(args) {
-  return Number.isFinite(args.connectReadyTimeoutMs)
-    ? args.connectReadyTimeoutMs
-    : 5000;
+  return resolveMultiConnectReadyTimeoutMs(args.connectReadyTimeoutMs);
 }
 
 async function coordinateRunnerStart(server, client, args, serverLabel = 'server') {
@@ -702,15 +700,16 @@ async function spawnMultiPair(serverScript, clientScript, args) {
     }
     throw error;
   }
-  const clientSpawn = buildClientSpawn(clientPath, clientArgs, args);
-  const client = spawn(clientSpawn.command, clientSpawn.args, {
-    cwd: process.cwd(),
-    env: childEnv(args, 'client'),
-    stdio: ['pipe', 'pipe', 'pipe'],
-    detached: true
-  });
-  attachProcessCapture(client, resultLines);
+  let client!: ManagedProcess;
   try {
+    const clientSpawn = buildClientSpawn(clientPath, clientArgs, args);
+    client = spawn(clientSpawn.command, clientSpawn.args, {
+      cwd: process.cwd(),
+      env: childEnv(args, 'client'),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true
+    });
+    attachProcessCapture(client, resultLines);
     if (needsClientReady(args.pattern)) {
       const clientLabel = clientScript || 'perf_stream_client';
       if (args.pattern === 'STREAM') {
@@ -734,15 +733,14 @@ async function spawnMultiPair(serverScript, clientScript, args) {
   } catch (error) {
     await Promise.allSettled([
       terminateProcessTree(server, 1000),
-      terminateProcessTree(client, 1000)
+      ...(client ? [terminateProcessTree(client, 1000)] : [])
     ]);
-    const stderr = [stderrText(server), stderrText(client)].filter(Boolean).join('\n');
+    const stderr = [stderrText(server), client && stderrText(client)].filter(Boolean).join('\n');
     if (stderr) {
       error.message = `${error.message}\n${stderr}`;
     }
     throw error;
   }
-
   const clientTimeoutMs = resolveMultiTimeoutSeconds(args) * 1000;
   const shutdownTimeoutMs = Number.isFinite(args.serverShutdownTimeoutMs)
     ? args.serverShutdownTimeoutMs : 5000;

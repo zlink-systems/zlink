@@ -6,11 +6,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const {
   attachProcessCapture,
   buildClientSpawn,
-  coordinateRunnerStart
+  coordinateRunnerStart,
+  spawnMultiPair
 } = require('../perf/multi/perf_multi_orchestrator');
+const { resolveMultiConnectReadyTimeoutMs } = require('../perf/common/perf_args');
 const {
   createStreamControlBarrier
 } = require('../perf/multi/perf_multi_stream_server');
@@ -28,6 +33,58 @@ function fakeManagedProcess() {
   attachProcessCapture(child, []);
   return child;
 }
+
+test('STREAM connection timeout follows the documented default and environment', () => {
+  const previous = process.env.PERF_MULTI_CONNECT_READY_TIMEOUT_MS;
+  const fallback = process.env.PERF_CONNECT_READY_TIMEOUT_MS;
+  try {
+    delete process.env.PERF_MULTI_CONNECT_READY_TIMEOUT_MS;
+    delete process.env.PERF_CONNECT_READY_TIMEOUT_MS;
+    assert.equal(resolveMultiConnectReadyTimeoutMs(undefined), 10000);
+    process.env.PERF_CONNECT_READY_TIMEOUT_MS = '7000';
+    assert.equal(resolveMultiConnectReadyTimeoutMs(undefined), 7000);
+    process.env.PERF_MULTI_CONNECT_READY_TIMEOUT_MS = '8000';
+    assert.equal(resolveMultiConnectReadyTimeoutMs(undefined), 8000);
+    assert.equal(resolveMultiConnectReadyTimeoutMs(9000), 9000);
+  } finally {
+    if (previous === undefined) delete process.env.PERF_MULTI_CONNECT_READY_TIMEOUT_MS;
+    else process.env.PERF_MULTI_CONNECT_READY_TIMEOUT_MS = previous;
+    if (fallback === undefined) delete process.env.PERF_CONNECT_READY_TIMEOUT_MS;
+    else process.env.PERF_CONNECT_READY_TIMEOUT_MS = fallback;
+  }
+});
+
+test('STREAM client preparation failure reaps its already-ready server', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-stream-ready-'));
+  const pidFile = path.join(directory, 'server.pid');
+  const oldPidFile = process.env.PERF_TEST_SERVER_PID_FILE;
+  const oldClient = process.env.PERF_STREAM_CLIENT_BINARY;
+  const originalExistsSync = fs.existsSync;
+  process.env.PERF_TEST_SERVER_PID_FILE = pidFile;
+  delete process.env.PERF_STREAM_CLIENT_BINARY;
+  fs.existsSync = (candidate) => String(candidate).endsWith('/bindings/c/build/perf/perf_stream_client')
+    ? false : originalExistsSync(candidate);
+  let serverPid;
+  try {
+    await assert.rejects(spawnMultiPair(
+      '../../../tests/fixtures/perf_multi_ready_server.js', null,
+      { pattern: 'STREAM', transport: 'tcp', msgSize: 1024, duration: 1,
+        clients: 1, pinCpu: false, serverReadyTimeoutMs: 1000 }
+    ), /shared perf_stream_client not found/);
+    serverPid = Number(fs.readFileSync(pidFile, 'utf8'));
+    assert.throws(() => process.kill(serverPid, 0), { code: 'ESRCH' });
+  } finally {
+    if (serverPid) {
+      try { process.kill(serverPid, 'SIGKILL'); } catch (_) {}
+    }
+    if (oldPidFile === undefined) delete process.env.PERF_TEST_SERVER_PID_FILE;
+    else process.env.PERF_TEST_SERVER_PID_FILE = oldPidFile;
+    if (oldClient === undefined) delete process.env.PERF_STREAM_CLIENT_BINARY;
+    else process.env.PERF_STREAM_CLIENT_BINARY = oldClient;
+    fs.existsSync = originalExistsSync;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('shared STREAM client is spawned behind the START gate', () => {
   const previous = process.env.PERF_STREAM_CLIENT_BINARY;
