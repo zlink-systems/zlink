@@ -39,7 +39,7 @@ framework_runtime_state_t client_server_framework_state (mesh::service_node_stat
  * batch budget, or the Application Job Queue supply stops it, as the client turn does. Each
  * record takes its own permit: the first is `application_permit`, the rest are reserved only
  * while the queue has room. */
-task_t<void>
+task_t<bool>
 pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        mesh::service_liveness_registry_t::clock_t::time_point now,
                        std::shared_ptr<application_job_queue_t> application_jobs,
@@ -106,7 +106,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     bool publish_servers ();
     task_t<bool> publish_servers_task ();
     task_t<void> pump ();
-    task_t<worker_lane_snapshot_t> refresh_client_pump_snapshot ();
+    task_t<worker_lane_snapshot_t> run_worker_turn ();
     task_t<void> publish_snapshot_changes ();
     client_server_channel_snapshot_t
     publish_snapshot_locked (client_server_channel_snapshot_t current,
@@ -183,10 +183,10 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::unique_ptr<zlink::poller_t> _transport_poller;
     std::shared_ptr<eventing::runtime_wake_timer_t> _wake_timer =
       std::make_shared<eventing::runtime_wake_timer_t> ();
-    std::atomic_bool _stop{false};
+    std::shared_ptr<std::atomic_bool> _stop = std::make_shared<std::atomic_bool> (false);
     // Protects _descriptor_publish_pending/result, _active_application_drains,
     // server_entry_t::pump_task, and publication of pump_task_state_t::task.
-    // Terminal waits read the published task; its completion uses state->mutex.
+    // Terminal waits read the published task, which owns its completion.
     std::mutex _server_progress_mutex;
     std::condition_variable _server_progress_changed;
     bool _descriptor_publish_pending = false;
