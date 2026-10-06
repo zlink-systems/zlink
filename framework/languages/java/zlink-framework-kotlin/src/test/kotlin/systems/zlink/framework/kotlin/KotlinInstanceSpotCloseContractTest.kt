@@ -41,6 +41,7 @@ class KotlinInstanceSpotCloseContractTest {
             currentObservation = observation
             val options = DefaultZLinkFrameworkOptions()
             options.addLocationStore(ZLinkInMemoryLocationStore())
+            options.addRelocationStore(systems.zlink.framework.runtime.InMemoryRelocationStore())
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             val node = options.addRouteMesh(MESH_NAME)
             node.listen("inproc://kotlin-close-$suffix").setRoutingId(nodeRid)
