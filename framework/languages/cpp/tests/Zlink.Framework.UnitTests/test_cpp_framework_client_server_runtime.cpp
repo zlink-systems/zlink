@@ -767,6 +767,49 @@ void verify_server_receive_turn_reads_queued_records ()
     assert (server_receive_turn_records (64, 64, 8) == 8);
 }
 
+// The runtime worker is the one waiter on its shared transport poller. A transport port that
+// shares the poller reads its socket without waiting on it, so it never meets the worker's
+// blocking wait (EBUSY).
+void verify_shared_transport_poller_has_one_waiter ()
+{
+    zlink::context_t context;
+    zlink::poller_t transport;
+    zlink::framework::runtime::eventing::runtime_wake_timer_t wake;
+    wake.attach (transport);
+    zlink::dealer_socket_t dealer (context);
+    dealer.options ().linger (0ms);
+    zlink::framework::detail::backend::raw_dealer_port_t port (dealer, {}, &transport, 3);
+    std::thread worker ([&transport] {
+        // The probe below is itself a waiter; the worker starts its wait once the probe ends.
+        for (;;) {
+            try {
+                zlink::poll_event_t event;
+                (void) transport.wait (&event, 1, 10s);
+                return;
+            }
+            catch (const std::exception &) {
+            }
+        }
+    });
+    // While the worker waits, the poller refuses any other waiter.
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    bool worker_waiting = false;
+    while (!worker_waiting && std::chrono::steady_clock::now () < deadline) {
+        try {
+            zlink::poll_event_t event;
+            (void) transport.wait (&event, 1, 0ms);
+            std::this_thread::sleep_for (1ms);
+        }
+        catch (const std::exception &) {
+            worker_waiting = true;
+        }
+    }
+    assert (worker_waiting);
+    assert (!port.try_receive ());
+    wake.signal ();
+    worker.join ();
+}
+
 void verify_seal_between_receive_and_admission_counts_no_accepted_job ()
 {
     assert (server_receive_turn_records (64, 64, 1, true) == 0);
@@ -1711,6 +1754,7 @@ int main ()
     verify_empty_server_receive_turn_has_no_progress ();
     verify_server_receive_turn_reads_queued_records ();
     verify_seal_between_receive_and_admission_counts_no_accepted_job ();
+    verify_shared_transport_poller_has_one_waiter ();
     verify_client_server_readiness_counts_local_ready_servers ();
     verify_network_defaults_are_deferred_until_apply ();
     verify_client_server_terminal_errors_preserve_public_boundaries ();
