@@ -167,6 +167,8 @@ void run_connected_lifecycle (const std::string &endpoint_,
       await_event (monitor, ZLINK_EVENT_DISCONNECTED, false,
                    !network_transport_);
     assert_same_physical_attempt (first_ready, first_disconnected);
+    TEST_ASSERT_EQUAL_UINT64 (0, await_event (
+      monitor, ZLINK_EVENT_CONNECTION_READY).value);
     if (!network_transport_)
         assert_no_queued_closed (monitor);
 
@@ -196,6 +198,8 @@ void run_connected_lifecycle (const std::string &endpoint_,
                    !network_transport_);
         assert_same_physical_attempt (reconnect_ready,
                                       explicit_disconnected);
+        TEST_ASSERT_EQUAL_UINT64 (0, await_event (
+          monitor, ZLINK_EVENT_CONNECTION_READY).value);
     }
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
@@ -235,9 +239,10 @@ void run_failed_connect_attempt (const std::string &endpoint_)
 }
 
 void run_explicit_disconnect (const std::string &endpoint_, void *server_,
-                              bool network_transport_)
+                              bool network_transport_,
+                              int client_type_ = ZLINK_SOCKET_DEALER)
 {
-    void *client = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *client = test_context_socket (client_type_);
     set_common_options (client);
     if (endpoint_.find ("tls://") == 0)
         configure_tls_socket (client, false);
@@ -267,6 +272,8 @@ void run_explicit_disconnect (const std::string &endpoint_, void *server_,
       await_event (monitor, ZLINK_EVENT_DISCONNECTED, false,
                    !network_transport_);
     assert_same_physical_attempt (ready, disconnected);
+    TEST_ASSERT_EQUAL_UINT64 (0, await_event (
+      monitor, ZLINK_EVENT_CONNECTION_READY).value);
     if (!network_transport_)
         assert_no_queued_closed (monitor);
 
@@ -305,6 +312,8 @@ void run_client_close (const std::string &endpoint_, void *server_,
       await_event (server_monitor, ZLINK_EVENT_DISCONNECTED, false,
                    !network_transport_);
     assert_same_physical_attempt (ready, disconnected);
+    TEST_ASSERT_EQUAL_UINT64 (0, await_event (
+      server_monitor, ZLINK_EVENT_CONNECTION_READY).value);
     if (!network_transport_)
         assert_no_queued_closed (server_monitor);
 
@@ -358,6 +367,15 @@ void test_tcp_explicit_disconnect_identity ()
     set_common_options (server);
     bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
     run_explicit_disconnect (endpoint, server, true);
+}
+
+void test_tcp_router_pair_explicit_disconnect_count ()
+{
+    char endpoint[MAX_SOCKET_STRING];
+    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
+    set_common_options (server);
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+    run_explicit_disconnect (endpoint, server, true, ZLINK_SOCKET_ROUTER);
 }
 
 #if defined(ZLINK_HAVE_IPC) && !defined(ZLINK_HAVE_GNU)
@@ -501,6 +519,7 @@ int main ()
     RUN_TEST (test_ipc_failed_attempt_closed_identity);
 #endif
     RUN_TEST (test_tcp_explicit_disconnect_identity);
+    RUN_TEST (test_tcp_router_pair_explicit_disconnect_count);
 #if defined(ZLINK_HAVE_IPC) && !defined(ZLINK_HAVE_GNU)
     RUN_TEST (test_ipc_explicit_disconnect_identity);
 #endif

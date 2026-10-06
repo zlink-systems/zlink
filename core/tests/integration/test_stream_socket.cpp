@@ -38,6 +38,7 @@ static const char *const stream_socket_smoke_cases[] = {
   "test_stream_rejects_unsupported_send_without_poisoning_routed_final",
   "test_stream_notify_records_and_bind_constraint",
   "test_stream_recv_ready_precedes_first_payload_contract",
+  "test_stream_tcp_ready_count_returns_to_zero",
   "test_stream_connect_is_not_supported_without_side_effects",
   "test_stream_phase3_mode_freeze_contract",
   "test_stream_phase3_packet_pull_contract",
@@ -1120,6 +1121,42 @@ void test_stream_recv_ready_precedes_first_payload_contract ()
     TEST_ASSERT_EQUAL_INT (0, ordering_probe.strict_drop_count.load (std::memory_order_acquire));
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    test_context_socket_close_zero_linger (server);
+}
+
+void test_stream_tcp_ready_count_returns_to_zero ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (server);
+    configure_stream_regression_socket (server, 256);
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+    zlink_socket_monitor_open_options_t options = {};
+    options.events = ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_DISCONNECTED;
+    void *monitor = zlink_socket_monitor_open (server, &options);
+    TEST_ASSERT_NOT_NULL (monitor);
+
+    const fd_t client = connect_raw_tcp (endpoint);
+    TEST_ASSERT_TRUE (client != retired_fd);
+    unsigned char routing_id[stream_routing_id_size] = {};
+    TEST_ASSERT_TRUE (wait_monitor_ready_edge_direct (monitor, routing_id, 5000));
+    close_raw_fd (client);
+
+    bool reached_zero = false;
+    for (int i = 0; i < 5000 && !reached_zero; ++i) {
+        zlink_monitor_event_t event = {};
+        const zlink_recv_result_t rc =
+          zlink_socket_monitor_recv (monitor, &event, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA) {
+            msleep (1);
+            continue;
+        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
+        reached_zero = event.event == ZLINK_EVENT_CONNECTION_READY
+                       && event.value == 0;
+    }
+    TEST_ASSERT_TRUE (reached_zero);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
     test_context_socket_close_zero_linger (server);
 }
 
@@ -2264,6 +2301,9 @@ int main (void)
     if (should_run_stream_socket_test (
           "test_stream_recv_ready_precedes_first_payload_contract"))
         RUN_TEST (test_stream_recv_ready_precedes_first_payload_contract);
+    if (should_run_stream_socket_test (
+          "test_stream_tcp_ready_count_returns_to_zero"))
+        RUN_TEST (test_stream_tcp_ready_count_returns_to_zero);
 #if !defined(ZLINK_HAVE_WINDOWS)
     if (should_run_stream_socket_test (
           "test_stream_recv_multiclient_strict_ready_gating_regression"))
