@@ -4844,6 +4844,102 @@ public sealed partial class StatefulServiceRuntimeTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ColdTerminalCompletesSourceOperationAcrossTargetReconnect(bool reconnect)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = NewNode(context, "cold-terminal-source");
+        await using var target = NewNode(context, "cold-terminal-target");
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetBind($"inproc://cold-source-{suffix}");
+        var targetEndpoint = $"inproc://cold-target-{suffix}";
+        target.SetBind(targetEndpoint);
+        source.ConnectPeer(targetEndpoint, target.RoutingId);
+        var admitted = new TaskCompletionSource<InstanceSpotActivationOperation>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        target.SetInstanceSpotActivationTarget(new DetachedColdActivationTarget(admitted));
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
+        using var first = Message.From([1, 2]);
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.ActivateInstanceSpot(
+                new InstanceSpotActivationTarget(
+                    "objects",
+                    target.RoutingId,
+                    target.Status().LifecycleGeneration,
+                    "cold",
+                    "sample",
+                    "descriptor"
+                ),
+                "caller",
+                [first],
+                true,
+                out var operationId,
+                checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds()),
+                TimeSpan.FromSeconds(5)
+            )
+        );
+        var operation = await admitted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (reconnect)
+        {
+            source.RemovePeerConnection(Assert.Single(source.Peers()).ConnectionIntentId);
+            source.ConnectPeer(targetEndpoint, target.RoutingId);
+            await WaitUntilAsync(() =>
+                source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+            );
+        }
+        await target.ReplyInstanceSpotActivationAsync(
+            operation,
+            new InstanceSpotActivationTerminal(
+                RequestResult.Ok,
+                ServiceWireConstants.FrameworkErrorCode.None,
+                [new byte[] { 7, 6 }]
+            ),
+            CancellationToken.None
+        );
+        await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
+        var completion = DrainCompletion(source, operationId);
+        try
+        {
+            Assert.Equal((int)RequestResult.Ok, completion.Record.TerminalResult);
+            Assert.Equal(new byte[] { 7, 6 }, Assert.Single(completion.Parts).ToArray());
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(completion.Parts);
+        }
+    }
+
+    private sealed class DetachedColdActivationTarget(
+        TaskCompletionSource<InstanceSpotActivationOperation> admitted
+    ) : IInstanceSpotActivationTarget
+    {
+        public ValueTask<InstanceSpotActivationTerminal> ActivateAsync(
+            InstanceSpotActivationOperation operation,
+            ReadOnlyMemory<byte>? metadata,
+            IReadOnlyList<ReadOnlyMemory<byte>> payload,
+            CancellationToken cancellationToken
+        )
+        {
+            admitted.TrySetResult(operation);
+            return ValueTask.FromResult(
+                new InstanceSpotActivationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    [],
+                    Forwarded: true
+                )
+            );
+        }
+    }
+
     private sealed class RecordingInstanceSpotActivationTarget : IInstanceSpotActivationTarget
     {
         private int _count;

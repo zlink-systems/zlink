@@ -489,6 +489,12 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             return await terminal.Task.ConfigureAwait(false);
     }
 
+    public ValueTask ReplyInstanceSpotActivationAsync(
+        InstanceSpotActivationOperation operation,
+        InstanceSpotActivationTerminal terminal,
+        CancellationToken cancellationToken
+    ) => _node.ReplyInstanceSpotActivationAsync(operation, terminal, cancellationToken);
+
     public ValueTask<InstanceSpotActivationTerminal> ForwardInstanceSpotActivationAsync(
         InstanceSpotActivationOperation operation,
         IReadOnlyList<ReadOnlyMemory<byte>> parts,

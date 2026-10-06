@@ -1488,79 +1488,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TimeSpan timeout = default,
         SendFlags flags = SendFlags.None,
         ReadOnlyMemory<byte> metadata = default
-    )
-    {
-        ArgumentNullException.ThrowIfNull(parts);
-        if (parts.Count == 0)
-            throw new ArgumentException(
-                "The first Instance Spot message is required.",
-                nameof(parts)
-            );
-        if (target.TargetNodeRid == _routingId)
-            throw new ArgumentException(
-                "Command 39 cold activation is reserved for a remote target.",
-                nameof(target)
-            );
-
-        var peer = RunState(() =>
-        {
-            _peersByRid.TryGetValue(target.TargetNodeRid, out var value);
-            return value;
-        });
-        if (
-            peer is null
-            || !peer.Admitted
-            || peer.LifecycleGeneration != target.TargetNodeGeneration
-        )
-        {
-            operationId = default;
-            return SubmitResult.NotConnected;
-        }
-
-        PendingOperation? pending = null;
-        ulong replyRouteId = 0;
-        var effectiveTimeout = timeout <= TimeSpan.Zero ? TimeSpan.FromSeconds(30) : timeout;
-        if (request)
-        {
-            CreateOperation(MeshOperationKind.InstanceSpotRequest, out replyRouteId, out pending);
-            operationId = pending.OperationId;
-            var timeoutDeadline = checked(
-                (ulong)DateTimeOffset.UtcNow.Add(effectiveTimeout).ToUnixTimeMilliseconds()
-            );
-            pending.DeadlineUnixMs = Math.Min(deadlineUnixMs, timeoutDeadline);
-        }
-        else
-        {
-            operationId = NextStandaloneOperationId();
-        }
-
-        var operation = new InstanceSpotActivationOperation(
+    ) =>
+        SubmitInstanceSpotActivation(
             target,
-            _routingId,
-            _lifecycleGeneration,
             sourceSpotId,
-            operationId,
+            parts,
             request,
-            replyRouteId,
-            deadlineUnixMs
+            null,
+            out operationId,
+            deadlineUnixMs,
+            timeout,
+            metadata
         );
-        var head = ZLinkServiceWireCodec.EncodeInstanceSpotActivation(operation, !metadata.IsEmpty);
-        var submit = pending is null
-            ? SubmitInstanceSpotSend(peer, head, parts, flags, metadata)
-            : SubmitNativeServiceRequest(peer, head, parts, flags, metadata, pending);
-        if (submit != SubmitResult.Ok)
-        {
-            if (pending is not null)
-            {
-                TryRemoveOperation(replyRouteId, out _);
-                pending.Cancel();
-            }
-            operationId = default;
-            return submit;
-        }
-
-        return SubmitResult.Ok;
-    }
 
     internal SubmitResult ActivateInstanceSpot(
         InstanceSpotActivationTarget target,
@@ -1571,6 +1510,31 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TimeSpan timeout = default,
         SendFlags flags = SendFlags.None,
         ReadOnlyMemory<byte> metadata = default
+    ) =>
+        SubmitInstanceSpotActivation(
+            target,
+            sourceSpotId,
+            parts,
+            true,
+            correlationId,
+            out _,
+            deadlineUnixMs,
+            timeout,
+            metadata
+        );
+
+    private static readonly TimeSpan DefaultServiceRequestTimeout = TimeSpan.FromSeconds(30);
+
+    private SubmitResult SubmitInstanceSpotActivation(
+        InstanceSpotActivationTarget target,
+        string sourceSpotId,
+        IReadOnlyList<Message> parts,
+        bool request,
+        MeshOperationId? requestedOperationId,
+        out MeshOperationId operationId,
+        ulong deadlineUnixMs,
+        TimeSpan timeout,
+        ReadOnlyMemory<byte> metadata
     )
     {
         ArgumentNullException.ThrowIfNull(parts);
@@ -1584,49 +1548,69 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 "Command 39 cold activation is reserved for a remote target.",
                 nameof(target)
             );
-
-        var peer = RunState(() =>
-        {
-            _peersByRid.TryGetValue(target.TargetNodeRid, out var value);
-            return value;
-        });
+        var peer = RunState(() => _peersByRid.GetValueOrDefault(target.TargetNodeRid));
         if (
             peer is null
             || !peer.Admitted
             || peer.LifecycleGeneration != target.TargetNodeGeneration
         )
+        {
+            operationId = default;
             return SubmitResult.NotConnected;
-
-        CreateOperation(
-            MeshOperationKind.InstanceSpotRequest,
-            correlationId,
-            out var replyRouteId,
-            out var pending
-        );
-        var effectiveTimeout = timeout <= TimeSpan.Zero ? TimeSpan.FromSeconds(30) : timeout;
-        var timeoutDeadline = checked(
-            (ulong)DateTimeOffset.UtcNow.Add(effectiveTimeout).ToUnixTimeMilliseconds()
-        );
-        pending.DeadlineUnixMs = Math.Min(deadlineUnixMs, timeoutDeadline);
-
+        }
+        operationId = requestedOperationId ?? NextStandaloneOperationId();
+        var correlation = request ? operationId.Low : 0;
+        if (request)
+        {
+            var effectiveTimeout =
+                timeout <= TimeSpan.Zero ? DefaultServiceRequestTimeout : timeout;
+            deadlineUnixMs = Math.Min(
+                deadlineUnixMs,
+                checked((ulong)DateTimeOffset.UtcNow.Add(effectiveTimeout).ToUnixTimeMilliseconds())
+            );
+        }
         var operation = new InstanceSpotActivationOperation(
             target,
             _routingId,
             _lifecycleGeneration,
             sourceSpotId,
-            correlationId,
-            true,
-            replyRouteId,
+            operationId,
+            request,
+            correlation,
             deadlineUnixMs
         );
+        // Validate and encode before publishing the source pending operation.
         var head = ZLinkServiceWireCodec.EncodeInstanceSpotActivation(operation, !metadata.IsEmpty);
-        var submit = SubmitNativeServiceRequest(peer, head, parts, flags, metadata, pending);
+        var wireParts = new List<ReadOnlyMemory<byte>>(3) { head };
+        if (!metadata.IsEmpty)
+            wireParts.Add(metadata);
+        wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
+        var messages = wireParts.Select(Message.From).ToArray();
+        PendingOperation? pending = null;
+        if (request)
+        {
+            CreateOperation(
+                MeshOperationKind.InstanceSpotRequest,
+                operationId,
+                out correlation,
+                out pending
+            );
+            pending.DeadlineUnixMs = deadlineUnixMs;
+        }
+        var submit = SubmitInstanceSpotSend(peer, messages);
         if (submit != SubmitResult.Ok)
         {
-            TryRemoveOperation(replyRouteId, out _);
-            pending.Cancel();
+            if (pending is not null)
+            {
+                TryRemoveOperation(correlation, out _);
+                pending.Cancel();
+            }
+            operationId = default;
+            return submit;
         }
-        return submit;
+        if (pending is not null)
+            StartColdOperationDeadline(correlation, pending);
+        return SubmitResult.Ok;
     }
 
     internal async ValueTask<InstanceSpotActivationTerminal> ForwardInstanceSpotActivationAsync(
@@ -1666,63 +1650,61 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             operation,
             metadata.HasValue && !metadata.Value.IsEmpty
         );
-        if (!operation.IsRequest)
-        {
-            var messageParts = parts.Select(Message.From).ToArray();
-            try
-            {
-                var submit = SubmitInstanceSpotSend(
-                    peer,
-                    head,
-                    messageParts,
-                    SendFlags.DontWait,
-                    metadata ?? ReadOnlyMemory<byte>.Empty
-                );
-                if (submit != SubmitResult.Ok)
-                    throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
-                return new InstanceSpotActivationTerminal(
-                    RequestResult.Ok,
-                    ServiceWireConstants.FrameworkErrorCode.None,
-                    Array.Empty<ReadOnlyMemory<byte>>(),
-                    Forwarded: true
-                );
-            }
-            finally
-            {
-                DisposeParts(messageParts);
-            }
-        }
-
-        return await SubmitForwardedInstanceSpotRequestAsync(
-                peer,
-                operation,
-                head,
-                parts,
-                metadata,
-                cancellationToken
-            )
+        var wire = new List<ReadOnlyMemory<byte>>(metadata.HasValue ? 3 : 2) { head };
+        if (metadata is { IsEmpty: false } value)
+            wire.Add(value);
+        wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
+        await SendRoutedAsync(peer.PhysicalRoutingId, wire, cancellationToken)
             .ConfigureAwait(false);
+        return new InstanceSpotActivationTerminal(
+            RequestResult.Ok,
+            ServiceWireConstants.FrameworkErrorCode.None,
+            [],
+            Forwarded: true
+        );
     }
 
-    private SubmitResult SubmitInstanceSpotSend(
-        Peer peer,
-        byte[] head,
-        IReadOnlyList<Message> parts,
-        SendFlags flags,
-        ReadOnlyMemory<byte> metadata
-    )
+    private void StartColdOperationDeadline(ulong correlation, PendingOperation pending)
     {
-        var wireParts = new List<ReadOnlyMemory<byte>>(3) { head };
-        if (!metadata.IsEmpty)
-            wireParts.Add(metadata);
-        wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
-        if (!TryScheduleRoutedSend(peer.PhysicalRoutingId, wireParts))
+        var remaining = TimeSpan.FromMilliseconds(
+            pending.DeadlineUnixMs
+                - Math.Min(
+                    pending.DeadlineUnixMs,
+                    checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                )
+        );
+        StartDetached(() => ExpireOperationAsync(correlation, pending, remaining));
+    }
+
+    private SubmitResult SubmitInstanceSpotSend(Peer peer, IReadOnlyList<Message> messages)
+    {
+        var transferred = false;
+        try
         {
-            Publish(MeshMonitorEventKind.Backpressured, peerRid: peer.RoutingId);
-            return SubmitResult.Backpressured;
+            lock (_socketGate)
+            {
+                var socket = _socket;
+                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
+                    return SubmitResult.Terminated;
+                socket.Send(peer.PhysicalRoutingId).Messages(messages).Submit();
+                transferred = true;
+            }
+            Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: peer.RoutingId);
+            return SubmitResult.Ok;
         }
-        Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: peer.RoutingId);
-        return SubmitResult.Ok;
+        catch (ZlinkSubmitException error)
+        {
+            return (SubmitResult)(int)error.Result;
+        }
+        catch (ObjectDisposedException)
+        {
+            return SubmitResult.Terminated;
+        }
+        finally
+        {
+            if (!transferred)
+                DisposeParts(messages);
+        }
     }
 
     public SubmitResult CreateUserSpot(
@@ -4858,189 +4840,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return SubmitResult.Ok;
     }
 
-    private async ValueTask<InstanceSpotActivationTerminal> SubmitForwardedInstanceSpotRequestAsync(
-        Peer peer,
-        InstanceSpotActivationOperation operation,
-        byte[] head,
-        IReadOnlyList<ReadOnlyMemory<byte>> parts,
-        ReadOnlyMemory<byte>? metadata,
-        CancellationToken cancellationToken
-    )
-    {
-        var wire = new Message[metadata is { IsEmpty: false } ? 3 : 2];
-        var created = 0;
-        var ownershipTransferred = false;
-        try
-        {
-            wire[created++] = Message.From(head);
-            if (metadata is { IsEmpty: false } value)
-                wire[created++] = Message.From(value);
-            wire[created++] = Message.From(
-                ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts)
-            );
-
-            var remainingMilliseconds =
-                operation.DeadlineUnixMs
-                - Math.Min(
-                    operation.DeadlineUnixMs,
-                    checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-                );
-            if (remainingMilliseconds == 0)
-                return new InstanceSpotActivationTerminal(
-                    RequestResult.InternalError,
-                    ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut,
-                    Array.Empty<ReadOnlyMemory<byte>>()
-                );
-            var remaining = TimeSpan.FromMilliseconds(
-                Math.Max(1, Math.Min(remainingMilliseconds, (ulong)int.MaxValue))
-            );
-            Task<IReadOnlyList<Message>> request;
-            lock (_socketGate)
-            {
-                var socket = _socket;
-                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
-                    throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.Terminated);
-                var requestOperation = socket
-                    .Request(peer.PhysicalRoutingId)
-                    .Messages(wire)
-                    .Timeout(remaining);
-                ownershipTransferred = true;
-                request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
-                    requestOperation,
-                    remaining,
-                    cancellationToken
-                );
-            }
-
-            Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: peer.RoutingId);
-            var replyParts = await request.ConfigureAwait(false);
-            try
-            {
-                return DecodeForwardedInstanceSpotTerminal(operation, RequestResult.Ok, replyParts);
-            }
-            finally
-            {
-                DisposeParts(replyParts);
-            }
-        }
-        catch (ZlinkRequestException exception)
-        {
-            return DecodeForwardedInstanceSpotTerminal(
-                operation,
-                (RequestResult)(int)exception.Result,
-                Array.Empty<Message>()
-            );
-        }
-        catch (ObjectDisposedException)
-        {
-            throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.Terminated);
-        }
-        catch (ZlinkException exception) when (exception is not ZlinkSubmitException)
-        {
-            throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.Terminated);
-        }
-        finally
-        {
-            if (!ownershipTransferred)
-                for (var index = 0; index < created; index++)
-                    wire[index].Dispose();
-        }
-    }
-
-    private static InstanceSpotActivationTerminal DecodeForwardedInstanceSpotTerminal(
-        InstanceSpotActivationOperation operation,
-        RequestResult transportResult,
-        IReadOnlyList<Message> replyParts
-    )
-    {
-        if (transportResult != RequestResult.Ok)
-        {
-            //  Schema terminal-failure-integrity: a worker timeout is encoded
-            //  as internalError+workerTimedOut (19 pairs only with 105; the
-            //  fine code still classifies publicly to DeadlineExceeded), a
-            //  boundary transport terminal carries None, and any other typed
-            //  transport terminal falls back to internalError+requestFailed.
-            if (transportResult == RequestResult.TimedOut)
-                return new InstanceSpotActivationTerminal(
-                    RequestResult.InternalError,
-                    ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut,
-                    Array.Empty<ReadOnlyMemory<byte>>()
-                );
-            if (ServiceWireConstants.ValidTerminalFailure(unchecked((uint)transportResult), 0u))
-                return new InstanceSpotActivationTerminal(
-                    transportResult,
-                    ServiceWireConstants.FrameworkErrorCode.None,
-                    Array.Empty<ReadOnlyMemory<byte>>()
-                );
-            return new InstanceSpotActivationTerminal(
-                RequestResult.InternalError,
-                ServiceWireConstants.FrameworkErrorCode.RequestFailed,
-                Array.Empty<ReadOnlyMemory<byte>>()
-            );
-        }
-        if (
-            replyParts.Count == 0
-            || !ZLinkServiceWireCodec.TryDecodeReply(replyParts[0].ToArray(), out var reply, out _)
-            || reply.Correlation != operation.ReplyRouteId
-        )
-            return new InstanceSpotActivationTerminal(
-                RequestResult.ProtocolError,
-                ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
-                Array.Empty<ReadOnlyMemory<byte>>()
-            );
-
-        var result = (RequestResult)reply.TerminalResult;
-        var failureCode = (ServiceWireConstants.FrameworkErrorCode)reply.FailureCode;
-        if (result != RequestResult.Ok)
-        {
-            if (replyParts.Count != 1)
-                return new InstanceSpotActivationTerminal(
-                    RequestResult.ProtocolError,
-                    ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
-                    Array.Empty<ReadOnlyMemory<byte>>()
-                );
-
-            return new InstanceSpotActivationTerminal(
-                result,
-                failureCode,
-                Array.Empty<ReadOnlyMemory<byte>>()
-            );
-        }
-
-        if (replyParts.Count == 1)
-            return new InstanceSpotActivationTerminal(
-                result,
-                failureCode,
-                Array.Empty<ReadOnlyMemory<byte>>()
-            );
-
-        if (
-            replyParts.Count != 2
-            || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                replyParts[1],
-                out var decodedParts
-            )
-        )
-            return new InstanceSpotActivationTerminal(
-                RequestResult.ProtocolError,
-                ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
-                Array.Empty<ReadOnlyMemory<byte>>()
-            );
-
-        try
-        {
-            return new InstanceSpotActivationTerminal(
-                result,
-                failureCode,
-                decodedParts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray()
-            );
-        }
-        finally
-        {
-            DisposeParts(decodedParts);
-        }
-    }
-
     private PendingOperation BeginOperation(MeshOperationKind kind, TimeSpan timeout)
     {
         if (!TryBeginOperation(kind, timeout, out var operation))
@@ -7421,42 +7220,27 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         var operation = record.Operation;
         var request = operation.IsRequest;
-        if (
-            request
-            && (received.MessageType != ReceivedMessageType.Request || received.ReplyToken is null)
-        )
-        {
-            // Command 39 requests own a Core request window. Accepting a raw
-            // envelope would put the terminal back on the Application path.
-            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
-            return;
-        }
-        var nativeReply = request ? received.Reply() : null;
-        var replied = 0;
         SubmitResult Reply(
             RequestResult result,
             uint failureCode,
             IReadOnlyList<Message> replyParts
         )
         {
-            if (!request || Interlocked.CompareExchange(ref replied, 1, 0) != 0)
-                return SubmitResult.InvalidState;
-            var (preparedReply, wire) = PrepareNativeTerminalReply(
-                sourceRid,
-                nativeReply!,
-                operation.ReplyRouteId,
+            var terminal = new InstanceSpotActivationTerminal(
                 result,
-                failureCode,
-                replyParts
+                (ServiceWireConstants.FrameworkErrorCode)failureCode,
+                replyParts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray()
             );
-            try
-            {
-                return SubmitNativeTerminalReply(preparedReply);
-            }
-            finally
-            {
-                ZLinkMessageParts.DisposeAll(wire);
-            }
+            return RunInboundOperation(() =>
+                ReplyInstanceSpotActivationAsync(
+                        operation,
+                        terminal,
+                        _stop?.Token ?? CancellationToken.None
+                    )
+                    .AsTask()
+            )
+                ? SubmitResult.Ok
+                : SubmitResult.Terminated;
         }
         if (
             peer is null
@@ -7519,7 +7303,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             .ToArray();
         DisposeParts(decodedPayload);
         RunInboundOperation(() =>
-            CompleteInstanceSpotActivationAsync(operation, target, metadata, payload, Reply)
+            CompleteInstanceSpotActivationAsync(operation, target, metadata, payload)
         );
     }
 
@@ -7527,8 +7311,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         InstanceSpotActivationOperation operation,
         IInstanceSpotActivationTarget target,
         ReadOnlyMemory<byte>? metadata,
-        IReadOnlyList<ReadOnlyMemory<byte>> payload,
-        Func<RequestResult, uint, IReadOnlyList<Message>, SubmitResult> reply
+        IReadOnlyList<ReadOnlyMemory<byte>> payload
     )
     {
         var remaining =
@@ -7593,17 +7376,56 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             }
         }
 
+        await ReplyInstanceSpotActivationAsync(
+                operation,
+                terminal,
+                _stop?.Token ?? CancellationToken.None
+            )
+            .ConfigureAwait(false);
+    }
+
+    internal async ValueTask ReplyInstanceSpotActivationAsync(
+        InstanceSpotActivationOperation operation,
+        InstanceSpotActivationTerminal terminal,
+        CancellationToken cancellationToken
+    )
+    {
         if (!operation.IsRequest || terminal.Forwarded)
             return;
-        var replyMessages = terminal.ReplyParts.Select(Message.From).ToArray();
-        try
+        var wire = new List<ReadOnlyMemory<byte>>(2)
         {
-            reply(terminal.Result, (uint)terminal.FailureCode, replyMessages);
-        }
-        finally
+            ZLinkServiceWireCodec.EncodeReply(
+                operation.ReplyRouteId,
+                (int)terminal.Result,
+                (uint)terminal.FailureCode
+            ),
+        };
+        if (terminal.Result == RequestResult.Ok && terminal.ReplyParts.Count > 0)
+            wire.Add(
+                ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(terminal.ReplyParts)
+            );
+        var peer = await _lane
+            .RunAsync(() =>
+            {
+                _peersByRid.TryGetValue(operation.SourceNodeRid, out var value);
+                return value;
+            })
+            .ConfigureAwait(false);
+        if (peer is null || peer.LifecycleGeneration != operation.SourceNodeGeneration)
         {
-            DisposeParts(replyMessages);
+            if (_logicalMulticastDispatchErrors is { Enabled: false })
+                return;
+            var error = new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "The Instance Spot activation reply source is unavailable."
+            );
+            if (_logicalMulticastDispatchErrors is not { } reporter)
+                throw error;
+            reporter.ReportRuntimeTaskException(nameof(ReplyInstanceSpotActivationAsync), error);
+            return;
         }
+        cancellationToken.ThrowIfCancellationRequested();
+        await SendServiceTerminalAsync(operation.SourceNodeRid, wire).ConfigureAwait(false);
     }
 
     private bool ProcessStateful(

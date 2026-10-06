@@ -113,8 +113,36 @@ internal sealed partial class ZLinkFrameworkRuntime
         var descriptors = await resolver
             .ListLiveMeshNodesAsync(address.MeshName, cancellationToken)
             .ConfigureAwait(false);
-        var eligible = descriptors
-            .Where(candidate => IsEligibleInstanceCandidate(candidate, address.InstanceSpotType))
+        var serving = descriptors.Where(static candidate =>
+            candidate.State == ZLinkFrameworkRuntimeState.Serving
+            && candidate.ObjectRole == ZLinkMeshNodeObjectRole.Server
+        );
+        var types = serving
+            .SelectMany(static candidate => candidate.ObjectCapabilities)
+            .Where(static capability =>
+                capability.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
+            )
+            .Select(static capability => capability.StableType)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var stableType = address.InstanceSpotType;
+        if (string.IsNullOrEmpty(stableType))
+        {
+            if (types.Length > 1)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    "InstanceSpot(instanceSpotType) is required when a Mesh serves multiple Instance Spot types."
+                );
+            stableType = types.SingleOrDefault() ?? string.Empty;
+        }
+        if (!types.Contains(stableType, StringComparer.Ordinal))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Mesh '{address.MeshName}' does not serve Instance Spot type '{stableType}'."
+            );
+        address = address with { InstanceSpotType = stableType };
+        var eligible = serving
+            .Where(candidate => IsEligibleInstanceCandidate(candidate, stableType))
             .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
             .ToArray();
         var selected =
@@ -215,9 +243,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkMeshNodeDescriptor candidate,
         string stableType
     ) =>
-        candidate.State == ZLinkFrameworkRuntimeState.Serving
-        && candidate.ObjectRole == ZLinkMeshNodeObjectRole.Server
-        && candidate.PlacementWeight > 0
+        candidate.PlacementWeight > 0
         && (
             candidate.Capacity.Spots.Limit == 0
             || candidate.Capacity.Spots.Active + (long)candidate.Capacity.Spots.Reserved
