@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Xunit;
 
@@ -209,41 +210,48 @@ public sealed class HarnessContractTests
     [Fact]
     public void HistogramKeepsExactSumOverflowAndInclusiveBounds()
     {
+        var bounds = Histogram.Bounds;
+        var firstBoundaryNs = checked((long)(bounds[0] * 1_000_000));
+        var firstAboveNs = firstBoundaryNs + 1;
+        var overflowNs = checked((long)(bounds[^1] * 1_000_000) + 1);
         var histogram = new Histogram();
-        histogram.Record(100_000);
-        histogram.Record(100_001);
-        histogram.Record(1_024_000_001);
+        histogram.Record(firstBoundaryNs);
+        histogram.Record(firstAboveNs);
+        histogram.Record(overflowNs);
         Dictionary<string, object?> metrics = [],
             histograms = [];
         Dictionary<string, NullReason> reasons = [];
         histogram.Export("latencyMs", "latency", metrics, histograms, reasons);
         var snapshot = histogram.Snapshot();
-        Assert.Equal(71, snapshot.bounds.Length);
-        var firstBucket = Array.IndexOf(snapshot.bounds, .1);
-        Assert.Equal("1", snapshot.counts[firstBucket]);
-        Assert.Equal("1", snapshot.counts[firstBucket + 1]);
+        Assert.Equal(bounds, snapshot.bounds);
+        Assert.Equal("1", snapshot.counts[0]);
+        Assert.Equal("1", snapshot.counts[1]);
         Assert.Equal("1", snapshot.overflow);
         Assert.Equal("3", snapshot.count);
-        Assert.Equal("1024200002", snapshot.sumNs);
-        Assert.Equal(snapshot.bounds[firstBucket + 1], metrics["latency.p50Ms"]);
+        Assert.Equal(
+            (firstBoundaryNs + firstAboveNs + overflowNs).ToString(CultureInfo.InvariantCulture),
+            snapshot.sumNs
+        );
+        Assert.Equal(bounds[1], metrics["latency.p50Ms"]);
         Assert.Null(metrics["latency.p95Ms"]);
         Assert.Equal("nearest-rank-bucket-upper-bound-capped-by-max", snapshot.percentileMethod);
         Assert.Equal("HISTOGRAM_OVERFLOW", reasons["/metrics/latency.p95Ms"].code);
         Assert.Equal(snapshot.bounds[^1], reasons["/metrics/latency.p95Ms"].lowerBoundMs);
-        Assert.Equal(1024.000001, metrics["latency.maxMs"]);
+        Assert.Equal(overflowNs / 1_000_000d, metrics["latency.maxMs"]);
     }
 
     [Fact]
     public void HistogramCapsRegularBucketPercentileAtObservedMaximum()
     {
+        var sampleNs = checked((long)(Histogram.Bounds[0] * 1_000_000) + 1);
         var histogram = new Histogram();
-        histogram.Record(100_001);
+        histogram.Record(sampleNs);
         Dictionary<string, object?> metrics = [],
             histograms = [];
         Dictionary<string, NullReason> reasons = [];
         histogram.Export("latencyMs", "latency", metrics, histograms, reasons);
-        Assert.Equal(0.100001, metrics["latency.p50Ms"]);
-        Assert.Equal(0.100001, metrics["latency.p95Ms"]);
+        Assert.Equal(sampleNs / 1_000_000d, metrics["latency.p50Ms"]);
+        Assert.Equal(sampleNs / 1_000_000d, metrics["latency.p95Ms"]);
         Assert.DoesNotContain("/metrics/latency.p95Ms", reasons.Keys);
     }
 
