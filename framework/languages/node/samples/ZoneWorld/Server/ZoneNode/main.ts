@@ -48,6 +48,8 @@ async function bootstrap(): Promise<void> {
   const config = app.get<ZoneWorldConfiguration>(ZONEWORLD_CONFIG);
   const node = config.zoneNode;
   if (node === undefined) throw new Error('ZoneNode configuration is required.');
+  const botStartAbort = new AbortController();
+  let botStartTask: Promise<void> | undefined;
   if (node.zoneCapacity > 0) {
     const state = app.get(NodeRuntimeState);
     const maintenance = app.get(MaintenanceStore);
@@ -83,7 +85,10 @@ async function bootstrap(): Promise<void> {
       console.log(`bot-start=ready node=${node.nodeId}`);
       // Keep topology and Ops reporting available while bot ticks remain
       // paused. The runner releases the tick gate after normal checks.
-      void waitForBotStart(node.botStartSignalPath).then(() => state.enableBotTicks());
+      botStartTask = waitForBotStart(node.botStartSignalPath, botStartAbort.signal).then(() => {
+        botStartAbort.signal.throwIfAborted();
+        state.enableBotTicks();
+      });
     } else {
       state.enableBotTicks();
     }
@@ -111,7 +116,14 @@ async function bootstrap(): Promise<void> {
     await waitForShutdown();
   } finally {
     if (statusTimer !== undefined) clearInterval(statusTimer);
-    await closeRuntime(app);
+    botStartAbort.abort();
+    try {
+      await botStartTask;
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'AbortError')) throw error;
+    } finally {
+      await closeRuntime(app);
+    }
   }
 }
 
@@ -149,9 +161,11 @@ bootstrap().catch((error: unknown) => {
 
 export {};
 
-async function waitForBotStart(signalPath: string | undefined): Promise<void> {
+async function waitForBotStart(signalPath: string | undefined, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
   if (signalPath === undefined) return;
-  while (!fs.existsSync(signalPath)) await delay(50);
+  while (!fs.existsSync(signalPath)) await delay(50, undefined, { signal });
+  signal.throwIfAborted();
 }
 
 async function waitForPlacementPeer(
