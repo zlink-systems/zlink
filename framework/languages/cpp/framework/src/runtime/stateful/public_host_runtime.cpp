@@ -4231,8 +4231,6 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     auto owned_command =
       std::make_shared<protocol::instance_activation_recovery_t> (std::move (command));
     auto &request = owned_command->activation;
-    const auto &metadata = owned_command->metadata;
-    const auto &application = owned_command->application_payload;
     std::shared_ptr<location_repository_t> store;
     std::shared_ptr<stateful::relocation_store_port_t> instance_relocations;
     instance_spot_activation_materializer_t instance_materializer;
@@ -4302,37 +4300,22 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
         co_return;
     }
     const auto authority_key = spot_authority_key (request.target.spot_id);
-    const auto forward_activation = [&, lifetime] (const zlink::routing_id_t &target,
-                                                   std::uint64_t generation) {
-        auto forwarded = request;
-        const auto local = status ();
-        forwarded.source_node_routing_id = local.routing_id ().to_bytes ();
-        forwarded.source_node_generation = local.lifecycle_generation ();
-        forwarded.target.target_node_routing_id = target.to_bytes ();
-        forwarded.target.target_node_generation = generation;
-        const auto remaining =
-          std::chrono::milliseconds (request.target.deadline_unix_ms > unix_milliseconds_now ()
-                                       ? request.target.deadline_unix_ms - unix_milliseconds_now ()
-                                       : 0);
-        auto relayed = std::make_shared<task_t<bool>> (activate_instance_spot_remote (
-          target, std::move (forwarded), metadata, application, remaining,
-          [lifetime, reply_terminal] (
-            foundation::operation_terminal_t terminal, protocol::reply_header_t reply,
-            std::optional<protocol::application_payload_t> application_reply) {
-              if (terminal != foundation::operation_terminal_t::completed) {
-                  reply.terminal_result = 105;
-                  reply.failure_code =
-                    static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed);
-                  application_reply.reset ();
-              }
-              reply_terminal (
-                {reply.terminal_result, reply.failure_code, std::move (application_reply)});
-          }));
-        detail::observe_task_terminal (
-          *relayed, [lifetime, relayed, reply_terminal] (const result_t<bool> &result) {
-              if (!result || !result.value ())
-                  reply_terminal ({103, 0, std::nullopt});
-          });
+    const auto reject_activation = [&] (std::optional<instance_spot_activation_result_t> result =
+                                          std::nullopt) {
+        if (request.target.authority_owner_generation == 0
+            && request.target.deadline_unix_ms <= unix_milliseconds_now ()) {
+            reply_terminal (
+              {static_cast<std::uint32_t> (protocol::request_terminal_result::timedOut), 0,
+               std::nullopt});
+            return;
+        }
+        if (result) {
+            reply_terminal (std::move (*result));
+            return;
+        }
+        const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
+          framework_error_kind_t::unavailable);
+        reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
     };
     const auto resume_missing = [weak = weak_from_this (), command = owned_command,
                                  mailbox_record] (std::function<void ()> &terminal_sink) {
@@ -4489,8 +4472,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                     const auto current_rid = zlink::routing_id_t::from (
                       std::string (snapshot->allocation.target.node_rid.value ()));
                     if (current_rid.to_bytes () != local.routing_id ().to_bytes ()) {
-                        forward_activation (current_rid,
-                                            snapshot->allocation.target.node_lifecycle_generation);
+                        reject_activation ();
                         co_return true;
                     }
                     bool prepared = false;
@@ -4553,7 +4535,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
         const auto local = status ();
         const auto target = zlink::routing_id_t::from (request.target.target_node_routing_id);
         if (target.to_bytes () != local.routing_id ().to_bytes ()) {
-            forward_activation (target, request.target.target_node_generation);
+            reject_activation ();
             co_return;
         }
     }
@@ -4607,20 +4589,19 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     if (!reservation) {
         instance_relocations->remove (recovery_root.reference);
         if (std::holds_alternative<object_type_mismatch_t> (reserved)) {
-            reply_terminal (
-              {107, static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch),
-               std::nullopt});
+            reject_activation (instance_spot_activation_result_t{
+              static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
+              static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch),
+              std::nullopt});
             co_return;
         }
         if (std::holds_alternative<object_placement_capacity_exhausted_t> (reserved)) {
-            reply_terminal ({static_cast<std::uint32_t> (protocol::request_terminal_result::busy),
-                             0, std::nullopt});
+            reject_activation (instance_spot_activation_result_t{
+              static_cast<std::uint32_t> (protocol::request_terminal_result::busy), 0,
+              std::nullopt});
             co_return;
         }
-        if (!(co_await join_existing (co_await store->read_authority (authority_key))))
-            reply_terminal (
-              {105, static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
-               std::nullopt});
+        reject_activation ();
         co_return;
     }
     bool prepared = false;

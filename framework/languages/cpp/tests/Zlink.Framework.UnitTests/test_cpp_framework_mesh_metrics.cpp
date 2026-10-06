@@ -469,6 +469,10 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
       .runtime_failures =
         std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()};
     source_options.metric_channel_names = {"work"};
+    auto application_jobs = std::make_shared<zlink::framework::runtime::application_job_queue_t> (
+      zlink::framework::runtime::application_job_queue_configuration_t{
+        zlink::framework::application_job_queue_profile_t::balanced, std::uint32_t{1}, 1, 1});
+    source_options.application_jobs = application_jobs;
     mesh::raw_mesh_node_owner_t source (std::move (source_options));
     source.start ();
     admit_pair (source, target);
@@ -513,6 +517,9 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
       },
       [&] (const auto &record) { return target.reply (record, reply_payload); });
 
+    auto held_permit = application_jobs->try_reserve_supply ();
+    require (held_permit.has_value (), "source application permit was not reserved");
+    require (!application_jobs->try_reserve_supply (), "source application permits were not full");
     const auto deadline_unix_ms =
       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
                                     std::chrono::system_clock::now ().time_since_epoch () + 2s)
@@ -539,6 +546,7 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
             protocol::decode_instance_spot_activation_header (record.parts.front ());
           require (decoded.request && decoded.reply_route_id != 0,
                    "instance activation was not encoded as a request");
+          require (record.reply_token.has_value (), "cold request did not use Core request");
           return target.reply_instance_spot_activation (record, 0, 0, reply_payload);
       });
 
@@ -598,6 +606,9 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     require (!find_sample (provider, "zlink.mesh_node.request.timeouts",
                            {{"mesh_name", "metrics-requests"}, {"surface", "instance_spot"}}),
              "failed instance activation emitted a timeout counter");
+    require (!application_jobs->try_reserve_supply (),
+             "cold completion released another operation's application permit");
+    held_permit.reset ();
 
     std::promise<request_result_t> failed_promise;
     auto failed = failed_promise.get_future ();

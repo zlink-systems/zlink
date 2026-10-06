@@ -1269,7 +1269,8 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_with_header_result (
   std::vector<std::uint8_t> header,
   const protocol::application_payload_t &application_payload,
   detail::backend::raw_send_stage_trace_t trace,
-  bool target_claimed)
+  bool target_claimed,
+  std::optional<std::vector<std::uint8_t>> metadata)
 {
     if (!target_claimed && !_topology.peer (target_routing_id)) {
         if (trace)
@@ -1277,8 +1278,10 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_with_header_result (
         co_return zlink::submit_result_t::not_connected;
     }
     detail::backend::raw_message_t parts;
-    parts.reserve (2);
+    parts.reserve (metadata ? 3 : 2);
     parts.push_back (std::move (header));
+    if (metadata)
+        parts.push_back (std::move (*metadata));
     parts.push_back (protocol::encode_application_payload (application_payload));
     auto started =
       start_send (std::move (target_routing_id), std::move (parts), true, std::move (trace));
@@ -2152,27 +2155,22 @@ task_t<bool> raw_mesh_node_owner_t::send_instance_spot_activation (
         throw std::invalid_argument (
           "Instance Spot send source, target, metadata, or operation kind is inconsistent");
     }
+    if (target_routing_id != local.node_routing_id)
+        co_return co_await send_with_header_result (
+          target_routing_id, protocol::encode_instance_spot_activation_header (request),
+          application_payload, {}, false, std::move (metadata))
+          == zlink::submit_result_t::ok;
     detail::backend::raw_message_t parts{
       protocol::encode_instance_spot_activation_header (request)};
     if (metadata)
         parts.push_back (std::move (*metadata));
     parts.push_back (protocol::encode_application_payload (application_payload));
-    if (target_routing_id == local.node_routing_id) {
-        const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t{
-          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
-          std::move (parts), local.node_routing_id, std::nullopt, std::nullopt});
-        if (accepted)
-            signal_activity ();
-        co_return accepted;
-    }
-    std::shared_ptr<detail::backend::raw_route_port_t> port;
-    {
-        std::lock_guard lifecycle_lock (_lifecycle_mutex);
-        port = _port;
-    }
-    if (!port)
-        co_return false;
-    co_return co_await port->send (target_routing_id, std::move (parts));
+    const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t{
+      owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
+      std::move (parts), local.node_routing_id, std::nullopt, std::nullopt});
+    if (accepted)
+        signal_activity ();
+    co_return accepted;
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
@@ -2187,7 +2185,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
         throw std::invalid_argument ("Instance Spot activation timeout must be positive");
     }
     const auto local = _topology.local_descriptor ();
-    if (request.source_node_routing_id != local.node_routing_id
+    if (!request.request || request.source_node_routing_id != local.node_routing_id
         || request.source_node_generation != local.lifecycle_generation
         || request.target.target_node_routing_id != target_routing_id
         || request.has_metadata != metadata.has_value ()) {
@@ -2204,7 +2202,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
         }
         correlation = take_reply_route_id_locked ();
     }
-    request.reply_route_id = request.request ? correlation : 0;
+    request.reply_route_id = correlation;
     detail::backend::raw_message_t parts{
       protocol::encode_instance_spot_activation_header (request)};
     if (metadata)
@@ -2213,9 +2211,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     const auto id = operation_id (local.lifecycle_generation, correlation);
     if (!_operations->register_operation (
           id, foundation::operation_registry_t::clock_t::now () + timeout, std::move (callback), {},
-          mesh_request_metric_t (_request_metrics, request.request
-                                                     ? mesh_request_surface_t::instance_spot
-                                                     : mesh_request_surface_t::none))) {
+          mesh_request_metric_t (_request_metrics, mesh_request_surface_t::instance_spot))) {
         co_return false;
     }
     if (target_routing_id == local.node_routing_id) {
@@ -2507,12 +2503,16 @@ bool raw_mesh_node_owner_t::reply_instance_spot_activation (
         throw std::invalid_argument (
           "failed Instance Spot activation reply cannot carry a payload");
     }
+    const auto local = _topology.local_descriptor ();
+    // Recovery has no native token. The original Core request owns its terminal;
+    // replay cannot create a new reply leg after that connection was lost.
+    if (request.source_routing_id != local.node_routing_id && !request.reply_token)
+        return false;
     detail::backend::raw_message_t parts{
       protocol::encode_reply_header (*request.correlation, terminal_result, failure_code)};
     if (application_reply) {
         parts.push_back (protocol::encode_application_payload (*application_reply));
     }
-    const auto local = _topology.local_descriptor ();
     if (request.source_routing_id == local.node_routing_id) {
         return _operations->complete (
           operation_id (local.lifecycle_generation, *request.correlation),
