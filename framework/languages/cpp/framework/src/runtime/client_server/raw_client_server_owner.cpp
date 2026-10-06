@@ -594,9 +594,12 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
         for (auto &received : records) {
             if (_connections.find (received.record.source_routing_id) == _connections.end ()) {
                 results.push_back (client_server_pump_result_t::protocol_error);
-            } else if (_mailbox.try_enqueue (std::move (received.record))) {
-                if (received.permit)
-                    received.permit->mark_queued ();
+            } else if (_mailbox.try_enqueue (std::move (received.record), [&received] {
+                           // From here the admitted record alone owns its permit.
+                           if (received.permit)
+                               received.permit->mark_queued ();
+                           received.permit.reset ();
+                       })) {
                 results.push_back (client_server_pump_result_t::application);
             } else {
                 results.push_back (client_server_pump_result_t::backpressured);

@@ -66,7 +66,8 @@ enum class client_server_pump_result_t
 };
 
 // A received application record and its permit. The permit becomes a queued job only
-// when the owner mailbox admits the record, so admission is the one acceptance point.
+// when the owner mailbox admits the record (under the mailbox lock, before any claim),
+// so admission is the one acceptance point.
 struct received_application_record_t
 {
     mesh::service_mailbox_record_t record;
