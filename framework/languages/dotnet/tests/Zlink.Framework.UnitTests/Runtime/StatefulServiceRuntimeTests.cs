@@ -4844,6 +4844,82 @@ public sealed partial class StatefulServiceRuntimeTests
         }
     }
 
+    [Fact]
+    public async Task ColdSendReturnsWithoutWaitingForPeerByteCredit()
+    {
+        const int payloadBytes = 65_536;
+        const ulong hwmBytes = 2 * payloadBytes;
+        using var queue = new ZLinkApplicationJobQueue(
+            new ZLinkApplicationJobQueueCapacity(
+                Zlink.Framework.Contracts.Configuration.ZLinkApplicationJobQueueProfile.Balanced,
+                ConfiguredManualMax: 1,
+                EffectiveProcessorCount: 1,
+                EffectiveMaxQueuedApplicationJobs: 1
+            )
+        );
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        context.Options.AutoHwmEnabled = false;
+        await using var source = NewNode(context, "cold-credit-source");
+        source.RouterHighWaterMark = hwmBytes;
+        await using var target = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            applicationJobQueue: queue
+        );
+        target.SetRoutingId(RoutingId.From("cold-credit-target"));
+        target.RouterReceiveHighWaterMark = hwmBytes;
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetBind($"inproc://cold-credit-source-{suffix}");
+        var endpoint = $"inproc://cold-credit-target-{suffix}";
+        target.SetBind(endpoint);
+        source.ConnectPeer(endpoint, target.RoutingId);
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
+        using var held = await queue.AcquireAsync(CancellationToken.None);
+        var activation = new InstanceSpotActivationTarget(
+            "objects",
+            target.RoutingId,
+            target.Status().LifecycleGeneration,
+            "cold",
+            "sample",
+            "descriptor"
+        );
+        using var payload = Message.From(new byte[payloadBytes]);
+        for (var index = 0; index < 16; index++)
+        {
+            var call = Task.Run(() =>
+                source.ActivateInstanceSpot(
+                    activation,
+                    "caller",
+                    [payload],
+                    false,
+                    out _,
+                    checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds()),
+                    TimeSpan.FromSeconds(5)
+                )
+            );
+            try
+            {
+                var result = await call.WaitAsync(TimeSpan.FromMilliseconds(250));
+                Assert.Contains(result, new[] { SubmitResult.Ok, SubmitResult.Backpressured });
+                Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
+            }
+            catch (TimeoutException)
+            {
+                // Release only after the non-blocking contract has already failed,
+                // so teardown can finish the blocked Core admission.
+                held.Dispose();
+                await call.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Fail(
+                    "Cold Send waited for peer byte credit while the application permit was held."
+                );
+            }
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -5032,10 +5108,8 @@ public sealed partial class StatefulServiceRuntimeTests
             {
                 // An explicit connection intent removal ends the admitted Core request.
                 // A later recovery reply cannot replace that source-owned terminal.
-                Assert.Contains(
-                    (RequestResult)completion.Record.TerminalResult,
-                    new[] { RequestResult.NotConnected, RequestResult.NotFound }
-                );
+                // Core explicit endpoint/pipe removal completes with REQUEST_NOT_FOUND.
+                Assert.Equal((int)RequestResult.NotFound, completion.Record.TerminalResult);
                 Assert.Empty(completion.Parts);
             }
             else

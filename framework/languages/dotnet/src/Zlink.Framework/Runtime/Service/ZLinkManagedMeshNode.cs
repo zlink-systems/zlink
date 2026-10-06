@@ -1597,7 +1597,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             pending.DeadlineUnixMs = deadlineUnixMs;
         }
         var submit = pending is null
-            ? SubmitInstanceSpotSend(peer, wireParts)
+            ? SubmitRoutedApplicationSend(peer, wireParts)
             : SubmitNativeServiceRequest(peer, wireParts, pending);
         if (submit != SubmitResult.Ok)
         {
@@ -1701,8 +1701,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
             }
         }
-        await SendRoutedAsync(peer.PhysicalRoutingId, wire, cancellationToken)
-            .ConfigureAwait(false);
+        var submit = SubmitRoutedApplicationSend(peer, wire);
+        if (submit != SubmitResult.Ok)
+            throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
         return new InstanceSpotActivationTerminal(
             RequestResult.Ok,
             ServiceWireConstants.FrameworkErrorCode.None,
@@ -1711,36 +1712,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
     }
 
-    private SubmitResult SubmitInstanceSpotSend(Peer peer, IReadOnlyList<ReadOnlyMemory<byte>> wire)
+    private SubmitResult SubmitRoutedApplicationSend(
+        Peer peer,
+        IReadOnlyList<ReadOnlyMemory<byte>> wire
+    )
     {
-        var messages = wire.Select(Message.From).ToArray();
-        var transferred = false;
-        try
+        if (!TryScheduleRoutedSend(peer.PhysicalRoutingId, wire))
         {
-            lock (_socketGate)
-            {
-                var socket = _socket;
-                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
-                    return SubmitResult.Terminated;
-                socket.Send(peer.PhysicalRoutingId).Messages(messages).Submit();
-                transferred = true;
-            }
-            Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: peer.RoutingId);
-            return SubmitResult.Ok;
+            Publish(MeshMonitorEventKind.Backpressured, peerRid: peer.RoutingId);
+            return SubmitResult.Backpressured;
         }
-        catch (ZlinkSubmitException error)
-        {
-            return (SubmitResult)(int)error.Result;
-        }
-        catch (ObjectDisposedException)
-        {
-            return SubmitResult.Terminated;
-        }
-        finally
-        {
-            if (!transferred)
-                DisposeParts(messages);
-        }
+        Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: peer.RoutingId);
+        return SubmitResult.Ok;
     }
 
     public SubmitResult CreateUserSpot(
@@ -4767,13 +4750,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (!metadata.IsEmpty)
             wireParts.Add(metadata);
         wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
-        if (!TryScheduleRoutedSend(peer.PhysicalRoutingId, wireParts))
-        {
-            Publish(MeshMonitorEventKind.Backpressured, peerRid: peer.RoutingId);
-            return SubmitResult.Backpressured;
-        }
-        Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: peer.RoutingId);
-        return SubmitResult.Ok;
+        return SubmitRoutedApplicationSend(peer, wireParts);
     }
 
     private SubmitResult SubmitNativeServiceRequest(
