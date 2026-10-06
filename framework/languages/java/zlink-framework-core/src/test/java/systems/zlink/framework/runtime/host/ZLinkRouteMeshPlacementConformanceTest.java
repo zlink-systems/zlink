@@ -84,6 +84,7 @@ final class ZLinkRouteMeshPlacementConformanceTest {
         var store = new ZLinkInMemoryLocationStore();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
+        options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
         var locations = options.configureLocations();
         locations.setOwnerLeaseRenewInterval(millis(lease, "renewIntervalMs"));
         locations.setOwnerLeaseRenewTimeout(millis(lease, "renewTimeoutMs"));

@@ -12,6 +12,8 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.16.0]
+
 ### Fixed
 
 - `zlink_socket()` returns `NULL` with the preserved errno (for example

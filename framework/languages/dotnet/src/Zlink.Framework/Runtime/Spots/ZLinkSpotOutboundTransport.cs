@@ -92,7 +92,7 @@ internal sealed class ZLinkSpotOutboundTransport(
         }
         catch (ZlinkSubmitException failure)
         {
-            return DirectSubmitFailure(failure);
+            return ZLinkSubmitFailureMapper.ToOneWayResult(failure, "Direct Spot send");
         }
         catch (ObjectDisposedException)
         {
@@ -152,7 +152,7 @@ internal sealed class ZLinkSpotOutboundTransport(
         }
         catch (ZlinkSubmitException failure)
         {
-            return DirectSubmitFailure(failure);
+            return ZLinkSubmitFailureMapper.ToOneWayResult(failure, "Direct Spot send");
         }
         catch (ObjectDisposedException)
         {
@@ -218,7 +218,11 @@ internal sealed class ZLinkSpotOutboundTransport(
         }
         catch (ZlinkSubmitException failure)
         {
-            return DirectSubmitFailure(failure, selectOne: true);
+            return ZLinkSubmitFailureMapper.ToOneWayResult(
+                failure,
+                "Direct Spot send",
+                selectOne: true
+            );
         }
         catch (ObjectDisposedException)
         {
@@ -345,31 +349,4 @@ internal sealed class ZLinkSpotOutboundTransport(
             ZLinkMessageParts.DisposeAll(parts);
         }
     }
-
-    //  selectOne marks the channel path, where NotFound means applying
-    //  eligibility and drain left no member to pick rather than a named target
-    //  being absent. The spec ends that as Unavailable
-    //  (06-framework-api "no eligible select-one member").
-    private static ZLinkOneWaySubmitResult DirectSubmitFailure(
-        ZlinkSubmitException failure,
-        bool selectOne = false
-    ) =>
-        failure.Result switch
-        {
-            ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.RouteNotConnected
-            ),
-            ZlinkSubmitException.ErrorCode.NotFound => new ZLinkOneWaySubmitResult(
-                selectOne
-                    ? ZLinkOneWaySubmitStatus.RouteNotConnected
-                    : ZLinkOneWaySubmitStatus.TargetNotFound
-            ),
-            ZlinkSubmitException.ErrorCode.Terminated => new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Shutdown
-            ),
-            ZlinkSubmitException.ErrorCode.Backpressured => new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Backpressured
-            ),
-            _ => throw ZLinkRequestFailureMapper.CreateSubmitException(failure, "Direct Spot send"),
-        };
 }

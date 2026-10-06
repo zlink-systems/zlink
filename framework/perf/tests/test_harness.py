@@ -24,14 +24,17 @@ from store import RunStore
 COMMON = ["--language", "dotnet", "--perf-dir", "/tmp/perf"]
 
 
+OVERFLOW_NS = int((BOUNDS[-1] + 1000) * 1e6)
+
+
 def histogram(samples, overflow=0):
     counts = ["0"] * len(BOUNDS)
     for bucket, count in samples.items():
         counts[bucket] = str(count)
     return {"unit": "ms", "ticksUnit": "ns", "bounds": BOUNDS.copy(), "counts": counts,
             "overflow": str(overflow), "count": str(sum(samples.values()) + overflow),
-            "sumNs": str(sum(int(BOUNDS[b] * 1e6) * n for b, n in samples.items()) + overflow * 2_000_000_000),
-            "maxNs": "2000000000" if overflow else str(int(BOUNDS[max(samples)] * 1e6)) if samples else None,
+            "sumNs": str(sum(int(BOUNDS[b] * 1e6) * n for b, n in samples.items()) + overflow * OVERFLOW_NS),
+            "maxNs": str(OVERFLOW_NS) if overflow else str(int(BOUNDS[max(samples)] * 1e6)) if samples else None,
             "percentileMethod": "nearest-rank-bucket-upper-bound-capped-by-max"}
 
 
@@ -342,8 +345,8 @@ class HarnessTests(unittest.TestCase):
         export_latency(value, "latency", "latencyMs", metrics, reasons)
         self.assertEqual(metrics["latency.p50Ms"], .01)
         self.assertIsNone(metrics["latency.p95Ms"])
-        self.assertEqual(reasons["/metrics/latency.p95Ms"]["lowerBoundMs"], 1000)
-        self.assertEqual(metrics["latency.meanMs"], 1000.005)
+        self.assertEqual(reasons["/metrics/latency.p95Ms"]["lowerBoundMs"], BOUNDS[-1])
+        self.assertEqual(metrics["latency.meanMs"], (0.01 + OVERFLOW_NS / 1e6) / 2)
 
     def test_mismatched_histogram_and_counter_overflow_are_failures(self):
         value = histogram({0: 1})

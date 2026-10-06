@@ -118,7 +118,8 @@ across processes.
   no new operation and finalizes its originals. Operations not yet terminal are counted only as
   `messages.inflightAtEnd`, never as success, failure or latency. Processes stop when the cell ends, so
   remaining work is not awaited.
-- **Preserve failed originals if warmup drain exceeds its bound.** Recreating connections
+- **Preserve failed originals if warmup drain exceeds its bound.** The drain bound is `drainTimeoutMs`
+  from §5.2. Recreating connections
   or adding arbitrary sleeps would hide unfinished work and invalidate comparisons.
 
 `messages.completed` counts cohort successes whose validation also ends inside the window.
@@ -139,9 +140,9 @@ A phase starts once; duplicate triggers return the same start acknowledgement.
 For cells measuring an outbound call inside a Spot handler, an application driver in the same
 process invokes the handler through public Spot request/send. Driver calls are also submitted
 continuously by the §4.3 request rule. Local driver calls are not
-additional KOPS. The driver call deadline is `driverTimeoutMs` from §5.2. The driver call wraps the
-measured remote call, so it must be able to receive that call's result even when the remote call ends
-at its own deadline.
+additional KOPS. The driver call deadline is `drainTimeoutMs` later than the §5.2 measured-call
+deadline. The driver call wraps the measured remote call, so it must be able to receive that call's
+result even when the remote call ends at its own deadline.
 The primary latency in §10.5 starts immediately before the handler's remote call
 and ends at completion; the whole driver interval is recorded separately as `driver.latency.*`.
 `driver.latency.*` samples only operations whose measured result was validated as a success, and
@@ -259,15 +260,27 @@ Each subscriber has an entry with `role=subscriber`, `roleInstance=subscriberId`
 
 ### 5.2 Common workload values
 
-Standard echo role config records `requestTimeoutMs=1000`, `correlationExpiryMs=1000`,
-`driverTimeoutMs=2000`, `setupTimeoutMs=30000`, and `adminTimeoutMs=5000`.
-Consumers are respectively public request calls, harness correlations, §4.2 local driver calls,
-shared-runner/setup callers and HTTP clients. The shared runner owns these values; roles and clients
-only read them from role config. Sends have no time limit. Record only the Classic fanout publisher send timeout from public socket
-configuration (standard: 1000ms; [owning contract][submit]).
+Standard echo role config records `drainTimeoutMs=30000`, `setupTimeoutMs=30000`, and
+`adminTimeoutMs=5000`. The shared runner owns these values; roles and clients only read them from role
+config.
+
+- **A measured call's deadline is the end of the phase it belongs to (warmup or measured) plus
+  `drainTimeoutMs`.** The public request call deadline, the send/send harness correlation expiry and the
+  worker call timeout all use this value. §4.3 continuous submission fills queues up to the backpressure
+  boundary, so queue waiting must enter latency; a short fixed deadline would turn saturation into
+  failures and the saturated state could not be measured. Operations not terminal when the measured
+  window ends count only as `inflightAtEnd`, per §4.1.
+- Setup values are consumed by the shared runner and setup callers, and admin values by HTTP clients.
+  Sends have no time limit.
+- Set the Classic fanout publisher's public socket send timeout to the warmup and measured durations
+  plus `drainTimeoutMs`, and record the actual value ([owning contract][submit]). A socket setting cannot
+  change per call, so this value keeps even the first publish from timing out before the measured-call
+  deadline. For the same reason, `NoDrop` publish admission waiting is measured as latency rather than
+  turned into failures.
 
 Worker config records `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
-`idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`, and effective executor limits. Apply
+`idleTimeoutMs=60000` and effective executor limits. The worker call timeout is the measured-call
+deadline above. Apply
 these only through each language's public worker options (§10.8). The worker queue has no limit
 ([Framework API](../spec/server/00-foundation/06-framework-api.en.md)). The Application job queue
 owns the limit on jobs a host accepts, and only the §23 manifest changes it.
