@@ -25,6 +25,61 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkStateLaneTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void closeWaitsForAnAdmissionThatHasNotYetPublishedItsTurn(boolean post) throws Exception {
+        var lane = new ZLinkStateLane();
+        var adding = new java.util.concurrent.CountDownLatch(1);
+        var publish = new java.util.concurrent.CountDownLatch(1);
+        var mailbox = ZLinkStateLane.class.getDeclaredField("mailbox");
+        mailbox.setAccessible(true);
+        mailbox.set(
+                lane,
+                new java.util.concurrent.ConcurrentLinkedQueue<Object>() {
+                    @Override
+                    public boolean add(Object turn) {
+                        adding.countDown();
+                        try {
+                            assertTrue(publish.await(5, TimeUnit.SECONDS));
+                        } catch (InterruptedException failure) {
+                            throw new AssertionError(failure);
+                        }
+                        return super.add(turn);
+                    }
+                });
+        var ran = new AtomicBoolean();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var submitted =
+                    executor.submit(
+                            () -> {
+                                if (post) {
+                                    assertTrue(
+                                            lane.tryPost(
+                                                    () -> {
+                                                        ran.set(true);
+                                                        return CompletableFuture.completedFuture(
+                                                                null);
+                                                    }));
+                                } else {
+                                    lane.runAsync(() -> ran.set(true)).toCompletableFuture().join();
+                                }
+                            });
+            try {
+                assertTrue(adding.await(5, TimeUnit.SECONDS));
+                var closed = lane.closeAsync().toCompletableFuture();
+                assertFalse(closed.isDone());
+                publish.countDown();
+                submitted.get(5, TimeUnit.SECONDS);
+                closed.get(5, TimeUnit.SECONDS);
+                assertTrue(ran.get());
+                assertFalse(lane.tryPost(() -> CompletableFuture.completedFuture(null)));
+                assertThrows(IllegalStateException.class, () -> lane.runAsync(() -> null));
+            } finally {
+                publish.countDown();
+            }
+        }
+    }
+
     @Test
     void inlineClaimDoesNotBypassQueuedTurnsAndPreservesNullCompletion() {
         var scheduled = new java.util.ArrayDeque<Runnable>();
