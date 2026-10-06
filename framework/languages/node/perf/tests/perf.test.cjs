@@ -15,6 +15,9 @@ const { PayloadPattern } = require('../build/shared/payload.js');
 const { ScenarioMetrics } = require('../build/server-support/scenario-metrics.js');
 const { SendSendCorrelation } = require('../build/server-support/send-send-correlation.js');
 const {
+  ActorNoBindSendSendEchoScenario
+} = require('../build/actor-caller-server/actor-no-bind-send-send-echo-scenario.js');
+const {
   S2sSpotToChannelSendSendEchoScenario
 } = require('../build/spot-server/s2s-spot-to-channel-send-send-echo-scenario.js');
 const { FanoutReceipts } = require('../build/subscriber-server/fanout-receipts.js');
@@ -90,6 +93,41 @@ test('server-driven config written by the common runner starts requests on every
   );
 
   assert.equal(started, workload.logicalStreams);
+});
+
+test('actor send setup probe uses the one-way send API without a deadline argument', async () => {
+  const roleConfig = config();
+  roleConfig.workload.connectConcurrency = 1;
+  roleConfig.actorIds = ['actor'];
+  roleConfig.channelName = 'return';
+  const measurement = new Measurement(roleConfig, true);
+  const submitArguments = [];
+  let ready;
+  const scenario = new ActorNoBindSendSendEchoScenario(
+    {
+      sendToActor: () => ({
+        submit: (...args) => {
+          submitArguments.push(args);
+          return Promise.resolve();
+        }
+      })
+    },
+    measurement,
+    roleConfig,
+    { createActors: async () => undefined },
+    {
+      set: (value) => {
+        ready = value;
+      }
+    },
+    { register: () => ({}), completeAsync: async () => ({ error: undefined }) },
+    { record: () => undefined }
+  );
+
+  await scenario.prepare();
+
+  assert.deepEqual(submitArguments, [[]]);
+  assert.equal(ready, true);
 });
 
 test('measurement owns setup, phase-drain and local-driver call deadlines', () => {

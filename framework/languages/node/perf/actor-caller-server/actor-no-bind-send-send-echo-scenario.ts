@@ -56,7 +56,7 @@ export class ActorNoBindSendSendEchoScenario {
             .request(stream, ++this.sequences[stream], true)
             .with({ returnChannel: config.channelName });
           const entry = this.correlations.register(request, PerfClock.now());
-          await this.actorClient.sendToActor(config.actorIds[stream], request).submit(signal);
+          await this.actorClient.sendToActor(config.actorIds[stream], request).submit();
           const { error } = await this.correlations.completeAsync(entry);
           if (error) throw error;
         }
