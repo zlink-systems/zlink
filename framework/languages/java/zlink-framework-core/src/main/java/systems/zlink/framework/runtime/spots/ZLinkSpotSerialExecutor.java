@@ -274,38 +274,51 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     @Override
-    public Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealActorRelocation(
-            String actorId) {
-        return actorQueue(actorId).trySealRelocation();
+    public CompletionStage<Optional<ZLinkSerialExecutionQueue.RelocationSeal>>
+            trySealActorRelocation(String actorId) {
+        return stateLane
+                .runNowOrQueue(() -> actorQueueOnLane(actorId))
+                .thenCompose(ZLinkActorSerialExecutor::trySealRelocation);
     }
 
     @Override
-    public boolean abortActorRelocation(
+    public CompletionStage<Boolean> abortActorRelocation(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return actorQueueIfPresent(actorId).map(queue -> queue.abortRelocation(seal)).orElse(false);
+        return abortActorRelocationAsync(actorId, seal);
     }
 
     @Override
     public CompletionStage<Boolean> abortActorRelocationAsync(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         Objects.requireNonNull(actorId, "actorId");
-        return stateLane.runNowOrQueue(
-                () ->
-                        Optional.ofNullable(actorQueues.get(actorId))
-                                .map(queue -> queue.abortRelocation(seal))
-                                .orElse(false));
+        return stateLane
+                .runNowOrQueue(
+                        () ->
+                                Optional.ofNullable(actorQueues.get(actorId))
+                                        .map(queue -> queue.abortRelocation(seal))
+                                        .orElseGet(() -> CompletableFuture.completedFuture(false)))
+                .thenCompose(stage -> stage);
     }
 
     @Override
-    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitActorRelocation(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return actorQueueIfPresent(actorId).flatMap(queue -> queue.commitRelocation(seal));
+    public CompletionStage<Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>>
+            commitActorRelocation(String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return stateLane
+                .runNowOrQueue(() -> Optional.ofNullable(actorQueues.get(actorId)))
+                .thenCompose(
+                        queue ->
+                                queue.map(owner -> owner.commitRelocation(seal))
+                                        .orElseGet(
+                                                () ->
+                                                        CompletableFuture.completedFuture(
+                                                                Optional.empty())));
     }
 
     @Override
-    public Optional<ZLinkRetainedSerialQueueCommit.Commit> retainActorRelocationCommit(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return actorQueueIfPresent(actorId).flatMap(queue -> queue.retainRelocationCommit(seal));
+    public CompletionStage<Optional<ZLinkRetainedSerialQueueCommit.Commit>>
+            retainActorRelocationCommit(
+                    String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return retainActorRelocationCommitAsync(actorId, seal);
     }
 
     @Override
@@ -313,16 +326,31 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
             retainActorRelocationCommitAsync(
                     String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
         Objects.requireNonNull(actorId, "actorId");
-        return stateLane.runNowOrQueue(
-                () ->
-                        Optional.ofNullable(actorQueues.get(actorId))
-                                .flatMap(queue -> queue.retainRelocationCommit(seal)));
+        return stateLane
+                .runNowOrQueue(
+                        () ->
+                                Optional.ofNullable(actorQueues.get(actorId))
+                                        .map(queue -> queue.retainRelocationCommit(seal))
+                                        .orElseGet(
+                                                () ->
+                                                        CompletableFuture.completedFuture(
+                                                                Optional.empty())))
+                .thenCompose(stage -> stage);
     }
 
     @Override
-    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeActorRelocationIngress(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return actorQueueIfPresent(actorId).flatMap(queue -> queue.freezeRelocationIngress(seal));
+    public CompletionStage<Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>>
+            freezeActorRelocationIngress(
+                    String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal) {
+        return stateLane
+                .runNowOrQueue(() -> Optional.ofNullable(actorQueues.get(actorId)))
+                .thenCompose(
+                        queue ->
+                                queue.map(owner -> owner.freezeRelocationIngress(seal))
+                                        .orElseGet(
+                                                () ->
+                                                        CompletableFuture.completedFuture(
+                                                                Optional.empty())));
     }
 
     @Override
@@ -477,11 +505,11 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.isCurrent() ? ZLinkSerialExecutionQueue.yieldCurrent(close) : close;
     }
 
-    void commitClose() {
-        spotQueue.commitLifecycleTransition();
+    CompletionStage<Void> commitClose() {
+        return spotQueue.commitLifecycleTransition();
     }
 
-    Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealRelocation() {
+    CompletionStage<Optional<ZLinkSerialExecutionQueue.RelocationSeal>> trySealRelocation() {
         return spotQueue.trySealRelocation();
     }
 
@@ -497,11 +525,11 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.tryEnqueue(operation);
     }
 
-    boolean abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {
+    CompletionStage<Boolean> abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return spotQueue.abortRelocation(seal);
     }
 
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitRelocation(
+    CompletionStage<Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>> commitRelocation(
             ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return spotQueue.commitRelocation(seal);
     }

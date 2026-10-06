@@ -79,26 +79,26 @@ public final class ZLinkActorSerialExecutor {
         return queue.isCurrent();
     }
 
-    public Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealRelocation() {
+    public CompletionStage<Optional<ZLinkSerialExecutionQueue.RelocationSeal>> trySealRelocation() {
         return queue.trySealRelocation();
     }
 
-    public boolean abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {
+    public CompletionStage<Boolean> abortRelocation(ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return queue.abortRelocation(seal);
     }
 
-    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitRelocation(
+    public CompletionStage<Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>> commitRelocation(
             ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return queue.commitRelocation(seal);
     }
 
-    public Optional<ZLinkRetainedSerialQueueCommit.Commit> retainRelocationCommit(
+    public CompletionStage<Optional<ZLinkRetainedSerialQueueCommit.Commit>> retainRelocationCommit(
             ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return ZLinkRetainedSerialQueueCommit.retain(queue, seal);
     }
 
-    public Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeRelocationIngress(
-            ZLinkSerialExecutionQueue.RelocationSeal seal) {
+    public CompletionStage<Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>>
+            freezeRelocationIngress(ZLinkSerialExecutionQueue.RelocationSeal seal) {
         return queue.freezeRelocationIngress(seal);
     }
 

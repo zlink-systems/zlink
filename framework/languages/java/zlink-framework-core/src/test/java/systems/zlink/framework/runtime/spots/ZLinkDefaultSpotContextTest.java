@@ -725,11 +725,14 @@ final class ZLinkDefaultSpotContextTest {
 
             ZLinkSerialExecutionQueue queue = context.actorRelocationLane("actor-a");
             ZLinkSerialExecutionQueue.RelocationSeal seal =
-                    queue.trySealRelocation(handle.get()).orElseThrow();
+                    queue.trySealRelocation(handle.get())
+                            .toCompletableFuture()
+                            .join()
+                            .orElseThrow();
             assertEquals(1, seal.captured().size());
             assertArrayEquals(acceptedRecord, seal.captured().getFirst().payload());
 
-            assertTrue(queue.abortRelocation(seal));
+            assertTrue(queue.abortRelocation(seal).toCompletableFuture().join());
             activeRelease.complete(null);
             CompletableFuture.allOf(active.toCompletableFuture(), pending.toCompletableFuture())
                     .get(2, TimeUnit.SECONDS);

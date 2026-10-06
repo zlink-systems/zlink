@@ -12,7 +12,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
@@ -105,63 +104,94 @@ public final class ZLinkCompositeRelocationBarrier {
             CompletableFuture<Void> pending) {
         LinkedHashMap<String, ZLinkSerialExecutionQueue.RelocationSeal> seals =
                 new LinkedHashMap<>();
-        try {
-            for (Map.Entry<String, ZLinkSerialExecutionQueue> lane : laneSnapshot.entrySet()) {
-                Optional<ZLinkSerialExecutionQueue.RelocationSeal> sealed =
-                        boundaries != null
-                                ? lane.getValue().trySealRelocation(boundaries.get(lane.getKey()))
-                                : activeTurns.containsKey(lane.getKey())
-                                        ? lane.getValue()
-                                                .trySealRelocation(activeTurns.get(lane.getKey()))
-                                        : lane.getValue().trySealRelocation();
-                if (sealed.isEmpty()) {
-                    rollback(laneSnapshot, seals);
-                    return finishTransition(pending).thenApply(ignored -> Optional.empty());
-                }
-                seals.put(lane.getKey(), sealed.get());
-            }
-        } catch (RuntimeException failure) {
-            try {
-                rollback(laneSnapshot, seals);
-            } catch (RuntimeException rollbackFailure) {
-                failure.addSuppressed(rollbackFailure);
-            }
-            return finishTransition(pending)
-                    .thenCompose(ignored -> CompletableFuture.failedFuture(failure));
-        }
-        try {
-            return stateLane
-                    .runAsync(
-                            () -> {
-                                Seal established =
-                                        new Seal(
-                                                nextGeneration++,
-                                                Collections.unmodifiableMap(
-                                                        new LinkedHashMap<>(laneSnapshot)),
-                                                Collections.unmodifiableMap(
-                                                        new LinkedHashMap<>(seals)));
-                                active = established;
-                                return established;
-                            })
-                    .handle(
-                            (seal, failure) ->
-                                    finishTransition(pending)
-                                            .thenCompose(
-                                                    ignored ->
-                                                            failure == null
-                                                                    ? CompletableFuture
-                                                                            .completedFuture(
-                                                                                    Optional.of(
-                                                                                            seal))
-                                                                    : CompletableFuture
-                                                                            .<Optional<Seal>>
-                                                                                    failedFuture(
-                                                                                            failure)))
-                    .thenCompose(result -> result);
-        } catch (RuntimeException | Error failure) {
-            return finishTransition(pending)
-                    .thenCompose(ignored -> CompletableFuture.failedFuture(failure));
-        }
+        CompletionStage<Boolean> chain =
+                foldLaneGates(
+                        laneSnapshot,
+                        true,
+                        (accepted, lane) -> {
+                            if (!accepted) return CompletableFuture.completedFuture(false);
+                            CompletionStage<Optional<ZLinkSerialExecutionQueue.RelocationSeal>>
+                                    sealed =
+                                            boundaries != null
+                                                    ? lane.getValue()
+                                                            .trySealRelocation(
+                                                                    boundaries.get(lane.getKey()))
+                                                    : activeTurns.containsKey(lane.getKey())
+                                                            ? lane.getValue()
+                                                                    .trySealRelocation(
+                                                                            activeTurns.get(
+                                                                                    lane.getKey()))
+                                                            : lane.getValue().trySealRelocation();
+                            return sealed.thenApply(
+                                    value -> {
+                                        value.ifPresent(seal -> seals.put(lane.getKey(), seal));
+                                        return value.isPresent();
+                                    });
+                        });
+        return chain.handle(
+                        (accepted, failure) -> {
+                            if (failure != null || !accepted) {
+                                return rollback(laneSnapshot, seals)
+                                        .handle(
+                                                (ignored, rollbackFailure) -> {
+                                                    if (failure != null && rollbackFailure != null)
+                                                        failure.addSuppressed(rollbackFailure);
+                                                    Throwable resultFailure =
+                                                            failure != null
+                                                                    ? failure
+                                                                    : rollbackFailure;
+                                                    return finishTransition(pending)
+                                                            .thenCompose(
+                                                                    done ->
+                                                                            resultFailure == null
+                                                                                    ? CompletableFuture
+                                                                                            .<Optional<
+                                                                                                            Seal>>
+                                                                                                    completedFuture(
+                                                                                                            Optional
+                                                                                                                    .empty())
+                                                                                    : CompletableFuture
+                                                                                            .<Optional<
+                                                                                                            Seal>>
+                                                                                                    failedFuture(
+                                                                                                            resultFailure));
+                                                })
+                                        .thenCompose(result -> result);
+                            }
+                            return stateLane
+                                    .runAsync(
+                                            () -> {
+                                                Seal established =
+                                                        new Seal(
+                                                                nextGeneration++,
+                                                                Collections.unmodifiableMap(
+                                                                        new LinkedHashMap<>(
+                                                                                laneSnapshot)),
+                                                                Collections.unmodifiableMap(
+                                                                        new LinkedHashMap<>(
+                                                                                seals)));
+                                                active = established;
+                                                return established;
+                                            })
+                                    .handle(
+                                            (seal, stateFailure) ->
+                                                    finishTransition(pending)
+                                                            .thenCompose(
+                                                                    ignored ->
+                                                                            stateFailure == null
+                                                                                    ? CompletableFuture
+                                                                                            .completedFuture(
+                                                                                                    Optional
+                                                                                                            .of(
+                                                                                                                    seal))
+                                                                                    : CompletableFuture
+                                                                                            .<Optional<
+                                                                                                            Seal>>
+                                                                                                    failedFuture(
+                                                                                                            stateFailure)))
+                                    .thenCompose(result -> result);
+                        })
+                .thenCompose(result -> result);
     }
 
     /**
@@ -334,58 +364,58 @@ public final class ZLinkCompositeRelocationBarrier {
         }
         List<String> laneIds = new ArrayList<>(start.seal().lanes.keySet());
         Collections.reverse(laneIds);
-        boolean restored = true;
-        try {
-            for (String laneId : laneIds) {
-                restored &=
-                        start.seal()
-                                .lanes
-                                .get(laneId)
-                                .abortRelocation(start.seal().seals.get(laneId));
-            }
-            if (!restored) {
-                throw new IllegalStateException("composite relocation abort lost a lane fence");
-            }
-            return stateLane
-                    .runAsync(
-                            () -> {
-                                if (active == start.seal()) {
-                                    active = null;
-                                }
-                            })
-                    .handle(
-                            (ignored, failure) ->
-                                    finishTransition(start.pending())
-                                            .thenCompose(
-                                                    finished ->
-                                                            failure == null
-                                                                    ? CompletableFuture
-                                                                            .completedFuture(true)
-                                                                    : CompletableFuture
-                                                                            .<Boolean>failedFuture(
-                                                                                    failure)))
-                    .thenCompose(result -> result);
-        } catch (RuntimeException | Error failure) {
-            return finishTransition(start.pending())
-                    .thenCompose(ignored -> CompletableFuture.failedFuture(failure));
-        }
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> reverse = new LinkedHashMap<>();
+        laneIds.forEach(laneId -> reverse.put(laneId, start.seal().lanes.get(laneId)));
+        CompletionStage<Boolean> restored =
+                foldLaneGates(
+                        reverse,
+                        true,
+                        (previous, lane) ->
+                                lane.getValue()
+                                        .abortRelocation(start.seal().seals.get(lane.getKey()))
+                                        .thenApply(current -> previous & current));
+        return restored.thenCompose(
+                        success -> {
+                            if (!success)
+                                return CompletableFuture.<Void>failedFuture(
+                                        new IllegalStateException(
+                                                "composite relocation abort lost a lane fence"));
+                            return stateLane.runAsync(
+                                    () -> {
+                                        if (active == start.seal()) active = null;
+                                    });
+                        })
+                .handle(
+                        (ignored, failure) ->
+                                finishTransition(start.pending())
+                                        .thenCompose(
+                                                finished ->
+                                                        failure == null
+                                                                ? CompletableFuture.completedFuture(
+                                                                        true)
+                                                                : CompletableFuture
+                                                                        .<Boolean>failedFuture(
+                                                                                failure)))
+                .thenCompose(result -> result);
     }
 
     public CompletionStage<Optional<Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>>>
             commit(Seal seal) {
         return retainCommit(seal)
-                .thenApplyAsync(
+                .thenCompose(
                         retained -> {
-                            if (retained.isEmpty()) {
-                                return Optional.empty();
-                            }
+                            if (retained.isEmpty())
+                                return CompletableFuture.completedFuture(Optional.empty());
                             RelocationCommit commit = retained.orElseThrow();
-                            RelocationCommit.Cut cut;
-                            do {
-                                cut = commit.cut();
-                            } while (!commit.tryEstablishAndFinishCapture(cut));
-                            commit.complete();
-                            return Optional.of(cut.records());
+                            return commit.capture()
+                                    .thenCompose(
+                                            cut ->
+                                                    commit.complete()
+                                                            .thenApply(
+                                                                    ignored ->
+                                                                            Optional.of(
+                                                                                    cut
+                                                                                            .records())));
                         });
     }
 
@@ -415,40 +445,53 @@ public final class ZLinkCompositeRelocationBarrier {
         LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> held =
                 new LinkedHashMap<>();
         List<ZLinkRetainedSerialQueueCommit.Commit> retained = new ArrayList<>();
-        try {
-            for (Map.Entry<String, ZLinkSerialExecutionQueue> lane : start.lanes().entrySet()) {
-                ZLinkRetainedSerialQueueCommit.Commit committed =
-                        ZLinkRetainedSerialQueueCommit.retain(
-                                        lane.getValue(), seal.seals.get(lane.getKey()))
-                                .orElseThrow(
-                                        () ->
-                                                new IllegalStateException(
-                                                        "composite relocation commit lost a lane"
-                                                                + " fence"));
-                retained.add(committed);
-                held.put(lane.getKey(), committed.records());
-            }
-        } catch (RuntimeException failure) {
-            return stateLane
-                    .runAsync(() -> committing = false)
-                    .thenCompose(ignored -> CompletableFuture.failedFuture(failure));
-        }
-        return stateLane
-                .runAsync(
-                        () -> {
-                            if (active != seal) {
-                                committing = false;
-                                return false;
-                            }
-                            active = null;
-                            committing = false;
-                            return true;
+        CompletionStage<Void> chain =
+                foldLaneGates(
+                        start.lanes(),
+                        (Void) null,
+                        (ignored, lane) ->
+                                ZLinkRetainedSerialQueueCommit.retain(
+                                                lane.getValue(), seal.seals.get(lane.getKey()))
+                                        .thenAccept(
+                                                value -> {
+                                                    var committed =
+                                                            value.orElseThrow(
+                                                                    () ->
+                                                                            new IllegalStateException(
+                                                                                    "composite relocation commit lost a lane fence"));
+                                                    retained.add(committed);
+                                                    held.put(lane.getKey(), committed.records());
+                                                }));
+        return chain.handle(
+                        (ignored, failure) -> {
+                            if (failure != null)
+                                return stateLane
+                                        .runAsync(() -> committing = false)
+                                        .thenCompose(
+                                                done ->
+                                                        CompletableFuture
+                                                                .<Optional<RelocationCommit>>
+                                                                        failedFuture(failure));
+                            return stateLane
+                                    .runAsync(
+                                            () -> {
+                                                if (active != seal) {
+                                                    committing = false;
+                                                    return false;
+                                                }
+                                                active = null;
+                                                committing = false;
+                                                return true;
+                                            })
+                                    .thenApply(
+                                            retainedActive ->
+                                                    retainedActive
+                                                            ? Optional.of(
+                                                                    new RelocationCommit(
+                                                                            held, retained))
+                                                            : Optional.<RelocationCommit>empty());
                         })
-                .thenApply(
-                        retainedActive ->
-                                retainedActive
-                                        ? Optional.of(new RelocationCommit(held, retained))
-                                        : Optional.empty());
+                .thenCompose(result -> result);
     }
 
     public CompletionStage<Optional<Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>>>>
@@ -476,27 +519,45 @@ public final class ZLinkCompositeRelocationBarrier {
                     ? CompletableFuture.completedFuture(Optional.empty())
                     : awaitTransition(start.pending()).thenCompose(ignored -> freezeIngress(seal));
         }
-        try {
-            LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> held =
-                    new LinkedHashMap<>();
-            for (Map.Entry<String, ZLinkSerialExecutionQueue> lane :
-                    start.seal().lanes.entrySet()) {
-                held.put(
-                        lane.getKey(),
-                        lane.getValue()
-                                .freezeRelocationIngress(start.seal().seals.get(lane.getKey()))
-                                .orElseThrow(
-                                        () ->
-                                                new IllegalStateException(
-                                                        "composite relocation freeze lost a"
-                                                                + " lane fence")));
-            }
-            return finishTransition(start.pending())
-                    .thenApply(ignored -> Optional.of(Collections.unmodifiableMap(held)));
-        } catch (RuntimeException | Error failure) {
-            return finishTransition(start.pending())
-                    .thenCompose(ignored -> CompletableFuture.failedFuture(failure));
-        }
+        LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> held =
+                new LinkedHashMap<>();
+        CompletionStage<Void> chain =
+                foldLaneGates(
+                        start.seal().lanes,
+                        (Void) null,
+                        (ignored, lane) ->
+                                lane.getValue()
+                                        .freezeRelocationIngress(
+                                                start.seal().seals.get(lane.getKey()))
+                                        .thenAccept(
+                                                value ->
+                                                        held.put(
+                                                                lane.getKey(),
+                                                                value.orElseThrow(
+                                                                        () ->
+                                                                                new IllegalStateException(
+                                                                                        "composite relocation freeze lost a lane fence")))));
+        return chain.handle(
+                        (ignored, failure) ->
+                                finishTransition(start.pending())
+                                        .thenCompose(
+                                                done ->
+                                                        failure == null
+                                                                ? CompletableFuture.completedFuture(
+                                                                        Optional.of(
+                                                                                Collections
+                                                                                        .unmodifiableMap(
+                                                                                                held)))
+                                                                : CompletableFuture
+                                                                        .<Optional<
+                                                                                        Map<
+                                                                                                String,
+                                                                                                List<
+                                                                                                        ZLinkSerialExecutionQueue
+                                                                                                                .QueuedRecord>>>>
+                                                                                failedFuture(
+                                                                                        failure)))
+                .thenCompose(result -> result);
     }
 
     public <T> CompletionStage<T> runCapture(Seal seal, Supplier<CompletionStage<T>> capture) {
@@ -565,17 +626,64 @@ public final class ZLinkCompositeRelocationBarrier {
                 Optional.of(Collections.unmodifiableMap(captured)));
     }
 
-    private static void rollback(
+    private static <T> CompletionStage<T> foldLaneGates(
+            Map<String, ZLinkSerialExecutionQueue> lanes,
+            T initial,
+            java.util.function.BiFunction<
+                            T, Map.Entry<String, ZLinkSerialExecutionQueue>, CompletionStage<T>>
+                    operation) {
+        List<Map.Entry<String, ZLinkSerialExecutionQueue>> entries =
+                new ArrayList<>(lanes.entrySet());
+        CompletionStage<T> chain = CompletableFuture.completedFuture(initial);
+        for (int start = 0; start < entries.size(); ) {
+            var first = entries.get(start).getValue();
+            int end = start + 1;
+            while (end < entries.size()
+                    && entries.get(end).getValue().sharedSpotGate() == first.sharedSpotGate())
+                end++;
+            var group = List.copyOf(entries.subList(start, end));
+            chain =
+                    chain.thenCompose(
+                            previous ->
+                                    first.underSharedSpotGateAsync(
+                                                    () -> {
+                                                        CompletionStage<T> turn =
+                                                                CompletableFuture.completedFuture(
+                                                                        previous);
+                                                        for (var lane : group)
+                                                            turn =
+                                                                    turn.thenCompose(
+                                                                            value ->
+                                                                                    operation.apply(
+                                                                                            value,
+                                                                                            lane));
+                                                        return turn;
+                                                    })
+                                            .thenCompose(turn -> turn));
+            start = end;
+        }
+        return chain;
+    }
+
+    private static CompletionStage<Void> rollback(
             Map<String, ZLinkSerialExecutionQueue> lanes,
             Map<String, ZLinkSerialExecutionQueue.RelocationSeal> seals) {
         List<String> laneIds = new ArrayList<>(seals.keySet());
         Collections.reverse(laneIds);
-        for (String laneId : laneIds) {
-            if (!lanes.get(laneId).abortRelocation(seals.get(laneId))) {
-                throw new IllegalStateException(
-                        "partial relocation seal rollback lost a lane fence");
-            }
-        }
+        LinkedHashMap<String, ZLinkSerialExecutionQueue> reverse = new LinkedHashMap<>();
+        laneIds.forEach(laneId -> reverse.put(laneId, lanes.get(laneId)));
+        return foldLaneGates(
+                reverse,
+                (Void) null,
+                (ignored, lane) ->
+                        lane.getValue()
+                                .abortRelocation(seals.get(lane.getKey()))
+                                .thenAccept(
+                                        restored -> {
+                                            if (!restored)
+                                                throw new IllegalStateException(
+                                                        "partial relocation seal rollback lost a lane fence");
+                                        }));
     }
 
     private static LinkedHashMap<String, ZLinkSerialExecutionQueue> validateLanes(
@@ -663,7 +771,6 @@ public final class ZLinkCompositeRelocationBarrier {
         private final Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> records;
         private final List<ZLinkRetainedSerialQueueCommit.Commit> lanes;
         private final List<String> laneIds;
-        private final AtomicBoolean completed = new AtomicBoolean();
 
         private RelocationCommit(
                 Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> records,
@@ -678,42 +785,44 @@ public final class ZLinkCompositeRelocationBarrier {
         }
 
         /** Captures one sequence-stable suffix cut across every lane. */
-        public Cut cut() {
+        public CompletionStage<Cut> cut() {
+            return ZLinkRetainedSerialQueueCommit.cutAll(lanes).thenApply(this::cutFromLanes);
+        }
+
+        public CompletionStage<Cut> capture() {
+            return ZLinkRetainedSerialQueueCommit.captureAll(lanes).thenApply(this::cutFromLanes);
+        }
+
+        private Cut cutFromLanes(List<ZLinkRetainedSerialQueueCommit.Cut> cuts) {
             LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> current =
                     new LinkedHashMap<>();
-            List<ZLinkRetainedSerialQueueCommit.Cut> cuts = new ArrayList<>();
-            for (int index = 0; index < lanes.size(); index++) {
-                ZLinkRetainedSerialQueueCommit.Cut cut = lanes.get(index).cut();
-                cuts.add(cut);
-                current.put(laneIds.get(index), cut.records());
-            }
+            for (int index = 0; index < cuts.size(); index++)
+                current.put(laneIds.get(index), cuts.get(index).records());
             return new Cut(Collections.unmodifiableMap(current), List.copyOf(cuts));
         }
 
         /** Detaches all lanes only if no lane accepted ingress after this cut. */
-        public boolean tryFinishCapture(Cut cut) {
+        public CompletionStage<Boolean> tryFinishCapture(Cut cut) {
             Objects.requireNonNull(cut, "cut");
             return ZLinkRetainedSerialQueueCommit.finishCapture(lanes, cut.lanes);
         }
 
-        public boolean tryEstablishDurableCut(Cut cut) {
+        public CompletionStage<Boolean> tryEstablishDurableCut(Cut cut) {
             Objects.requireNonNull(cut, "cut");
             return ZLinkRetainedSerialQueueCommit.establishDurableCut(lanes, cut.lanes);
         }
 
-        public boolean tryEstablishAndFinishCapture(Cut cut) {
+        public CompletionStage<Boolean> tryEstablishAndFinishCapture(Cut cut) {
             Objects.requireNonNull(cut, "cut");
             return ZLinkRetainedSerialQueueCommit.establishAndFinishCapture(lanes, cut.lanes);
         }
 
-        public boolean abort() {
+        public CompletionStage<Boolean> abort() {
             return ZLinkRetainedSerialQueueCommit.abortRetained(lanes);
         }
 
-        public void complete() {
-            if (completed.compareAndSet(false, true)) {
-                lanes.forEach(ZLinkRetainedSerialQueueCommit.Commit::complete);
-            }
+        public CompletionStage<Void> complete() {
+            return ZLinkRetainedSerialQueueCommit.completeAll(lanes);
         }
 
         public static final class Cut {

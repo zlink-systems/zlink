@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -12,6 +13,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -25,6 +27,97 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkSpotWideConsumerOwnershipTest {
+    @Test
+    void externalRetainedCutReturnsWhileSharedGateIsOccupied() throws Exception {
+        var spot = new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+        var serials =
+                new ZLinkSpotSerialExecutor(
+                        spot,
+                        Runnable::run,
+                        Runnable::run,
+                        ZLinkUserSpotExecutionMode.SPOT_WIDE,
+                        false);
+        var actor = serials.claimActorQueue("actor").toCompletableFuture().get(5, TimeUnit.SECONDS);
+        var mailbox = actor.relocationLane();
+        var seal =
+                mailbox.trySealRelocation()
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS)
+                        .orElseThrow();
+        var retained =
+                ZLinkRetainedSerialQueueCommit.retain(mailbox, seal)
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS)
+                        .orElseThrow();
+        var release = new CompletableFuture<Void>();
+        var entered = new CompletableFuture<Void>();
+        var occupied =
+                spot.enqueue(
+                        () -> {
+                            entered.complete(null);
+                            return release;
+                        },
+                        null);
+        entered.get(5, TimeUnit.SECONDS);
+        try (var callers = Executors.newVirtualThreadPerTaskExecutor()) {
+            var invocation = callers.submit(retained::cut);
+            try {
+                var cut = invocation.get(1, TimeUnit.SECONDS);
+                assertFalse(cut.toCompletableFuture().isDone());
+            } finally {
+                release.complete(null);
+            }
+            invocation.get(5, TimeUnit.SECONDS).toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertTrue(retained.abort().toCompletableFuture().get(5, TimeUnit.SECONDS));
+            occupied.toCompletableFuture().get(5, TimeUnit.SECONDS);
+        } finally {
+            release.complete(null);
+            serials.close();
+        }
+    }
+
+    @Test
+    void externalRelocationSealReturnsWhileSharedGateIsOccupied() throws Exception {
+        var spot = new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+        var serials =
+                new ZLinkSpotSerialExecutor(
+                        spot,
+                        Runnable::run,
+                        Runnable::run,
+                        ZLinkUserSpotExecutionMode.SPOT_WIDE,
+                        false);
+        serials.claimActorQueue("actor").toCompletableFuture().get(5, TimeUnit.SECONDS);
+        var release = new CompletableFuture<Void>();
+        var entered = new CompletableFuture<Void>();
+        var occupied =
+                spot.enqueue(
+                        () -> {
+                            entered.complete(null);
+                            return release;
+                        },
+                        null);
+        entered.get(5, TimeUnit.SECONDS);
+        try (var callers = Executors.newVirtualThreadPerTaskExecutor()) {
+            var invocation = callers.submit(() -> serials.trySealActorRelocation("actor"));
+            try {
+                var sealed = invocation.get(1, TimeUnit.SECONDS);
+                assertFalse(sealed.toCompletableFuture().isDone());
+            } finally {
+                release.complete(null);
+            }
+            occupied.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertTrue(
+                    invocation
+                            .get(5, TimeUnit.SECONDS)
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS)
+                            .isPresent());
+        } finally {
+            release.complete(null);
+            serials.close();
+        }
+    }
+
     @Test
     void concurrentPublicationAcrossIdleTransitionsDoesNotStrandRecords() throws Exception {
         var serials =

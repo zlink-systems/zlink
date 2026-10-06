@@ -292,12 +292,6 @@ public final class ZLinkSerialExecutionQueue {
             stage.whenComplete((ignored, failure) -> schedule());
         }
 
-        public <T> T control(Supplier<T> operation) {
-            Objects.requireNonNull(operation, "operation");
-            if (CURRENT_CONTROL.get() == this || spot.isCurrent()) return operation.get();
-            return controlAsync(operation).toCompletableFuture().join();
-        }
-
         public <T> CompletionStage<T> controlAsync(Supplier<T> operation) {
             Objects.requireNonNull(operation, "operation");
             if (CURRENT_CONTROL.get() == this || spot.isCurrent()) {
@@ -324,8 +318,13 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
-    public <T> T underSharedSpotGate(Supplier<T> operation) {
-        return sharedSpotGate == null ? operation.get() : sharedSpotGate.control(operation);
+    public <T> CompletionStage<T> underSharedSpotGateAsync(Supplier<T> operation) {
+        if (sharedSpotGate != null) return sharedSpotGate.controlAsync(operation);
+        try {
+            return CompletableFuture.completedFuture(operation.get());
+        } catch (RuntimeException | Error failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
     }
 
     private void publish(Entry entry) {
@@ -412,8 +411,8 @@ public final class ZLinkSerialExecutionQueue {
      *
      * @return whether a retained message waits behind the Close
      */
-    public boolean retainsPendingOrSealClosingAdmission() {
-        return underSharedSpotGate(this::retainsPendingOrSealClosingAdmissionDirect);
+    public CompletionStage<Boolean> retainsPendingOrSealClosingAdmission() {
+        return underSharedSpotGateAsync(this::retainsPendingOrSealClosingAdmissionDirect);
     }
 
     private synchronized boolean retainsPendingOrSealClosingAdmissionDirect() {
@@ -505,8 +504,8 @@ public final class ZLinkSerialExecutionQueue {
         return result.result();
     }
 
-    public List<Object> pendingMessages() {
-        return underSharedSpotGate(this::pendingMessagesDirect);
+    public CompletionStage<List<Object>> pendingMessages() {
+        return underSharedSpotGateAsync(this::pendingMessagesDirect);
     }
 
     private synchronized List<Object> pendingMessagesDirect() {
@@ -618,8 +617,8 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
-    public void commitLifecycleTransition() {
-        underSharedSpotGate(
+    public CompletionStage<Void> commitLifecycleTransition() {
+        return underSharedSpotGateAsync(
                 () -> {
                     commitLifecycleTransitionDirect();
                     return null;
@@ -1520,8 +1519,8 @@ public final class ZLinkSerialExecutionQueue {
         return waiter;
     }
 
-    public Optional<RelocationSeal> trySealRelocation() {
-        return underSharedSpotGate(() -> trySealRelocation((RelocationBoundary) null));
+    public CompletionStage<Optional<RelocationSeal>> trySealRelocation() {
+        return trySealRelocation((RelocationBoundary) null);
     }
 
     /**
@@ -1575,7 +1574,13 @@ public final class ZLinkSerialExecutionQueue {
      * Seals this queue while the supplied lifecycle boundary owns its active turn. Only the exact
      * reservation instance can cross that boundary.
      */
-    public synchronized Optional<RelocationSeal> trySealRelocation(RelocationBoundary boundary) {
+    public CompletionStage<Optional<RelocationSeal>> trySealRelocation(
+            RelocationBoundary boundary) {
+        return underSharedSpotGateAsync(() -> trySealRelocationDirect(boundary));
+    }
+
+    private synchronized Optional<RelocationSeal> trySealRelocationDirect(
+            RelocationBoundary boundary) {
         if (relocated || relocation != null) {
             return Optional.empty();
         }
@@ -1627,7 +1632,13 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     /** Seals this queue while the captured turn is still the active turn. */
-    public synchronized Optional<RelocationSeal> trySealRelocation(ActiveTurnSealHandle handle) {
+    public CompletionStage<Optional<RelocationSeal>> trySealRelocation(
+            ActiveTurnSealHandle handle) {
+        return underSharedSpotGateAsync(() -> trySealRelocationDirect(handle));
+    }
+
+    private synchronized Optional<RelocationSeal> trySealRelocationDirect(
+            ActiveTurnSealHandle handle) {
         if (relocated || relocation != null) {
             return Optional.empty();
         }
@@ -1668,8 +1679,8 @@ public final class ZLinkSerialExecutionQueue {
         return Optional.of(seal);
     }
 
-    public boolean abortRelocation(RelocationSeal seal) {
-        return underSharedSpotGate(() -> abortRelocationDirect(seal));
+    public CompletionStage<Boolean> abortRelocation(RelocationSeal seal) {
+        return underSharedSpotGateAsync(() -> abortRelocationDirect(seal));
     }
 
     private boolean abortRelocationDirect(RelocationSeal seal) {
@@ -1700,8 +1711,9 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     /** Captures the current ingress high-water before authority prepare. */
-    public Optional<List<QueuedRecord>> freezeRelocationIngress(RelocationSeal seal) {
-        return underSharedSpotGate(() -> freezeRelocationIngressDirect(seal));
+    public CompletionStage<Optional<List<QueuedRecord>>> freezeRelocationIngress(
+            RelocationSeal seal) {
+        return underSharedSpotGateAsync(() -> freezeRelocationIngressDirect(seal));
     }
 
     private synchronized Optional<List<QueuedRecord>> freezeRelocationIngressDirect(
@@ -1717,11 +1729,12 @@ public final class ZLinkSerialExecutionQueue {
                         .toList());
     }
 
-    public Optional<List<QueuedRecord>> commitRelocation(RelocationSeal seal) {
-        return underSharedSpotGate(() -> commitRelocationDirect(seal));
+    public CompletionStage<Optional<List<QueuedRecord>>> commitRelocation(RelocationSeal seal) {
+        return underSharedSpotGateAsync(() -> commitRelocationOnGate(seal));
     }
 
-    private Optional<List<QueuedRecord>> commitRelocationDirect(RelocationSeal seal) {
+    /** Internal retained adapter entry, invoked synchronously inside the owning gate turn. */
+    public Optional<List<QueuedRecord>> commitRelocationOnGate(RelocationSeal seal) {
         Optional<RetainedCommit> retained = retainRelocationCommit(seal);
         if (retained.isEmpty()) {
             return Optional.empty();

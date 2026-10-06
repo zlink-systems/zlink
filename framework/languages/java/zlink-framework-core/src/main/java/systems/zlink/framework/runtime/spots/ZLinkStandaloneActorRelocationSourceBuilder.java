@@ -490,10 +490,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             //  turn directly instead (spec 28 §2 — the source finishes the
             //  current application turn and stops new dispatch; the barrier
             //  IS that current turn).
-            return CompletableFuture.completedFuture(
-                    cancellation.isCancellationRequested()
-                            ? Optional.empty()
-                            : queue.trySealRelocation(activeTurnSeal));
+            return cancellation.isCancellationRequested()
+                    ? CompletableFuture.completedFuture(Optional.empty())
+                    : queue.trySealRelocation(activeTurnSeal);
         }
         Optional<ZLinkSerialExecutionQueue.RelocationBoundary> reserved =
                 queue.reserveRelocationTurnBoundary();
@@ -504,12 +503,17 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         return boundary.reached()
                 .thenCompose(
                         ignored -> {
-                            Optional<ZLinkSerialExecutionQueue.RelocationSeal> sealedResult =
-                                    cancellation.isCancellationRequested()
-                                            ? Optional.empty()
-                                            : queue.trySealRelocation(boundary);
-                            boundary.release();
-                            return boundary.finished().thenApply(ignoredFinished -> sealedResult);
+                            CompletionStage<Optional<ZLinkSerialExecutionQueue.RelocationSeal>>
+                                    sealedResult =
+                                            cancellation.isCancellationRequested()
+                                                    ? CompletableFuture.completedFuture(
+                                                            Optional.empty())
+                                                    : queue.trySealRelocation(boundary);
+                            return sealedResult
+                                    .whenComplete((result, failure) -> boundary.release())
+                                    .thenCompose(
+                                            result ->
+                                                    boundary.finished().thenApply(done -> result));
                         });
     }
 
@@ -971,13 +975,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private final String targetSpotId;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private AsyncDrainProbe debugProbe;
-        private List<ZLinkSerialExecutionQueue.QueuedRecord> finalJournal = List.of();
+        private CompletableFuture<List<ZLinkSerialExecutionQueue.QueuedRecord>> captureCompletion;
         private CompletionStage<
                         systems.zlink.framework.runtime.internal.relocation
                                 .ZLinkRetainedSerialQueueCommit.Commit>
                 relocationCommit;
         private CompletableFuture<Void> relayCompletion;
-        private boolean captureFinished;
         private boolean committed;
         private boolean terminal;
 
@@ -1178,51 +1181,68 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             return stateLane
                     .runNowOrQueue(
                             () -> {
-                                if (terminal || committed) {
+                                if (terminal || committed)
                                     throw new IllegalStateException(
                                             "Actor relocation relay boundary is terminal");
-                                }
-                                List<ZLinkSerialExecutionQueue.QueuedRecord> relayed =
-                                        finishCaptureOnLane(retained);
-                                return installExpectedRelocationForward()
-                                        .thenApply(ignored -> relayed);
+                                return null;
                             })
-                    .thenCompose(stage -> stage)
+                    .thenCompose(ignored -> finishCapture(retained))
+                    .thenCompose(
+                            relayed ->
+                                    installExpectedRelocationForward()
+                                            .thenApply(ignored -> relayed))
                     .thenCompose(
                             relayed ->
                                     stateLane.runNowOrQueue(
                                             () -> {
-                                                if (terminal || committed) {
+                                                if (terminal || committed)
                                                     throw new IllegalStateException(
-                                                            "Actor relocation relay boundary is"
-                                                                    + " terminal");
-                                                }
+                                                            "Actor relocation relay boundary is terminal");
                                                 return relayed;
                                             }))
                     .thenCompose(relayed -> relayJournal(relayed, client, timeout));
         }
 
-        private List<ZLinkSerialExecutionQueue.QueuedRecord> finishCaptureOnLane(
+        private CompletionStage<List<ZLinkSerialExecutionQueue.QueuedRecord>> finishCapture(
                 systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit
                                 .Commit
                         retained) {
-            if (!captureFinished) {
-                systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit
-                                .Cut
-                        cut;
-                do {
-                    cut = retained.cut();
-                } while (!retained.tryEstablishAndFinishCapture(cut));
-                finalJournal =
-                        cut.records().stream()
-                                .sorted(
-                                        (left, right) ->
-                                                Long.compareUnsigned(
-                                                        left.sequence(), right.sequence()))
-                                .toList();
-                captureFinished = true;
-            }
-            return finalJournal;
+            return stateLane
+                    .runNowOrQueue(
+                            () -> {
+                                if (captureCompletion != null)
+                                    return (CompletableFuture<
+                                                    List<ZLinkSerialExecutionQueue.QueuedRecord>>)
+                                            null;
+                                captureCompletion = new CompletableFuture<>();
+                                return captureCompletion;
+                            })
+                    .thenCompose(
+                            created -> {
+                                if (created == null)
+                                    return stateLane
+                                            .runNowOrQueue(() -> captureCompletion)
+                                            .thenCompose(stage -> stage);
+                                retained.capture()
+                                        .whenComplete(
+                                                (cut, failure) -> {
+                                                    if (failure != null)
+                                                        created.completeExceptionally(failure);
+                                                    else
+                                                        created.complete(
+                                                                cut.records().stream()
+                                                                        .sorted(
+                                                                                (left, right) ->
+                                                                                        Long
+                                                                                                .compareUnsigned(
+                                                                                                        left
+                                                                                                                .sequence(),
+                                                                                                        right
+                                                                                                                .sequence()))
+                                                                        .toList());
+                                                });
+                                return created;
+                            });
         }
 
         private CompletionStage<Void> relayJournal(
@@ -1308,23 +1328,30 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                     () ->
                                             new IllegalStateException(
                                                     "Actor relocation participant is missing"));
-            return relocationReplies.bindCanonicalRelocationRepliesAsync(
-                    Map.of("actor:" + owned.actorId(), finalJournal),
-                    stageRequest.targetNodeRid(),
-                    stageRequest.targetNodeGeneration(),
-                    Map.of(
-                            owned.actorId(),
-                            new ZLinkSpotRelocationReplyRoutes.CommittedFence(
-                                    participant.authorityKey(),
-                                    1L,
-                                    stageRequest.fence().aggregateGeneration())));
+            return captureCompletion.thenCompose(
+                    journal ->
+                            relocationReplies.bindCanonicalRelocationRepliesAsync(
+                                    Map.of("actor:" + owned.actorId(), journal),
+                                    stageRequest.targetNodeRid(),
+                                    stageRequest.targetNodeGeneration(),
+                                    Map.of(
+                                            owned.actorId(),
+                                            new ZLinkSpotRelocationReplyRoutes.CommittedFence(
+                                                    participant.authorityKey(),
+                                                    1L,
+                                                    stageRequest.fence().aggregateGeneration()))));
         }
 
         CompletionStage<Void> completeSourceQueueCommit() {
             return stateLane
                     .runNowOrQueue(
                             () -> {
-                                if (relocationCommit == null || !committed && !captureFinished) {
+                                if (relocationCommit == null
+                                        || !committed
+                                                && (captureCompletion == null
+                                                        || !captureCompletion.isDone()
+                                                        || captureCompletion
+                                                                .isCompletedExceptionally())) {
                                     throw new IllegalStateException(
                                             "Actor relocation source queue is not durably"
                                                     + " committed");
@@ -1337,7 +1364,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             retained ->
                                     actors.commitRelocationMessageFollowAsync(sourceRoute())
                                             .thenApply(ignored -> retained))
-                    .thenAccept(
+                    .thenCompose(
                             systems.zlink.framework.runtime.internal.relocation
                                             .ZLinkRetainedSerialQueueCommit.Commit
                                     ::complete);
@@ -1406,31 +1433,28 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                     return retainCommitOnLane();
                                 })
                         .thenCompose(stage -> stage)
-                        .thenCompose(
-                                retained ->
-                                        stateLane.runNowOrQueue(
-                                                () -> {
-                                                    finishCaptureOnLane(retained);
-                                                    return retained;
-                                                }))
+                        .thenCompose(retained -> finishCapture(retained).thenApply(cut -> retained))
                         .thenCompose(
                                 retained ->
                                         actors.abortRelocationMessageFollowAsync(sourceRoute())
                                                 .thenCompose(
                                                         routeFinished -> {
-                                                            retained.complete();
-                                                            return relocationReplies
-                                                                    .failRelocationRepliesUnavailable(
-                                                                            true,
-                                                                            owned.actorId(),
-                                                                            owned.snapshot()
-                                                                                    .objectGeneration())
+                                                            return retained.complete()
                                                                     .thenCompose(
-                                                                            repliesFailed ->
-                                                                                    cleanupLocal())
-                                                                    .thenCompose(
-                                                                            cleaned ->
-                                                                                    discardInitialAfterCommit());
+                                                                            queueCompleted ->
+                                                                                    relocationReplies
+                                                                                            .failRelocationRepliesUnavailable(
+                                                                                                    true,
+                                                                                                    owned
+                                                                                                            .actorId(),
+                                                                                                    owned.snapshot()
+                                                                                                            .objectGeneration())
+                                                                                            .thenCompose(
+                                                                                                    repliesFailed ->
+                                                                                                            cleanupLocal())
+                                                                                            .thenCompose(
+                                                                                                    cleaned ->
+                                                                                                            discardInitialAfterCommit()));
                                                         }));
             } catch (RuntimeException failure) {
                 return failed(failure);
@@ -1469,10 +1493,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                                                 failure) ->
                                                                                                 failure
                                                                                                                 == null
-                                                                                                        ? CompletableFuture
-                                                                                                                .completedFuture(
-                                                                                                                        commit
-                                                                                                                                .abort())
+                                                                                                        ? commit
+                                                                                                                .abort()
                                                                                                         : actors
                                                                                                                 .abortActorRelocationAsync(
                                                                                                                         owned
