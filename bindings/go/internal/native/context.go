@@ -10,7 +10,6 @@ import "C"
 
 import (
 	"math"
-	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,24 +47,24 @@ type ContextOptions struct {
 
 // CoreHwmBudgetSnapshot is an immutable value copy of Core's ABI-v1 budget snapshot.
 type CoreHwmBudgetSnapshot struct {
-	ABIVersion, StructSize                                                        uint32
-	BudgetGeneration, MeasurementEpoch                                            uint64
-	ConfiguredMemoryLimitBytes, RuntimeMemoryLimitBytes, ResolvedMemoryLimitBytes uint64
-	ConfiguredCoreBudgetBytes, EffectiveCoreBudgetBytes                           uint64
-	TotalPlannedHwmBytes, TotalAppliedHwmBytes, ManualReservedHwmBytes            uint64
-	CoreQueueAccountedBytes, ApplicationAccountedBytes                            uint64
-	CurrentAccountedBytes, ProvisionalAccountedBytes, PeakAccountedBytes          uint64
-	CompletionCurrentAccountedBytes, CompletionPeakAccountedBytes                 uint64
-	CompletionPendingMessageCount, TotalMessagingAccountedBytes                   uint64
-	MonitorQueueAppliedHwmBytes, MonitorQueueAccountedBytes                       uint64
-	TotalInstanceAppliedHwmBytes, TotalInstanceAccountedBytes                     uint64
-	OversizeAdmissionCount, LargestOversizeMessageBytes                           uint64
-	ActiveDirectionalQueueCount, ActiveCompletionDirectionalQueueCount            uint64
-	ActiveSendQueueCount, ActiveReceiveQueueCount                                 uint64
-	OutstandingApplicationLeaseCount, RetiredQueueCount                           uint64
-	DeferredOriginCreditBytes, UnlimitedManualQueueCount                          uint64
-	BlockedRatioPPM, Flags                                                        uint32
-	ReservedUint64                                                                [8]uint64
+	ABIVersion, StructSize                                               uint32
+	BudgetGeneration, MeasurementEpoch                                   uint64
+	ConfiguredMemoryLimitBytes, ResolvedMemoryLimitBytes                 uint64
+	ConfiguredCoreBudgetBytes, EffectiveCoreBudgetBytes                  uint64
+	TotalPlannedHwmBytes, TotalAppliedHwmBytes, ManualReservedHwmBytes   uint64
+	CoreQueueAccountedBytes, ApplicationAccountedBytes                   uint64
+	CurrentAccountedBytes, ProvisionalAccountedBytes, PeakAccountedBytes uint64
+	CompletionCurrentAccountedBytes, CompletionPeakAccountedBytes        uint64
+	CompletionPendingMessageCount, TotalMessagingAccountedBytes          uint64
+	MonitorQueueAppliedHwmBytes, MonitorQueueAccountedBytes              uint64
+	TotalInstanceAppliedHwmBytes, TotalInstanceAccountedBytes            uint64
+	OversizeAdmissionCount, LargestOversizeMessageBytes                  uint64
+	ActiveDirectionalQueueCount, ActiveCompletionDirectionalQueueCount   uint64
+	ActiveSendQueueCount, ActiveReceiveQueueCount                        uint64
+	OutstandingApplicationLeaseCount, RetiredQueueCount                  uint64
+	DeferredOriginCreditBytes, UnlimitedManualQueueCount                 uint64
+	BlockedRatioPPM, Flags                                               uint32
+	ReservedUint64                                                       [8]uint64
 }
 
 func (s CoreHwmBudgetSnapshot) BudgetPlanningActive() bool { return s.Flags&(1<<0) != 0 }
@@ -101,12 +100,6 @@ func NewContext() (*Context, error) {
 	ctx := &Context{sockets: make(map[*socketCore]struct{})}
 	ctx.handle.Store((*byte)(handle))
 	ctx.options = &ContextOptions{ctx: ctx}
-	if limit := debug.SetMemoryLimit(-1); limit > 0 && limit < math.MaxInt64 {
-		if err := ctx.setUint64DataOption(C.ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES, uint64(limit)); err != nil {
-			_ = ctx.Close()
-			return nil, err
-		}
-	}
 	return ctx, nil
 }
 
@@ -209,7 +202,7 @@ func (c *Context) CoreHwmBudgetSnapshot() (CoreHwmBudgetSnapshot, error) {
 	}
 	return CoreHwmBudgetSnapshot{
 		uint32(raw.abi_version), uint32(raw.struct_size), uint64(raw.budget_generation), uint64(raw.measurement_epoch),
-		uint64(raw.configured_memory_limit_bytes), uint64(raw.runtime_memory_limit_bytes), uint64(raw.resolved_memory_limit_bytes),
+		uint64(raw.configured_memory_limit_bytes), uint64(raw.resolved_memory_limit_bytes),
 		uint64(raw.configured_core_budget_bytes), uint64(raw.effective_core_budget_bytes), uint64(raw.total_planned_hwm_bytes),
 		uint64(raw.total_applied_hwm_bytes), uint64(raw.manual_reserved_hwm_bytes), uint64(raw.core_queue_accounted_bytes),
 		uint64(raw.application_accounted_bytes), uint64(raw.current_accounted_bytes), uint64(raw.provisional_accounted_bytes),

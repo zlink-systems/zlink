@@ -1311,31 +1311,33 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 ZLinkRelocationTransitionClient client,
                 Duration timeout,
                 ZLinkUserSpotRelocationBarrier.RelocationCommit retained) {
-            ZLinkUserSpotRelocationBarrier.RelocationCommit.Cut cut;
-            do {
-                cut = retained.cut();
-            } while (!retained.tryEstablishAndFinishCapture(cut));
-            Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> relayed =
-                    cut.committed().heldIngress();
-            CompletionStage<Void> chain =
-                    stateLane.runAsync(
-                            () -> {
-                                finalJournal = relayed;
-                                captureFinished = true;
+            return retained.capture()
+                    .thenCompose(
+                            cut -> {
+                                Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> relayed =
+                                        cut.committed().heldIngress();
+                                CompletionStage<Void> chain =
+                                        stateLane.runAsync(
+                                                () -> {
+                                                    finalJournal = relayed;
+                                                    captureFinished = true;
+                                                });
+                                for (List<ZLinkSerialExecutionQueue.QueuedRecord> lane :
+                                        relayed.values()) {
+                                    for (ZLinkSerialExecutionQueue.QueuedRecord record : lane) {
+                                        chain =
+                                                chain.thenCompose(
+                                                        ignored ->
+                                                                client.relay(
+                                                                        stageRequest
+                                                                                .targetNodeRid(),
+                                                                        stageRequest.fence(),
+                                                                        record.payload(),
+                                                                        timeout));
+                                    }
+                                }
+                                return chain;
                             });
-            for (List<ZLinkSerialExecutionQueue.QueuedRecord> lane : relayed.values()) {
-                for (ZLinkSerialExecutionQueue.QueuedRecord record : lane) {
-                    chain =
-                            chain.thenCompose(
-                                    ignored ->
-                                            client.relay(
-                                                    stageRequest.targetNodeRid(),
-                                                    stageRequest.fence(),
-                                                    record.payload(),
-                                                    timeout));
-                }
-            }
-            return chain;
         }
 
         private void installExpectedRelocationForwards() {
@@ -1428,7 +1430,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     Map.copyOf(replyFences));
         }
 
-        void completeSourceBarrierCommit() {
+        CompletionStage<Void> completeSourceBarrierCommit() {
             ZLinkUserSpotRelocationBarrier.RelocationCommit retained =
                     inStateLane(
                             () -> {
@@ -1454,7 +1456,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             });
             // CompletableFuture dependents may run inline, so complete only
             // after the lane turn has released its ownership marker.
-            retained.complete();
+            return retained.complete();
         }
 
         boolean relayBoundaryCommitted() {
@@ -1507,26 +1509,31 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                 ZLinkUserSpotRelocationBarrier.RelocationCommit retained;
                                 retained = inStateLane(() -> relocationCommit);
                                 if (retained != null) {
-                                    if (!retained.abort()) {
-                                        return failed(
-                                                new IllegalStateException(
-                                                        "source relocation retained queue cannot be"
-                                                                + " restored"));
-                                    }
-                                    inStateLane(
-                                            () -> {
-                                                terminal = true;
-                                                return null;
-                                            });
-                                    forgetUnresolved(unresolved, seal);
-                                    if (relocationReplies != null) {
-                                        captured.inventory()
-                                                .actorIds()
-                                                .forEach(
-                                                        relocationReplies
-                                                                ::resumeActorTimersAfterRelocationAbort);
-                                    }
-                                    return CompletableFuture.completedFuture(null);
+                                    return retained.abort()
+                                            .thenCompose(
+                                                    restored -> {
+                                                        if (!restored) {
+                                                            return failed(
+                                                                    new IllegalStateException(
+                                                                            "source relocation retained queue cannot be"
+                                                                                    + " restored"));
+                                                        }
+                                                        inStateLane(
+                                                                () -> {
+                                                                    terminal = true;
+                                                                    return null;
+                                                                });
+                                                        forgetUnresolved(unresolved, seal);
+                                                        if (relocationReplies != null) {
+                                                            captured.inventory()
+                                                                    .actorIds()
+                                                                    .forEach(
+                                                                            relocationReplies
+                                                                                    ::resumeActorTimersAfterRelocationAbort);
+                                                        }
+                                                        return CompletableFuture
+                                                                .<Void>completedFuture(null);
+                                                    });
                                 }
                                 return barrier.abortAsync(
                                                 seal,
@@ -1605,17 +1612,20 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 actors.abortRelocationMessageFollow(
                         actorRoute(actor, false, targetOwnerGenerations));
             }
-            if (retained != null) {
-                retained.complete();
-            } else {
-                barrier.commit(seal);
-            }
-            CompletionStage<Void> unavailable = CompletableFuture.completedFuture(null);
+            CompletionStage<Void> queueCompleted =
+                    retained != null
+                            ? retained.complete()
+                            : barrier.commit(seal).thenApply(committed -> null);
+            CompletionStage<Void> unavailable = queueCompleted;
             if (relocationReplies != null) {
                 Owned spot = captured.inventory().spot();
                 unavailable =
-                        relocationReplies.failRelocationRepliesUnavailable(
-                                false, spot.id(), spot.snapshot().objectGeneration());
+                        unavailable.thenCompose(
+                                ignored ->
+                                        relocationReplies.failRelocationRepliesUnavailable(
+                                                false,
+                                                spot.id(),
+                                                spot.snapshot().objectGeneration()));
                 for (Owned actor : captured.inventory().actors()) {
                     unavailable =
                             unavailable.thenCompose(

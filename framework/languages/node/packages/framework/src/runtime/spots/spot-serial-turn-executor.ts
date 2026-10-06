@@ -19,6 +19,7 @@ import {
   type ZLinkSerialWorkRecord
 } from '../execution/serial-execution-queue';
 import type { ZLinkSerialLifecycleContext } from '../execution/serial-execution-queue';
+import { ZLinkActorSerialExecutor } from '../actors/actor-mailbox';
 
 export type ZLinkSpotApplicationTurnContext = ZLinkExecutionBarrierClaim & {
   readonly replay?: (failure?: unknown) => Promise<unknown> | unknown;
@@ -51,6 +52,15 @@ export class ZLinkSpotSerialTurnExecutor {
 
   get isExecuting(): boolean {
     return this.depth > 0;
+  }
+
+  /** Creates a passive Actor mailbox consumed by this Spot's scheduler. */
+  createActorExecutor(
+    actorId: string,
+    sourceSpotId: unknown,
+    options?: ZLinkSerialSchedulerOptions
+  ): ZLinkActorSerialExecutor {
+    return new ZLinkActorSerialExecutor(actorId, sourceSpotId, options, this.scheduler);
   }
 
   get isCurrentTurn(): boolean {

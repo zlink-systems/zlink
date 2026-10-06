@@ -79,29 +79,32 @@ public interface ZLinkActorDispatchTarget {
 
     boolean isActorQueueCurrent(String actorId);
 
-    Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealActorRelocation(String actorId);
+    CompletionStage<Optional<ZLinkSerialExecutionQueue.RelocationSeal>> trySealActorRelocation(
+            String actorId);
 
     ZLinkSerialExecutionQueue actorRelocationLane(String actorId);
 
     CompletionStage<ZLinkSerialExecutionQueue> actorRelocationLaneAsync(String actorId);
 
-    boolean abortActorRelocation(String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
+    CompletionStage<Boolean> abortActorRelocation(
+            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
 
     CompletionStage<Boolean> abortActorRelocationAsync(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
 
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commitActorRelocation(
+    CompletionStage<Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>> commitActorRelocation(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
 
-    Optional<ZLinkRetainedSerialQueueCommit.Commit> retainActorRelocationCommit(
+    CompletionStage<Optional<ZLinkRetainedSerialQueueCommit.Commit>> retainActorRelocationCommit(
             String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
 
     CompletionStage<Optional<ZLinkRetainedSerialQueueCommit.Commit>>
             retainActorRelocationCommitAsync(
                     String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
 
-    Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> freezeActorRelocationIngress(
-            String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
+    CompletionStage<Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>>
+            freezeActorRelocationIngress(
+                    String actorId, ZLinkSerialExecutionQueue.RelocationSeal seal);
 
     CompletionStage<Void> awaitActorQuiescence(String actorId);
 

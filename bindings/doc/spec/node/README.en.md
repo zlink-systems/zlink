@@ -664,10 +664,7 @@ interface CommonSocketOptions {
 }
 ```
 
-Input precedence is manual Core budget, explicit memory limit, V8 heap-limit
-hint, then Core fallback. Setting either of the first two values disables
-automatic V8-hint detection. The binding does not combine the hint with Core's
-hard limit. If an explicit input exceeds a finite hard limit Core detected, the
+If an explicit input exceeds a finite hard limit Core detected, the
 binding preserves the existing configuration error corresponding to `EINVAL`
 and does not clamp the value.
 
@@ -686,7 +683,7 @@ diagnostics; `sndPendingBytes` and `rcvPendingBytes` are separate `bigint` byte
 values. Slot, message-unit, size-cap, and connection-bucket properties,
 including a count-based name such as `autoHwmAppliedSndHwm`, are not part of the public surface.
 
-`CoreHwmBudgetSnapshot` projects ABI version/size, configured/runtime/resolved
+`CoreHwmBudgetSnapshot` projects ABI version/size, configured/resolved
 memory limits, configured/effective budgets, planned/applied/manual-reserved
 HWM, Core-queue/application/current/peak/provisional accounted bytes,
 completion current/peak/pending and total-messaging values, monitor/instance

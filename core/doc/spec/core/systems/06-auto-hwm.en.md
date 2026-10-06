@@ -34,9 +34,12 @@ Core checks the following inputs in priority order and selects the first usable 
 
 1. A positive `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`
 2. A positive `ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`
-3. A positive runtime memory hint. If Core also detected a finite hard limit, the smaller of the two values
-4. A finite hard limit detected by Core
-5. Physical memory detected by Core
+3. A finite process/container hard limit Core detects when the context is created. When several positive limits are detected, the smallest
+4. Physical memory detected by Core
+
+Detection covers Windows Job Object memory limits, finite `RLIMIT_AS`, and Linux cgroup memory limits. On Linux, Core reads the limits (v2 `memory.max`, v1 `memory.limit_in_bytes`) of the current process's cgroup that `/proc/self/cgroup` names and of all its ancestor cgroups, and uses only positive values below physical memory. Undetected limits are not part of the resolved memory limit.
+
+The first available value among 2–4 is the **resolved memory limit**. Even when a manual Core budget is set, the resolved memory limit comes from 2–4, and the **connection admission** check below uses it.
 
 A manual Core budget is used as-is without applying the profile percentage or effective cap. For every other memory input, Core applies the selected profile percentage once and then clamps the result to the effective cap below.
 
@@ -78,7 +81,7 @@ effectiveCoreBudgetBytes = min (percentShareBytes, effectiveCapBytes)  // final 
 
 `perQueueMinimumBytes` is the general data role minimum for that profile. `activeDirectionalQueueCount` is known only after the physical queue registry has resolved every plannable application direction, so the budget is finalized at that point (context finalize). Setting a manual Core budget skips this entire calculation.
 
-When Core detects a finite hard limit, setting an explicit memory limit or manual Core budget above that limit fails with `EINVAL`. A runtime memory hint may still be set, and calculation uses the smaller of the hint and the finite hard limit. Physical memory and the finite hard limit are detected only once when the context starts and are not detected again while it runs.
+When Core detects a finite hard limit, setting an explicit memory limit or manual Core budget above that limit fails with `EINVAL`. Physical memory and the finite hard limit are detected only once when the context starts and are not detected again while it runs.
 
 When an Auto HWM option setter succeeds, it stores the configured value and schedules a new calculation through the normal debounce path. `zlink_ctx_get_data` returns the stored configured value immediately, but the budget snapshot returns the last recorded plan and may therefore contain the previous result until recalculation. Calling `zlink_ctx_auto_hwm_recalculate` records a new plan immediately.
 
@@ -94,7 +97,7 @@ A DEALER-ROUTER single connection is registered as one Application pipepair, tha
 Application directional queues. Because there is no separate Completion pipe, no completion
 directional queue is added.
 
-- Application direction: atomically reserves the role-specific minimum. If both directions cannot be reserved, Core rejects the entire reservation before publishing the attach and does not register only a subset of the directions. The budget this admission uses is computed from **the topology being reserved**: the explicit Core budget when one is set, otherwise the budget whose effective cap comes from the number of application directions already reserved plus the two directions of this pair. It is not judged against the budget of an already recorded plan or against a seed budget whose queue count is zero: a plan snapshot can lag pipe creation, and judging by the fixed cap alone rejects with `ENOBUFS` connections that the same planner would fund. For this the registry keeps the reserved byte total together with the reserved direction count, and returns both when a direction retires and finishes draining.
+- Application direction: atomically reserves the role-specific minimum. If both directions cannot be reserved, Core rejects the entire reservation before publishing the attach and does not register only a subset of the directions. The **connection admission** rule below decides whether the reservation succeeds. For this the registry keeps the reserved byte total, and returns a direction's reservation when that direction retires and finishes draining.
 - Manual direction: also reserves the role-specific minimum before attach. A finite manual HWM applies to admission immediately and is included in the next plan's manual reservation sum and aggregate HWM statistics.
 - Direction with manual HWM `0`: admission remains unlimited, while the next plan uses the role-specific maximum as its calculation reservation and sets the flag that indicates the aggregate HWM is not finite.
 
@@ -108,6 +111,8 @@ The judgment uses the set of the two endpoint values, regardless of which endpoi
 | No finite manual value and at least one auto | Water-filling result (auto plan) |
 | Both unlimited manual | Admission is unlimited; the role-specific maximum is reserved once for calculation |
 
+**Connection admission.** A new pipe pair reserves successfully only when the recorded minimum reservation total plus this pair's per-direction minimums does not exceed the resolved memory limit. The check uses the memory inputs the setters currently store, not the budget. The planner determines budget insufficiency under the manual-reservation and automatic-minimum rule below. What this check limits is the minimum reservation total at the time a new pair is reserved. Changing the memory limit or profile at runtime can leave the minimum total of existing queues above the resolved memory limit; existing queues follow the recalculation and HWM-change contracts below.
+
 If the budget remaining after subtracting manual reservations is less than the sum of the minimums for all automatic directions, Core does not reduce the minimums and sets the insufficient-budget flag. When the budget is sufficient, Core divides the remainder by the number of unique physical queues that have not reached their maximum and repeatedly increases each queue up to its maximum. It assigns division remainders one byte at a time in stable queue ID order. The same registry snapshot and inputs therefore always produce the same result.
 
 When a new input cannot secure the required reservation, Core handles each situation as follows.
@@ -115,10 +120,9 @@ When a new input cannot secure the required reservation, Core handles each situa
 | Situation | Core behavior |
 |---|---|
 | A new explicit memory limit or manual Core budget cannot accommodate the current manual HWMs and automatic minimums together | Stores the value and schedules recalculation. The planner preserves the automatic minimums and sets the insufficient-budget flag. |
-| A new synchronous inproc attach cannot reserve the required minimum | Fails with `ENOBUFS` |
-| The runtime memory hint decreases while running | Records the new value without removing existing pipes or messages. If the recalculated result is insufficient, sets the insufficient-budget flag. |
+| A new synchronous inproc attach's minimum reservation exceeds the connection admission limit | Fails with `ENOBUFS` |
 | Physical memory or the hard limit decreases while running | Does not change the current context's inputs or plan because they are not detected again after context startup. |
-| A new asynchronous network attach has not obtained the required reservation | Does not publish the attach and terminates the failed connection attempt. |
+| A new asynchronous network attach's minimum reservation exceeds the connection admission limit | Does not publish the attach and terminates the connection attempt. |
 
 When the number of connections changes a per-queue target, Core applies the change as follows.
 
@@ -136,7 +140,7 @@ originQueueUsedBytes(queue) = physicalQueueAccountedBytes(queue)
 
 Ordinary admission checks only this origin-local sum and that queue's applied HWM. It does not block other queues merely because the context's `current_accounted_bytes` exceeds `effective_core_budget_bytes`.
 
-`total_planned_hwm_bytes` is the sum of the current targets for application directions, and `total_applied_hwm_bytes` is the sum of the HWMs actually applied to live application directions. `core_queue_accounted_bytes` is the number of bytes currently held by Core queues, and `current_accounted_bytes` equals that value.The ABI-reserved fields `application_accounted_bytes`, `outstanding_application_lease_count`, `deferred_origin_credit_bytes`, and `retired_queue_count` are always zero.
+`total_planned_hwm_bytes` is the sum of the current targets for application directions, and `total_applied_hwm_bytes` is the sum of the HWMs actually applied to live application directions. `core_queue_accounted_bytes` is the number of bytes currently held by Core queues, and `current_accounted_bytes` equals that value.The ABI-reserved fields `runtime_memory_limit_bytes`, `application_accounted_bytes`, `outstanding_application_lease_count`, `deferred_origin_credit_bytes`, and `retired_queue_count` are always zero.
 
 The ROUTER-ROUTER [completion progress lane](../glossary.en.md#completion-progress-lane) does not
 apply a byte HWM, LWM, inproc HWM boost, or the legacy 256 KiB floor, and it is excluded from the
@@ -198,7 +202,7 @@ typedef struct zlink_auto_hwm_budget_snapshot_t {
   uint64_t budget_generation;                   // increments for each new recorded plan (new context=0)
   uint64_t measurement_epoch;                   // increments for each metrics reset (new context=1)
   uint64_t configured_memory_limit_bytes;       // configured explicit memory limit
-  uint64_t runtime_memory_limit_bytes;          // runtime memory hint
+  uint64_t runtime_memory_limit_bytes;          // reserved (always 0)
   uint64_t resolved_memory_limit_bytes;         // limit actually used for calculation
   uint64_t configured_core_budget_bytes;        // configured manual Core budget
   uint64_t effective_core_budget_bytes;         // final budget after applying the effective cap
@@ -499,7 +503,9 @@ This section collects the items that workers must verify. These behaviors are ob
 **Options and budget**
 - Setting a memory limit or manual Core budget larger than a finite hard limit detected by Core fails with `EINVAL`.
 - A valid memory limit or manual Core budget is stored and recalculation is scheduled even when the value is less than the sum of current manual HWMs and automatic minimums. The recalculated snapshot preserves the automatic minimums and sets `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`.
-- Physical memory and the hard limit are detected only once when the context starts. Changing them while the context runs does not trigger detection again. Only a decreased runtime memory hint is stored as a new input, and `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT` is set when it causes a shortage.
+- Physical memory and the hard limit are detected only once when the context starts. Changing them while the context runs does not trigger detection again.
+- In a configuration where every direction is automatic, an attach succeeds when the recorded minimum reservation total, including the new pair, does not exceed the resolved memory limit. If the automatic minimum total calculated under the current profile exceeds the budget, the recalculated snapshot preserves the automatic minimums and sets `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`.
+- A new pair whose minimum reservation total would exceed the resolved memory limit is not registered. A synchronous inproc attach fails with `ENOBUFS`, and a network connection attempt ends without publishing.
 - Calling `zlink_ctx_set_data`/`zlink_ctx_get_data` for an Auto HWM byte option with a size other than exactly `sizeof(uint64_t)` fails with `EINVAL` and leaves the value unchanged.
 - With the same connection configuration and inputs, the snapshot's `effective_core_budget_bytes` is always the same (deterministic).
 - A new pipe pair first reserves the role-specific minimum for each direction regardless of the manual HWM size. A finite manual HWM applies to admission immediately and is included in the next snapshot's `manual_reserved_hwm_bytes` and aggregate HWM statistics.

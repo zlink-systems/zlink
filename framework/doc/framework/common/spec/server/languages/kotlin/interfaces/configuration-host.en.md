@@ -166,8 +166,7 @@ The raw client observes the close without a separate wire error code. The
 limit doesn't apply to server-to-client outbound messages, and the setting
 isn't added to ClientServer or RouteMesh SS.
 
-The Kotlin binding forwards a positive finite Java `Runtime.maxMemory()` value to Core as
-its runtime memory hint. Core and application-job-queue profiles use the Java public
+Core and application-job-queue profiles use the Java public
 contract's independent enums and calculations, both defaulting to `BALANCED`. Pressure thresholds
 default to pause `80` and resume `60`; pause is an integer in `1..100`, resume is an integer in
 `0..99`, and resume must be less than pause. Manual job cap, startup CPU snapshot, and pre-bind

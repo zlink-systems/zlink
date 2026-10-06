@@ -98,8 +98,7 @@ zlink_ctx_set_data(ctx, ZLINK_THREAD_NAME_PREFIX, prefix, strlen(prefix) + 1);
 ```
 
 **Parameters.** `option_`은 Auto HWM byte 옵션 `ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`,
-`ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES`, `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`
-또는 `ZLINK_THREAD_NAME_PREFIX`다. Byte 옵션은 정확히 `sizeof(uint64_t)` byte를 사용하며,
+`ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES` 또는 `ZLINK_THREAD_NAME_PREFIX`다. Byte 옵션은 정확히 `sizeof(uint64_t)` byte를 사용하며,
 `0`은 해당 명시값을 지정하지 않음을 뜻한다. 이름 접두사는 terminator를 포함한 널 종료
 문자열이고 길이는 최대 16 byte다.
 
@@ -151,7 +150,7 @@ zlink_ctx_reset_auto_hwm_budget_metrics(ctx);
 `ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1`로, `struct_size`를 자신이 할당한 크기로 설정한다.
 Core는 caller 크기와 Core v1 크기 중 작은 prefix만 기록하고, `struct_size`에는 Core v1 구조체의
 전체 크기를 반환한다. `zlink_ctx_reset_auto_hwm_budget_metrics`는 context handle만 받는다.
-Snapshot 구조체는 budget 계획(`configured_memory_limit_bytes`, `runtime_memory_limit_bytes`,
+Snapshot 구조체는 budget 계획(`configured_memory_limit_bytes`,
 `resolved_memory_limit_bytes`, `configured_core_budget_bytes`, `effective_core_budget_bytes`,
 `total_planned_hwm_bytes`, `total_applied_hwm_bytes`, `manual_reserved_hwm_bytes`), accounted-byte
 counter(`core_queue_accounted_bytes`, `current_accounted_bytes`, `provisional_accounted_bytes`,
