@@ -19,6 +19,7 @@ import java.util.Objects;
 public final class ZLinkServiceM6AWireCodec {
     public static final int IDENTITY_MISMATCH_REJECT_REASON =
             (int) ServiceWireCodec.RejectReason.IDENTITY_MISMATCH.wire;
+    private static final int MAX_ENDPOINT_BYTES = 4096;
     private static final int FIELD_STATE = 1;
     private static final int FIELD_APPLICATION_VERSION = 2;
     private static final int FIELD_PROTOCOL_CAPABILITIES = 6;
@@ -753,7 +754,7 @@ public final class ZLinkServiceM6AWireCodec {
 
         void text16(String value, String field) {
             byte[] bytes = text(value, field);
-            if (bytes.length > 4096) {
+            if (bytes.length > MAX_ENDPOINT_BYTES) {
                 throw protocol(field + " exceeds endpoint bound");
             }
             u16(bytes.length);
@@ -883,7 +884,7 @@ public final class ZLinkServiceM6AWireCodec {
 
         String text16(String field) {
             int length = u16(field + ".length");
-            if (length == 0 || length > 4096) {
+            if (length == 0 || length > MAX_ENDPOINT_BYTES) {
                 throw protocol(field + " has invalid length");
             }
             return decodeText(bytes(length, field), field);

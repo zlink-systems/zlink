@@ -446,10 +446,6 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         return writer.bytes();
     }
 
-    private static void validateText8(String value) {
-        Writer.bounded(value);
-    }
-
     private static void validateText16(String value) {
         Writer.bounded16(value);
     }

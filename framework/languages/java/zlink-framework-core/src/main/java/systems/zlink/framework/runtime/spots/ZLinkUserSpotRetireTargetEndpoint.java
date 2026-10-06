@@ -26,7 +26,6 @@ import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -828,19 +827,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
             case PROTOBUF -> "application/protobuf";
         };
     }
-
-    private static boolean sameParts(List<byte[]> left, List<byte[]> right) {
-        if (left.size() != right.size()) return false;
-        for (int index = 0; index < left.size(); index++) {
-            if (!Arrays.equals(left.get(index), right.get(index))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private record CanonicalRelayAttempt(
-            ZLinkServiceRelocationWireCodec.ReplyRelayAck ack, Throwable failure) {}
 
     private record ParticipantSlot(
             long id, ZLinkSpotRetireControl.ParticipantFence fence, long replyRouteId) {}

@@ -3811,8 +3811,6 @@ final class ZLinkProviderAuthorityRepository {
         }
     }
 
-    private record DecodedItem(String key, ZLinkStoreValue value) {}
-
     private record LoadedParticipant(ZLinkStoreKey key, ZLinkStoreValue value) {}
 
     private record PreparedAggregate(

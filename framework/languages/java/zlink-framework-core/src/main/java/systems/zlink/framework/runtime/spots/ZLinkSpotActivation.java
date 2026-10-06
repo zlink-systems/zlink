@@ -305,14 +305,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         return dispatched;
     }
 
-    private CompletionStage<Void> dispatchRoutesAsync(List<ZLinkBackendReceived> routes) {
-        CompletionStage<Void> tail = CompletableFuture.completedFuture(null);
-        for (ZLinkBackendReceived received : routes) {
-            tail = tail.thenCompose(ignored -> dispatchRouteAsync(received));
-        }
-        return tail;
-    }
-
     void drainPolledDispatchQueues() {
         drainRoutesForDispatch();
     }
