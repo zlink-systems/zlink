@@ -43,7 +43,7 @@ internal sealed class ZoneNodeBootstrap(
         // failure is not an automatic replacement, so the Zones the previous incarnation owned
         // stay registered to it, and the Zones a graceful stop released belong to the next cold
         // start rather than to the process coming back. Claiming here would also let a
-        // replacement settle on one Zone — neither the two a cold start needs nor the none a
+        // replacement claim a Zone, violating the empty zone set a
         // replacement announces — and that is a state this bootstrap cannot leave.
         if (settings.AllowEmptyZoneSet)
         {
@@ -58,37 +58,22 @@ internal sealed class ZoneNodeBootstrap(
             return;
         }
 
-        // Every eligible process requests the same four global ZoneIds. Placement capacity,
-        // not NodeId, distributes two Spot owners to each process. A process that fills its
-        // local capacity keeps retrying until the other eligible process is ready and owns the
-        // remaining objects.
-        var locallyClaimed = new HashSet<string>(StringComparer.Ordinal);
-        for (var attempt = 0; census.ZoneIds.Count != 2; attempt++)
+        for (var attempt = 0; census.ZoneIds.Count != settings.ZoneCapacity; attempt++)
         {
-            var claimed = ClaimedZones(locallyClaimed);
-            var claimOrder = new List<string>();
-            foreach (var zoneId in claimed)
-            foreach (var adjacent in World.AdjacentZones(zoneId))
-                if (!claimed.Contains(adjacent) && !claimOrder.Contains(adjacent))
-                    claimOrder.Add(adjacent);
-            foreach (var zoneId in ZoneTopology.Zones)
-                if (!claimed.Contains(zoneId) && !claimOrder.Contains(zoneId))
-                    claimOrder.Add(zoneId);
-
+            var claimed = census.ZoneIds;
             // Re-issuing the canonical create operation every round is what lets this process
             // claim a Zone as soon as capacity frees up; merely waiting on the local census
             // would never trigger a new placement decision.
-            foreach (var zoneId in claimOrder)
+            foreach (var zoneId in ZoneTopology.Zones)
             {
-                if (await EnsureZoneAsync(zoneId, cancellationToken))
-                    locallyClaimed.Add(zoneId);
-                if (!ClaimedZones(locallyClaimed).SequenceEqual(claimed))
+                await EnsureZoneAsync(zoneId, cancellationToken);
+                if (!census.ZoneIds.SequenceEqual(claimed))
                     break;
             }
 
             if (attempt + 1 >= StartupRetryAttempts)
                 throw new InvalidOperationException(
-                    $"Zone Spot capacity did not settle at two local owners. node={maintenance.OwnNodeId}; "
+                    $"Zone Spot capacity did not settle. node={maintenance.OwnNodeId}; "
                         + $"zones={string.Join(',', census.ZoneIds)}"
                 );
             await Task.Delay(StartupRetryDelay, cancellationToken);
@@ -108,13 +93,6 @@ internal sealed class ZoneNodeBootstrap(
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private IReadOnlyList<string> ClaimedZones(IReadOnlySet<string> locallyClaimed) =>
-        census
-            .ZoneIds.Concat(locallyClaimed)
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(value => value, StringComparer.Ordinal)
-            .ToArray();
-
     /// <summary>
     /// One claim attempt for one Zone. The claim loop in <see cref="StartAsync"/> owns the
     /// retry budget (§3, `250 ms` × `120`) and the startup failure, so a Zone this attempt
@@ -123,7 +101,7 @@ internal sealed class ZoneNodeBootstrap(
     /// Retrying here as well would spend the whole budget on the first such Zone and never let
     /// the claim loop reach its own decision.
     /// </summary>
-    private async Task<bool> EnsureZoneAsync(string zoneId, CancellationToken cancellationToken)
+    private async Task EnsureZoneAsync(string zoneId, CancellationToken cancellationToken)
     {
         try
         {
@@ -133,9 +111,8 @@ internal sealed class ZoneNodeBootstrap(
                 .Request(ZLinkMessage.Empty)
                 .Async(cancellationToken);
             if (result.State is ZLinkSpotCreateState.Rejected)
-                return false;
+                return;
             logger.LogInformation("zone ensured. zone={ZoneId}", zoneId);
-            return result.State is ZLinkSpotCreateState.Created;
         }
         catch (ZLinkFrameworkException exception)
             when (exception.Kind
@@ -143,7 +120,7 @@ internal sealed class ZoneNodeBootstrap(
                         or ZLinkFrameworkErrorKind.DeadlineExceeded
             )
         {
-            return false;
+            return;
         }
     }
 

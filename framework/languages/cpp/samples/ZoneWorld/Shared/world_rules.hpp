@@ -78,6 +78,27 @@ struct reject_reason_t
     static constexpr const char *zone_maintenance = "ZoneMaintenance";
 };
 
+struct bot_route_t
+{
+    const char *id;
+    int x;
+    int y;
+    int dx;
+    int dy;
+};
+inline const auto &bot_fixtures ()
+{
+    static constexpr std::array routes{bot_route_t{"bot-nw-x", 10, 15, 1, 0},
+                                       bot_route_t{"bot-nw-y", 15, 10, 0, 1},
+                                       bot_route_t{"bot-ne-x", 90, 15, -1, 0},
+                                       bot_route_t{"bot-ne-y", 85, 10, 0, 1},
+                                       bot_route_t{"bot-sw-x", 10, 85, 1, 0},
+                                       bot_route_t{"bot-sw-y", 15, 90, 0, -1},
+                                       bot_route_t{"bot-se-x", 90, 85, -1, 0},
+                                       bot_route_t{"bot-se-y", 85, 90, 0, -1}};
+    return routes;
+}
+
 inline std::string zone_of (int x, int y)
 {
     return y < 50 ? (x < 50 ? "zone-nw" : "zone-ne") : (x < 50 ? "zone-sw" : "zone-se");

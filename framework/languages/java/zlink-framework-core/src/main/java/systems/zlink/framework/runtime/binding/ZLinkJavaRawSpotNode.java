@@ -2309,19 +2309,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         metadataFrame,
                         new byte[0],
                         parts,
-                        envelope.request()
-                                ? reply -> {
-                                    try {
-                                        owner.replyRecoveredInstance(
-                                                envelope.sourceNodeRid(),
-                                                envelope.sourceNodeGeneration(),
-                                                envelope.replyRouteId(),
-                                                reply);
-                                    } finally {
-                                        reply.forEach(Message::close);
-                                    }
-                                }
-                                : null,
+                        envelope.request() ? reply -> reply.forEach(Message::close) : null,
                         () -> {},
                         payload.contentType());
         received.retainActivationMessage(header);

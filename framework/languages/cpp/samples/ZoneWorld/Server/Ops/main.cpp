@@ -193,15 +193,11 @@ class ops_state_t
     relocation_pair_res_t relocation_pair () const
     {
         std::lock_guard lock (_mutex);
-        // The canonical player spawn is logical zone-nw. Discover its current
-        // physical owner from reports and select an adjacent zone on another
-        // owner; never turn the stable NodeId into a placement pin.
+        // Select an adjacent cross-owner pair from the current Ops reports.
         for (const auto &[source_id, source] : _nodes) {
-            if (!source.registered
-                || std::find (source.zones.begin (), source.zones.end (), "zone-nw")
-                     == source.zones.end ())
+            if (!source.registered)
                 continue;
-            for (const auto &source_zone : {std::string ("zone-nw")}) {
+            for (const auto &source_zone : source.zones) {
                 for (const auto &[target_id, target] : _nodes) {
                     if (source_id == target_id || !target.registered)
                         continue;

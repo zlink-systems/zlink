@@ -2563,132 +2563,167 @@ void spot_context_state_t::run_local_close_steps (
                                            "Spot Close could not release its local activation"));
             return;
         }
-        const auto original = self->serial_queue
-                                ? self->serial_queue->first_pending_message_or_close ()
-                                : std::shared_ptr<const void>{};
-        const auto fail_pending = [self, owner] (const result_t<bool> &failure) {
-            const auto messages = self->serial_queue ? self->serial_queue->pending_messages ()
-                                                     : std::vector<std::shared_ptr<const void>>{};
-            const auto kind =
-              failure ? framework_error_kind_t::internal_failure : failure.error_kind ();
-            const auto message = failure.error ()
-                                   ? std::string (failure.error ()->what ())
-                                   : "Spot initialization did not create an incarnation";
-            for (const auto &retained : messages) {
-                const auto command =
-                  std::static_pointer_cast<const instance_spot_retained_message_t> (retained);
-                if (command->completion)
-                    command->completion->complete (
-                      result_t<zlink::message_t>::failure (kind, message));
-            }
-            owner->lane
-              .run ([&] {
-                  const auto found = owner->spot_contexts_by_id.find (std::string (self->spot_id));
-                  if (found != owner->spot_contexts_by_id.end ()
-                      && spot_context_access_t::state (found->second) == self)
-                      owner->spot_contexts_by_id.erase (found);
-              })
-              .get ();
-        };
-        // Spot address messaging §7 step 3: drain or relocation forbids
-        // Reincarnate, and its kind ends the Instance intent messages left after
-        // the release. Accepted messages are never placed again.
-        const auto boundary = owner->lane
-                                .run ([&] {
-                                    const auto phase = owner->host_phase
-                                                         ? std::optional{owner->host_phase ()}
-                                                         : std::nullopt;
-                                    return phase == framework_runtime_state_t::draining
-                                             ? std::optional{framework_error_kind_t::shutting_down}
-                                           : phase == framework_runtime_state_t::relocating
-                                               || phase == framework_runtime_state_t::relocated
-                                             ? std::optional{framework_error_kind_t::unavailable}
-                                             : std::optional<framework_error_kind_t>{};
-                                })
-                                .get ();
-        if (original && !boundary && reincarnate) {
-            service::after_close_step (
-              run_close_step<authority_snapshot_t> (reincarnate, resume), resume,
-              [self, owner, done, resume, original, discard_reincarnation,
-               fail_pending] (result_t<authority_snapshot_t> snapshot) {
-                  if (!snapshot) {
-                      const auto failure = result_t<bool>::failure (
-                        snapshot.error_kind (),
-                        snapshot.error () ? snapshot.error ()->what () : "Spot Reincarnate failed");
-                      fail_pending (failure);
-                      done (failure);
-                      return;
-                  }
-                  const auto next = snapshot.value ();
-                  service::after_close_step (
-                    run_close_step<bool> (
-                      [self, owner, next, original] {
-                          const auto command =
-                            std::static_pointer_cast<const instance_spot_retained_message_t> (
-                              original);
-                          auto flow = runtime::flow_context_t::enter (
-                            command->original_activation->application_payload.flow_id,
-                            command->original_activation->application_payload.flow_origin,
-                            message_flow_tracer_t (owner->dispatch).mode (), flow_origin_t::inbound,
-                            std::nullopt);
-                          const auto created = spot_node_runtime_t (owner).create_spot_context (
-                            command->original_activation->activation.target.stable_type,
-                            self->spot_id,
-                            zlink::message_t::from (
-                              command->original_activation->application_payload.payload_bytes ()),
-                            next.object_generation, next.allocation.target.mesh_name, {},
-                            next.authority_owner_generation, self->serial_queue);
-                          return task_t<bool> (result_t<bool>::success (
-                            created.state == spot_create_state_t::created));
-                      },
-                      resume),
-                    resume,
-                    [done, next, discard_reincarnation, resume,
-                     fail_pending] (result_t<bool> initialized) {
-                        if (initialized && initialized.value ()) {
-                            done (initialized);
-                            return;
-                        }
-                        service::after_close_step (
-                          run_close_step<bool> (
-                            [discard_reincarnation, next] { return discard_reincarnation (next); },
-                            resume),
-                          resume, [done, initialized, fail_pending] (result_t<bool> deleted) {
-                              const auto failure =
-                                !deleted ? deleted
-                                : !initialized
-                                  ? initialized
-                                  : result_t<bool>::failure (
-                                      framework_error_kind_t::internal_failure,
-                                      "Spot initialization did not create an incarnation");
-                              fail_pending (failure);
-                              done (failure);
-                          });
-                    });
-              });
-            return;
-        }
+        auto pending = self->serial_queue ? self->serial_queue->first_pending_message_or_close ()
+                                          : task_t<std::shared_ptr<const void>> (
+                                              result_t<std::shared_ptr<const void>>::success ({}));
         service::after_close_step (
-          run_close_step<bool> (release, resume), resume,
-          [done, owner, self, original, boundary, fail_pending] (result_t<bool> result) mutable {
-              if (original && boundary) {
-                  fail_pending (result_t<bool>::failure (
-                    *boundary, *boundary == framework_error_kind_t::shutting_down
-                                 ? "Spot Close released its authority during host drain"
-                                 : "Spot Close released its authority during relocation"));
-                  done (result);
+          std::move (pending), resume,
+          [self, owner, done, release, reincarnate, discard_reincarnation,
+           resume] (result_t<std::shared_ptr<const void>> probed) mutable {
+              if (!probed) {
+                  done (result_t<bool>::failure (probed.error_kind (), probed.error ()->what ()));
                   return;
               }
-              owner->lane
-                .run ([&] {
-                    const auto found =
-                      owner->spot_contexts_by_id.find (std::string (self->spot_id));
-                    if (found != owner->spot_contexts_by_id.end ()
-                        && spot_context_access_t::state (found->second) == self)
-                        owner->spot_contexts_by_id.erase (found);
-                })
-                .get ();
-              done (result);
+              const auto original = probed.value ();
+              const auto fail_pending = [self, owner, resume, done] (const result_t<bool> &failure,
+                                                                     result_t<bool> terminal) {
+                  auto pending =
+                    self->serial_queue
+                      ? self->serial_queue->pending_messages ()
+                      : task_t<std::vector<std::shared_ptr<const void>>> (
+                          result_t<std::vector<std::shared_ptr<const void>>>::success ({}));
+                  service::after_close_step (
+                    std::move (pending), resume,
+                    [self, owner, failure, done, terminal] (
+                      result_t<std::vector<std::shared_ptr<const void>>> messages) mutable {
+                        if (!messages) {
+                            report_spot_close_diagnostic (owner, std::string (self->spot_id),
+                                                          "pending_query_failed",
+                                                          messages.exception ());
+                            done (result_t<bool>::failure (messages.error_kind (),
+                                                           messages.error ()->what ()));
+                            return;
+                        }
+                        const auto kind = failure ? framework_error_kind_t::internal_failure
+                                                  : failure.error_kind ();
+                        const auto message =
+                          failure.error () ? std::string (failure.error ()->what ())
+                                           : "Spot initialization did not create an incarnation";
+                        for (const auto &retained : messages.value ()) {
+                            const auto command =
+                              std::static_pointer_cast<const instance_spot_retained_message_t> (
+                                retained);
+                            if (command->completion)
+                                command->completion->complete (
+                                  result_t<zlink::message_t>::failure (kind, message));
+                        }
+                        owner->lane
+                          .run ([&] {
+                              const auto found =
+                                owner->spot_contexts_by_id.find (std::string (self->spot_id));
+                              if (found != owner->spot_contexts_by_id.end ()
+                                  && spot_context_access_t::state (found->second) == self)
+                                  owner->spot_contexts_by_id.erase (found);
+                          })
+                          .get ();
+                        done (terminal);
+                    });
+              };
+              // Spot address messaging §7 step 3: drain or relocation forbids
+              // Reincarnate, and its kind ends the Instance intent messages left after
+              // the release. Accepted messages are never placed again.
+              const auto boundary =
+                owner->lane
+                  .run ([&] {
+                      const auto phase =
+                        owner->host_phase ? std::optional{owner->host_phase ()} : std::nullopt;
+                      return phase == framework_runtime_state_t::draining
+                               ? std::optional{framework_error_kind_t::shutting_down}
+                             : phase == framework_runtime_state_t::relocating
+                                 || phase == framework_runtime_state_t::relocated
+                               ? std::optional{framework_error_kind_t::unavailable}
+                               : std::optional<framework_error_kind_t>{};
+                  })
+                  .get ();
+              if (original && !boundary && reincarnate) {
+                  service::after_close_step (
+                    run_close_step<authority_snapshot_t> (reincarnate, resume), resume,
+                    [self, owner, done, resume, original, discard_reincarnation,
+                     fail_pending] (result_t<authority_snapshot_t> snapshot) {
+                        if (!snapshot) {
+                            const auto failure = result_t<bool>::failure (
+                              snapshot.error_kind (), snapshot.error ()
+                                                        ? snapshot.error ()->what ()
+                                                        : "Spot Reincarnate failed");
+                            fail_pending (failure, failure);
+                            return;
+                        }
+                        const auto next = snapshot.value ();
+                        service::after_close_step (
+                          run_close_step<bool> (
+                            [self, owner, next, original] {
+                                const auto command =
+                                  std::static_pointer_cast<const instance_spot_retained_message_t> (
+                                    original);
+                                auto flow = runtime::flow_context_t::enter (
+                                  command->original_activation->application_payload.flow_id,
+                                  command->original_activation->application_payload.flow_origin,
+                                  message_flow_tracer_t (owner->dispatch).mode (),
+                                  flow_origin_t::inbound, std::nullopt);
+                                const auto created =
+                                  spot_node_runtime_t (owner).create_spot_context (
+                                    command->original_activation->activation.target.stable_type,
+                                    self->spot_id,
+                                    zlink::message_t::from (
+                                      command->original_activation->application_payload
+                                        .payload_bytes ()),
+                                    next.object_generation, next.allocation.target.mesh_name, {},
+                                    next.authority_owner_generation, self->serial_queue);
+                                return task_t<bool> (result_t<bool>::success (
+                                  created.state == spot_create_state_t::created));
+                            },
+                            resume),
+                          resume,
+                          [done, next, discard_reincarnation, resume,
+                           fail_pending] (result_t<bool> initialized) {
+                              if (initialized && initialized.value ()) {
+                                  done (initialized);
+                                  return;
+                              }
+                              service::after_close_step (
+                                run_close_step<bool> (
+                                  [discard_reincarnation, next] {
+                                      return discard_reincarnation (next);
+                                  },
+                                  resume),
+                                resume, [done, initialized, fail_pending] (result_t<bool> deleted) {
+                                    const auto failure =
+                                      !deleted ? deleted
+                                      : !initialized
+                                        ? initialized
+                                        : result_t<bool>::failure (
+                                            framework_error_kind_t::internal_failure,
+                                            "Spot initialization did not create an incarnation");
+                                    fail_pending (failure, failure);
+                                });
+                          });
+                    });
+                  return;
+              }
+              service::after_close_step (
+                run_close_step<bool> (release, resume), resume,
+                [done, owner, self, original, boundary,
+                 fail_pending] (result_t<bool> result) mutable {
+                    if (original && boundary) {
+                        fail_pending (
+                          result_t<bool>::failure (
+                            *boundary, *boundary == framework_error_kind_t::shutting_down
+                                         ? "Spot Close released its authority during host drain"
+                                         : "Spot Close released its authority during relocation"),
+                          result);
+                        return;
+                    }
+                    owner->lane
+                      .run ([&] {
+                          const auto found =
+                            owner->spot_contexts_by_id.find (std::string (self->spot_id));
+                          if (found != owner->spot_contexts_by_id.end ()
+                              && spot_context_access_t::state (found->second) == self)
+                              owner->spot_contexts_by_id.erase (found);
+                      })
+                      .get ();
+                    done (result);
+                });
           });
     };
     owner->lane.run ([&] { closed = true; }).get ();
@@ -6089,7 +6124,8 @@ spot_node_runtime_t::commit_accepted_actor_join (const std::string &key,
             }
             if (previous_context)
                 decrement_actor_count_unlocked (*previous_context->_state);
-            erase_actor_route_unlocked (*_state, key);
+            // Replace the native projection without discarding the committed owner fence.
+            _state->native_actors.erase (key);
             _state->destroyed_actor_keys.erase (key);
             if (native_actor && !_state->native_actors.contains (key)
                 && !_state->mesh_runtime_owned_native_actor_ids.contains (
@@ -8933,14 +8969,11 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
     // A newer attempt displaces the older one before its admission queues, so
     // the older attempt's lifecycle position is released instead of awaited.
     std::vector<handoff_packet_t> displaced_backlog;
-    const bool admitted_attempt = _state->actor_transfer_coordinator.admit_attempt (
-      actor_key (store_actor), transfer_id, displaced_backlog);
+    (void) _state->actor_transfer_coordinator.admit_attempt (actor_key (store_actor), transfer_id,
+                                                             displaced_backlog);
     fail_handoff_backlog (_state, std::move (displaced_backlog));
-    if (!admitted_attempt) {
-        return task_t<spot_actor_join_result_t> (result_t<spot_actor_join_result_t>::failure (
-          framework_error_kind_t::protocol_error,
-          "remote actor admission conflicts with the pending prepare"));
-    }
+    // Source housekeeping may still own a move here. Normal callback rejection
+    // does not install an admission; accepted attempts arbitrate in try_add_admission.
     /* The admission callback is user code on the target Spot's lifecycle
      * lane; its item completes this task. A caller that holds that turn runs
      * it inline. The state lane is not held across it. */
@@ -9022,8 +9055,8 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
           }
           if (outcome->admission_conflict) {
               admitted->complete (result_t<spot_actor_join_result_t>::failure (
-                framework_error_kind_t::protocol_error,
-                "remote actor admission conflicts with the pending prepare"));
+                framework_error_kind_t::unavailable,
+                "remote actor admission conflicts with the current membership"));
               return;
           }
           if (outcome->reservation_failed) {
