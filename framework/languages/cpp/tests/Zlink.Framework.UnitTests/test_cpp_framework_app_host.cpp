@@ -1753,7 +1753,8 @@ int main (int test_argc, char **test_argv)
         const auto core_context =
           zlink::framework::detail::zlink_builder_access_t::shared_core_context (
             core_hwm_app.advanced ().zlink ());
-        if (!core_context || core_context->options ().core_hwm_memory_limit_bytes ().bytes () != 4096
+        if (!core_context
+            || core_context->options ().core_hwm_memory_limit_bytes ().bytes () != 4096
             || core_context->options ().core_hwm_budget_bytes ().bytes () != 1024
             || core_context->options ().core_hwm_profile ()
                  != zlink::auto_hwm_profile::throughput) {
