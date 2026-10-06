@@ -676,6 +676,7 @@ void client_server_location_runtime_t::start_server (
                                                  : std::optional<std::string> (advertise->second)};
     options.transport_poller = _transport_poller.get ();
     options.transport_poller_slot = next_transport_poller_slot ();
+    options.transport_monitor_slot = next_transport_poller_slot ();
     options.application_jobs = _application_jobs;
     options.runtime_failures = _channel_runtime.runtime_failures ();
     auto raw = std::make_shared<raw_client_server_server_t> (std::move (options),
@@ -1078,8 +1079,10 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_ch
                                                    std::move (expected)};
         options.transport_poller = _transport_poller.get ();
         options.transport_poller_slot = next_transport_poller_slot ();
+        options.transport_monitor_slot = next_transport_poller_slot ();
         options.application_jobs = _application_jobs;
         options.runtime_failures = _channel_runtime.runtime_failures ();
+        options.control_reply_parked = [wake = _wake_timer] { wake->signal (); };
         auto raw = std::make_shared<raw_client_server_client_t> (std::move (options),
                                                                  _channel_runtime.core_context ());
         co_await raw->start_task ();
@@ -1222,6 +1225,13 @@ task_t<void> client_server_location_runtime_t::pump ()
                   std::make_shared<task_t<bool>> (pump_client_transport (connection.owner, now));
                 connection.pump_task = state;
                 observe_pump (state);
+            } else {
+                // This turn's input (a parked control reply) may arrive after the busy pump
+                // read its queue. Like an in-flight worker turn, the busy pump then owns the
+                // next turn when it completes, so the input is not absorbed.
+                detail::observe_task_terminal (
+                  *connection.pump_task->task,
+                  [wake = _wake_timer] (const result_t<bool> &) { wake->signal (); });
             }
         }
         _client_pump_cursor = (start + 1) % _client_pump_snapshot.size ();
