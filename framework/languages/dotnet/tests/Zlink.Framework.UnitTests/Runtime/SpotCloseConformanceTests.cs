@@ -688,6 +688,7 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
     )
     {
         var node = host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node;
+        var operationId = node.AllocateOperationId();
         var operation = new InstanceSpotActivationOperation(
             new InstanceSpotActivationTarget(
                 SpotCloseHost.MeshName,
@@ -700,9 +701,9 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             node.RoutingId,
             node.MeshStatus().LifecycleGeneration,
             string.Empty,
-            node.AllocateOperationId(),
+            operationId,
             true,
-            0,
+            operationId.Low,
             checked((ulong)DateTimeOffset.UtcNow.Add(Wait).ToUnixTimeMilliseconds())
         );
         var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(

@@ -656,7 +656,7 @@ internal abstract partial class ZLinkSpotActivation
             parts,
             sourceNodeRid,
             sourceSpotId,
-            request ? operationId.Low : null,
+            request ? originalOperation.ReplyRouteId : null,
             replyCallback,
             metadata: decodedMetadata,
             operationId: operationId,
@@ -673,7 +673,7 @@ internal abstract partial class ZLinkSpotActivation
         {
             acceptedJournalLength = ZLinkSpotAcceptedJournal.MeasureEncodedLength(
                 received,
-                request ? operationId.Low : 0
+                request ? originalOperation.ReplyRouteId : 0
             );
         }
         catch
@@ -682,7 +682,7 @@ internal abstract partial class ZLinkSpotActivation
             throw;
         }
         Func<ReadOnlyMemory<byte>> acceptedJournalFactory = () =>
-            ZLinkSpotAcceptedJournal.Encode(received, request ? operationId.Low : 0);
+            ZLinkSpotAcceptedJournal.Encode(received, request ? originalOperation.ReplyRouteId : 0);
 
         // Spot messaging §4 step 12 with §7 step 1: the first terminal record is
         // the lifecycle item posted before the first message runs, so a Close
@@ -884,14 +884,14 @@ internal abstract partial class ZLinkSpotActivation
         var received = state.Received;
         var journalLength = ZLinkSpotAcceptedJournal.MeasureEncodedLength(
             received,
-            state.Request ? received.OperationId.Low : 0
+            state.Request ? received.RequestSeq!.Value : 0
         );
         var admission = _serial.QueueAcceptedOnLane(
             journalLength,
             () =>
                 ZLinkSpotAcceptedJournal.Encode(
                     received,
-                    state.Request ? received.OperationId.Low : 0
+                    state.Request ? received.RequestSeq!.Value : 0
                 ),
             (activation, ct) => activation.DispatchQueuedApplicationRouteAsync(state, ct),
             state.ReleaseForRelocation,
@@ -1502,7 +1502,6 @@ internal abstract partial class ZLinkSpotActivation
                 received.OperationId == default
                 || received.RequestSeq is not { } correlation
                 || correlation == 0
-                || correlation != received.OperationId.Low
             )
             {
                 operationAdmission.Lease.Dispose();

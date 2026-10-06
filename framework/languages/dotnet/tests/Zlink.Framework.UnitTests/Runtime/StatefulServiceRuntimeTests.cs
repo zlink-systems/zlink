@@ -13,6 +13,7 @@ using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Timers;
@@ -2596,7 +2597,10 @@ public sealed partial class StatefulServiceRuntimeTests
                     )
                     .AsTask()
             );
-            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.Unavailable,
+                Assert.IsType<ZLinkFrameworkException>(error).Kind
+            );
 
             if (prepared is { } reservedPrepared)
             {
@@ -3765,6 +3769,38 @@ public sealed partial class StatefulServiceRuntimeTests
         );
         Assert.Equal(MeshOperationKind.ActorCreate, actorCreate.OperationKind);
         Assert.Equal((int)RequestResult.Ok, actorCreate.TerminalResult);
+        using var first = Message.From([1, 2]);
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.ActivateInstanceSpot(
+                new InstanceSpotActivationTarget(
+                    "mesh",
+                    targetRid,
+                    1,
+                    "raw-cold",
+                    "sample",
+                    "descriptor"
+                ),
+                "caller",
+                [first],
+                true,
+                out var coldOperation,
+                checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds()),
+                TimeSpan.FromSeconds(3)
+            )
+        );
+        var cold = await RejectRawReplyThenReceiveNativeTerminalAsync(
+            source,
+            target,
+            monitor,
+            coldOperation,
+            ZLinkServiceWireCodec.EncodeReply(coldOperation.Low, (int)RequestResult.Ok, 0),
+            ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
+                new ReadOnlyMemory<byte>[] { new byte[] { 9 } }
+            )
+        );
+        Assert.Equal(MeshOperationKind.InstanceSpotRequest, cold.OperationKind);
+        Assert.Equal((int)RequestResult.Ok, cold.TerminalResult);
     }
 
     [Fact]
@@ -4059,7 +4095,7 @@ public sealed partial class StatefulServiceRuntimeTests
     }
 
     [Fact]
-    public async Task InstanceSpotActivationLoserForwardsOriginalOperationToWinner()
+    public async Task InstanceSpotActivationLoserReturnsUnavailableOnceOnNativeReply()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = NewNode(context, "instance-forward-source");
@@ -4077,9 +4113,7 @@ public sealed partial class StatefulServiceRuntimeTests
         loser.ConnectPeer(winnerEndpoint, winner.RoutingId);
         var winnerTarget = new RecordingInstanceSpotActivationTarget();
         winner.SetInstanceSpotActivationTarget(winnerTarget);
-        loser.SetInstanceSpotActivationTarget(
-            new ForwardingInstanceSpotActivationTarget(loser, winner)
-        );
+        loser.SetInstanceSpotActivationTarget(new RefusingInstanceSpotActivationTarget());
         source.Start();
         loser.Start();
         winner.Start();
@@ -4117,21 +4151,27 @@ public sealed partial class StatefulServiceRuntimeTests
         var completion = DrainCompletion(source, operationId);
         try
         {
-            Assert.Equal((int)RequestResult.Ok, completion.Record.TerminalResult);
-            Assert.Equal([7, 6], completion.Parts.Single().ToArray());
+            var error = ZLinkRequestFailureMapper.CreateCompletionException(
+                (RequestResult)completion.Record.TerminalResult,
+                completion.Record.FailureErrno,
+                "Reserve loser"
+            );
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.Unavailable,
+                Assert.IsType<ZLinkFrameworkException>(error).Kind
+            );
+            Assert.Empty(completion.Parts);
         }
         finally
         {
             ZLinkMessageParts.DisposeAll(completion.Parts);
         }
 
-        Assert.Equal(1, winnerTarget.Count);
-        Assert.Equal(operationId, winnerTarget.LastOperation.OperationId);
-        Assert.Equal(operationId.Low, winnerTarget.LastOperation.ReplyRouteId);
-        Assert.Equal(source.RoutingId, winnerTarget.LastOperation.SourceNodeRid);
-        Assert.Equal("descriptor-winner", winnerTarget.LastOperation.Target.DescriptorVersion);
-        Assert.Equal([7, 8], winnerTarget.LastMetadata.ToArray());
-        Assert.Equal([4, 5, 6], winnerTarget.LastPayload.Single().ToArray());
+        Assert.Equal(0, winnerTarget.Count);
+        Assert.DoesNotContain(
+            DrainRecords(source),
+            record => record.Kind == MeshRecordKind.Completion && record.OperationId == operationId
+        );
     }
 
     [Fact]
@@ -4621,7 +4661,8 @@ public sealed partial class StatefulServiceRuntimeTests
         IRouterSocket target,
         IMeshNodeMonitor monitor,
         MeshOperationId operationId,
-        byte[] nativeTerminal
+        byte[] nativeTerminal,
+        byte[]? nativeApplicationPayload = null
     )
     {
         using var request = await ReceiveRouterRequestAsync(target);
@@ -4646,8 +4687,16 @@ public sealed partial class StatefulServiceRuntimeTests
         );
 
         using var reply = Message.From(nativeTerminal);
-        target.Reply(sourceRid, replyToken).Message(reply).Submit();
-        return DrainCompletion(source, operationId).Record;
+        if (nativeApplicationPayload is not null)
+        {
+            using var payload = Message.From(nativeApplicationPayload);
+            target.Reply(sourceRid, replyToken).Messages([reply, payload]).Submit();
+        }
+        else
+            target.Reply(sourceRid, replyToken).Message(reply).Submit();
+        var completion = DrainCompletion(source, operationId);
+        ZLinkMessageParts.DisposeAll(completion.Parts);
+        return completion.Record;
     }
 
     private static async Task<Received> ReceiveRouterEnvelopeAsync(IRouterSocket target)
@@ -4844,6 +4893,199 @@ public sealed partial class StatefulServiceRuntimeTests
         }
     }
 
+    [Fact]
+    public async Task ColdSendReturnsWithoutWaitingForPeerByteCredit()
+    {
+        const int payloadBytes = 65_536;
+        const ulong hwmBytes = 2 * payloadBytes;
+        using var queue = new ZLinkApplicationJobQueue(
+            new ZLinkApplicationJobQueueCapacity(
+                Zlink.Framework.Contracts.Configuration.ZLinkApplicationJobQueueProfile.Balanced,
+                ConfiguredManualMax: 1,
+                EffectiveProcessorCount: 1,
+                EffectiveMaxQueuedApplicationJobs: 1
+            )
+        );
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        context.Options.AutoHwmEnabled = false;
+        await using var source = NewNode(context, "cold-credit-source");
+        source.RouterHighWaterMark = hwmBytes;
+        await using var target = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            applicationJobQueue: queue
+        );
+        target.SetRoutingId(RoutingId.From("cold-credit-target"));
+        target.RouterReceiveHighWaterMark = hwmBytes;
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetBind($"inproc://cold-credit-source-{suffix}");
+        var endpoint = $"inproc://cold-credit-target-{suffix}";
+        target.SetBind(endpoint);
+        source.ConnectPeer(endpoint, target.RoutingId);
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
+        using var held = await queue.AcquireAsync(CancellationToken.None);
+        var activation = new InstanceSpotActivationTarget(
+            "objects",
+            target.RoutingId,
+            target.Status().LifecycleGeneration,
+            "cold",
+            "sample",
+            "descriptor"
+        );
+        using var payload = Message.From(new byte[payloadBytes]);
+        for (var index = 0; index < 16; index++)
+        {
+            var call = Task.Run(() =>
+                source.ActivateInstanceSpot(
+                    activation,
+                    "caller",
+                    [payload],
+                    false,
+                    out _,
+                    checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds()),
+                    TimeSpan.FromSeconds(5)
+                )
+            );
+            try
+            {
+                var result = await call.WaitAsync(TimeSpan.FromMilliseconds(250));
+                Assert.Contains(result, new[] { SubmitResult.Ok, SubmitResult.Backpressured });
+                Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
+            }
+            catch (TimeoutException)
+            {
+                // Release only after the non-blocking contract has already failed,
+                // so teardown can finish the blocked Core admission.
+                held.Dispose();
+                await call.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Fail(
+                    "Cold Send waited for peer byte credit while the application permit was held."
+                );
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NormalColdReplyCompletesWhileAllSourceApplicationPermitsAreHeld(
+        bool rejectBeforeHandler
+    )
+    {
+        using var queue = new ZLinkApplicationJobQueue(
+            new ZLinkApplicationJobQueueCapacity(
+                Zlink.Framework.Contracts.Configuration.ZLinkApplicationJobQueueProfile.Balanced,
+                ConfiguredManualMax: 1,
+                EffectiveProcessorCount: 1,
+                EffectiveMaxQueuedApplicationJobs: 1
+            )
+        );
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            applicationJobQueue: queue
+        );
+        source.SetRoutingId(RoutingId.From("cold-permit-source"));
+        await using var target = NewNode(context, "cold-permit-target");
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetBind($"inproc://cold-permit-source-{suffix}");
+        var endpoint = $"inproc://cold-permit-target-{suffix}";
+        target.SetBind(endpoint);
+        source.ConnectPeer(endpoint, target.RoutingId);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!rejectBeforeHandler)
+            target.SetInstanceSpotActivationTarget(
+                new PermitHeldColdActivationTarget(entered, release)
+            );
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
+        using var held = await queue
+            .AcquireAsync(CancellationToken.None)
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
+        using var first = Message.From([1, 2]);
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.ActivateInstanceSpot(
+                new InstanceSpotActivationTarget(
+                    "objects",
+                    target.RoutingId,
+                    target.Status().LifecycleGeneration,
+                    "cold",
+                    "sample",
+                    "descriptor"
+                ),
+                "caller",
+                [first],
+                true,
+                out var operationId,
+                checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds()),
+                TimeSpan.FromSeconds(5)
+            )
+        );
+        if (!rejectBeforeHandler)
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            release.SetResult();
+        }
+        await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
+        var completion = DrainCompletion(source, operationId);
+        try
+        {
+            if (rejectBeforeHandler)
+            {
+                Assert.Equal((int)RequestResult.InternalError, completion.Record.TerminalResult);
+                Assert.Equal(
+                    (int)ServiceWireConstants.FrameworkErrorCode.RequestFailed,
+                    completion.Record.FailureErrno
+                );
+                Assert.Empty(completion.Parts);
+            }
+            else
+            {
+                Assert.Equal((int)RequestResult.Ok, completion.Record.TerminalResult);
+                Assert.Equal(new byte[] { 7, 6 }, Assert.Single(completion.Parts).ToArray());
+            }
+            Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(completion.Parts);
+        }
+    }
+
+    private sealed class PermitHeldColdActivationTarget(
+        TaskCompletionSource entered,
+        TaskCompletionSource release
+    ) : IInstanceSpotActivationTarget
+    {
+        public async ValueTask<InstanceSpotActivationTerminal> ActivateAsync(
+            InstanceSpotActivationOperation operation,
+            ReadOnlyMemory<byte>? metadata,
+            IReadOnlyList<ReadOnlyMemory<byte>> payload,
+            CancellationToken cancellationToken
+        )
+        {
+            entered.SetResult();
+            await release.Task.WaitAsync(cancellationToken);
+            return new InstanceSpotActivationTerminal(
+                RequestResult.Ok,
+                ServiceWireConstants.FrameworkErrorCode.None,
+                [new byte[] { 7, 6 }]
+            );
+        }
+    }
+
     private sealed class RecordingInstanceSpotActivationTarget : IInstanceSpotActivationTarget
     {
         private int _count;
@@ -4876,32 +5118,18 @@ public sealed partial class StatefulServiceRuntimeTests
         }
     }
 
-    private sealed class ForwardingInstanceSpotActivationTarget(
-        ZLinkManagedMeshNode relay,
-        ZLinkManagedMeshNode winner
-    ) : IInstanceSpotActivationTarget
+    private sealed class RefusingInstanceSpotActivationTarget : IInstanceSpotActivationTarget
     {
-        public async ValueTask<InstanceSpotActivationTerminal> ActivateAsync(
+        public ValueTask<InstanceSpotActivationTerminal> ActivateAsync(
             InstanceSpotActivationOperation operation,
             ReadOnlyMemory<byte>? metadata,
             IReadOnlyList<ReadOnlyMemory<byte>> payload,
             CancellationToken cancellationToken
-        )
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var forwarded = operation with
-            {
-                Target = operation.Target with
-                {
-                    TargetNodeRid = winner.RoutingId,
-                    TargetNodeGeneration = winner.Status().LifecycleGeneration,
-                    DescriptorVersion = "descriptor-winner",
-                },
-            };
-            return await relay
-                .ForwardInstanceSpotActivationAsync(forwarded, payload, metadata, cancellationToken)
-                .ConfigureAwait(false);
-        }
+        ) =>
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "The activation reservation was lost."
+            );
     }
 
     private sealed class BlockingInstanceSpotActivationTarget : IInstanceSpotActivationTarget

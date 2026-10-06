@@ -10,21 +10,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             string.IsNullOrEmpty(address.MeshName) ? null : address.MeshName
         );
         var meshName = source.Registration.SpotMeshChannelName ?? source.Registration.SpotNodeName;
-        if (!string.IsNullOrEmpty(address.InstanceSpotType))
-            return address with { MeshName = meshName };
-        var types = source.Registration.InstanceSpotFactories.Keys.ToArray();
-        return types.Length switch
-        {
-            1 => address with { MeshName = meshName, InstanceSpotType = types[0] },
-            0 => throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Mesh '{meshName}' has no registered Instance Spot type."
-            ),
-            _ => throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                "InstanceSpot(instanceSpotType) is required when a Mesh registers multiple Instance Spot types."
-            ),
-        };
+        return address with { MeshName = meshName };
     }
 
     internal ZLinkSpotNodeRuntime ResolveActorCreationSource(string? meshName)
