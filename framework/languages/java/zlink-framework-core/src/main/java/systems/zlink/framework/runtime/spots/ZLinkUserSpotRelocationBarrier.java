@@ -405,11 +405,17 @@ final class ZLinkUserSpotRelocationBarrier {
 
     CompletionStage<Optional<Committed>> commit(Seal seal) {
         return retainCommit(seal)
-                .thenApply(
-                        retained -> {
-                            retained.ifPresent(RelocationCommit::complete);
-                            return retained.map(RelocationCommit::committed);
-                        });
+                .thenCompose(
+                        retained ->
+                                retained.isEmpty()
+                                        ? CompletableFuture.completedFuture(Optional.empty())
+                                        : retained.orElseThrow()
+                                                .complete()
+                                                .thenApply(
+                                                        ignored ->
+                                                                retained.map(
+                                                                        RelocationCommit
+                                                                                ::committed)));
     }
 
     CompletionStage<Optional<RelocationCommit>> retainCommit(Seal seal) {
@@ -721,8 +727,15 @@ final class ZLinkUserSpotRelocationBarrier {
             return committed;
         }
 
-        Cut cut() {
-            ZLinkCompositeRelocationBarrier.RelocationCommit.Cut cut = retained.cut();
+        CompletionStage<Cut> cut() {
+            return retained.cut().thenApply(this::cutFromRetained);
+        }
+
+        CompletionStage<Cut> capture() {
+            return retained.capture().thenApply(this::cutFromRetained);
+        }
+
+        private Cut cutFromRetained(ZLinkCompositeRelocationBarrier.RelocationCommit.Cut cut) {
             return new Cut(
                     new Committed(
                             committed.generation(),
@@ -732,27 +745,27 @@ final class ZLinkUserSpotRelocationBarrier {
                     cut);
         }
 
-        boolean tryFinishCapture(Cut cut) {
+        CompletionStage<Boolean> tryFinishCapture(Cut cut) {
             Objects.requireNonNull(cut, "cut");
             return retained.tryFinishCapture(cut.retained);
         }
 
-        boolean tryEstablishDurableCut(Cut cut) {
+        CompletionStage<Boolean> tryEstablishDurableCut(Cut cut) {
             Objects.requireNonNull(cut, "cut");
             return retained.tryEstablishDurableCut(cut.retained);
         }
 
-        boolean tryEstablishAndFinishCapture(Cut cut) {
+        CompletionStage<Boolean> tryEstablishAndFinishCapture(Cut cut) {
             Objects.requireNonNull(cut, "cut");
             return retained.tryEstablishAndFinishCapture(cut.retained);
         }
 
-        boolean abort() {
+        CompletionStage<Boolean> abort() {
             return retained.abort();
         }
 
-        void complete() {
-            retained.complete();
+        CompletionStage<Void> complete() {
+            return retained.complete();
         }
 
         static final class Cut {

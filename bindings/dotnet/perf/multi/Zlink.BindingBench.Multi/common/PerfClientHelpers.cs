@@ -131,9 +131,8 @@ internal static partial class PerfRunner
         return DrainReadyEvents(monitor) > 0;
     }
 
-    internal static int DrainReadyEvents(MonitorSocket monitor)
+    internal static int DrainReadyEvents(MonitorSocket monitor, int readyCount = 0)
     {
-        int readyCount = 0;
         while (true)
         {
             try
@@ -142,7 +141,7 @@ internal static partial class PerfRunner
                 if (evt == null)
                     return readyCount;
                 if (IsMonitorReady(evt.Event))
-                    readyCount++;
+                    readyCount = checked((int)evt.Value);
             }
             catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
                                             || IsInterrupted(ex.NativeErrno))

@@ -106,6 +106,8 @@ import {
 import { SERVICE_WIRE_MAGIC, SERVICE_WIRE_MAJOR } from './service-wire-constants.generated';
 import {
   ServiceWireProtocolError,
+  M6aServiceWireCommand,
+  decodeReplyHeader,
   decodeApplicationPayload,
   decodeApplicationPayloadView,
   encodeApplicationPayload,
@@ -382,7 +384,10 @@ export class ServiceStatefulRuntime {
 
   readonly registry: ServiceStatefulRegistry;
 
-  private readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult>;
+  private readonly operations: ServiceTerminalOperationRegistry<
+    ServiceStatefulResult,
+    ServiceInstanceActivationTarget
+  >;
   private readonly sessionDeliveries = new Map<string, ServiceSessionDelivery>();
   /**
    * A local Actor owner can replace its own session binding before the
@@ -1553,8 +1558,8 @@ export class ServiceStatefulRuntime {
     metadataFrame?: Uint8Array
   ): ServiceStatefulPendingOperation {
     const timeoutMs = remainingDeadlineMs(deadlineUnixMs);
-    const pending = this.operations.register(timeoutMs);
-    this.submitRequest(
+    const pending = this.operations.register(timeoutMs, 'registry', target);
+    this.submitColdRequest(
       pending,
       target.targetNodeRid,
       instanceOperationParts(
@@ -1573,9 +1578,7 @@ export class ServiceStatefulRuntime {
           payloadFrame
         ],
         metadataFrame
-      ),
-      timeoutMs,
-      'instanceSpotRequest'
+      )
     );
     return pending;
   }
@@ -2028,6 +2031,30 @@ export class ServiceStatefulRuntime {
   private async ingress(
     record: RawServiceIngressRecord
   ): Promise<RawServicePumpResult | undefined> {
+    if (record.command === M6aServiceWireCommand.reply) {
+      let correlation: bigint;
+      try {
+        correlation = decodeReplyHeader(record.parts[0]!).correlation;
+      } catch {
+        return 'protocolError';
+      }
+      const target = this.operations.context(correlation);
+      if (target === undefined) return 'infrastructure';
+      if (
+        record.sourceRoutingId !== target.targetNodeRid ||
+        this.tryPeerGeneration(record.sourceRoutingId) !== target.targetNodeGeneration
+      ) {
+        return 'protocolError';
+      }
+      this.completeRemoteReply(
+        { id: correlation },
+        target.targetNodeRid,
+        'instanceSpotRequest',
+        undefined,
+        record.parts
+      );
+      return 'infrastructure';
+    }
     // These frozen relocation controls overlap the legacy stateful command
     // number range (30-34). They are bare infrastructure records and must
     // fall through to RawServiceMeshRuntime's relocation ingress instead of
@@ -2779,8 +2806,8 @@ export class ServiceStatefulRuntime {
       return;
     }
 
-    const pending = this.operations.register(remainingMs);
-    this.submitRequest(
+    const pending = this.operations.register(remainingMs, 'registry', redirectedTarget);
+    this.submitColdRequest(
       pending,
       route.targetNodeRid,
       instanceOperationParts(
@@ -2799,9 +2826,7 @@ export class ServiceStatefulRuntime {
           payloadFrame
         ],
         metadataFrame
-      ),
-      remainingMs,
-      'instanceSpotRequest'
+      )
     );
     const result = await pending.promise;
     if (localReply !== undefined) {
@@ -4057,10 +4082,82 @@ export class ServiceStatefulRuntime {
     payload?: ServiceApplicationPayload,
     tail?: ServiceStatefulReplyTail
   ): void {
-    this.raw.replyService(ingress, [
+    const parts = [
       encodeStatefulReply(correlation, terminalResult, failureCode, tail),
       ...(payload === undefined ? [] : [encodeApplicationPayload(payload)])
-    ]);
+    ];
+    if (ingress.command === M6bServiceWireCommand.instanceSpot) {
+      const record = decodeStatefulHeader(ingress.parts[0]!);
+      if (record.kind === 'instanceSpot' && record.activation === 'missing') {
+        if (this.tryPeerGeneration(record.sourceNodeRid) !== record.sourceNodeGeneration) {
+          this.reportColdReplyFailure(record, undefined);
+          return;
+        }
+        void this.submitOneWay(record.sourceNodeRid, parts).then(
+          (result) => {
+            if (result !== SubmitResult.Ok) this.reportColdReplyFailure(record, result);
+          },
+          (error) => this.reportColdReplyFailure(record, error)
+        );
+        return;
+      }
+    }
+    this.raw.replyService(ingress, parts);
+  }
+
+  private reportColdReplyFailure(
+    record: Extract<
+      ServiceStatefulWireRecord,
+      { readonly kind: 'instanceSpot'; readonly activation: 'missing' }
+    >,
+    error: unknown
+  ): void {
+    const reporter = this.dispatchErrors;
+    if (reporter?.captureEnabled() !== true) return;
+    reporter.report({
+      surface: ZLinkDispatchErrorSurface.InstanceSpot,
+      messageKind: ZLinkDispatchMessageKind.Request,
+      reason: ZLinkDispatchErrorReason.ReplyPathMissing,
+      action: ZLinkDispatchErrorAction.Drop,
+      meshName: this.dispatchErrorMeshName,
+      targetRid: record.sourceNodeRid,
+      spotId: record.target.targetSpotId,
+      error:
+        typeof error === 'number'
+          ? new Error(`Cold reply admission failed: ${error}.`)
+          : (error ?? new Error('Cold reply has no current source peer generation.'))
+    });
+  }
+
+  private submitColdRequest(
+    pending: ServiceStatefulPendingOperation,
+    targetNodeRid: string,
+    parts: readonly Buffer[]
+  ): void {
+    const stopObserving = this.raw.observePeerConnectionIntentRemoved((nodeRid) => {
+      if (nodeRid !== targetNodeRid) return;
+      this.operations.fail(
+        pending.id,
+        createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+          `Cold Instance target '${nodeRid}' disconnected.`
+        )
+      );
+    });
+    void pending.promise.then(stopObserving, stopObserving);
+    void this.submitOneWay(targetNodeRid, parts).then(
+      (result) => {
+        if (result !== SubmitResult.Ok)
+          this.operations.fail(
+            pending.id,
+            createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+              `Cold Instance request admission failed: ${result}.`
+            )
+          );
+      },
+      (error) => this.operations.fail(pending.id, error)
+    );
   }
 
   private handleUserSpotOperation(
@@ -4790,7 +4887,7 @@ export class ServiceStatefulRuntime {
   }
 
   private completeRemoteReply(
-    pending: ServiceStatefulPendingOperation,
+    pending: Pick<ServiceStatefulPendingOperation, 'id'>,
     targetNodeRid: string,
     operationKind:
       | 'spotRequest'

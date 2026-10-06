@@ -24,14 +24,17 @@ from store import RunStore
 COMMON = ["--language", "dotnet", "--perf-dir", "/tmp/perf"]
 
 
+OVERFLOW_NS = int((BOUNDS[-1] + 1000) * 1e6)
+
+
 def histogram(samples, overflow=0):
     counts = ["0"] * len(BOUNDS)
     for bucket, count in samples.items():
         counts[bucket] = str(count)
     return {"unit": "ms", "ticksUnit": "ns", "bounds": BOUNDS.copy(), "counts": counts,
             "overflow": str(overflow), "count": str(sum(samples.values()) + overflow),
-            "sumNs": str(sum(int(BOUNDS[b] * 1e6) * n for b, n in samples.items()) + overflow * 2_000_000_000),
-            "maxNs": "2000000000" if overflow else str(int(BOUNDS[max(samples)] * 1e6)) if samples else None,
+            "sumNs": str(sum(int(BOUNDS[b] * 1e6) * n for b, n in samples.items()) + overflow * OVERFLOW_NS),
+            "maxNs": str(OVERFLOW_NS) if overflow else str(int(BOUNDS[max(samples)] * 1e6)) if samples else None,
             "percentileMethod": "nearest-rank-bucket-upper-bound-capped-by-max"}
 
 
@@ -325,8 +328,8 @@ class HarnessTests(unittest.TestCase):
         export_latency(value, "latency", "latencyMs", metrics, reasons)
         self.assertEqual(metrics["latency.p50Ms"], .01)
         self.assertIsNone(metrics["latency.p95Ms"])
-        self.assertEqual(reasons["/metrics/latency.p95Ms"]["lowerBoundMs"], 1000)
-        self.assertEqual(metrics["latency.meanMs"], 1000.005)
+        self.assertEqual(reasons["/metrics/latency.p95Ms"]["lowerBoundMs"], BOUNDS[-1])
+        self.assertEqual(metrics["latency.meanMs"], (0.01 + OVERFLOW_NS / 1e6) / 2)
 
     def test_mismatched_histogram_and_counter_overflow_are_failures(self):
         value = histogram({0: 1})
@@ -492,8 +495,10 @@ class FrameworkVersionAgreementTest(unittest.TestCase):
     def test_packages_json_declares_all_supported_framework_versions(self):
         packages = json.loads((Path(__file__).resolve().parents[1] / "schema/packages.json").read_text())
         self.assertEqual(set(packages), {"dotnet", "cpp", "java", "kotlin", "node"})
-        self.assertEqual({declared_framework_version(language) for language in packages}, {"0.26.0"})
-        self.assertEqual(agreed_framework_version("0.26.0", declared_framework_version("dotnet")), "0.26.0")
+        declared = {declared_framework_version(language) for language in packages}
+        self.assertEqual(len(declared), 1)
+        version = declared.pop()
+        self.assertEqual(agreed_framework_version(version, declared_framework_version("dotnet")), version)
 
     def test_observed_package_version_mismatch_fails(self):
         with self.assertRaises(RuntimeError):
@@ -507,7 +512,8 @@ class FrameworkVersionAgreementTest(unittest.TestCase):
                                    package_source="local")
             with patch("runner.subprocess.run", return_value=SimpleNamespace(returncode=0)) as run:
                 build(args, ["Client"])
-        self.assertEqual(run.call_args.kwargs["env"]["ZLINK_PERF_FRAMEWORK_VERSION"], "0.26.0")
+        self.assertEqual(run.call_args.kwargs["env"]["ZLINK_PERF_FRAMEWORK_VERSION"],
+                         declared_framework_version("dotnet"))
         self.assertEqual(run.call_args.kwargs["env"]["ZLINK_PERF_PACKAGE_SOURCE"], "local")
 
     def test_jvm_launchers_build_through_the_java_perf_build_script(self):

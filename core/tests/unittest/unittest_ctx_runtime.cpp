@@ -6,6 +6,14 @@
 #include "core/ctx.hpp"
 #include "core/control_runtime.hpp"
 #include "sockets/common/socket_base.hpp"
+#include "core/ctx_auto_hwm_state.hpp"
+
+#if defined ZLINK_HAVE_LINUX
+#include <fstream>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <stdlib.h>
+#endif
 
 void setUp ()
 {
@@ -17,6 +25,63 @@ void tearDown ()
 
 namespace
 {
+#if defined ZLINK_HAVE_LINUX
+void test_cgroup_memory_limit_reads_current_and_ancestors ()
+{
+    char temporary[] = "/tmp/zlink-cgroup-XXXXXX";
+    const char *root = mkdtemp (temporary);
+    TEST_ASSERT_NOT_NULL (root);
+    const std::string base (root);
+    mkdir ((base + "/parent").c_str (), 0700);
+    mkdir ((base + "/parent/leaf").c_str (), 0700);
+    mkdir ((base + "/memory").c_str (), 0700);
+    mkdir ((base + "/memory/parent").c_str (), 0700);
+    mkdir ((base + "/memory/parent/leaf").c_str (), 0700);
+    const std::string process = base + "/process";
+    const std::string paths[] = {base + "/memory.max",
+      base + "/parent/memory.max", base + "/parent/leaf/memory.max",
+      base + "/memory/memory.limit_in_bytes",
+      base + "/memory/parent/memory.limit_in_bytes",
+      base + "/memory/parent/leaf/memory.limit_in_bytes"};
+    const char *values[] = {"900", "400", "max", "950", "300", "0"};
+    for (size_t i = 0; i != 6; ++i)
+        std::ofstream (paths[i].c_str ()) << values[i];
+    std::ofstream (process.c_str ()) << "0::/parent/leaf\n";
+    const uint64_t v2_parent = zlink::detected_cgroup_memory_limit_bytes (
+      process.c_str (), root, 1000);
+    std::ofstream (paths[2].c_str ()) << "200";
+    const uint64_t v2_leaf = zlink::detected_cgroup_memory_limit_bytes (
+      process.c_str (), root, 1000);
+    std::ofstream (paths[1].c_str ()) << "1000";
+    std::ofstream (paths[2].c_str ()) << "-1";
+    const uint64_t v2_invalid = zlink::detected_cgroup_memory_limit_bytes (
+      process.c_str (), root, 1000);
+    std::ofstream (process.c_str ()) << "7:cpu,memory:/parent/leaf\n";
+    const uint64_t v1_parent = zlink::detected_cgroup_memory_limit_bytes (
+      process.c_str (), root, 1000);
+    std::ofstream (paths[5].c_str ()) << "150";
+    const uint64_t v1_leaf = zlink::detected_cgroup_memory_limit_bytes (
+      process.c_str (), root, 1000);
+    std::ofstream (process.c_str ()) << "7:cpu:/parent/leaf\n";
+    const uint64_t no_memory = zlink::detected_cgroup_memory_limit_bytes (
+      process.c_str (), root, 1000);
+    for (size_t i = 0; i != 6; ++i)
+        unlink (paths[i].c_str ());
+    unlink (process.c_str ());
+    rmdir ((base + "/parent/leaf").c_str ());
+    rmdir ((base + "/parent").c_str ());
+    rmdir ((base + "/memory/parent/leaf").c_str ());
+    rmdir ((base + "/memory/parent").c_str ());
+    rmdir ((base + "/memory").c_str ());
+    rmdir (root);
+    TEST_ASSERT_EQUAL_UINT64 (400, v2_parent);
+    TEST_ASSERT_EQUAL_UINT64 (200, v2_leaf);
+    TEST_ASSERT_EQUAL_UINT64 (900, v2_invalid);
+    TEST_ASSERT_EQUAL_UINT64 (300, v1_parent);
+    TEST_ASSERT_EQUAL_UINT64 (150, v1_leaf);
+    TEST_ASSERT_EQUAL_UINT64 (0, no_memory);
+}
+#endif
 void set_zero_linger (zlink::socket_base_t *socket_)
 {
     TEST_ASSERT_NOT_NULL (socket_);
@@ -140,6 +205,9 @@ void test_ctx_control_runtime_bootstraps_runtime_resources_once ()
 extern "C" int main ()
 {
     UNITY_BEGIN ();
+#if defined ZLINK_HAVE_LINUX
+    RUN_TEST (test_cgroup_memory_limit_reads_current_and_ancestors);
+#endif
     RUN_TEST (test_ctx_close_socket_and_wait_updates_socket_registry);
     RUN_TEST (test_ctx_reuses_released_socket_slot);
     RUN_TEST (test_ctx_inproc_endpoint_registry_tracks_owner);

@@ -149,8 +149,12 @@ public sealed class SpotPeerConnectorTests
         startInfo.ArgumentList.Add(projectPath);
         startInfo.ArgumentList.Add("--no-build");
         startInfo.ArgumentList.Add("--no-restore");
+        // The probe reruns this build: bin/<configuration>/<framework>.
+        var outputDirectory = new DirectoryInfo(AppContext.BaseDirectory);
+        startInfo.ArgumentList.Add("--configuration");
+        startInfo.ArgumentList.Add(outputDirectory.Parent!.Name);
         startInfo.ArgumentList.Add("--framework");
-        startInfo.ArgumentList.Add(new DirectoryInfo(AppContext.BaseDirectory).Name);
+        startInfo.ArgumentList.Add(outputDirectory.Name);
         startInfo.ArgumentList.Add("--filter");
         startInfo.ArgumentList.Add($"FullyQualifiedName~{testName}");
         startInfo.ArgumentList.Add("--verbosity");

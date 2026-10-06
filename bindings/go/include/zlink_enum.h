@@ -24,7 +24,6 @@ typedef enum zlink_ctx_option_t
     /* uint64_t bytes; use zlink_ctx_set_data()/zlink_ctx_get_data(). */
     ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES = 19,
     /* uint64_t bytes; use zlink_ctx_set_data()/zlink_ctx_get_data(). */
-    ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES = 20,
     /* uint64_t bytes; use zlink_ctx_set_data()/zlink_ctx_get_data(). */
     ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES = 21
 } zlink_ctx_option_t;

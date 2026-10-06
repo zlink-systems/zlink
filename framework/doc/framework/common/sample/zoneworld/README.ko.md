@@ -100,40 +100,41 @@ store는 resource 표에서 설명하며 이동·publish 시간 순서는 §7 se
   `zoneworld.player`), zone Channel과 report channel을 등록한다. 모든 언어가 이 canonical
   stable type 문자열을 동일하게 등록한다(actorJoin은 stable type을 wire에 싣지 않고 Location
   Store authority row로 해석하므로 이름이 갈리면 cross-language join이 실패한다).
-- 각 ZoneNode는 Zone Spot capacity를 2로 선언한다. 네 zone은 capacity에 의해 두 node에
-  2/2로 분산되며, 2x2 격자의 어떤 2/2 분할도 서로 다른 owner의 인접 zone pair를 보장한다.
-  runner는 zone→NodeId를 가정하지 않고 Ops probe로 실제 owner 배치를 발견해 cross-owner
-  경계를 선택한다. fixture나 test가 특정 zone을 특정 NodeId에 고정 배치하는 것은 금지한다.
-  각 ZoneNode의 bootstrap은 첫 zone을 claim한 뒤 두 번째 claim에서 **그 인접 zone을 우선**
-  한다(연속영역 선호). 이로써 2/2 분할이 항상 두 연속 영역이 되어 cross-owner 인접쌍과
-  same-owner 인접쌍(ZW-E4의 전제)이 모두 결정적으로 존재한다 — 대각 분할({nw,se}/{ne,sw})은
-  same-owner 인접쌍이 없어 E4를 불충족으로 만들므로 배제한다. 선호는 claim 시도 순서일 뿐
-  owner 계산이 아니며, placement 판정은 여전히 Framework capacity가 소유한다.
+- 두 ZoneNode는 Zone Spot capacity를 각각 1과 3으로 선언한다. 두 node는 같은 Zone Spot·Player
+  Actor capability를 제공한다. 네 zone이
+  모두 Ready이면 capacity에 의해 1/3으로 분산된다. 2x2 격자에서 세 zone을 소유한 node에는
+  same-owner 인접쌍(ZW-E4의 전제)이 있고, 단독 zone과 그 이웃 사이에는 cross-owner 인접쌍이 있다.
+  runner는 Ops probe로 실제 owner 배치를 확인하고 각 시나리오가 요구하는 인접쌍을 전체 zone
+  경계에서 선택한다. fixture나 test가 특정 zone을 특정 NodeId에 고정 배치하는 것은 금지한다.
+  bootstrap의 claim 요청 순서로 owner의 인접성을 보장하지 않는다. Zone Spot·Player Actor의 owner
+  선택과 capacity reservation은 [MeshNode §5.1·§5.2](../../spec/server/03-spot-actor/03-mesh-node.ko.md#51-weight와-capacity)를 따른다.
 - **ready 신호 문자열을 고정한다.** ZoneNode는 준비를 마치면 표준 출력에
   `topology=ready node=<NodeId> zones=<쉼표로 이은 ZoneId>`를 정확히 한 줄 낸다. zone이
   없으면 `zones=` 뒤를 비운다. runner가 이 줄을 기다려 다음 단계로 넘어가므로 언어마다
   문자열이 다르면 같은 runner 절차를 사용할 수 없다. 이 줄에 다른 field를 덧붙이지 않는다.
-- **Bootstrap은 zone 2개를 확보한 뒤에 ready를 알린다.** ZoneNode는 startup에서 claim을
-  시도하고, 자기 census가 zone 2개가 될 때까지 반복한다. 확보하기 전에 ready를 알리면
+- **최초 cold start의 Bootstrap은 선언한 capacity만큼 zone을 확보한 뒤에 ready를 알린다.** ZoneNode는 startup에서
+  claim을 시도하고, 자기 local census의 zone 수가 자신이 선언한 Zone Spot capacity와 같아질 때까지
+  반복한다. factory의 capacity 선언과 bootstrap의 준비 판정은 같은 설정값을 쓴다. runner는 두 node가
+  보고한 zone 목록에 네 ZoneId가 중복 없이 모두 있는지 확인한다. 확보하기 전에 ready를 알리면
   `ZW-C1`이 "두 ZoneNode의 Registered·Connected 각각 정확"을 단언할 때 zone을 갖지 않은
   node도 통과시켜 단언의 뜻이 달라진다. factory만 등록하고 첫 요청에서 zone Spot을 만드는
   구현은 이 조건을 만족하지 않는다.
 - **claim 재시도는 `250 ms` 간격으로 최대 `120`회다.** 다른 ZoneNode가 아직 뜨지 않아
-  capacity가 남아 있을 수 있으므로 즉시 실패하지 않고 반복한다. 120회를 모두 사용하고도 zone
-  2개를 확보하지 못하면 startup 실패로 끝낸다 — 조용히 zone 없이 ready를 알리지 않는다.
+  capacity가 남아 있을 수 있으므로 즉시 실패하지 않고 반복한다. 120회를 모두 사용하고도 선언한
+  capacity만큼 zone을 확보하지 못하면 startup 실패로 끝낸다 — 조용히 zone 없이 ready를 알리지 않는다.
   간격과 횟수를 언어마다 다르게 두면 같은 시나리오가 언어별로 다른 시점에 실패해 판정이
   갈리므로 값을 고정한다.
-- **crash 교체 process는 zone을 확보하지 않고 ready를 알린다.** §7.5가 crash replacement를
-  "새 object를 수용할 수 있게 되는 것"으로 정의하고 이전 owner object의 자동 복원을 금지하기
-  때문이다. 이 경우에만 zone 0개로 ready이며, runner가 그 의도를 명시적으로 켠다. 설정
+- **replacement 구성은 zone을 확보하지 않고 ready를 알린다.** §11.2의 정상 종료·급정지 뒤
+  재기동은 모두 이 구성을 사용한다. §7.5가 replacement를 "새 object를 수용할 수 있게 되는 것"으로
+  정의하고 이전 owner object의 자동 복원을 금지하기 때문이다. runner가 이 구성을 명시적으로 켜며,
+  최초 cold start에는 사용하지 않는다. 설정
   이름은 `allowEmptyZoneSet`으로 고정한다(각 언어의 이름 규칙을 따라 표기만 바꾼다 —
   `allow_empty_zone_set`, `allowsEmptyZoneSet`). 이 경로에서는 `attempt`가 `8`에 이르고
   census가 비어 있으면 재시도를 멈추고 ready를 알린다. 일반 startup에서는 이 경로를 쓰지
   않는다.
 - zoneworld.mesh는 ChannelName, Spot·Actor direct message와 Logical Multicast를 운반한다.
 - zoneworld.broadcast는 mesh와 독립된 classic fanout publisher/subscriber 연결이다.
-- Zone Spot·Player Actor 같은 object의 owner는 Location Store placement가 선택한다.
-  NodeId와 transport RID는 별도 domain이다.
+- NodeId와 transport RID는 별도 domain이다.
 - Client에는 Gateway와 Ops endpoint만 제공하며 ZoneNode endpoint를 노출하지 않는다.
 
 | Resource | 책임 | 준비 |
@@ -462,13 +463,13 @@ Y 방향 bot 하나를 두고, 500ms BotTickMsg마다 3칸 이동한다. 이동�
 
 | PlayerId | 시작 좌표 | 방향 | 경계 효과 |
 |---|---|---|---|
-| bot-nw-x | (10,15) | (+1,0) | X 경계 cross-node relocation |
+| bot-nw-x | (10,15) | (+1,0) | X 경계 이동(§7.2의 owner별 처리) |
 | bot-nw-y | (15,10) | (0,+1) | X 경계 없음 |
-| bot-ne-x | (90,15) | (-1,0) | X 경계 cross-node relocation |
+| bot-ne-x | (90,15) | (-1,0) | X 경계 이동(§7.2의 owner별 처리) |
 | bot-ne-y | (85,10) | (0,+1) | X 경계 없음 |
-| bot-sw-x | (10,85) | (+1,0) | X 경계 cross-node relocation |
+| bot-sw-x | (10,85) | (+1,0) | X 경계 이동(§7.2의 owner별 처리) |
 | bot-sw-y | (15,90) | (0,-1) | X 경계 없음 |
-| bot-se-x | (90,85) | (-1,0) | X 경계 cross-node relocation |
+| bot-se-x | (90,85) | (-1,0) | X 경계 이동(§7.2의 owner별 처리) |
 | bot-se-y | (85,90) | (0,-1) | X 경계 없음 |
 
 ### 7.4 Ops 관찰, announce와 maintenance
@@ -489,8 +490,7 @@ ZoneMaintenance로 거부한다. 허용 범위는 같은 zone 내부 이동뿐�
 최종 판정자이며 source/Entry cache는 terminal을 만들지 않는다. Ops는 desired state를
 maintenance store에 기록하므로 ZoneNode 재시작 뒤 같은 NodeId의 maintenance state를 복원한다.
 
-이 maintenance는 application admission desired state이며 [Host relocation flow]
-(../../spec/server/05-location-relocation/05-host-relocation-flow.ko.md)의 `Relocate(PlannedMaintenance)`를 호출하지
+이 maintenance는 application admission desired state이며 [Host relocation flow](../../spec/server/05-location-relocation/05-host-relocation-flow.ko.md)의 `Relocate(PlannedMaintenance)`를 호출하지
 않는다 — ZW-E는 Spec 30 host relocation의 검증 대상이 아니다(그 커버리지는 별도 harness가
 소유한다).
 
@@ -683,11 +683,11 @@ self-check 시나리오 ID(`ZW-*`)는 의도별 계열로 묶인다. 각 계열�
 | ZW-E1 | 기본 | SetMaintenanceReq(node,true) | 해당 NodeId만 desired state 변경, store 기록 |
 | ZW-E2 | E1 | 점검 node의 zone으로 신규 join | target OnActorJoin이 ZoneMaintenance 거부(§7.4 단독 판정) |
 | ZW-E3 | E1 | 점검 zone 내부 이동 | 허용 |
-| ZW-E4 | E1 | 점검 node의 다른 zone으로 이동 | ZoneMaintenance 거부(same-zone만 허용) |
+| ZW-E4 | 실제 owner 배치에서 고른 same-owner 인접쌍의 source zone에 player 입장, 그 owner에 E1 적용 | target zone으로 정상 MoveMsg | ZoneMaintenance 거부, source zone·좌표·membership 유지(같은 zone 내부 이동은 E3대로 허용) |
 | ZW-E5 | E1 | ZoneNode 재시작 | 같은 NodeId의 maintenance state 복원 |
 | ZW-E6 | 기본 | NodeDiagnosticsReq | 최신 zone 목록·player count·maintenance 반환 |
 | ZW-F1 | 기본 | bot 관찰 | 8 bot이 §7.3 고정 초기값·궤적으로 이동 |
-| ZW-F2 | F1 | X-bot 경계 도달 | cross-owner bot relocation 완주(binding 없음) |
+| ZW-F2 | F1, 실제 owner 배치에서 고른 cross-owner X 경계를 향해 이동하는 X-bot | 선택한 bot의 경계 도달 | cross-owner bot relocation 완주(binding 없음) |
 | ZW-F3 | F1 | bot 이동 거부 유도 | 방향 반전 |
 | ZW-F4 | F1 | client push 관찰 | bot 대상 push 부재(음성 증거) |
 | ZW-G1 | 기본 | RID 관측(probe) | `zn-<lowercase-uuid-v4>` 형식 실검사(문자열 marker 출력만으로는 불충분), 노드 간 상이 |
@@ -716,10 +716,9 @@ self-check 시나리오 ID(`ZW-*`)는 의도별 계열로 묶인다. 각 계열�
 | ZW-G4 | 급정지(abrupt) | 표의 전제가 "crash 교체(kill→start)"다 |
 
 **다시 띄운 ZoneNode는 zone을 되찾지 않는다.** §2.2가 "Ready owner 장애는 자동 replacement가
-아니다"라고 정하므로, 재기동한 process는 **zone 0개로 ready가 되는 replacement 구성**으로
-띄운다. 멈춘 방식이 정상 종료든 급정지든 같다. zone을 claim하는 것은 최초 cold start뿐이다.
+아니다"라고 정하므로, 재기동한 ZoneNode의 zone 집합과 준비 판정은 §3의 replacement 구성을 따른다.
 
-이 값을 비워 두면 재기동한 node가 zone 2개를 요구하며 claim을 반복하다 예산을 소진한다 —
+replacement 구성을 쓰지 않으면 재기동한 node가 최초 시작과 같은 수의 zone을 요구하며 claim을 반복하다 예산을 소진한다 —
 실제로 cpp 구현이 그 상태였다.
 
 **ZW-E5의 판정 연결은 ZoneNode 정지를 시작하기 전에 연다.** 순서는 다음으로 고정한다.

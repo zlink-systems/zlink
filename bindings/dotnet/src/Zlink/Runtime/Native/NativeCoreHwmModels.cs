@@ -14,7 +14,7 @@ internal unsafe struct ZlinkAutoHwmBudgetSnapshot
     public ulong BudgetGeneration;
     public ulong MeasurementEpoch;
     public ulong ConfiguredMemoryLimitBytes;
-    public ulong RuntimeMemoryLimitBytes;
+    public ulong ReservedRuntimeMemoryLimitBytes;
     public ulong ResolvedMemoryLimitBytes;
     public ulong ConfiguredCoreBudgetBytes;
     public ulong EffectiveCoreBudgetBytes;

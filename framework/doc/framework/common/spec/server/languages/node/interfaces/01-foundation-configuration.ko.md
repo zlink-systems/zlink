@@ -499,7 +499,7 @@ record를 기록한다. Message-flow observer callback, runtime error sink와 ra
 
 ## Dispatch capacity 계산 입력
 
-Node.js binding은 V8 `heap_size_limit`의 양수 유한값을 Core runtime memory hint로 전달한다. Core와
+Core와
 Application job queue profile은 기본값 `Balanced`인 독립된 enum과 계산이다. Manual job cap은
 `1..2,147,483,647`이고 생략하면 common startup CPU snapshot과 32/64/128/256 계수를 사용한다. Range
 검증에서 pressure threshold 기본값은 pause `80`, resume `60`이고, pause는 `1..100`, resume은 `0..99`의
