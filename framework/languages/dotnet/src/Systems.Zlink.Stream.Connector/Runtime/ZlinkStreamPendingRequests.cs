@@ -7,10 +7,10 @@ internal sealed class ZlinkStreamPendingRequests
     private readonly ConcurrentDictionary<ulong, PendingRequest> _pending = new();
     private long _nextRequestSeq;
 
-    public PendingRequest Create(string packetName)
+    public PendingRequest Create()
     {
         var requestSeq = NextRequestSeq();
-        var pending = new PendingRequest(requestSeq, packetName);
+        var pending = new PendingRequest(requestSeq);
         if (!_pending.TryAdd(requestSeq.Value, pending))
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ValidationFailed,
@@ -76,15 +76,13 @@ internal sealed class ZlinkStreamPendingRequests
         }
     }
 
-    internal sealed class PendingRequest(ZlinkStreamRequestSeq requestSeq, string packetName)
+    internal sealed class PendingRequest(ZlinkStreamRequestSeq requestSeq)
     {
         private readonly TaskCompletionSource<ZlinkStreamPendingCompletion> _completion = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
 
         public ZlinkStreamRequestSeq RequestSeq { get; } = requestSeq;
-
-        public string PacketName { get; } = packetName;
 
         public Task<ZlinkStreamPendingCompletion> Task => _completion.Task;
 
