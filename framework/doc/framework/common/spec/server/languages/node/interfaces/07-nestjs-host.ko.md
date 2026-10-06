@@ -138,6 +138,7 @@ export interface ZLinkNestFanoutChannelBuilder extends ZLinkNestFrameworkOptions
     routingId(routingId: string | undefined): this;
     setRoutingIdPrefix(prefix: string): this;
     setNoDrop(noDrop?: boolean): this;
+    setSendTimeout(timeoutMs: number): this;
     subscribe(topic: string): this;
     enableSubscriber(endpoint?: string | readonly string[]): this;
     addPublishHandler(packetName: string, handlerType: Type): this;
