@@ -67,11 +67,13 @@ fun main() = runBlocking {
 
     // --8<-- [start:single-actor-send]
     val singleChanged = CompletableFuture<ZLinkStreamMessage<NicknameChanged>>()
+    // --8<-- [start:typed-receive]
     val singleReceive =
         connector.on<NicknameChanged> { message ->
             singleChanged.complete(message)
             CompletableFuture.completedFuture(null)
         }
+    // --8<-- [end:typed-receive]
     connector.send(ChangeNickname("speedy")).await()
     val pushed = singleChanged.await()
     println("pushed: ${pushed.payload().nickname}, actor: ${pushed.actorId()}")

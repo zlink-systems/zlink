@@ -39,6 +39,25 @@ npm run typecheck
 이 명령은 `EngineLobbyClient.ts`만 컴파일한다. `EngineLobbyBehaviour.ts`의 `cc` import와
 scene serialization은 Cocos Creator Editor에서 확인해야 한다.
 
+## Protobuf 송수신 예시
+
+이 Engine Lobby sample의 서버와 client는 JSON을 사용한다. Protobuf 서버에 연결하는 client 예시는
+[StreamClient Protobuf tutorial](../../node/tutorial/StreamClient/README.ko.md)에 별도로 있다.
+같은 `.proto`에서 생성한 `Ping`을 보내고 push를 받으며, `Pong` 응답의 `rank`를 확인하는 예제다.
+`npm run protobuf:check`는 검증용 WebSocket peer와 함께 실행해
+`protobuf: push=hello, reply.rank=7`을 출력한다.
+
+생성 코드와 codec 등록은 [Node Protobuf 송수신 가이드](../../../doc/framework/node/guide/stream-connector/40-protobuf.ko.md)가
+설명한다. browser client는 `@zlink-systems/framework-codec-protobuf`의 package root를 사용하고,
+connector와 codec package의 버전을 맞춘다. 이 tutorial은 두 package의 `0.28.0`을 사용한다.
+서버도 같은 schema와 packet 이름으로 Protobuf를 보내야 하므로, 현재 JSON 서버에 codec만 바꾸는
+구성은 예제의 대상이 아니다. Cocos scene의 Protobuf 실행을 검증한 결과는 아니다.
+
+요청 응답은 `submitEncoded()`로 받은 뒤 생성된 응답 클래스로 `fromProto()`를 호출한다.
+`submit<Pong>()`의 타입 인자만으로는 응답 클래스가 decoder에 전달되지 않는다.
+여러 수신 타입을 handler 타입만으로 선택하는 현재 helper의 제약은
+[Protobuf codec과 타입](../../../doc/framework/node/guide/stream-connector/41-protobuf-codecs.ko.md)이 설명한다.
+
 ## Server 실행
 
 Monorepo에서는 `../Server`, mirror에서는 `zlink-engine-server`를 준비한다. Server README의

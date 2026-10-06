@@ -77,6 +77,7 @@ public final class StreamClientProgram {
         // --8<-- [start:single-actor-send]
         CompletableFuture<ZLinkStreamMessage<Contracts.NicknameChanged>> singleChanged =
                 new CompletableFuture<>();
+        // --8<-- [start:typed-receive]
         AutoCloseable singleReceive =
                 connector.on(
                         Contracts.NicknameChanged.class,
@@ -84,6 +85,7 @@ public final class StreamClientProgram {
                             singleChanged.complete(message);
                             return CompletableFuture.completedFuture(null);
                         });
+        // --8<-- [end:typed-receive]
         connector
                 .send(new Contracts.ChangeNickname("speedy"))
                 .submit()

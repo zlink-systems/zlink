@@ -27,23 +27,42 @@ title: "packet 수신 · Node/TypeScript"
 이 장은 그 큐에서 packet을 꺼내는 방법을 다룬다. 응답과 heartbeat는 이 큐를 거치지 않는다 —
 응답은 기다리는 request로 바로 이어지고, heartbeat는 연결 유지에 사용한다.
 
-## 1. handler 등록
+## 1. 타입 지정 수신과 디코딩
 
-handler가 받는 것은 payload만이 아니라 **message**다. message에는 packet 이름, decode한 payload,
-metadata가 함께 담긴다. 어떤 packet을 받을지는 payload 타입에서 정하거나 이름으로 지정한다.
+서버가 보낸 packet 이름으로 handler를 찾은 뒤, connector가 payload를 디코딩해 message에 담는다.
+message는 packet 이름, payload, metadata와 Actor ID를 함께 전달한다. bytes를 업무 타입으로 바꾸는
+역할을 맡은 객체가 codec이다. codec은 connector 생성 옵션에 하나만 등록한다.
 
-`on<T>(nameOrType, handler)`에 이름이나 payload 타입을 전달한다.
+### 1.1 받는 쪽 — 타입을 지정한 handler
 
-다음 예제는 payload 타입으로 handler를 등록한다.
+다음 코드는 tutorial의 수신 등록이다. .NET·Java·Kotlin·C++ 예제는 기존 JSON 흐름의
+`NicknameChanged`를 받고, Node 예제는 Protobuf 흐름의 생성 클래스 `Ping`을 받는다.
+각 예제의 실행 절차는 해당 tutorial README가 설명한다.
+
+<iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push.html" title="Node 고정 타입 Protobuf 수신 예제" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/stream-protobuf-push.html" target="_blank">↗ 크게 보기</a></p>
 
 ```typescript
-// TypeScript의 type은 실행 시점에 남지 않으므로 이름과 생성자를 함께 준다.
-const subscription = connector.on<LeaderboardUpdate>(
-  'leaderboard.update',
-  message => { updateBoard(message.name, message.payload.rank); },
-  LeaderboardUpdate
-);
+--8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:typed-receive"
 ```
+
+### 1.2 타입이 codec으로 전달되는 순서
+
+`on(Type, handler)`는 타입에서 packet 이름을 정하고, 그 타입으로 payload를 디코딩한다.
+이름을 명시하는 형태는 이름으로 packet을 고르면서 디코딩 타입을 별도로 지정한다.
+타입의 이름과 서버 packet 이름이 다를 때 사용하는 형태다.
+
+`on(Type, handler)`와 `on(name, handler, Type)`는 `codec.decode(payload, Type)`를 호출한다.
+`on(name, handler)`는 타입을 전달하지 않는다. `<T>`만 적으면 실행 시점의 타입 정보는 생기지 않는다.
+이름만 지정했을 때의 디코딩 결과는 등록된 codec에 달려 있다.
+
+!!! warning "Node Protobuf helper의 타입 처리"
+
+    현재 `createZlinkStreamProtobufCodec(Type)`는 생성할 때 지정한 타입만 사용한다.
+    `createZlinkStreamProtobufEnvelopeCodec`도 handler 타입을 사용자 decoder로 전달하지 않는다.
+    `on(..., Type)`만으로 여러 Protobuf 타입이 자동 선택되지는 않는다.
+    이 차이는 [#1503](https://github.com/zlink-systems/zlink/issues/1503)에서 확인 중이다.
+    현재 실행되는 예제는 [Node Protobuf 송수신](../../../node/guide/stream-connector/40-protobuf.ko.md)에 있다.
 
 ## 2. 등록 해제
 
@@ -206,3 +225,7 @@ unbind 직전에 이미 보낸 packet이 서버에 늦게 도착하면 서버는
 
 - 연결 상태와 재연결, 종료 사유 — [연결 생명주기](06-lifecycle.ko.md)
 - 수신 경로에서 나는 오류 — [오류 처리](07-error-handling.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

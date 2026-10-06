@@ -1,0 +1,84 @@
+---
+title: "Node Protobuf Codecs and Types · Node/TypeScript"
+---
+
+<!-- generated:start -->
+<!-- This file is generated from `common/guide/stream-connector/41-protobuf-codecs.en.md`. Do not edit directly.
+     Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
+<!-- generated:end -->
+
+# Node Protobuf Codecs and Types
+
+<!-- framework-adapter-nav:start -->
+[Contents](README.en.md) | [Previous: Node Protobuf Messaging](40-protobuf.en.md)
+<!-- framework-adapter-nav:end -->
+
+!!! info "After reading this chapter"
+
+    You can distinguish a fixed-type codec from an envelope codec, and packet names from decoding types.
+    Runnable code comes from the same StreamClient tutorial as [Protobuf Messaging](40-protobuf.en.md).
+
+Protobuf bytes alone do not identify their message class. They contain field numbers and values,
+but no class name such as `Ping` or `Pong`. Selecting a handler by packet name and choosing a class
+to decode the bytes are separate operations.
+
+## 1. Fixed Types and Envelopes
+
+Use `createZlinkStreamProtobufCodec(Type)` when handling one message type.
+This factory calls only the `Type.encode` and `Type.decode` selected at creation.
+Passing different constructors to handlers does not change that choice.
+
+`createZlinkStreamProtobufEnvelopeCodec(options)` is available for protocols that already use their own
+envelope format. An envelope is an outer message carrying information to distinguish message kinds.
+The factory calls `options.encode` and `options.decode`; it does not automatically register message kinds.
+
+| Surface | Where the type is selected | Current receiving behavior |
+|---|---|---|
+| `createZlinkStreamProtobufCodec(Type)` | At factory creation | Reads every payload as the same `type` |
+| `createZlinkStreamProtobufEnvelopeCodec(options)` | In the application's envelope format | Delegates to `options.decode(payload)` without forwarding the handler type |
+| `fromProto(payload, ReplyType)` | At the call | Reads an encoded payload using the supplied `ReplyType` |
+
+!!! warning "Automatic Selection Between Receiving Types"
+
+    The connector passes the type from `on(Type, handler)` or `on(name, handler, Type)` to the codec.
+    However, the two Protobuf factories above do not use that argument. The current helpers do not
+    select between distinct `.proto` messages from handler types alone.
+    This difference is being reviewed in [#1503](https://github.com/zlink-systems/zlink/issues/1503).
+
+## 2. Server Packet Names and Generated Classes
+
+A packet name is a separate name sent by the connector, not a field in the Protobuf schema.
+For type-based sending and receiving, the default name resolver uses the constructor's `name`.
+The example's `.proto` package is `tutorial`, but its packet name is `Ping`, not `tutorial.Ping`.
+
+The names match when the server handler accepts `Ping` and uses `Ping` for pushes.
+For a server name such as `player.ping`, specify it with the sending builder's
+`packetName('player.ping')` and `on('player.ping', handler, Ping)`.
+If bundling shortens constructor names, specify wire names explicitly or preserve constructor names.
+
+## 3. Request and Reply Types
+
+The constructor in `request(new Ping(...))` is used to encode the request and select its packet name.
+It does not select the reply type. The type argument in `submit<Pong>()` also does not exist at runtime.
+The current reply handling method is `submitEncoded()` followed by `fromProto(encodedReply, Pong)`.
+
+<iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-reply-en.html" title="Explicit reply type decoding" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/stream-protobuf-reply-en.html" target="_blank">↗ Open larger</a></p>
+
+```typescript title="StreamClient/protobuf.ts"
+--8<-- "framework/languages/node/tutorial/StreamClient/protobuf.ts:protobuf-request"
+```
+
+Replies correlate with requests through their sequence, so the connector does not automatically find
+a decoding type from the `Pong` packet name alone. The server and client need matching `.proto` field
+numbers and types for replies too. Reading with the wrong schema does not always fail: unknown fields
+may be ignored and default values returned.
+
+## 4. Related Documents
+
+- Code generation through execution verification — [Protobuf Messaging](40-protobuf.en.md)
+- Handler type propagation — [Receiving Packets](05-receiving.en.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

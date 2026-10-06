@@ -10,7 +10,7 @@ title: "게임 엔진 통합 · C#/.NET"
 # 게임 엔진 통합
 
 <!-- framework-adapter-nav:start -->
-[목차](README.ko.md) | [이전: Godot C#](09-godot-csharp.ko.md)
+[목차](README.ko.md) | [이전: Godot C#](09-godot-csharp.ko.md) | [다음: Node Protobuf 송수신](../../../node/guide/stream-connector/40-protobuf.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

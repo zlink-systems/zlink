@@ -84,8 +84,10 @@ int main ()
         std::promise<sc::message_t<nickname_changed_t>> single_changed;
         auto single_received = single_changed.get_future ();
         {
+            // --8<-- [start:typed-receive]
             auto single_notice = connector.on<nickname_changed_t> (
               [&] (const auto &changed) { single_changed.set_value (changed); });
+            // --8<-- [end:typed-receive]
             connector.send (change_nickname_t{"speedy"}).submit ();
             if (single_received.wait_for (options.wait_timeout) != std::future_status::ready)
                 throw std::runtime_error ("NicknameChanged was not received for p1");

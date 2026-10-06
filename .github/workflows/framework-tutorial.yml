@@ -424,6 +424,12 @@ jobs:
           npm run build
           npm run build:http-client
 
+      - name: Build and verify the Protobuf StreamClient
+        working-directory: framework/languages/node/tutorial/StreamClient
+        run: |
+          npm ci
+          npm run protobuf:check
+
       - name: Check that the documented snippet markers exist
         shell: bash
         run: |

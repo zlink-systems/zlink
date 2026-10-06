@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "고정 타입 Protobuf push",
+    "subtitle": "codec 생성 시 지정한 Ping으로 디코딩",
+    "output": "stream-protobuf-push.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      40,
+      100
+    ],
+    "cols": 4,
+    "gapX": 100,
+    "gapY": 82,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "server",
+      "type": "external",
+      "label": "server",
+      "sublabel": "Ping bytes",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "connector",
+      "type": "backend",
+      "label": "connector",
+      "sublabel": "packet: Ping",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "codec",
+      "type": "backend",
+      "label": "codec",
+      "sublabel": "fixed type: Ping",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "handler",
+      "type": "frontend",
+      "label": "handler",
+      "sublabel": "Ping instance",
+      "row": 0,
+      "col": 3
+    }
+  ],
+  "connections": [
+    {
+      "from": "server",
+      "to": "connector",
+      "variant": "default",
+      "label": "push"
+    },
+    {
+      "from": "connector",
+      "to": "codec",
+      "variant": "default",
+      "label": "decode(payload)"
+    },
+    {
+      "from": "codec",
+      "to": "handler",
+      "variant": "default",
+      "label": "message.payload"
+    }
+  ],
+  "cards": []
+}

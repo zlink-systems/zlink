@@ -4,14 +4,21 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/StreamClient/main.js"
+    "build": "npm run generate:protobuf && tsc -p tsconfig.json && node -e \"require('node:fs').cpSync('generated', 'dist/StreamClient/generated', {recursive: true})\"",
+    "start": "node dist/StreamClient/main.js",
+    "generate:protobuf": "node -e \"require('node:fs').mkdirSync('generated', {recursive: true})\" && pbjs -t static-module -w commonjs -o generated/messages.cjs messages.proto && pbts -o generated/messages.d.cts generated/messages.cjs",
+    "protobuf:check": "npm run build && node --test protobuf.test.mjs",
+    "protobuf": "node dist/StreamClient/main.js --protobuf"
   },
   "dependencies": {
-    "@zlink-systems/stream-connector": "0.28.0"
+    "@zlink-systems/framework-codec-protobuf": "0.28.0",
+    "@zlink-systems/stream-connector": "0.28.0",
+    "protobufjs": "8.8.0"
   },
   "devDependencies": {
+    "@types/node": "22.15.30",
+    "protobufjs-cli": "2.7.0",
     "typescript": "5.8.3",
-    "@types/node": "22.15.30"
+    "ws": "8.18.3"
   }
 }

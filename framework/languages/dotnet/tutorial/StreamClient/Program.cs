@@ -60,6 +60,7 @@ var singleChanged = new TaskCompletionSource<ZlinkStreamMessage<NicknameChanged>
     TaskCreationOptions.RunContinuationsAsynchronously
 );
 using (
+    // --8<-- [start:typed-receive]
     connector.On<NicknameChanged>(
         (message, _) =>
         {
@@ -67,6 +68,7 @@ using (
             return ValueTask.CompletedTask;
         }
     )
+    // --8<-- [end:typed-receive]
 )
 {
     await connector.Send(new ChangeNickname("speedy")).Async();

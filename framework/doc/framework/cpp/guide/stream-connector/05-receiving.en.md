@@ -28,22 +28,41 @@ consumes it. This chapter covers how packets leave that queue. Answers and heart
 through it — an answer goes straight to the request waiting for it, and a heartbeat serves the
 connection itself.
 
-## 1. Registering a Handler
+## 1. Typed Receiving and Decoding
 
-A handler receives a **message**, not a payload alone. The message carries the packet name, the
-decoded payload, and the metadata. Which packets it receives is decided by the payload type or by
-an explicit name.
+The connector finds a handler by the incoming packet name, decodes its payload, and places it in a
+message. A message carries the packet name, payload, metadata, and Actor ID. A codec converts
+payload bytes into an application type. One codec is configured when the connector is created.
 
-Use `on<T>(handler)` or an overload that takes a name.
+### 1.1 Receiving — Registering a Typed Handler
 
-The example below registers a handler by payload type.
+These registrations come from the tutorial. The .NET, Java, Kotlin, and C++ examples receive
+`NicknameChanged` in the existing JSON flow. The Node example receives the generated Protobuf
+class `Ping`. Each tutorial README provides the execution procedure.
+
+<iframe class="zlink-diagram" src="/common/diagrams/stream-protobuf-push-en.html" title="Node fixed-type Protobuf receiving example" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/stream-protobuf-push-en.html" target="_blank">↗ Open larger</a></p>
 
 ```cpp
-auto subscription = connector.on<leaderboard_update_t> (
-  [] (const sc::message_t<leaderboard_update_t> &message) {
-      update_board (message.packet_name, message.payload.rank);
-  });
+--8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:typed-receive"
 ```
+
+### 1.2 How the Type Reaches the Codec
+
+`on(Type, handler)` derives the packet name from the type and decodes the payload as that type.
+The named form selects packets by an explicit wire name while specifying the decoding type
+separately. This is useful when the type name differs from the server's packet name.
+
+The `T` in `on<T>(handler)` and `on<T>(name, handler)` is the decoding type.
+Generated Protobuf messages are decoded through `codec_traits<T>` using `ParseFromString`.
+
+!!! warning "Type Handling in the Node Protobuf Helpers"
+
+    Currently, `createZlinkStreamProtobufCodec(Type)` always uses the type selected at creation.
+    `createZlinkStreamProtobufEnvelopeCodec` also does not forward the handler type to the supplied decoder.
+    Registering `on(..., Type)` alone does not automatically select between Protobuf message types.
+    This difference is being reviewed in [#1503](https://github.com/zlink-systems/zlink/issues/1503).
+    [Node Protobuf Messaging](../../../node/guide/stream-connector/40-protobuf.en.md) contains the runnable example.
 
 ## 2. Releasing a Registration
 
@@ -218,3 +237,7 @@ and a one-way send is dropped.
 
 - Connection state, reconnection, close reasons — [Connection Lifecycle](06-lifecycle.en.md)
 - Errors raised on the receive path — [Error Handling](07-error-handling.en.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

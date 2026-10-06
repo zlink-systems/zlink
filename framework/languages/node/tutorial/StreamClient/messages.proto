@@ -1,0 +1,7 @@
+// --8<-- [start:protobuf-schema]
+syntax = "proto3";
+package tutorial;
+
+message Ping { string text = 1; }
+message Pong { uint32 rank = 1; }
+// --8<-- [end:protobuf-schema]

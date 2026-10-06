@@ -16,6 +16,13 @@ import {
 } from '../Shared/contracts.js';
 
 async function main(): Promise<void> {
+  if (process.argv.includes('--protobuf')) {
+    const endpoint = process.env.STREAM_PROTOBUF_ENDPOINT;
+    if (!endpoint) throw new Error('STREAM_PROTOBUF_ENDPOINT is required for --protobuf.');
+    const { runProtobuf } = await import('./protobuf.js');
+    console.log(await runProtobuf(endpoint));
+    return;
+  }
   // --8<-- [start:stream-client]
   // A game client outside the mesh. It references the connector only, never the
   // Framework, and speaks to the port the stream node opened. In Node the
