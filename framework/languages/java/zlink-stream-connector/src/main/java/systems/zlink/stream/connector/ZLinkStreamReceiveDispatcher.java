@@ -77,20 +77,22 @@ final class ZLinkStreamReceiveDispatcher {
             }
             return;
         }
-        DefaultZLinkStreamConnector.trace(
-                () ->
-                        "connector read-frame endpoint="
-                                + configuration.endpoint()
-                                + " kind="
-                                + header.kind()
-                                + " name="
-                                + header.name()
-                                + " requestSeq="
-                                + header.requestSeq()
-                                + " bytes="
-                                + decodedPayload.length
-                                + " correlation="
-                                + header.correlationId());
+        if (DefaultZLinkStreamConnector.traceEnabled()) {
+            DefaultZLinkStreamConnector.trace(
+                    () ->
+                            "connector read-frame endpoint="
+                                    + configuration.endpoint()
+                                    + " kind="
+                                    + header.kind()
+                                    + " name="
+                                    + header.name()
+                                    + " requestSeq="
+                                    + header.requestSeq()
+                                    + " bytes="
+                                    + decodedPayload.length
+                                    + " correlation="
+                                    + header.correlationId());
+        }
         if (header.kind() == ZLinkStreamWireProtocol.KIND_CONTROL) {
             dispatchControl(header, decodedPayload);
             return;
