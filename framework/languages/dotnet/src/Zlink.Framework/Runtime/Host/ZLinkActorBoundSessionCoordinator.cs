@@ -999,25 +999,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         }
         catch (ZlinkSubmitException failure)
         {
-            return failure.Result switch
-            {
-                ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkOneWaySubmitResult(
-                    ZLinkOneWaySubmitStatus.RouteNotConnected
-                ),
-                ZlinkSubmitException.ErrorCode.NotFound => new ZLinkOneWaySubmitResult(
-                    ZLinkOneWaySubmitStatus.TargetNotFound
-                ),
-                ZlinkSubmitException.ErrorCode.Terminated => new ZLinkOneWaySubmitResult(
-                    ZLinkOneWaySubmitStatus.Shutdown
-                ),
-                ZlinkSubmitException.ErrorCode.Backpressured => new ZLinkOneWaySubmitResult(
-                    ZLinkOneWaySubmitStatus.Backpressured
-                ),
-                _ => throw ZLinkRequestFailureMapper.CreateSubmitException(
-                    failure,
-                    "Actor bound-session send"
-                ),
-            };
+            return ZLinkSubmitFailureMapper.ToOneWayResult(failure, "Actor bound-session send");
         }
         catch (ObjectDisposedException)
         {

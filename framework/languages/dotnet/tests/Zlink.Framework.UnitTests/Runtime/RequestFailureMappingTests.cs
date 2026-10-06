@@ -6,6 +6,101 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RequestFailureMappingTests
 {
     [Fact]
+    public void Named_target_one_way_submit_results_agree_for_all_three_callers()
+    {
+        var cases = new[]
+        {
+            (
+                ZlinkSubmitException.ErrorCode.NotConnected,
+                ZLinkOneWaySubmitStatus.RouteNotConnected
+            ),
+            (ZlinkSubmitException.ErrorCode.NotFound, ZLinkOneWaySubmitStatus.TargetNotFound),
+            (ZlinkSubmitException.ErrorCode.Terminated, ZLinkOneWaySubmitStatus.Shutdown),
+            (ZlinkSubmitException.ErrorCode.Backpressured, ZLinkOneWaySubmitStatus.Backpressured),
+        };
+        foreach (var (code, expected) in cases)
+        {
+            var failure = new ZlinkSubmitException(code);
+            foreach (
+                var operation in new[]
+                {
+                    "Direct MeshNode send",
+                    "Direct Spot send",
+                    "Actor bound-session send",
+                }
+            )
+                Assert.Equal(
+                    expected,
+                    ZLinkSubmitFailureMapper.ToOneWayResult(failure, operation).Status
+                );
+        }
+    }
+
+    [Fact]
+    public void Select_one_changes_only_the_one_way_NotFound_meaning()
+    {
+        foreach (var code in Enum.GetValues<ZlinkSubmitException.ErrorCode>())
+        {
+            if (
+                code
+                is not (
+                    ZlinkSubmitException.ErrorCode.NotConnected
+                    or ZlinkSubmitException.ErrorCode.NotFound
+                    or ZlinkSubmitException.ErrorCode.Terminated
+                    or ZlinkSubmitException.ErrorCode.Backpressured
+                )
+            )
+                continue;
+
+            var failure = new ZlinkSubmitException(code);
+            var named = ZLinkSubmitFailureMapper.ToOneWayResult(failure, "named target");
+            var channel = ZLinkSubmitFailureMapper.ToOneWayResult(
+                failure,
+                "select-one channel",
+                selectOne: true
+            );
+            Assert.Equal(
+                code == ZlinkSubmitException.ErrorCode.NotFound
+                    ? ZLinkOneWaySubmitStatus.RouteNotConnected
+                    : named.Status,
+                channel.Status
+            );
+        }
+    }
+
+    [Fact]
+    public void Other_one_way_submit_failures_preserve_the_request_failure_exception()
+    {
+        foreach (var code in Enum.GetValues<ZlinkSubmitException.ErrorCode>())
+        {
+            if (
+                code
+                is ZlinkSubmitException.ErrorCode.Ok
+                    or ZlinkSubmitException.ErrorCode.NotConnected
+                    or ZlinkSubmitException.ErrorCode.NotFound
+                    or ZlinkSubmitException.ErrorCode.Terminated
+                    or ZlinkSubmitException.ErrorCode.Backpressured
+            )
+                continue;
+
+            var failure = new ZlinkSubmitException(code);
+            foreach (var selectOne in new[] { false, true })
+            {
+                var expected = Assert.IsType<ZLinkFrameworkException>(
+                    ZLinkRequestFailureMapper.CreateSubmitException(failure, "one-way")
+                );
+                var actual = Assert.Throws<ZLinkFrameworkException>(() =>
+                    ZLinkSubmitFailureMapper.ToOneWayResult(failure, "one-way", selectOne)
+                );
+                Assert.Equal(expected.Kind, actual.Kind);
+                Assert.Equal(expected.RetryAdvice, actual.RetryAdvice);
+                Assert.Equal(expected.Message, actual.Message);
+                Assert.Same(failure, actual.InnerException);
+            }
+        }
+    }
+
+    [Fact]
     public void Malformed_Envelope_Header_Is_A_Protocol_Error()
     {
         using var header = Message.From("{");

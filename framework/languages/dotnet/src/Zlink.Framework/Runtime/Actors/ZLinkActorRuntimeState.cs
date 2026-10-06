@@ -240,8 +240,6 @@ internal sealed class ZLinkActorRuntimeState(
         await DisposeHandlerActivationAsync().ConfigureAwait(false);
     }
 
-    private void CloseHandlerActivation() => RunState(CloseHandlerActivationCore);
-
     private void CloseHandlerActivationCore()
     {
         _handlerActivationClosed = true;
