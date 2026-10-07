@@ -189,7 +189,9 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                             MonitorEventType.CONNECTION_READY,
                                             MonitorEventType.DISCONNECTED));
                     ZLinkJavaSocketMonitor eventMonitor = monitor;
-                    Thread.ofVirtual()
+                    // Native poller waits pin a virtual-thread carrier.
+                    Thread.ofPlatform()
+                            .daemon()
                             .name("zlink-stream-monitor")
                             .start(() -> receiveMonitorEvents(eventMonitor, handler));
                     return null;
@@ -224,11 +226,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                     .ifPresent(
                             routingId -> {
                                 try {
-                                    handler.handle(
-                                            routingId,
-                                            MonitorEventType.valueOf(event.event()),
-                                            0,
-                                            event.event());
+                                    handler.handle(routingId, eventType, 0, event.event());
                                 } catch (RuntimeException failure) {
                                     LOGGER.log(
                                             Level.WARNING,
