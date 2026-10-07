@@ -1159,7 +1159,8 @@ messages.
 - [ClientServer Channel](02-glossary.en.md#clientserver-channel)'s Client/Server roles, and
   location-store registration when automatic discovery is used
 - duplicate process-local ChannelName send paths and empty ChannelName registration
-- whether application DI resolves each constructor dependency of a registered Spot, Actor, or handler to exactly one candidate (startup fails when there is none or more than one). This doesn't apply to languages where the application supplies the constructor itself
+- duplicate handler keys and missing required handlers
+- whether the constructor arguments of a registered Spot, Actor, or handler can be supplied under the application DI's declaration and selection rules (including optional, collection, and name or qualifier selection). Startup fails when a required dependency is missing or the selection is ambiguous. An explicit factory registration in which the application wholly owns object creation is excluded from this check. The check uses only registrations and constructor metadata; it doesn't run a constructor or factory or create a scoped dependency for the check. The actual lookup happens in the execution scope of §11
 - matching of channel kind and handler kind
 - location-store registration when using Object Client/Server or automatic location
   features
