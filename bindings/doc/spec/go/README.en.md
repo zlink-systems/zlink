@@ -99,10 +99,7 @@ unlimited.
 Pass the byte-valued context memory limit and Core budget, and the profile option, to Core.
 Planning, manual overrides, and admission follow [Core HWM calculation and admission](../README.en.md#hwm-calculation-and-admission).
 
-Input precedence is manual Core budget, explicit memory limit, a finite memory-
-limit hint configured in the Go runtime, then Core fallback. Setting either of
-the first two values disables automatic runtime-hint detection. The binding
-does not combine the hint with Core's hard limit. If an explicit input exceeds
+If an explicit input exceeds
 a finite hard limit Core detected, the binding preserves the existing
 configuration error corresponding to `EINVAL` and does not clamp the value.
 
@@ -196,7 +193,7 @@ the Core default; a positive value is passed unchanged as the exact byte HWM.
 If the option is supplied more than once, the last value in call order wins.
 A `MonitorStatus` exposes `SndPendingBytes` and `RcvPendingBytes` separately
 from pending-message counts. `CoreHwmBudgetSnapshot` projects ABI version/size,
-configured/runtime/resolved memory limits, configured/effective budgets,
+configured/resolved memory limits, configured/effective budgets,
 planned/applied/manual-reserved HWM, Core-queue/application/current/peak/
 provisional accounted bytes, completion current/peak/pending and total-
 messaging values, monitor/instance aggregates, application/completion queue

@@ -1257,20 +1257,16 @@ Public SPOT channel and dispatch operations are owned by [Framework API](../../.
   binding. A byte value of `0` means that the explicit memory limit or
   manual Core budget is absent. A binding does not calculate profile ratios
   or per-queue HWM values.
-- Input precedence is manual Core budget, explicit memory limit, a runtime
-  memory limit detected by the binding, then Core fallback. When the user sets
-  either of the first two values, the binding does not auto-detect a runtime
-  hint. Candidate hints are .NET GC available-memory limit, Java maximum JVM
-  heap, Node.js V8 heap limit, and a finite Go runtime memory limit. C++ and
-  Rust add no runtime hint, while Python supplies one only when a distinct VM
-  hard limit is unambiguous. A binding neither combines the hint with Core's
-  hard limit nor applies a profile ratio itself.
+- A binding does not forward managed heap limits (GC, JVM, V8, and so on) to
+  Core. Memory-input precedence and connection admission follow
+  [Core Auto HWM §2](../../../core/doc/spec/core/systems/06-auto-hwm.en.md#2-auto-hwm-budget-calculation).
+  A binding does not apply a profile ratio itself.
 - If Core detects a finite hard limit and an explicit memory limit or manual
   Core budget exceeds it, the binding preserves Core's `EINVAL` and does not
   clamp the value.
 - The context budget snapshot includes Core ABI v1 version and structure size
-  and projects this canonical range without unit conversion: configured,
-  runtime, and resolved memory limits; configured and effective Core budgets;
+  and projects this canonical range without unit conversion: configured
+  and resolved memory limits; configured and effective Core budgets;
   planned, applied, and manual-reserved HWM; Core-queue, application, current,
   peak, and provisional accounted bytes; completion current, peak, pending,
   and total-messaging values; monitor-queue and instance aggregates; active
@@ -1287,7 +1283,7 @@ Public SPOT channel and dispatch operations are owned by [Framework API](../../.
 
   ```text
   abiVersion, structSize
-  configuredMemoryLimitBytes, runtimeMemoryLimitBytes, resolvedMemoryLimitBytes
+  configuredMemoryLimitBytes, resolvedMemoryLimitBytes
   configuredCoreBudgetBytes, effectiveCoreBudgetBytes
   totalPlannedHwmBytes, totalAppliedHwmBytes, manualReservedHwmBytes
   coreQueueAccountedBytes, applicationAccountedBytes

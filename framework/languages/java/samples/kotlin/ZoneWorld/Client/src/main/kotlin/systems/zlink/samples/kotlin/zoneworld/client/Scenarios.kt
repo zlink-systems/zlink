@@ -46,6 +46,7 @@ internal object Scenarios {
         )
     val runnerDriven: Map<String, Scenario> =
         linkedMapOf(
+            "LAYOUT" to ::layout,
             "ZW-B4" to ::b4,
             "ZW-B8" to ::b8,
             "ZW-C2" to ::c2,
@@ -320,6 +321,41 @@ internal object Scenarios {
                     home.ownerNodeRid == back.ownerNodeRid,
                 "A-B-A identity and binding survive",
             )
+        }
+    }
+
+    private suspend fun layout(options: ClientOptions) {
+        val ops = Ops.create(options)
+        withResources(ops) {
+            val observed = ops.watch()
+            val zones = observed.nodes.flatMap { it.zones }
+            ensure(
+                observed.nodes.size == 2 &&
+                    zones.size == ZoneWorldSpec.zones().size &&
+                    zones.toSet() == ZoneWorldSpec.zones().toSet(),
+                "Ops must report every ZoneId exactly once",
+            )
+            observed.nodes.forEach { node ->
+                println("ops-zone-owner node=${node.nodeId} zones=${node.zones.joinToString(",")}")
+            }
+            for (sourceZone in ZoneWorldSpec.zones()) {
+                if (!ZoneWorldSpec.isWest(sourceZone)) continue
+                for (targetZone in ZoneWorldSpec.adjacentZones(sourceZone)) {
+                    if (ZoneWorldSpec.isNorth(sourceZone) != ZoneWorldSpec.isNorth(targetZone))
+                        continue
+                    val source = nodeOwning(observed, sourceZone)
+                    val target = nodeOwning(observed, targetZone)
+                    if (source != target) {
+                        val bot =
+                            ZoneWorldSpec.bots().first {
+                                it.dirX > 0 && ZoneWorldSpec.zoneOf(it.x, it.y) == sourceZone
+                            }
+                        println("ops-bot-boundary bot=${bot.id} source=$source target=$target")
+                        return@withResources
+                    }
+                }
+            }
+            error("Ops layout has no cross-owner X boundary")
         }
     }
 
@@ -767,33 +803,48 @@ internal object Scenarios {
         withResources(ops) {
             coroutineScope {
                 val nodeId = "zone-node-2"
-                // Status payloads have no incarnation token, so accept ready only after this
-                // connection observes the old node leave.
+                // Consume status in arrival order so readiness before the stop cannot be reused.
                 ops.watch()
+                val observationTimeout = Duration.ofSeconds(20)
                 val targetStopped =
                     async(start = CoroutineStart.UNDISPATCHED) {
-                        ops.connector
-                            .waitFor<Messages.NodeStatusNotify>()
-                            .where {
-                                it.payload().nodeId == nodeId &&
-                                    (!it.payload().registered || !it.payload().connected)
-                            }
-                            .timeout(Duration.ofSeconds(20))
-                            .await()
+                        val deadline = System.nanoTime() + observationTimeout.toNanos()
+                        var remaining = observationTimeout
+                        while (true) {
+                            val node =
+                                ops.connector
+                                    .waitFor<Messages.NodeStatusNotify>()
+                                    .timeout(remaining)
+                                    .await()
+                                    .payload()
+                            if (node.nodeId == nodeId && !node.connected) break
+                            remaining = Duration.ofNanos(deadline - System.nanoTime())
+                            ensure(
+                                !remaining.isNegative && !remaining.isZero,
+                                "E5 stopped status observation timed out",
+                            )
+                        }
                     }
                 println("scenario ZW-E5 restore armed")
                 targetStopped.await()
                 val replacementReady =
                     async(start = CoroutineStart.UNDISPATCHED) {
-                        ops.connector
-                            .waitFor<Messages.NodeStatusNotify>()
-                            .where {
-                                it.payload().nodeId == nodeId &&
-                                    it.payload().registered &&
-                                    it.payload().connected
-                            }
-                            .timeout(Duration.ofSeconds(20))
-                            .await()
+                        val deadline = System.nanoTime() + observationTimeout.toNanos()
+                        var remaining = observationTimeout
+                        while (true) {
+                            val node =
+                                ops.connector
+                                    .waitFor<Messages.NodeStatusNotify>()
+                                    .timeout(remaining)
+                                    .await()
+                                    .payload()
+                            if (node.nodeId == nodeId && node.registered && node.connected) break
+                            remaining = Duration.ofNanos(deadline - System.nanoTime())
+                            ensure(
+                                !remaining.isNegative && !remaining.isZero,
+                                "E5 replacement status observation timed out",
+                            )
+                        }
                     }
                 println("scenario ZW-E5 replacement waiting")
                 replacementReady.await()

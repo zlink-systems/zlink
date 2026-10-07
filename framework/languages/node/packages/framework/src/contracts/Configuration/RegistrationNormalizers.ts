@@ -21,6 +21,9 @@ import { normalizeEndpoint, parseEndpointHostPort } from './EndpointNotation';
 import {
   defaultWorkerMaxThreads,
   DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE,
+  DEFAULT_STREAM_HEARTBEAT_INTERVAL_MS,
+  DEFAULT_STREAM_HEARTBEAT_TIMEOUT_MS,
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   DEFAULT_WORKER_IDLE_TIMEOUT_MS,
   DEFAULT_WORKER_MIN_THREADS
 } from './InternalDefaults';
@@ -77,6 +80,27 @@ export function toChannelMap(
   );
 }
 
+export function normalizeStreamLiveness(
+  options: ZLinkStreamNodeOptions
+): Required<
+  Pick<ZLinkStreamNodeOptions, 'heartbeatIntervalMs' | 'heartbeatTimeoutMs' | 'idleTimeoutMs'>
+> {
+  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_STREAM_HEARTBEAT_INTERVAL_MS;
+  const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_STREAM_HEARTBEAT_TIMEOUT_MS;
+  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+  if (!Number.isFinite(heartbeatIntervalMs) || heartbeatIntervalMs <= 0)
+    throw new ZLinkConfigurationException('STREAM heartbeat interval must be positive.');
+  if (!Number.isFinite(heartbeatTimeoutMs) || heartbeatTimeoutMs <= 0)
+    throw new ZLinkConfigurationException('STREAM heartbeat timeout must be positive.');
+  if (heartbeatTimeoutMs <= heartbeatIntervalMs)
+    throw new ZLinkConfigurationException(
+      'STREAM heartbeat timeout must be greater than interval.'
+    );
+  if (!Number.isFinite(idleTimeoutMs) || idleTimeoutMs < 0)
+    throw new ZLinkConfigurationException('STREAM idle timeout must not be negative.');
+  return { heartbeatIntervalMs, heartbeatTimeoutMs, idleTimeoutMs };
+}
+
 export function toStreamNodeMap(
   streamNodes: ZLinkFrameworkRegistrationOptions['streamNodes'],
   network: ZLinkNetworkOptions
@@ -88,6 +112,7 @@ export function toStreamNodeMap(
         name,
         {
           ...normalized,
+          ...normalizeStreamLiveness(streamNode),
           maxMessageSize: streamNode.maxMessageSize ?? DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE
         }
       ];

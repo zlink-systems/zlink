@@ -31,6 +31,7 @@ import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
 import systems.zlink.framework.spots.ZLinkInstanceSpot
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext
+import systems.zlink.framework.spots.ZLinkSpotClosingContext
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler
 import systems.zlink.framework.spring.EnableZLinkFramework
@@ -183,8 +184,9 @@ class PlayerQuestSpot(
 
     // --8<-- [start:doc-gq-spot-init]
     override fun onInitialize(): CompletionStage<Void> {
-        val generation = store.markRehydrated(instanceContext.spotId())
-        if (generation > 1) {
+        val rehydrationCount = store.markRehydrated(instanceContext.spotId())
+        val generation = instanceContext.objectGeneration()
+        if (rehydrationCount > 1) {
             println(
                 "gamequest-mission replayed player=${instanceContext.spotId()} generation=$generation"
             )
@@ -197,6 +199,14 @@ class PlayerQuestSpot(
     }
 
     // --8<-- [end:doc-gq-spot-init]
+
+    override fun onClosing(context: ZLinkSpotClosingContext): CompletionStage<Void> {
+        println(
+            "gamequest-mission closing player=${instanceContext.spotId()} " +
+                "generation=${instanceContext.objectGeneration()}"
+        )
+        return CompletableFuture.completedFuture(null)
+    }
 
     fun requirePlayer(playerId: String) {
         require(playerId == instanceContext.spotId()) {

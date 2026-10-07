@@ -61,7 +61,7 @@ final class ZLinkSerialExecutionQueueTest {
                 queue.enqueueLifecycleTransition(
                         () -> {
                             committed.set(true);
-                            queue.commitLifecycleTransition();
+                            queue.commitLifecycleTransition().toCompletableFuture().join();
                             return ZLinkSerialExecutionQueue.yieldCurrent(release);
                         },
                         message -> {
@@ -119,7 +119,7 @@ final class ZLinkSerialExecutionQueueTest {
                 queue.enqueueLifecycleTransition(
                         () -> {
                             committed.set(true);
-                            queue.commitLifecycleTransition();
+                            queue.commitLifecycleTransition().toCompletableFuture().join();
                             return ZLinkSerialExecutionQueue.yieldCurrent(firstRelease)
                                     .thenCompose(
                                             ignored ->
@@ -289,7 +289,7 @@ final class ZLinkSerialExecutionQueueTest {
     @Test
     void relocationSealHoldsIngressInsteadOfClosingRejection() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
-        var seal = queue.trySealRelocation().orElseThrow();
+        var seal = queue.trySealRelocation().toCompletableFuture().join().orElseThrow();
         CompletionStage<Void> held =
                 queue.enqueueRelocatableLazyRecord(
                         () -> new byte[] {7},
@@ -298,8 +298,14 @@ final class ZLinkSerialExecutionQueueTest {
                         () -> {},
                         null);
         assertFalse(held.toCompletableFuture().isDone());
-        assertEquals(1, queue.freezeRelocationIngress(seal).orElseThrow().size());
-        assertTrue(queue.abortRelocation(seal));
+        assertEquals(
+                1,
+                queue.freezeRelocationIngress(seal)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow()
+                        .size());
+        assertTrue(queue.abortRelocation(seal).toCompletableFuture().join());
         held.toCompletableFuture().get(3, TimeUnit.SECONDS);
     }
 
@@ -571,7 +577,8 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     activeStarted.complete(null);
                     sealNow.join();
-                    sealed.complete(queue.trySealRelocation().orElseThrow());
+                    sealed.complete(
+                            queue.trySealRelocation().toCompletableFuture().join().orElseThrow());
                     return CompletableFuture.completedFuture(null);
                 },
                 null);
@@ -591,7 +598,7 @@ final class ZLinkSerialExecutionQueueTest {
 
         assertEquals(1, materializations.get());
         assertArrayEquals(new byte[] {4, 2}, seal.captured().getFirst().payload());
-        assertTrue(queue.abortRelocation(seal));
+        assertTrue(queue.abortRelocation(seal).toCompletableFuture().join());
         assertEquals(1, materializations.get());
     }
 
@@ -814,7 +821,8 @@ final class ZLinkSerialExecutionQueueTest {
         ZLinkSerialExecutionQueue queue =
                 new ZLinkSerialExecutionQueue(
                         null, ZLinkExecutionLanePolicy.generic(), 2, Duration.ofSeconds(1));
-        ZLinkSerialExecutionQueue.RelocationSeal seal = queue.trySealRelocation().orElseThrow();
+        ZLinkSerialExecutionQueue.RelocationSeal seal =
+                queue.trySealRelocation().toCompletableFuture().join().orElseThrow();
 
         CompletableFuture<Void> first =
                 queue.enqueueWithPayloadBytes(
@@ -832,7 +840,7 @@ final class ZLinkSerialExecutionQueueTest {
                         .toCompletableFuture()
                         .isCompletedExceptionally());
 
-        queue.commitRelocation(seal).orElseThrow();
+        queue.commitRelocation(seal).toCompletableFuture().join().orElseThrow();
         first.get(3, TimeUnit.SECONDS);
         lastRepresentable.get(3, TimeUnit.SECONDS);
     }
@@ -1176,7 +1184,8 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     intentStarted.complete(null);
                     sealNow.join();
-                    sealed.complete(queue.trySealRelocation().orElseThrow());
+                    sealed.complete(
+                            queue.trySealRelocation().toCompletableFuture().join().orElseThrow());
                     return CompletableFuture.completedFuture(null);
                 },
                 null);
@@ -1220,7 +1229,7 @@ final class ZLinkSerialExecutionQueueTest {
         assertEquals(List.of(), handled);
         assertEquals(2, seal.captured().size());
 
-        assertTrue(queue.abortRelocation(seal));
+        assertTrue(queue.abortRelocation(seal).toCompletableFuture().join());
         waitForSize(handled, 4);
         assertEquals(List.of("one", "two", "three", "infrastructure"), handled);
     }
@@ -1238,7 +1247,8 @@ final class ZLinkSerialExecutionQueueTest {
                 () -> {
                     intentStarted.complete(null);
                     sealNow.join();
-                    sealed.complete(queue.trySealRelocation().orElseThrow());
+                    sealed.complete(
+                            queue.trySealRelocation().toCompletableFuture().join().orElseThrow());
                     return CompletableFuture.completedFuture(null);
                 },
                 null);
@@ -1267,7 +1277,7 @@ final class ZLinkSerialExecutionQueueTest {
                         .toCompletableFuture();
 
         List<ZLinkSerialExecutionQueue.QueuedRecord> relay =
-                queue.commitRelocation(seal).orElseThrow();
+                queue.commitRelocation(seal).toCompletableFuture().join().orElseThrow();
         captured.get(3, TimeUnit.SECONDS);
         held.get(3, TimeUnit.SECONDS);
 
@@ -1293,7 +1303,8 @@ final class ZLinkSerialExecutionQueueTest {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         AtomicInteger releases = new AtomicInteger();
         AtomicReference<Boolean> ran = new AtomicReference<>(false);
-        ZLinkSerialExecutionQueue.RelocationSeal seal = queue.trySealRelocation().orElseThrow();
+        ZLinkSerialExecutionQueue.RelocationSeal seal =
+                queue.trySealRelocation().toCompletableFuture().join().orElseThrow();
         CompletableFuture<Void> held =
                 queue.enqueueRelocatable(
                                 new byte[] {7},
@@ -1305,7 +1316,8 @@ final class ZLinkSerialExecutionQueueTest {
                                 null)
                         .toCompletableFuture();
 
-        assertEquals(1, queue.commitRelocation(seal).orElseThrow().size());
+        assertEquals(
+                1, queue.commitRelocation(seal).toCompletableFuture().join().orElseThrow().size());
         held.get(3, TimeUnit.SECONDS);
         assertEquals(1, releases.get());
         assertFalse(ran.get());
@@ -1323,7 +1335,8 @@ final class ZLinkSerialExecutionQueueTest {
     @Test
     void relocationIngressContinuesHoldingAfterFreezeUntilTargetAck() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
-        ZLinkSerialExecutionQueue.RelocationSeal seal = queue.trySealRelocation().orElseThrow();
+        ZLinkSerialExecutionQueue.RelocationSeal seal =
+                queue.trySealRelocation().toCompletableFuture().join().orElseThrow();
         CompletableFuture<Void> held =
                 queue.enqueueRelocatable(
                                 new byte[] {7},
@@ -1332,7 +1345,7 @@ final class ZLinkSerialExecutionQueueTest {
                                 null)
                         .toCompletableFuture();
 
-        var frozen = queue.freezeRelocationIngress(seal).orElseThrow();
+        var frozen = queue.freezeRelocationIngress(seal).toCompletableFuture().join().orElseThrow();
         assertEquals(1, frozen.size());
         assertArrayEquals(new byte[] {7}, frozen.getFirst().payload());
         CompletableFuture<Void> suffix =
@@ -1347,11 +1360,13 @@ final class ZLinkSerialExecutionQueueTest {
                 commit =
                         systems.zlink.framework.runtime.internal.relocation
                                 .ZLinkRetainedSerialQueueCommit.retain(queue, seal)
+                                .toCompletableFuture()
+                                .join()
                                 .orElseThrow();
         assertEquals(2, commit.records().size());
         assertFalse(held.isDone());
         assertFalse(suffix.isDone());
-        var firstCut = commit.cut();
+        var firstCut = commit.cut().toCompletableFuture().join();
         CompletableFuture<Void> late =
                 queue.enqueueRelocatable(
                                 new byte[] {9},
@@ -1359,10 +1374,10 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {},
                                 null)
                         .toCompletableFuture();
-        assertFalse(commit.tryEstablishDurableCut(firstCut));
-        var durableCut = commit.cut();
+        assertFalse(commit.tryEstablishDurableCut(firstCut).toCompletableFuture().join());
+        var durableCut = commit.cut().toCompletableFuture().join();
         assertEquals(3, durableCut.records().size());
-        assertTrue(commit.tryEstablishDurableCut(durableCut));
+        assertTrue(commit.tryEstablishDurableCut(durableCut).toCompletableFuture().join());
         CompletableFuture<Void> duringActivation =
                 queue.enqueueRelocatable(
                                 new byte[] {10},
@@ -1370,11 +1385,13 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {},
                                 null)
                         .toCompletableFuture();
-        assertFalse(commit.tryFinishCapture(durableCut));
-        var finalCut = commit.cut();
+        assertFalse(commit.tryFinishCapture(durableCut).toCompletableFuture().join());
+        var finalCut = commit.cut().toCompletableFuture().join();
         assertEquals(4, finalCut.records().size());
-        assertTrue(commit.tryFinishCapture(finalCut));
-        commit.complete();
+        assertTrue(commit.tryFinishCapture(finalCut).toCompletableFuture().join());
+        commit.complete().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        commit.complete().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertFalse(commit.abort().toCompletableFuture().get(3, TimeUnit.SECONDS));
         held.get(3, TimeUnit.SECONDS);
         suffix.get(3, TimeUnit.SECONDS);
         late.get(3, TimeUnit.SECONDS);
@@ -1384,7 +1401,8 @@ final class ZLinkSerialExecutionQueueTest {
     @Test
     void relocationHoldReleasesRecordsAndMakesPostReleaseProgress() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
-        ZLinkSerialExecutionQueue.RelocationSeal seal = queue.trySealRelocation().orElseThrow();
+        ZLinkSerialExecutionQueue.RelocationSeal seal =
+                queue.trySealRelocation().toCompletableFuture().join().orElseThrow();
         List<String> handled = new CopyOnWriteArrayList<>();
 
         CompletableFuture<Void> first =
@@ -1397,7 +1415,13 @@ final class ZLinkSerialExecutionQueueTest {
                                 () -> {},
                                 null)
                         .toCompletableFuture();
-        assertEquals(1, queue.freezeRelocationIngress(seal).orElseThrow().size());
+        assertEquals(
+                1,
+                queue.freezeRelocationIngress(seal)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow()
+                        .size());
         CompletableFuture<Void> second =
                 queue.enqueueRelocatableLazyRecord(
                                 () -> new byte[] {2},
@@ -1428,7 +1452,7 @@ final class ZLinkSerialExecutionQueueTest {
                                 null)
                         .toCompletableFuture();
 
-        assertTrue(queue.abortRelocation(seal));
+        assertTrue(queue.abortRelocation(seal).toCompletableFuture().join());
         CompletableFuture.allOf(first, second, third, fourth).get(3, TimeUnit.SECONDS);
         waitForSize(handled, 4);
         assertEquals(List.of("first", "second", "third", "fourth"), handled);
@@ -1454,13 +1478,13 @@ final class ZLinkSerialExecutionQueueTest {
                         .toCompletableFuture();
 
         yieldRegistered.get(3, TimeUnit.SECONDS);
-        assertTrue(queue.trySealRelocation().isEmpty());
+        assertTrue(queue.trySealRelocation().toCompletableFuture().join().isEmpty());
         remote.complete(null);
         continuationFinished.get(3, TimeUnit.SECONDS);
         dispatch.get(3, TimeUnit.SECONDS);
         queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
 
-        assertTrue(queue.trySealRelocation().isPresent());
+        assertTrue(queue.trySealRelocation().toCompletableFuture().join().isPresent());
     }
 
     @Test
@@ -1574,8 +1598,12 @@ final class ZLinkSerialExecutionQueueTest {
                             var handle =
                                     ZLinkSerialExecutionQueue.captureCurrentActiveTurnSealHandle()
                                             .orElseThrow();
-                            var seal = queue.trySealRelocation(handle).orElseThrow();
-                            assertTrue(queue.abortRelocation(seal));
+                            var seal =
+                                    queue.trySealRelocation(handle)
+                                            .toCompletableFuture()
+                                            .join()
+                                            .orElseThrow();
+                            assertTrue(queue.abortRelocation(seal).toCompletableFuture().join());
                             return CompletableFuture.completedFuture(null);
                         },
                         null)
@@ -1749,7 +1777,8 @@ final class ZLinkSerialExecutionQueueTest {
                         .toCompletableFuture();
         queue.enqueue(
                 () -> {
-                    sealed.complete(queue.trySealRelocation().isPresent());
+                    sealed.complete(
+                            queue.trySealRelocation().toCompletableFuture().join().isPresent());
                     return CompletableFuture.completedFuture(null);
                 },
                 null);
@@ -1758,21 +1787,23 @@ final class ZLinkSerialExecutionQueueTest {
         remote.complete(null);
         dispatch.get(3, TimeUnit.SECONDS);
         queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
-        assertTrue(queue.trySealRelocation().isPresent());
+        assertTrue(queue.trySealRelocation().toCompletableFuture().join().isPresent());
     }
 
     @Test
     void relocationAbortRequiresTheExactSealReferenceAndGeneration() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
-        ZLinkSerialExecutionQueue.RelocationSeal first = queue.trySealRelocation().orElseThrow();
+        ZLinkSerialExecutionQueue.RelocationSeal first =
+                queue.trySealRelocation().toCompletableFuture().join().orElseThrow();
         var forged = new ZLinkSerialExecutionQueue.RelocationSeal(first.serial(), first.captured());
 
-        assertFalse(queue.abortRelocation(forged));
-        assertTrue(queue.abortRelocation(first));
+        assertFalse(queue.abortRelocation(forged).toCompletableFuture().join());
+        assertTrue(queue.abortRelocation(first).toCompletableFuture().join());
 
-        ZLinkSerialExecutionQueue.RelocationSeal second = queue.trySealRelocation().orElseThrow();
-        assertFalse(queue.abortRelocation(first));
-        assertTrue(queue.abortRelocation(second));
+        ZLinkSerialExecutionQueue.RelocationSeal second =
+                queue.trySealRelocation().toCompletableFuture().join().orElseThrow();
+        assertFalse(queue.abortRelocation(first).toCompletableFuture().join());
+        assertTrue(queue.abortRelocation(second).toCompletableFuture().join());
     }
 
     private static ZLinkSerialExecutionQueue batchQueue(Executor executor, Duration budget) {

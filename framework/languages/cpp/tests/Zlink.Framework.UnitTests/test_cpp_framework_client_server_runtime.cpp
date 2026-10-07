@@ -595,9 +595,40 @@ void verify_invalid_metadata_is_a_protocol_error ()
 // #1383: one server receive turn reads the queued records until the Application Job Queue
 // supply or the receive batch budget stops it. Reading one record per turn made N concurrent
 // requests wait N worker turns. The turn starts after the server socket reports POLLIN.
+void verify_empty_server_receive_turn_has_no_progress ()
+{
+    using zlink::framework::runtime::application_job_queue_configuration_t;
+    using zlink::framework::runtime::application_job_queue_t;
+    protocol::client_server_server_admission_t descriptor{
+      "empty-turn",
+      bytes ("empty-turn-server"),
+      1,
+      1,
+      100,
+      zlink::framework::runtime::mesh::service_node_state_t::serving,
+      "default",
+      16 * 1024 * 1024,
+      {}};
+    client_server::raw_client_server_server_options_t options{descriptor};
+    options.runtime_failures =
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+    auto server = std::make_shared<client_server::raw_client_server_server_t> (
+      options, std::make_shared<zlink::context_t> ());
+    auto jobs = std::make_shared<application_job_queue_t> (application_job_queue_configuration_t{});
+    auto permit = jobs->try_reserve_supply ();
+    assert (permit);
+    assert (!client_server::pump_server_transport (
+               server, std::chrono::steady_clock::now (), jobs,
+               std::make_shared<application_job_queue_t::permit_t> (std::move (*permit)))
+               .result ()
+               .value ());
+    assert (jobs->snapshot ().permits_in_use == 0);
+    server->close ();
+}
 std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
                                          std::size_t budget_messages,
-                                         std::size_t queued_records)
+                                         std::size_t queued_records,
+                                         bool seal_after_receive = false)
 {
     using zlink::framework::runtime::application_job_queue_configuration_t;
     using zlink::framework::runtime::application_job_queue_t;
@@ -674,14 +705,40 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
     auto jobs = std::make_shared<application_job_queue_t> (configuration);
     auto first = jobs->try_reserve_supply ();
     assert (first);
+    if (seal_after_receive) {
+        // A received record is still a reservation; only mailbox admission makes it a queued
+        // job. A seal between receive and admission rejects it without counting it accepted.
+        std::vector<client_server::received_application_record_t> received;
+        const auto result =
+          server
+            ->pump_one (std::chrono::steady_clock::now (),
+                        std::make_shared<application_job_queue_t::permit_t> (std::move (*first)),
+                        nullptr, &received)
+            .result ()
+            .value ();
+        assert (result == client_server::client_server_pump_result_t::application);
+        assert (received.size () == 1);
+        assert (jobs->snapshot ().queued_application_jobs == 0);
+        assert (jobs->snapshot ().permits_in_use == 1);
+        server->mailbox ().close ();
+        assert (server->enqueue_application_records (received).result ().value ()
+                == client_server::client_server_pump_result_t::backpressured);
+        assert (jobs->snapshot ().queued_application_jobs == 0);
+        assert (jobs->snapshot ().permits_in_use == 0);
+        assert (server->mailbox ().pending_messages (service_mailbox_domain_t::application) == 0);
+        server->close ();
+        return 0;
+    }
     receive_batch_budget_t budget;
     budget.max_messages = budget_messages;
     budget.max_elapsed = std::chrono::hours (1);
-    client_server::pump_server_transport (
-      server, std::chrono::steady_clock::now (), jobs,
-      std::make_shared<application_job_queue_t::permit_t> (std::move (*first)), budget)
-      .result ()
-      .value ();
+    const auto progressed =
+      client_server::pump_server_transport (
+        server, std::chrono::steady_clock::now (), jobs,
+        std::make_shared<application_job_queue_t::permit_t> (std::move (*first)), budget)
+        .result ()
+        .value ();
+    assert (progressed);
     const auto records =
       server->mailbox ().pending_messages (service_mailbox_domain_t::application);
     assert (jobs->snapshot ().queued_application_jobs == records);
@@ -708,6 +765,54 @@ void verify_server_receive_turn_reads_queued_records ()
     assert (server_receive_turn_records (64, 3, 8) == 3);
     // Neither stops it: the turn reads every queued record.
     assert (server_receive_turn_records (64, 64, 8) == 8);
+}
+
+// The runtime worker is the one waiter on its shared transport poller. A transport port that
+// shares the poller reads its socket without waiting on it, so it never meets the worker's
+// blocking wait (EBUSY).
+void verify_shared_transport_poller_has_one_waiter ()
+{
+    zlink::context_t context;
+    zlink::poller_t transport;
+    zlink::framework::runtime::eventing::runtime_wake_timer_t wake;
+    wake.attach (transport);
+    zlink::dealer_socket_t dealer (context);
+    dealer.options ().linger (0ms);
+    zlink::framework::detail::backend::raw_dealer_port_t port (dealer, {}, &transport, 3);
+    std::thread worker ([&transport] {
+        // The probe below is itself a waiter; the worker starts its wait once the probe ends.
+        for (;;) {
+            try {
+                zlink::poll_event_t event;
+                (void) transport.wait (&event, 1, 10s);
+                return;
+            }
+            catch (const std::exception &) {
+            }
+        }
+    });
+    // While the worker waits, the poller refuses any other waiter.
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    bool worker_waiting = false;
+    while (!worker_waiting && std::chrono::steady_clock::now () < deadline) {
+        try {
+            zlink::poll_event_t event;
+            (void) transport.wait (&event, 1, 0ms);
+            std::this_thread::sleep_for (1ms);
+        }
+        catch (const std::exception &) {
+            worker_waiting = true;
+        }
+    }
+    assert (worker_waiting);
+    assert (!port.try_receive ());
+    wake.signal ();
+    worker.join ();
+}
+
+void verify_seal_between_receive_and_admission_counts_no_accepted_job ()
+{
+    assert (server_receive_turn_records (64, 64, 1, true) == 0);
 }
 
 void verify_client_server_closed_reply_finishes_without_server_lane ()
@@ -1646,7 +1751,10 @@ int main ()
     verify_client_server_send_does_not_wait_on_infrastructure_worker ();
     verify_client_server_owner_gate_and_budget ();
     verify_client_server_stop_drains_budget_remainder ();
+    verify_empty_server_receive_turn_has_no_progress ();
     verify_server_receive_turn_reads_queued_records ();
+    verify_seal_between_receive_and_admission_counts_no_accepted_job ();
+    verify_shared_transport_poller_has_one_waiter ();
     verify_client_server_readiness_counts_local_ready_servers ();
     verify_network_defaults_are_deferred_until_apply ();
     verify_client_server_terminal_errors_preserve_public_boundaries ();

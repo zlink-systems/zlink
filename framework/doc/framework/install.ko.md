@@ -106,7 +106,7 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
 === "Java"
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.16.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.29.0")
     ```
 
     | 포함 패키지 | 역할 |
@@ -132,8 +132,8 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
 === "Kotlin"
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.16.0")
-    implementation("systems.zlink:zlink-framework-kotlin:0.16.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.29.0")
+    implementation("systems.zlink:zlink-framework-kotlin:0.29.0")
     ```
 
     | 포함 패키지 | 역할 |
@@ -203,7 +203,7 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
     태그를 고정하지 않으면 browser bundle과 서버 버전이 어긋난다.
 
     ```
-    https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.16.0
+    https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.29.0
     ```
 
     UPM 어댑터는 npm 패키지의 browser bundle을 담고 jslib·C# 호출 경계만 제공한다. **C# 표면은
@@ -272,7 +272,7 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
     |---|---|---|
     | `.NET` | `Zlink.Stream.Connector` | nuget.org |
     | C++ | `zlink::stream_e2e_client` — connector에 시나리오 helper를 추가한 타깃 | vcpkg · Conan · source |
-    | Java · Kotlin | `systems.zlink:zlink-stream-connector:0.16.0` | Maven Central |
+    | Java · Kotlin | `systems.zlink:zlink-stream-connector:0.29.0` | Maven Central |
     | Node.js | `@zlink-systems/stream-connector` | npm |
 
     C++만 전용 타깃을 둔다. `zlink::stream_e2e_client`는 `zlink::stream_connector`에 시나리오

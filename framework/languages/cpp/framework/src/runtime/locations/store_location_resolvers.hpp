@@ -604,13 +604,10 @@ class store_location_runtime_query_t final : public location_runtime_query_t
         output.items.reserve (static_cast<std::size_t> (page.page_size));
         do {
             const auto remaining = static_cast<std::size_t> (page.page_size) - output.items.size ();
-            auto read = co_await await_result (_store->list_authorities (
+            auto read = co_await _store->list_authorities (
               std::string (authority_key_codec_detail::prefix) + authority_kind + ":",
-              std::move (cursor), remaining));
-            if (!read.has_value ())
-                co_return co_await unavailable<location_page_t<location_object_entry_t>> (
-                  "Location Store object scan failed");
-            const auto *stored_page = std::get_if<authority_page_t> (&read.value ());
+              std::move (cursor), remaining);
+            const auto *stored_page = std::get_if<authority_page_t> (&read);
             if (stored_page == nullptr)
                 co_return co_await unavailable<location_page_t<location_object_entry_t>> (
                   "Location Store object scan cursor expired");
@@ -620,10 +617,7 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                 if (!decoded || decoded->kind != authority_kind || !matches (item.snapshot, filter))
                     continue;
                 auto projected = co_await project_object (decoded->object_id, item.snapshot);
-                if (!projected.has_value ())
-                    co_return co_await unavailable<location_page_t<location_object_entry_t>> (
-                      "Location Store owner lease lookup failed");
-                output.items.push_back (std::move (projected.value ()));
+                output.items.push_back (std::move (projected));
             }
             cursor = stored_page->next_cursor;
         } while (output.items.size () < static_cast<std::size_t> (page.page_size)
@@ -650,22 +644,16 @@ class store_location_runtime_query_t final : public location_runtime_query_t
     task_t<std::optional<location_object_entry_t>> find_object (authority_key_t key,
                                                                 std::string global_id)
     {
-        auto read = co_await await_result (_store->read_authority (std::move (key)));
-        if (!read.has_value ())
-            co_return co_await unavailable<std::optional<location_object_entry_t>> (
-              "Location Store object lookup failed");
-        const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
+        auto read = co_await _store->read_authority (std::move (key));
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
         if (snapshot == nullptr)
             co_return std::optional<location_object_entry_t>{};
         auto projected = co_await project_object (std::move (global_id), *snapshot);
-        if (!projected.has_value ())
-            co_return co_await unavailable<std::optional<location_object_entry_t>> (
-              "Location Store owner lease lookup failed");
-        co_return std::optional<location_object_entry_t>{std::move (projected.value ())};
+        co_return std::optional<location_object_entry_t>{std::move (projected)};
     }
 
-    task_t<std::optional<location_object_entry_t>> project_object (std::string global_id,
-                                                                   authority_snapshot_t snapshot)
+    task_t<location_object_entry_t> project_object (std::string global_id,
+                                                    authority_snapshot_t snapshot)
     {
         if (snapshot.allocation.state == placement_allocation_state_t::reserved) {
             co_return location_object_entry_t{.global_id = std::move (global_id),
@@ -676,17 +664,14 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                                               .state = location_object_state_t::creating,
                                               .stable_type = snapshot.allocation.stable_type};
         }
-        auto owner = co_await await_result (_store->owner_available (snapshot.owner));
-        if (!owner.has_value ())
-            co_return std::nullopt;
+        auto owner = co_await _store->owner_available (snapshot.owner);
         co_return location_object_entry_t{
           .global_id = std::move (global_id),
           .object_generation = snapshot.object_generation,
           .mesh_name = snapshot.allocation.target.mesh_name,
           .node_rid =
             zlink::routing_id_t::from (std::string (snapshot.allocation.target.node_rid.value ())),
-          .state =
-            owner.value () ? location_object_state_t::ready : location_object_state_t::unavailable,
+          .state = owner ? location_object_state_t::ready : location_object_state_t::unavailable,
           .stable_type = snapshot.allocation.stable_type};
     }
 

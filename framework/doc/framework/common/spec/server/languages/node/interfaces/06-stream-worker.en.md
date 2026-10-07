@@ -74,6 +74,8 @@ export interface ZLinkStreamNodeBuilder {
  setAdvertiseHost(advertiseHost: string): this;
  configureSocket(): ZLinkStreamSocketConfig;
  enableActorDispatch(): this;
+ setHeartbeat(intervalMs: number, timeoutMs: number): this;
+ setIdleTimeout(timeoutMs: number): this;
  setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
  registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
 }
@@ -103,6 +105,8 @@ export interface ZLinkTimerOptions {
  stopOnUnhandledException?: boolean;
 }
 ```
+
+The defaults, validation, and idle closing rule of the heartbeat interval, heartbeat timeout, and idle timeout are owned by [STREAM session §7](../../../04-session/01-stream-session.en.md#7-error-boundary).
 
 The default of `configureSocket().maxMessageSize` is `64 KiB`. The limit
 applies only to complete messages received by a StreamNode from client to

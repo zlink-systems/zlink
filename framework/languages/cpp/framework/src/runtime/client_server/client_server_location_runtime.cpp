@@ -209,13 +209,34 @@ struct client_server_location_runtime_t::worker_lane_snapshot_t
     std::vector<std::shared_ptr<raw_client_server_server_t>> servers;
     std::optional<std::chrono::steady_clock::time_point> ready_deadline;
     std::optional<mesh::service_liveness_registry_t::clock_t::time_point> next_activity;
+
+    std::optional<std::chrono::steady_clock::time_point> next_deadline () const
+    {
+        if (!ready_deadline)
+            return next_activity;
+        if (!next_activity)
+            return ready_deadline;
+        return std::min (*ready_deadline, *next_activity);
+    }
 };
 
 struct client_server_location_runtime_t::pump_task_state_t
 {
-    std::mutex mutex;
-    std::optional<result_t<void>> completion;
-    std::shared_ptr<task_t<void>> task;
+    std::shared_ptr<task_t<bool>> task;
+
+    bool needs_publication ()
+    {
+        if (!task || !task->await_ready ())
+            return false;
+        const auto &result = task->result ();
+        return !result || result.value ();
+    }
+};
+
+struct client_server_location_runtime_t::worker_request_t
+{
+    std::function<void ()> transport_turn;
+    task_completion_source_t<bool> completion;
 };
 
 struct client_server_location_runtime_t::ready_waiter_t
@@ -236,21 +257,22 @@ struct client_server_location_runtime_t::client_channel_t
     bool selector_dirty = true;
 };
 
-task_t<void>
+task_t<bool>
 pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        mesh::service_liveness_registry_t::clock_t::time_point now,
                        std::shared_ptr<application_job_queue_t> application_jobs,
                        std::shared_ptr<application_job_queue_t::permit_t> application_permit,
                        receive_batch_budget_t budget)
 {
-    (void) co_await server->drain_monitor_events_task (now);
-    std::vector<mesh::service_mailbox_record_t> application_records;
+    bool progressed = (co_await server->drain_monitor_events_task (now)) != 0;
+    std::vector<received_application_record_t> application_records;
     while (application_permit && budget.can_receive ()) {
         const auto result = co_await server->pump_one (now, std::move (application_permit), &budget,
                                                        &application_records);
         if (result == client_server_pump_result_t::no_data
             || result == client_server_pump_result_t::backpressured)
             break;
+        progressed = true;
         if (budget.exhausted ())
             break;
         if (auto next = application_jobs->try_reserve_supply ())
@@ -258,27 +280,30 @@ pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
               std::make_shared<application_job_queue_t::permit_t> (std::move (*next));
     }
     (void) co_await server->enqueue_application_records (application_records);
-    (void) co_await server->tick_liveness (now);
+    const auto tick = co_await server->tick_liveness (now);
+    co_return progressed || !tick.probes.empty () || !tick.timed_out_nodes.empty ();
 }
 
 namespace
 {
 
-task_t<void> pump_client_transport (std::shared_ptr<raw_client_server_client_t> client,
+task_t<bool> pump_client_transport (std::shared_ptr<raw_client_server_client_t> client,
                                     mesh::service_liveness_registry_t::clock_t::time_point now)
 {
-    (void) co_await client->drain_monitor_events (now);
+    bool progressed = (co_await client->drain_monitor_events (now)) != 0;
     receive_batch_budget_t budget;
     while (budget.can_receive ()) {
         const auto result = co_await client->pump_one (now);
         if (result == client_server_pump_result_t::no_data
             || result == client_server_pump_result_t::backpressured)
             break;
+        progressed = true;
         budget.account (co_await client->last_pump_bytes_task ());
         if (budget.exhausted ())
             break;
     }
-    (void) co_await client->tick_liveness (now);
+    const auto tick = co_await client->tick_liveness (now);
+    co_return progressed || !tick.probes.empty () || !tick.timed_out_nodes.empty ();
 }
 
 class client_server_observation_t final : public mesh_runtime_observation_t
@@ -334,6 +359,7 @@ client_server_location_runtime_t::client_server_location_runtime_t (
     _store (&store),
     _leases (&leases),
     _services (services),
+    _framework_runtime (&_services.get_required<framework_runtime_t> ()),
     _serializers (&serializers),
     _handlers (&handlers),
     _application_jobs (
@@ -395,11 +421,10 @@ client_server_location_runtime_t::snapshot_source_locked (const std::string &cha
                                      "ClientServer channel is not configured: " + channel_name);
 
     source.role = local_role (*configured);
-    auto services = _services;
-    source.host_state = _stop.load (std::memory_order_acquire)
+    source.host_state = _stop->load (std::memory_order_acquire)
                           ? (_transport_poller ? framework_runtime_state_t::draining
                                                : framework_runtime_state_t::stopped)
-                          : services.get_required<framework_runtime_t> ().status ().state;
+                          : _framework_runtime->status ().state;
     const auto client = _clients.find (channel_name);
     if (client != _clients.end ()) {
         source.connections.reserve (client->second->connections.size ());
@@ -601,7 +626,7 @@ void client_server_location_runtime_t::start ()
         return;
     auto owner = _locations->current_owner_token ();
 
-    _stop.store (false, std::memory_order_release);
+    _stop->store (false, std::memory_order_release);
     try {
         _lane.run_checked ([this] { _transport_poller = std::make_unique<zlink::poller_t> (); })
           .get ();
@@ -651,6 +676,7 @@ void client_server_location_runtime_t::start_server (
                                                  : std::optional<std::string> (advertise->second)};
     options.transport_poller = _transport_poller.get ();
     options.transport_poller_slot = next_transport_poller_slot ();
+    options.transport_monitor_slot = next_transport_poller_slot ();
     options.application_jobs = _application_jobs;
     options.runtime_failures = _channel_runtime.runtime_failures ();
     auto raw = std::make_shared<raw_client_server_server_t> (std::move (options),
@@ -742,62 +768,114 @@ void client_server_location_runtime_t::start_client (const channel_snapshot_t &c
 bool client_server_location_runtime_t::publish_descriptor_state (
   framework_runtime_state_t state) noexcept
 {
-    if (state != framework_runtime_state_t::draining)
-        return true;
+    return state != framework_runtime_state_t::draining || request_publication ();
+}
+
+bool client_server_location_runtime_t::republish_after_store_recovery ()
+{
+    // stop() owns descriptor removal, so a stopping runtime has nothing to republish.
+    return empty () || _stop->load (std::memory_order_acquire) || request_publication ();
+}
+
+bool client_server_location_runtime_t::request_publication () noexcept
+{
+    auto request = std::make_shared<worker_request_t> ();
+    auto result = request->completion.task ();
     {
         std::lock_guard lock (_server_progress_mutex);
-        if (_stop.load (std::memory_order_acquire))
+        if (_stop->load (std::memory_order_acquire))
             return false;
-        _descriptor_publish_result = false;
-        _descriptor_publish_pending = true;
+        _worker_requests.push_back (request);
     }
-    _server_progress_changed.notify_all ();
     _wake_timer->signal ();
 
     std::unique_lock lock (_server_progress_mutex);
     if (!runtime::infrastructure_wait_guard::condition_wait_for (
           _server_progress_changed, lock, std::chrono::seconds (5),
-          [this] { return !_descriptor_publish_pending; }, "client-server/descriptor-publish",
+          [&result] { return result.await_ready (); }, "client-server/descriptor-publish",
           runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion)) {
         return false;
     }
-    return _descriptor_publish_result;
+    return result.result () && result.result ().value ();
 }
 
-bool client_server_location_runtime_t::republish_after_store_recovery ()
+task_t<void> client_server_location_runtime_t::request_transport_turn (std::function<void ()> work)
 {
-    return publish_servers ();
+    auto request = std::make_shared<worker_request_t> ();
+    request->transport_turn = std::move (work);
+    auto result = request->completion.task ();
+    {
+        std::lock_guard lock (_server_progress_mutex);
+        _worker_requests.push_back (request);
+    }
+    _wake_timer->signal ();
+    co_await result;
+}
+
+void client_server_location_runtime_t::run_transport_turns ()
+{
+    for (;;) {
+        std::shared_ptr<worker_request_t> request;
+        {
+            std::lock_guard lock (_server_progress_mutex);
+            const auto found =
+              std::find_if (_worker_requests.begin (), _worker_requests.end (),
+                            [] (const auto &value) { return bool (value->transport_turn); });
+            if (found == _worker_requests.end ())
+                return;
+            request = std::move (*found);
+            _worker_requests.erase (found);
+        }
+        auto result = [&] {
+            try {
+                request->transport_turn ();
+                return result_t<bool>::success (true);
+            }
+            catch (const framework_exception_t &error) {
+                return result_t<bool>::failure (error.kind (), error.what ());
+            }
+            catch (const std::exception &error) {
+                return result_t<bool>::failure (framework_error_kind_t::internal_failure,
+                                                error.what ());
+            }
+        }();
+        request->completion.complete (std::move (result));
+    }
 }
 
 void client_server_location_runtime_t::run ()
 {
     auto next_reconcile = std::chrono::steady_clock::now ();
-    std::shared_ptr<task_t<void>> pending_snapshot;
-    std::shared_ptr<task_t<void>> pending_pump;
     std::shared_ptr<task_t<worker_lane_snapshot_t>> pending_worker_snapshot;
     std::shared_ptr<task_t<bool>> pending_maintenance;
     std::shared_ptr<task_t<void>> pending_reconcile;
-    std::unique_lock<std::mutex> maintenance_lock;
-    std::optional<std::chrono::steady_clock::time_point> ready_deadline;
-    std::optional<mesh::service_liveness_registry_t::clock_t::time_point> next_activity;
-    while (!_stop.load (std::memory_order_acquire) || pending_snapshot || pending_pump
-           || pending_worker_snapshot || pending_maintenance || pending_reconcile) {
+    // Requests taken by the in-flight maintenance turn; empty for a periodic turn.
+    std::vector<std::shared_ptr<worker_request_t>> serving;
+    std::optional<std::chrono::steady_clock::time_point> next_worker_deadline;
+    for (;;) {
+        // Reconcile can await registration while the worker remains the poller owner.
+        run_transport_turns ();
         if (pending_maintenance && pending_maintenance->await_ready ()) {
             auto completed = std::move (pending_maintenance);
             const auto &result = completed->result ();
             const bool published = result && result.value ();
-            const bool reconcile_after_publish = !_descriptor_publish_pending;
+            const bool reconcile_after_publish = serving.empty ();
             if (!result)
                 _locations->record_store_error ();
-            if (_descriptor_publish_pending) {
-                _descriptor_publish_result = published;
-                _descriptor_publish_pending = false;
-            }
-            maintenance_lock.unlock ();
-            if (!reconcile_after_publish)
+            if (!reconcile_after_publish) {
+                {
+                    std::lock_guard lock (_server_progress_mutex);
+                    for (const auto &request : serving)
+                        request->completion.complete (result_t<bool>::success (published));
+                }
+                serving.clear ();
                 _server_progress_changed.notify_all ();
-            if (reconcile_after_publish && result && !_stop.load (std::memory_order_acquire)) {
-                pending_reconcile = std::make_shared<task_t<void>> (reconcile_task ());
+            }
+            if (reconcile_after_publish && result && !_stop->load (std::memory_order_acquire)) {
+                pending_reconcile = std::make_shared<task_t<void>> (
+                  reconcile_task ([this] (std::function<void ()> work) {
+                      return request_transport_turn (std::move (work));
+                  }));
                 detail::observe_task_terminal (
                   *pending_reconcile,
                   [wake = _wake_timer] (const result_t<void> &) { wake->signal (); });
@@ -813,73 +891,53 @@ void client_server_location_runtime_t::run ()
             next_reconcile =
               std::chrono::steady_clock::now () + _locations->options ().polling_interval;
         }
-        if (pending_worker_snapshot && pending_worker_snapshot->await_ready ()
-            && _stop.load (std::memory_order_acquire)) {
+        if (pending_worker_snapshot && pending_worker_snapshot->await_ready ()) {
             auto completed = std::move (pending_worker_snapshot);
-            if (!completed->result ())
+            const auto &result = completed->result ();
+            if (result) {
+                next_worker_deadline = result.value ().next_deadline ();
+            } else {
                 trace_client_server_runtime_failure ("runtime-loop-error",
-                                                     completed->result ().error ()->what ());
-        }
-        if (pending_snapshot && pending_snapshot->await_ready ()) {
-            auto completed = std::move (pending_snapshot);
-            if (!completed->result ()) {
-                trace_client_server_runtime_failure ("runtime-loop-error",
-                                                     completed->result ().error ()->what ());
+                                                     result.error ()->what ());
                 _locations->record_store_error ();
             }
-        }
-        if (pending_pump && pending_pump->await_ready ()) {
-            auto completed = std::move (pending_pump);
-            if (!completed->result ()) {
-                trace_client_server_runtime_failure ("runtime-loop-error",
-                                                     completed->result ().error ()->what ());
-                _locations->record_store_error ();
-            }
-        }
-        if (_stop.load (std::memory_order_acquire)) {
-            continue;
         }
         const auto now = std::chrono::steady_clock::now ();
-        if (!pending_maintenance && !pending_reconcile && !pending_worker_snapshot
-            && !pending_pump) {
-            maintenance_lock = std::unique_lock<std::mutex> (_server_progress_mutex);
-            if (_descriptor_publish_pending || now >= next_reconcile) {
+        if (!_stop->load (std::memory_order_acquire) && !pending_maintenance && !pending_reconcile
+            && !pending_worker_snapshot) {
+            {
+                std::lock_guard lock (_server_progress_mutex);
+                serving.swap (_worker_requests);
+            }
+            if (!serving.empty () || now >= next_reconcile) {
                 _client_pump_snapshot.clear ();
                 pending_maintenance = std::make_shared<task_t<bool>> (publish_servers_task ());
                 detail::observe_task_terminal (
                   *pending_maintenance,
                   [wake = _wake_timer] (const result_t<bool> &) { wake->signal (); });
-            } else {
-                maintenance_lock.unlock ();
             }
         }
         try {
-            if (!pending_maintenance && !pending_reconcile && !pending_worker_snapshot
-                && !pending_pump) {
-                pending_worker_snapshot = std::make_shared<task_t<worker_lane_snapshot_t>> (
-                  refresh_client_pump_snapshot ());
+            if (!_stop->load (std::memory_order_acquire) && !pending_maintenance
+                && !pending_reconcile && !pending_worker_snapshot) {
+                pending_worker_snapshot =
+                  std::make_shared<task_t<worker_lane_snapshot_t>> (run_worker_turn ());
                 detail::observe_task_terminal (
                   *pending_worker_snapshot,
-                  [wake = _wake_timer] (const result_t<worker_lane_snapshot_t> &) {
-                      wake->signal ();
+                  [stop = _stop, wake = _wake_timer,
+                   deadline =
+                     std::min (next_reconcile, next_worker_deadline.value_or (
+                                                 std::chrono::steady_clock::time_point::max ()))] (
+                    const result_t<worker_lane_snapshot_t> &result) {
+                      // The worker turn is not a new input. Only an earlier deadline,
+                      // a due reconcile, failure or shutdown requires another poll turn.
+                      if (!result || stop->load (std::memory_order_acquire)
+                          || std::chrono::steady_clock::now () >= deadline
+                          || result.value ().next_deadline ().value_or (
+                               std::chrono::steady_clock::time_point::max ())
+                               < deadline)
+                          wake->signal ();
                   });
-            }
-            if (pending_worker_snapshot && pending_worker_snapshot->await_ready ()) {
-                auto completed = std::move (pending_worker_snapshot);
-                auto current = completed->result ().value ();
-                _client_pump_snapshot = std::move (current.connections);
-                ready_deadline = current.ready_deadline;
-                next_activity = current.next_activity;
-                pending_pump = std::make_shared<task_t<void>> (pump ());
-                detail::observe_task_terminal (
-                  *pending_pump,
-                  [wake = _wake_timer] (const result_t<void> &) { wake->signal (); });
-                if (!pending_snapshot) {
-                    pending_snapshot = std::make_shared<task_t<void>> (publish_snapshot_changes ());
-                    detail::observe_task_terminal (
-                      *pending_snapshot,
-                      [wake = _wake_timer] (const result_t<void> &) { wake->signal (); });
-                }
             }
         }
         catch (const std::exception &error) {
@@ -898,38 +956,42 @@ void client_server_location_runtime_t::run ()
             catch (...) {
             }
         }
-        if (_stop.load (std::memory_order_acquire))
-            continue;
-
-        auto wake_at = next_reconcile;
-        if (next_activity)
-            wake_at = std::min (wake_at, *next_activity);
-        if (ready_deadline)
-            wake_at = std::min (wake_at, *ready_deadline);
+        // The only exit. In-flight work references state that stop() releases after the
+        // join, so the worker leaves only once that work has completed.
+        const bool pending = pending_maintenance || pending_reconcile || pending_worker_snapshot;
+        if (_stop->load (std::memory_order_acquire) && !pending)
+            break;
 
         const auto after_pump = std::chrono::steady_clock::now ();
+        // In-flight work owns expired deadlines and signals when it completes.
+        // Future deadlines still bound the wait even if the turn has no new input.
+        auto wake_at = pending && next_reconcile <= after_pump
+                         ? std::chrono::steady_clock::time_point::max ()
+                         : next_reconcile;
+        if (next_worker_deadline && (!pending || *next_worker_deadline > after_pump))
+            wake_at = std::min (wake_at, *next_worker_deadline);
         if (wake_at <= after_pump || !_transport_poller)
             continue;
         try {
             zlink::poll_event_t readiness;
             const auto count = _transport_poller->wait (
-              &readiness, 1,
-              std::chrono::duration_cast<std::chrono::milliseconds> (wake_at - after_pump));
-            if (count == 1 && _wake_timer->is_event (readiness))
+              &readiness, 1, std::chrono::ceil<std::chrono::milliseconds> (wake_at - after_pump));
+            if (count == 1 && _wake_timer->is_event (readiness)) {
                 _wake_timer->consume ();
+                // Input received during a turn still needs a subsequent turn.
+                // Register on the existing task so its terminal cannot absorb that input.
+                if (pending_worker_snapshot && !pending_worker_snapshot->await_ready ())
+                    detail::observe_task_terminal (
+                      *pending_worker_snapshot,
+                      [wake = _wake_timer] (const result_t<worker_lane_snapshot_t> &) {
+                          wake->signal ();
+                      });
+            }
         }
         catch (...) {
-            if (!_stop.load (std::memory_order_acquire))
-                continue;
-            break;
+            // A failed wait ends only this wait; the next iteration still owns pending work.
         }
     }
-}
-
-bool client_server_location_runtime_t::publish_servers ()
-{
-    std::lock_guard publish_lock (_server_progress_mutex);
-    return publish_servers_task ().result ().value ();
 }
 
 task_t<bool> client_server_location_runtime_t::publish_servers_task ()
@@ -981,13 +1043,15 @@ void client_server_location_runtime_t::reconcile ()
     reconcile_task ().result ().value ();
 }
 
-task_t<void> client_server_location_runtime_t::reconcile_task ()
+task_t<void> client_server_location_runtime_t::reconcile_task (
+  raw_client_server_client_t::transport_turn_t transport_turn)
 {
     for (auto &[_, channel] : _clients)
-        co_await reconcile_channel_task (*channel);
+        co_await reconcile_channel_task (*channel, transport_turn);
 }
 
-task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_channel_t &channel)
+task_t<void> client_server_location_runtime_t::reconcile_channel_task (
+  client_channel_t &channel, const raw_client_server_client_t::transport_turn_t &transport_turn)
 {
     std::map<std::string, client_server_server_descriptor_t> desired;
     location_page_request_t page;
@@ -1065,11 +1129,13 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_ch
                                                    std::move (expected)};
         options.transport_poller = _transport_poller.get ();
         options.transport_poller_slot = next_transport_poller_slot ();
+        options.transport_monitor_slot = next_transport_poller_slot ();
         options.application_jobs = _application_jobs;
         options.runtime_failures = _channel_runtime.runtime_failures ();
+        options.control_reply_parked = [wake = _wake_timer] { wake->signal (); };
         auto raw = std::make_shared<raw_client_server_client_t> (std::move (options),
                                                                  _channel_runtime.core_context ());
-        co_await raw->start_task ();
+        co_await raw->start_task (transport_turn);
         co_await _lane.run_task ([&] {
             channel.selector_dirty = true;
             channel.connections.emplace (key, client_connection_t{descriptor, std::move (raw)});
@@ -1116,7 +1182,7 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_ch
         });
     }
     for (auto &owner : close)
-        co_await owner->close_task ();
+        co_await owner->close_task (transport_turn);
 }
 
 task_t<void> client_server_location_runtime_t::pump ()
@@ -1124,23 +1190,19 @@ task_t<void> client_server_location_runtime_t::pump ()
     /* The worker uses the same client snapshot for pumping and liveness scheduling. */
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
     const auto take_completed =
-      [] (const std::shared_ptr<pump_task_state_t> &state) -> std::optional<result_t<void>> {
-        if (!state)
+      [] (const std::shared_ptr<pump_task_state_t> &state) -> std::optional<result_t<bool>> {
+        if (!state || !state->task || !state->task->await_ready ())
             return std::nullopt;
-        std::lock_guard lock (state->mutex);
-        return state->completion;
+        return state->task->result ();
     };
-    const auto start_task = [wake = _wake_timer] (task_t<void> pending) {
-        auto state = std::make_shared<pump_task_state_t> ();
-        state->task = std::make_shared<task_t<void>> (std::move (pending));
-        detail::observe_task_terminal (*state->task, [state, wake] (const result_t<void> &result) {
-            {
-                std::lock_guard lock (state->mutex);
-                state->completion = result;
-            }
-            wake->signal ();
+    const auto observe_pump = [wake =
+                                 _wake_timer] (const std::shared_ptr<pump_task_state_t> &state) {
+        detail::observe_task_terminal (*state->task, [state, wake] (const result_t<bool> &) {
+            // No-data completion only retires this turn. Readiness, supply and
+            // deadlines own the next turn; failures and state changes need publication.
+            if (state->needs_publication ())
+                wake->signal ();
         });
-        return state;
     };
 
     _server_pump_snapshot.clear ();
@@ -1181,7 +1243,7 @@ task_t<void> client_server_location_runtime_t::pump ()
                         }
                     }
                     if (installed) {
-                        auto task = std::make_shared<task_t<void>> (pump_server_transport (
+                        auto task = std::make_shared<task_t<bool>> (pump_server_transport (
                           server.owner, now, _application_jobs,
                           std::make_shared<application_job_queue_t::permit_t> (
                             std::move (*reserved))));
@@ -1190,14 +1252,7 @@ task_t<void> client_server_location_runtime_t::pump ()
                             state->task = task;
                             _server_progress_changed.notify_all ();
                         }
-                        detail::observe_task_terminal (
-                          *task, [state, wake = _wake_timer] (const result_t<void> &result) {
-                              {
-                                  std::lock_guard state_lock (state->mutex);
-                                  state->completion = result;
-                              }
-                              wake->signal ();
-                          });
+                        observe_pump (state);
                     }
                 }
             }
@@ -1215,7 +1270,18 @@ task_t<void> client_server_location_runtime_t::pump ()
                 connection.pump_task.reset ();
             }
             if (!connection.pump_task) {
-                connection.pump_task = start_task (pump_client_transport (connection.owner, now));
+                auto state = std::make_shared<pump_task_state_t> ();
+                state->task =
+                  std::make_shared<task_t<bool>> (pump_client_transport (connection.owner, now));
+                connection.pump_task = state;
+                observe_pump (state);
+            } else {
+                // This turn's input (a parked control reply) may arrive after the busy pump
+                // read its queue. Like an in-flight worker turn, the busy pump then owns the
+                // next turn when it completes, so the input is not absorbed.
+                detail::observe_task_terminal (
+                  *connection.pump_task->task,
+                  [wake = _wake_timer] (const result_t<bool> &) { wake->signal (); });
             }
         }
         _client_pump_cursor = (start + 1) % _client_pump_snapshot.size ();
@@ -1224,7 +1290,7 @@ task_t<void> client_server_location_runtime_t::pump ()
 }
 
 task_t<client_server_location_runtime_t::worker_lane_snapshot_t>
-client_server_location_runtime_t::refresh_client_pump_snapshot ()
+client_server_location_runtime_t::run_worker_turn ()
 {
     auto snapshot = co_await _lane.run_task ([this] {
         worker_lane_snapshot_t result;
@@ -1274,6 +1340,11 @@ client_server_location_runtime_t::refresh_client_pump_snapshot ()
         }
         return true;
     });
+    _client_pump_snapshot = std::move (snapshot.connections);
+    snapshot.owners.clear ();
+    snapshot.servers.clear ();
+    co_await pump ();
+    co_await publish_snapshot_changes ();
     co_return snapshot;
 }
 
@@ -1293,7 +1364,7 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
             if (!active_claim)
                 break;
             for (const auto &record : active_claim->records) {
-                if (_stop.load (std::memory_order_acquire)) {
+                if (_stop->load (std::memory_order_acquire)) {
                     if (record.reply_token) {
                         const framework_exception_t error (
                           framework_error_kind_t::shutting_down,
@@ -1609,7 +1680,7 @@ task_t<std::shared_ptr<raw_client_server_client_t>> client_server_location_runti
 result_t<client_server_location_runtime_t::client_channel_t *>
 client_server_location_runtime_t::select_channel_locked (const std::string &channel_name)
 {
-    if (_stop.load (std::memory_order_acquire)) {
+    if (_stop->load (std::memory_order_acquire)) {
         return result_t<client_channel_t *>::failure (framework_error_kind_t::shutting_down,
                                                       "ClientServer runtime is stopping");
     }
@@ -1742,7 +1813,7 @@ bool client_server_location_runtime_t::wait_for_accepted_callbacks_until (
         for (const auto &server : servers) {
             if (!server.pump)
                 continue;
-            std::shared_ptr<task_t<void>> task;
+            std::shared_ptr<task_t<bool>> task;
             {
                 std::unique_lock lock (_server_progress_mutex);
                 if (!_server_progress_changed.wait_until (
@@ -1783,11 +1854,15 @@ void client_server_location_runtime_t::stop ()
 {
     seal_application_dispatch ();
     runtime_failure_collector_t failures;
-    const bool was_stopped = _stop.exchange (true, std::memory_order_acq_rel);
+    const bool was_stopped = _stop->exchange (true, std::memory_order_acq_rel);
     {
         std::lock_guard lock (_server_progress_mutex);
-        _descriptor_publish_result = false;
-        _descriptor_publish_pending = false;
+        std::erase_if (_worker_requests, [] (const auto &request) {
+            if (request->transport_turn)
+                return false;
+            request->completion.complete (result_t<bool>::success (false));
+            return true;
+        });
     }
     _server_progress_changed.notify_all ();
     _wake_timer->signal ();

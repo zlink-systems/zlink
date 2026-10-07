@@ -518,9 +518,9 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         }
 
         @Override
-        public Object beginIngressHold(Object preparedSpot) {
+        public CompletionStage<Object> beginIngressHold(Object preparedSpot) {
             operations.add("ingress-sealed");
-            return "ingress-hold";
+            return CompletableFuture.completedFuture("ingress-hold");
         }
 
         @Override

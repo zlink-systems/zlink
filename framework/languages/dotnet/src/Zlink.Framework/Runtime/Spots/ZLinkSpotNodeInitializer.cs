@@ -87,26 +87,9 @@ internal sealed class ZLinkSpotNodeInitializer(
                         .ConfigureAwait(false);
                     if (claim.Status != ZLinkLocationWriteStatus.Stored)
                     {
-                        if (claim.Status != ZLinkLocationWriteStatus.RejectedConflict)
-                            throw new ZLinkConfigurationException(
-                                $"MeshNode '{spotNodeRegistration.SpotNodeName}' could not "
-                                    + $"claim its descriptor: {claim.Status}."
-                            );
-                        var conflictKind = descriptor.EntrySpotId is not null
-                            ? await lifecycle
-                                .ClassifyMeshNodeClaimConflictAsync(
-                                    meshName,
-                                    nodeRoutingId,
-                                    descriptor.EntrySpotId
-                                )
-                                .ConfigureAwait(false)
-                            : ZLinkFrameworkErrorKind.AlreadyExists;
-                        throw CreateClaimFailure(
-                            spotNodeRegistration,
-                            nodeRoutingId,
-                            entrySpotId,
-                            claim.Status,
-                            conflictKind
+                        throw new ZLinkConfigurationException(
+                            $"MeshNode '{spotNodeRegistration.SpotNodeName}' could not "
+                                + $"claim its descriptor: {claim.Status}."
                         );
                     }
                     startupState = new ZLinkMeshNodeStartupState(
@@ -245,19 +228,6 @@ internal sealed class ZLinkSpotNodeInitializer(
     private static bool RequiresDescriptorClaim(ZLinkSpotNodeRegistration registration) =>
         registration.ObjectRoleSelected
         || registration.Router?.AcquisitionMode == ZLinkPeerAcquisitionMode.AutoConnect;
-
-    private static Exception CreateClaimFailure(
-        ZLinkSpotNodeRegistration registration,
-        RoutingId routingId,
-        string entrySpotId,
-        ZLinkLocationWriteStatus status,
-        ZLinkFrameworkErrorKind conflictKind
-    ) =>
-        new ZLinkFrameworkException(
-            conflictKind,
-            $"MeshNode '{registration.SpotNodeName}' could not claim RID "
-                + $"'{routingId}' with Entry Spot ID '{entrySpotId}': {status}."
-        );
 
     private static void ConnectManualPeers(
         ZLinkSpotNodeRegistration registration,

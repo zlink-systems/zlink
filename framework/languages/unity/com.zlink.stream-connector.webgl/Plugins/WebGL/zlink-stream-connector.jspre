@@ -218,6 +218,17 @@ var ZlinkStreamConnectorBundle = (() => {
   function isStreamWireCodec(value) {
     return validCodecs.has(value);
   }
+  function validateHeaderKindAndControl(kind, codec, flags) {
+    if (!isStreamWireMessageKind(kind)) {
+      throw new Error("Unknown stream message kind.");
+    }
+    if (!isStreamWireCodec(codec)) {
+      throw new Error("Unknown stream codec.");
+    }
+    if (kind === 5 /* Control */ && (codec !== 0 /* Raw */ || flags !== 0 /* None */)) {
+      throw new Error("Control packet must use raw codec and must not contain flags.");
+    }
+  }
   var UTF8_TWO_BYTE_MIN = 128;
   var UTF8_THREE_BYTE_MIN = 2048;
   var UTF16_HIGH_SURROGATE_MIN = 55296;
@@ -393,6 +404,7 @@ var ZlinkStreamConnectorBundle = (() => {
     headerFlags = hasCorrelation ? headerFlags | flags.hasCorrelationId : headerFlags & ~flags.hasCorrelationId;
     headerFlags = hasFlow ? headerFlags | flags.hasFlowId : headerFlags & ~flags.hasFlowId;
     headerFlags = hasActorSlot ? headerFlags | flags.hasActorSlot : headerFlags & ~flags.hasActorSlot;
+    validateHeaderKindAndControl(header.kind, header.codec, header.flags | headerFlags);
     const metadataBytes = hasMetadata ? encodeStreamWireMetadata(header.metadata) : new Uint8Array();
     const size = 4 + (hasRequestSeq ? UINT64_BYTES : 0) + 1 + nameBytes.length + (hasMetadata ? UINT16_BYTES + metadataBytes.length : 0) + (hasCorrelation ? 1 + correlationBytes.length : 0) + (hasFlow ? FLOW_FIELDS_BYTES : 0) + (hasActorSlot ? UINT16_BYTES : 0);
     const buffer = new Uint8Array(size);
@@ -444,6 +456,7 @@ var ZlinkStreamConnectorBundle = (() => {
     const kind = header[offset++];
     const codec = header[offset++];
     const headerFlags = header[offset++];
+    validateHeaderKindAndControl(kind, codec, headerFlags);
     const hasRequestSeq = (headerFlags & flags.hasRequestSeq) !== 0;
     const hasMetadata = (headerFlags & flags.hasMetadata) !== 0;
     const hasCorrelation = (headerFlags & flags.hasCorrelationId) !== 0;
@@ -1041,32 +1054,23 @@ var ZlinkStreamConnectorBundle = (() => {
       this.state.compress = true;
       return this;
     }
-    submit(signalOrCallback) {
-      var _a;
-      this.state.ensureNotExecuted();
-      const operation = this.connector.requestEncoded(
-        this.state.resolveMessageName(),
-        this.payload,
-        this.state.metadata,
-        this.state.compress,
-        (_a = this.state.timeoutMs) != null ? _a : this.connector.options.requestTimeoutMs,
-        typeof signalOrCallback === "function" ? void 0 : signalOrCallback,
-        this.state.actorSlot
-      );
-      if (typeof signalOrCallback === "function") {
-        operation.then(
-          (value) => this.enqueueCallback(() => signalOrCallback({ isSuccess: true, value })),
-          (error) => this.enqueueCallback(
-            () => signalOrCallback({ isSuccess: false, error: unwrapStreamError(error) })
-          )
-        );
-        return;
-      }
-      return operation.then(
+    submit(replyTypeOrSignal, signal) {
+      const replyType = typeof replyTypeOrSignal === "function" ? replyTypeOrSignal : void 0;
+      return this.submitEncoded(
+        replyType !== void 0 ? signal : replyTypeOrSignal
+      ).then(
         (value) => {
-          var _a2;
-          return ((_a2 = this.connector.options.codec) != null ? _a2 : zlinkStreamJsonCodec).decode(value);
+          var _a;
+          return ((_a = this.connector.options.codec) != null ? _a : zlinkStreamJsonCodec).decode(value, replyType);
         }
+      );
+    }
+    submitCallback(replyTypeOrCallback, callback) {
+      const operation = callback !== void 0 ? this.submit(replyTypeOrCallback) : this.submitEncoded();
+      const handler = callback != null ? callback : replyTypeOrCallback;
+      operation.then(
+        (value) => this.enqueueCallback(() => handler({ isSuccess: true, value })),
+        (error) => this.enqueueCallback(() => handler({ isSuccess: false, error: unwrapStreamError(error) }))
       );
     }
     submitEncoded(signal) {
@@ -1352,6 +1356,15 @@ var ZlinkStreamConnectorBundle = (() => {
   }
 
   // packages/stream-connector/src/Runtime/ZlinkStreamConnectorOptions.ts
+  var DEFAULT_CONNECT_TIMEOUT_MS = 5e3;
+  var DEFAULT_REQUEST_TIMEOUT_MS = 3e4;
+  var DEFAULT_WAIT_TIMEOUT_MS = 5e3;
+  var DEFAULT_HEARTBEAT_INTERVAL_MS = 1e3;
+  var DEFAULT_HEARTBEAT_TIMEOUT_MS = 5e3;
+  var DEFAULT_RECONNECT_INITIAL_DELAY_MS = 250;
+  var DEFAULT_RECONNECT_MAX_DELAY_MS = 5e3;
+  var DEFAULT_RECONNECT_BACKOFF_FACTOR = 2;
+  var DEFAULT_RECONNECT_MAX_ATTEMPTS = 3;
   function normalizeOptions(options, defaultTransportFactory) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z;
     const endpoint = options.endpoint;
@@ -1368,20 +1381,20 @@ var ZlinkStreamConnectorBundle = (() => {
     const normalized = {
       endpoint,
       transport: inferredTransport,
-      connectTimeoutMs: (_a = options.connectTimeoutMs) != null ? _a : 5e3,
-      requestTimeoutMs: (_b = options.requestTimeoutMs) != null ? _b : 3e4,
-      waitTimeoutMs: (_c = options.waitTimeoutMs) != null ? _c : 5e3,
+      connectTimeoutMs: (_a = options.connectTimeoutMs) != null ? _a : DEFAULT_CONNECT_TIMEOUT_MS,
+      requestTimeoutMs: (_b = options.requestTimeoutMs) != null ? _b : DEFAULT_REQUEST_TIMEOUT_MS,
+      waitTimeoutMs: (_c = options.waitTimeoutMs) != null ? _c : DEFAULT_WAIT_TIMEOUT_MS,
       heartbeat: {
         enabled: (_e = (_d = options.heartbeat) == null ? void 0 : _d.enabled) != null ? _e : true,
-        intervalMs: (_g = (_f = options.heartbeat) == null ? void 0 : _f.intervalMs) != null ? _g : 1e3,
-        timeoutMs: (_i = (_h = options.heartbeat) == null ? void 0 : _h.timeoutMs) != null ? _i : 5e3
+        intervalMs: (_g = (_f = options.heartbeat) == null ? void 0 : _f.intervalMs) != null ? _g : DEFAULT_HEARTBEAT_INTERVAL_MS,
+        timeoutMs: (_i = (_h = options.heartbeat) == null ? void 0 : _h.timeoutMs) != null ? _i : DEFAULT_HEARTBEAT_TIMEOUT_MS
       },
       reconnect: {
         enabled: (_k = (_j = options.reconnect) == null ? void 0 : _j.enabled) != null ? _k : true,
-        initialDelayMs: (_m = (_l = options.reconnect) == null ? void 0 : _l.initialDelayMs) != null ? _m : 250,
-        maxDelayMs: (_o = (_n = options.reconnect) == null ? void 0 : _n.maxDelayMs) != null ? _o : 5e3,
-        backoffFactor: (_q = (_p = options.reconnect) == null ? void 0 : _p.backoffFactor) != null ? _q : 2,
-        maxAttempts: ((_r = options.reconnect) == null ? void 0 : _r.maxAttempts) === void 0 ? 3 : options.reconnect.maxAttempts
+        initialDelayMs: (_m = (_l = options.reconnect) == null ? void 0 : _l.initialDelayMs) != null ? _m : DEFAULT_RECONNECT_INITIAL_DELAY_MS,
+        maxDelayMs: (_o = (_n = options.reconnect) == null ? void 0 : _n.maxDelayMs) != null ? _o : DEFAULT_RECONNECT_MAX_DELAY_MS,
+        backoffFactor: (_q = (_p = options.reconnect) == null ? void 0 : _p.backoffFactor) != null ? _q : DEFAULT_RECONNECT_BACKOFF_FACTOR,
+        maxAttempts: ((_r = options.reconnect) == null ? void 0 : _r.maxAttempts) === void 0 ? DEFAULT_RECONNECT_MAX_ATTEMPTS : options.reconnect.maxAttempts
       },
       maxSendPayloadSize: (_s = options.maxSendPayloadSize) != null ? _s : ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES,
       maxReceivePayloadSize: (_t = options.maxReceivePayloadSize) != null ? _t : ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES,
@@ -1483,8 +1496,8 @@ var ZlinkStreamConnectorBundle = (() => {
 
   // packages/stream-connector/src/Runtime/Protocol/ZlinkStreamFrameCodec.ts
   var ZlinkStreamFrameCodec = class {
-    static encode(header, payload, maxPayloadSize = ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES) {
-      validatePayload(payload.length, maxPayloadSize);
+    static encode(header, payload, maxPayloadSize) {
+      validatePayload(payload.length, maxPayloadSize != null ? maxPayloadSize : ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES);
       try {
         return encodeStreamWireFrame(header, payload);
       } catch (cause) {
@@ -1634,9 +1647,7 @@ var ZlinkStreamConnectorBundle = (() => {
     };
   }
   function validateHeaderSemantics(header) {
-    validateEnum(header.kind, header.codec);
     const hasRequestSeq = header.requestSeq !== void 0 || (header.flags & 1 /* HasRequestSeq */) !== 0;
-    const hasMetadata = header.metadata.count > 0 || (header.flags & 2 /* HasMetadata */) !== 0;
     if (header.kind === 1 /* Send */ && hasRequestSeq) {
       throw connectorError(
         "frameDecodeFailed" /* FrameDecodeFailed */,
@@ -1654,25 +1665,6 @@ var ZlinkStreamConnectorBundle = (() => {
         "frameDecodeFailed" /* FrameDecodeFailed */,
         "Error packet must use the JSON codec."
       );
-    }
-    if (header.kind === 5 /* Control */) {
-      const hasCorrelation = header.correlationId !== void 0 && header.correlationId.length > 0 || (header.flags & 8 /* HasCorrelationId */) !== 0;
-      const hasFlow = (header.flags & 16 /* HasFlowId */) !== 0;
-      const hasActorSlot = header.actorSlot !== void 0 || (header.flags & 32 /* HasActorSlot */) !== 0;
-      if (header.flags !== 0 /* None */ || hasRequestSeq || hasMetadata || hasCorrelation || hasFlow || hasActorSlot || header.codec !== 0 /* Raw */) {
-        throw connectorError(
-          "frameDecodeFailed" /* FrameDecodeFailed */,
-          "Control packet must use raw codec and must not contain flags."
-        );
-      }
-    }
-  }
-  function validateEnum(kind, codec) {
-    if (!isStreamWireMessageKind(kind)) {
-      throw connectorError("frameDecodeFailed" /* FrameDecodeFailed */, "Unknown stream message kind.");
-    }
-    if (!isStreamWireCodec(codec)) {
-      throw connectorError("frameDecodeFailed" /* FrameDecodeFailed */, "Unknown stream codec.");
     }
   }
   function validateEncodeFlags(flags) {
@@ -1941,7 +1933,8 @@ var ZlinkStreamConnectorBundle = (() => {
           cause instanceof Error ? cause.cause : void 0
         );
       }
-      const { slot, actorId } = binding;
+      const slot = binding.slot;
+      const actorId = binding.actorId;
       if (actorId.length === 0 || this.bySlot.has(slot) || this.byId.has(actorId)) {
         throw invalidControl("Actor bound identity is already in use.");
       }
@@ -2197,7 +2190,8 @@ var ZlinkStreamConnectorBundle = (() => {
             this.events.runUserCallback(queued.callback, "Connector callback failed.");
             continue;
           }
-          const { message, signal } = queued;
+          const message = queued.message;
+          const signal = queued.signal;
           const handlers = this.receiversOf(message);
           for (const handler of currentRegistrations(this.handlers.get(message.name), handlers)) {
             if (!receives(handler, message)) continue;
@@ -3064,14 +3058,14 @@ var ZlinkStreamConnectorBundle = (() => {
      *   server `session-closing` and the heartbeat timeout. Every other ending
      *   takes it from {@link closeReasonFor}.
      */
-    async disconnectForTransportFailure(error, origin, generation, reason = closeReasonFor(error)) {
+    async disconnectForTransportFailure(error, origin, generation, reason) {
       if (this.closeRequested || this.currentState === "closed" /* Closed */) {
         return;
       }
       if (origin !== void 0 && !this.isCurrentConnection(origin, generation)) {
         return;
       }
-      this.closeReasonValue = reason;
+      this.closeReasonValue = reason != null ? reason : closeReasonFor(error);
       if (this.disconnectTask !== void 0) {
         return await this.disconnectTask;
       }

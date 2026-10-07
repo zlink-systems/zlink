@@ -72,6 +72,8 @@ export interface ZLinkStreamNodeBuilder {
     setAdvertiseHost(advertiseHost: string): this;
     configureSocket(): ZLinkStreamSocketConfig;
     enableActorDispatch(): this;
+    setHeartbeat(intervalMs: number, timeoutMs: number): this;
+    setIdleTimeout(timeoutMs: number): this;
     setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
     registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
 }
@@ -101,6 +103,8 @@ export interface ZLinkTimerOptions {
     stopOnUnhandledException?: boolean;
 }
 ```
+
+Heartbeat interval·timeout과 idle timeout의 기본값, 검증과 유휴 종료 규칙은 [STREAM session §7](../../../04-session/01-stream-session.ko.md#7-오류-경계)이 정한다.
 
 `configureSocket().maxMessageSize`의 기본값은 `64 KiB`다. 이 상한은 StreamNode가
 Core STREAM에서 client→server로 받는 complete message에만 적용하며, 크기는 6-byte

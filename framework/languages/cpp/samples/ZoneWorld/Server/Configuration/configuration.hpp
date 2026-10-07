@@ -21,6 +21,7 @@ struct configuration_t
     std::string bootstrap_http_endpoint;
     std::string log_dir;
     std::optional<std::string> mesh_advertise_host;
+    int zone_capacity = 0;
     bool subscriber_only = false;
     bool disable_bots = false;
     bool allow_empty_zone_set = false;
@@ -37,6 +38,7 @@ struct configuration_t
                 section.require ("bootstrapHttpEndpoint"),
                 section.require ("logDir"),
                 section.get ("meshAdvertiseHost"),
+                std::stoi (section.get ("zoneCapacity").value_or ("0")),
                 section.get ("subscriberOnly").value_or ("false") == "true",
                 section.get ("disableBots").value_or ("false") == "true",
                 section.get ("allowEmptyZoneSet").value_or ("false") == "true",

@@ -330,7 +330,7 @@ exact interface for each language's precise spelling.
 
 | Setting | Purpose |
 | --- | --- |
-| `CoreHwmMemoryLimitBytes` | A finite process/runtime memory-limit hint forwarded for Core budget calculation |
+| `CoreHwmMemoryLimitBytes` | Positive memory limit in bytes used for Core budget calculation and connection admission. When omitted, Core uses the process/container hard limit it detects, or physical memory |
 | `CoreHwmBudgetBytes` | A positive manual Core budget that takes precedence over profile calculation |
 | `CoreHwmProfile` | The Core Auto-budget profile. The default is `Balanced` |
 

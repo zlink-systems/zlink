@@ -1,18 +1,18 @@
 {
   "schema": 1,
-  "coreVersion": "1.16.0",
+  "coreVersion": "1.17.0",
   "headers": [
     {
       "path": "include/zlink.h",
-      "sha256": "41275bc7230a56ee20a66a5ef78ee12a13e069ce96973d1c8c341b9f633af1bd"
+      "sha256": "ac9251106f4bb37bd002e0487bea8f7e6bfb3fdc3c14e9a091598689f4063393"
     },
     {
       "path": "include/zlink/common.h",
-      "sha256": "d43948dfa7f13e136ab68c3244e847cf3c931900bae19e614ef971a4afdeb53a"
+      "sha256": "adb51c1ee9004d4eee4be767a737275ee44cc384aa3c849e33a157c37c5230b4"
     },
     {
       "path": "include/zlink/core/api.h",
-      "sha256": "8a6cd736ab2bd477edd5d8845445c844682a2783b5e10b313aab5c5b76c560f1"
+      "sha256": "738532d35e039650f00c5de7c555c308c413202ed7cbb9618eb672a3b3c81904"
     },
     {
       "path": "include/zlink/eventing/api.h",
@@ -28,7 +28,7 @@
     },
     {
       "path": "include/zlink_enum.h",
-      "sha256": "4183ceeea0d80df59fb26b68cdc8e1f582dd9c14e942e9e728dcba8e5a283fa8"
+      "sha256": "e7780ad285e5e3590356616d8c9f07b4ef50a85fec9ea02451d17d31237dcbf9"
     },
     {
       "path": "include/zlink_errno.h",

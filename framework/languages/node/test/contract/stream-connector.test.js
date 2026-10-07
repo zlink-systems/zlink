@@ -1692,7 +1692,7 @@ test('Manual state and request callbacks run only in dispatch', async (t) => {
     .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
     .packetName('NoReply')
     .timeout(10)
-    .submit((result) => calls.push(result.error.code));
+    .submitCallback((result) => calls.push(result.error.code));
   t.mock.timers.tick(10);
   // The timeout has rejected the request; the macrotask boundary lets every
   // continuation of that rejection run before the check.

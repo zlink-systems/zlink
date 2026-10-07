@@ -11,22 +11,30 @@ const spec = req('./samples/ZoneWorld/dist/Shared/spec.js');
 const {BotIds, ZoneIds, NodeIds, ZoneWorldSpec} = spec;
 // A NW client sees adjacent residents inside the server's border band (Server/ZoneNode/Domain/world.ts inBorderBand).
 const bandEdge = ZoneWorldSpec.zoneSplit + ZoneWorldSpec.borderBand;
+const sampleRoot = root + '/samples/ZoneWorld';
+const transpile = source => ts.transpileModule(source, {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText;
 function loadRunBots(factory, output) {
-  let source = fs.readFileSync(root + '/samples/ZoneWorld/Client/special.ts', 'utf8');
+  let source = fs.readFileSync(sampleRoot + '/Client/special.ts', 'utf8');
   source = source.slice(0, source.lastIndexOf('main().catch')) + '\nexports.runBots = runBots;';
-  const code = ts.transpileModule(source, {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText;
-  const context = {exports: {}, console: {log: value => output.push(value)}, require: name => {
-    if (name === '@zlink-systems/stream-connector') return {
-      zlinkStreamConnectorFactory: factory, zlinkStreamDispatchMode: {Immediate: 0},
-      ZlinkStreamDispatchMode: {Immediate: 0}, zlinkStreamAssert: {ensure: (condition, message) => {if (!condition) throw Error(message);}}
-    };
-    if (name === './join-readiness') return {joinAndWaitForOwnedState: async () => ({playerId: 'player-f', zoneId: 'zone-nw', x:25, y:25, error:null})};
-    if (name === '../Server/Configuration/configuration') return {};
-    if (name.startsWith('../Shared/')) return req('./samples/ZoneWorld/dist/Shared/' + path.basename(name) + '.js');
-    return req(name);
-  }};
-  vm.runInNewContext(code, context);
-  return context.exports.runBots;
+  function loadModule(relativePath, moduleSource = fs.readFileSync(sampleRoot + '/' + relativePath, 'utf8')) {
+    const modulePath = path.join(sampleRoot, relativePath);
+    const context = {exports: {}, console: {log: value => output.push(value)}, require: name => {
+      if (name === '@zlink-systems/stream-connector') return {
+        zlinkStreamConnectorFactory: factory, zlinkStreamDispatchMode: {Immediate: 0},
+        ZlinkStreamDispatchMode: {Immediate: 0}, zlinkStreamAssert: {ensure: (condition, message) => {if (!condition) throw Error(message);}}
+      };
+      if (name === './join-readiness') return {joinAndWaitForOwnedState: async () => ({playerId: 'player-f', zoneId: 'zone-nw', x:25, y:25, error:null})};
+      if (name === '../Server/Configuration/configuration') return {};
+      if (name.startsWith('.')) {
+        const dependencyPath = path.resolve(path.dirname(modulePath), name + '.ts');
+        return loadModule(path.relative(sampleRoot, dependencyPath));
+      }
+      return req(name);
+    }};
+    vm.runInNewContext(transpile(moduleSource), context);
+    return context.exports;
+  }
+  return loadModule('Client/special.ts', source).runBots;
 }
 async function simulate(zones, phase = 7000) {
   let now = phase;

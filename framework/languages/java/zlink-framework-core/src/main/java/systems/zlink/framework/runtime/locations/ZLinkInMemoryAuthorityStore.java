@@ -202,6 +202,41 @@ final class ZLinkInMemoryAuthorityStore {
                 });
     }
 
+    CompletionStage<Boolean> releaseEndedReservation(
+            String key, String expectedStoreVersion, ZLinkStoreCancellation cancellation) {
+        return inStateLane(
+                () -> {
+                    Row current = rows.get(key);
+                    return completed(
+                            current != null
+                                    && current.storeVersion.equals(expectedStoreVersion)
+                                    && releaseEndedReservationOnLane(key, current));
+                });
+    }
+
+    private boolean releaseEndedReservationOnLane(String key, Row current) {
+        if (current.allocation.state() != ZLinkPlacementAllocationState.PENDING
+                || participantIsPrepared(key)
+                || !Arrays.equals(
+                        current.payload,
+                        ZLinkCanonicalRelocationAuthorityStateCodec.applicationPayloadOrOriginal(
+                                current.payload))) return false;
+        var descriptor =
+                descriptorLookup.find(
+                        current.allocation.descriptor(),
+                        current.allocation.descriptorLifecycleGeneration(),
+                        current.owner);
+        if (ownerLeaseIsLive.test(current.owner)
+                && descriptor != null
+                && descriptor.lifecycleGeneration()
+                        == current.allocation.descriptorLifecycleGeneration()) return false;
+        adjustPending(current.allocation, current.allocation.capacityBundle(), -1);
+        var reservation = reservations.remove(key);
+        if (reservation != null) reservation.state = State.ABORTED;
+        rows.remove(key);
+        return true;
+    }
+
     public CompletionStage<ZLinkObjectReserveResult> reserve(
             ZLinkObjectReservationRequest request, ZLinkStoreCancellation cancellation) {
         return inStateLane(
@@ -215,24 +250,17 @@ final class ZLinkInMemoryAuthorityStore {
                     Instant now = clock.instant();
                     Row current = rows.get(request.authorityKey());
                     if (current != null
+                            && releaseEndedReservationOnLane(request.authorityKey(), current))
+                        current = null;
+                    if (current != null
+                            && current.allocation.state() == ZLinkPlacementAllocationState.ACTIVE
                             && !ownerLeaseIsLive.test(current.owner)
                             && !participantIsPrepared(request.authorityKey())
                             && Arrays.equals(
                                     current.payload,
                                     ZLinkCanonicalRelocationAuthorityStateCodec
                                             .applicationPayloadOrOriginal(current.payload))) {
-                        if (current.allocation.state() == ZLinkPlacementAllocationState.ACTIVE) {
-                            adjustActive(
-                                    current.allocation, current.allocation.capacityBundle(), -1);
-                        } else {
-                            adjustPending(
-                                    current.allocation, current.allocation.capacityBundle(), -1);
-                            ReservationState abandoned =
-                                    reservations.remove(request.authorityKey());
-                            if (abandoned != null) {
-                                abandoned.state = State.ABORTED;
-                            }
-                        }
+                        adjustActive(current.allocation, current.allocation.capacityBundle(), -1);
                         rows.remove(request.authorityKey());
                         current = null;
                     }

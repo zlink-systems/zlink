@@ -104,8 +104,7 @@ Every
 delivered the same way.
 
 Without an
-explicit value, a managed binding forwards the raw runtime memory hint from the GC, JVM, or
-V8 to Core, and a native binding uses Core's container/process/OS detection.
+explicit value, Core uses the process/container hard limit it detects, or physical memory.
 
 Framework and
 the binding don't apply a profile ratio or divide the budget by connection count.
@@ -1161,6 +1160,7 @@ messages.
   location-store registration when automatic discovery is used
 - duplicate process-local ChannelName send paths and empty ChannelName registration
 - duplicate handler keys and missing required handlers
+- whether the constructor arguments of a registered Spot, Actor, or handler can be supplied under the application DI's declaration and selection rules (including optional, collection, and name or qualifier selection). Startup fails when a required dependency is missing or the selection is ambiguous. An explicit factory registration in which the application wholly owns object creation is excluded from this check. The check uses only registrations and constructor metadata; it doesn't run a constructor or factory or create a scoped dependency for the check. The actual lookup happens in the execution scope of §11
 - matching of channel kind and handler kind
 - location-store registration when using Object Client/Server or automatic location
   features

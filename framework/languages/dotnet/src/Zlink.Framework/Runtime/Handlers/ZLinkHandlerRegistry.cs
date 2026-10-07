@@ -59,13 +59,26 @@ internal sealed class ZLinkHandlerRegistry
         _publishes = Freeze(publishes);
     }
 
-    internal void PrepareInstances(IServiceProvider services) =>
-        ZLinkScopedHandlerInstanceOwner.Prepare(
+    internal void PrepareInstances(
+        IServiceProvider services,
+        ZLinkFrameworkRegistration registration
+    ) =>
+        ZLinkScopedHandlerInstanceOwner.Validate(
             services,
             _requests
                 .Values.Concat(_commands.Values)
                 .Concat(_publishes.Values)
                 .SelectMany(static endpoints => endpoints)
+                .Where(endpoint =>
+                    registration.Channels.Values.Any(channel =>
+                        IsMappedToChannel(endpoint, channel.ChannelName, channel.HandlerGroups)
+                    )
+                    || registration
+                        .SpotNodes.Values.SelectMany(static node => node.ChannelMemberships)
+                        .Any(channel =>
+                            IsMappedToChannel(endpoint, channel.ChannelName, channel.HandlerGroups)
+                        )
+                )
                 .Select(static endpoint => endpoint.DeclaringType)
         );
 

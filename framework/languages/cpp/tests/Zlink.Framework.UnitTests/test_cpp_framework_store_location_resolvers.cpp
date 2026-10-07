@@ -2684,11 +2684,36 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsExactAndPagedObj
 
 TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeObjectQueryMapsStoreFailureToUnavailable)
 {
-    test_location_repository_t store;
+    class fault_store_t final : public zlink::framework::location_store_t
+    {
+      public:
+        zlink::framework::task_t<zlink::framework::store_read_result_t>
+        read (zlink::framework::store_key_t key) override
+        {
+            if (fail)
+                throw std::runtime_error ("provider read failed");
+            return inner.read (std::move (key));
+        }
+        zlink::framework::task_t<zlink::framework::store_write_result_t>
+        write (zlink::framework::store_write_request_t request) override
+        {
+            return inner.write (std::move (request));
+        }
+        zlink::framework::task_t<zlink::framework::store_scan_result_t>
+        scan (zlink::framework::store_scan_request_t request) override
+        {
+            if (fail)
+                throw std::runtime_error ("provider scan failed");
+            return inner.scan (std::move (request));
+        }
+        bool fail = false;
+        in_memory_location_store_t inner;
+    } provider;
+    zlink::framework::runtime::provider_location_repository_t store (provider);
     location_options_t options;
     location_runtime_t runtime (store, options, "owner-query-failure");
     store_location_runtime_query_t query (store, runtime, options);
-    store.fail_authority_queries = true;
+    provider.fail = true;
 
     const auto exact =
       query.find_actor_location (zlink::framework::actor_id_t ("actor-a")).result ();
@@ -2700,6 +2725,24 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeObjectQueryMapsStoreFailureTo
         .result ();
     ASSERT_FALSE (page.has_value ());
     EXPECT_EQ (zlink::framework::framework_error_kind_t::unavailable, page.error_kind ());
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeObjectQueryPreservesFrameworkFailure)
+{
+    test_location_repository_t store;
+    location_options_t options;
+    location_runtime_t runtime (store, options, "owner-typed-query-failure");
+    store_location_runtime_query_t query (store, runtime, options);
+    store.fail_authority_queries = true;
+    const auto exact =
+      query.find_actor_location (zlink::framework::actor_id_t ("actor-a")).result ();
+    ASSERT_FALSE (exact.has_value ());
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::internal_failure, exact.error_kind ());
+    const auto page =
+      query.list_object_locations ({.object_kind = zlink::framework::location_object_kind_t::actor})
+        .result ();
+    ASSERT_FALSE (page.has_value ());
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::internal_failure, page.error_kind ());
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostPublishesAndCleansLocalPeers)

@@ -245,24 +245,36 @@ final class ZLinkSpotLifecycle {
                                                         .RELOCATED));
     }
 
-    Object beginReservedIngressHold(PreparedUserSpot prepared) {
+    CompletionStage<Object> beginReservedIngressHold(PreparedUserSpot prepared) {
         requireNewPrepared(prepared);
         return prepared.created()
                 .activation()
                 .context
                 .trySealRelocation()
-                .orElseThrow(
-                        () ->
-                                new IllegalStateException(
-                                        "reserved relocation target ingress could not be sealed"));
+                .thenApply(
+                        seal ->
+                                seal.orElseThrow(
+                                        () ->
+                                                new IllegalStateException(
+                                                        "reserved relocation target ingress could not be sealed")));
     }
 
-    void resumeReservedIngress(PreparedUserSpot prepared, Object ingressHold) {
+    CompletionStage<Void> resumeReservedIngress(PreparedUserSpot prepared, Object ingressHold) {
         requireNewPrepared(prepared);
-        if (!(ingressHold instanceof ZLinkSerialExecutionQueue.RelocationSeal seal)
-                || !prepared.created().activation().context.abortRelocation(seal)) {
-            throw new IllegalStateException("reserved relocation target ingress hold was lost");
+        if (!(ingressHold instanceof ZLinkSerialExecutionQueue.RelocationSeal seal)) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("reserved relocation target ingress hold was lost"));
         }
+        return prepared.created()
+                .activation()
+                .context
+                .abortRelocation(seal)
+                .thenAccept(
+                        restored -> {
+                            if (!restored)
+                                throw new IllegalStateException(
+                                        "reserved relocation target ingress hold was lost");
+                        });
     }
 
     CompletionStage<List<byte[]>> replayReserved(

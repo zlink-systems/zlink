@@ -6,6 +6,8 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import systems.zlink.framework.streams.ZLinkSession;
 
+import java.time.Duration;
+
 public final class StreamBuilders {
     private StreamBuilders() {}
 
@@ -62,6 +64,18 @@ public final class StreamBuilders {
         @Override
         public ZLinkStreamNodeBuilder setAdvertiseHost(String host) {
             registration.setAdvertiseHost(requireHost(host, "advertise host"));
+            return this;
+        }
+
+        @Override
+        public ZLinkStreamNodeBuilder heartbeat(Duration interval, Duration timeout) {
+            registration.heartbeat(interval, timeout);
+            return this;
+        }
+
+        @Override
+        public ZLinkStreamNodeBuilder idleTimeout(Duration timeout) {
+            registration.idleTimeout(timeout);
             return this;
         }
 

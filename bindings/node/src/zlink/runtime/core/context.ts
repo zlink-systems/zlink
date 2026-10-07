@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import { getHeapStatistics } from 'node:v8';
 import type {
   AutoHwmProfileValue,
   CoreHwmBudgetSnapshot
@@ -155,11 +154,6 @@ export class ContextBase extends NativeHandle {
 export class Context extends ContextBase {
   constructor() {
     super(configCall('context creation failed', () => requireNative().ctxNew()));
-    const heapLimitBytes = BigInt(Math.trunc(getHeapStatistics().heap_size_limit));
-    if (heapLimitBytes > 0n) {
-      setContextUInt64(this, ContextOption.AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES,
-        heapLimitBytes, 'runtimeMemoryLimitBytes');
-    }
   }
 
   shutdown(): void {

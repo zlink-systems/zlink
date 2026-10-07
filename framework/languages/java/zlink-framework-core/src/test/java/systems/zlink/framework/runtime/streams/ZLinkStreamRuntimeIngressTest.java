@@ -280,10 +280,118 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void heartbeatContractSlowConstructionPreservesApplicationIdleStart() throws Exception {
+    void configuredHeartbeatAndIdleControlLiveness() throws Exception {
+        FakeStream heartbeat = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        var runtime =
+                startDeterministic(
+                        heartbeat,
+                        clock,
+                        b -> b.heartbeat(Duration.ofSeconds(2), Duration.ofSeconds(6)));
+        heartbeat.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        clock.set(Duration.ofSeconds(1).toNanos());
+        runtime.checkSessionLiveness();
+        assertEquals(2, heartbeat.heartbeatPingAttempted.getCount());
+        clock.set(Duration.ofSeconds(2).toNanos());
+        runtime.checkSessionLiveness();
+        assertEquals(1, heartbeat.heartbeatPingAttempted.getCount());
+        clock.set(Duration.ofMillis(5999).toNanos());
+        runtime.checkSessionLiveness();
+        assertEquals(0, heartbeat.sessionClosingSends.get());
+        clock.set(Duration.ofSeconds(6).toNanos());
+        List<String> heartbeatReasons = new ArrayList<>();
+        try (AutoCloseable ignored = installClosedMetricSink(heartbeatReasons)) {
+            runtime.checkSessionLiveness();
+            assertEquals(List.of("heartbeat_timeout"), heartbeatReasons);
+        }
+        FakeStream idle = new FakeStream();
+        clock.set(0);
+        var idleRuntime =
+                startDeterministic(idle, clock, b -> b.idleTimeout(Duration.ofSeconds(3)));
+        idle.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        clock.set(Duration.ofMillis(2999).toNanos());
+        dispatchDeterministic(idleRuntime, HEARTBEAT_PONG, true);
+        idleRuntime.checkSessionLiveness();
+        assertEquals(0, idle.sessionClosingSends.get());
+        clock.set(Duration.ofSeconds(3).toNanos());
+        List<String> idleReasons = new ArrayList<>();
+        try (AutoCloseable ignored = installClosedMetricSink(idleReasons)) {
+            idleRuntime.checkSessionLiveness();
+            assertEquals(List.of("idle_timeout"), idleReasons);
+        }
+    }
+
+    @Test
+    void invalidLivenessSettingsAreConfigurationErrorsBeforeStart() {
+        var builder = new DefaultZLinkFrameworkOptions().addStreamNode("validation");
+        for (long[] pair :
+                new long[][] {
+                    {0, 5000}, {-1, 5000}, {1000, 0}, {1000, -1}, {1000, 1000}, {1000, 999}
+                }) {
+            String expected =
+                    pair[0] <= 0
+                            ? "STREAM heartbeat interval must be positive."
+                            : pair[1] <= 0
+                                    ? "STREAM heartbeat timeout must be positive."
+                                    : "STREAM heartbeat timeout must be greater than interval.";
+            var error =
+                    assertThrows(
+                            systems.zlink.framework.errors.ZLinkConfigurationException.class,
+                            () ->
+                                    builder.heartbeat(
+                                            Duration.ofMillis(pair[0]),
+                                            Duration.ofMillis(pair[1])));
+            assertEquals(expected, error.getMessage());
+        }
+        assertEquals(
+                "STREAM idle timeout must not be negative.",
+                assertThrows(
+                                systems.zlink.framework.errors.ZLinkConfigurationException.class,
+                                () -> builder.idleTimeout(Duration.ofMillis(-1)))
+                        .getMessage());
+        assertEquals(builder, builder.idleTimeout(Duration.ZERO));
+    }
+
+    @Test
+    void largePositiveDurationsDoNotOverflowOrExpireEarly() throws Exception {
+        FakeStream stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        var runtime =
+                startDeterministic(
+                        stream,
+                        clock,
+                        builder ->
+                                builder.heartbeat(
+                                                Duration.ofSeconds(Long.MAX_VALUE - 1),
+                                                Duration.ofSeconds(Long.MAX_VALUE))
+                                        .idleTimeout(Duration.ofSeconds(Long.MAX_VALUE)));
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        clock.set(Duration.ofSeconds(35).toNanos());
+        runtime.checkSessionLiveness();
+        assertEquals(0, stream.sessionClosingSends.get());
+        assertEquals(2, stream.heartbeatPingAttempted.getCount());
+    }
+
+    @Test
+    void defaultIdleIsDisabledWithHeartbeatTraffic() throws Exception {
         FakeStream stream = new FakeStream();
         var clock = new java.util.concurrent.atomic.AtomicLong();
         ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        for (int second = 1; second <= 35; second++) {
+            clock.set(Duration.ofSeconds(second).toNanos());
+            dispatchDeterministic(runtime, HEARTBEAT_PONG, true);
+            runtime.checkSessionLiveness();
+            assertEquals(0, stream.sessionClosingSends.get());
+        }
+    }
+
+    @Test
+    void heartbeatContractSlowConstructionPreservesApplicationIdleStart() throws Exception {
+        FakeStream stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        ZLinkStreamRuntime runtime =
+                startDeterministic(stream, clock, b -> b.idleTimeout(Duration.ofSeconds(30)));
         TestSession.constructionHook = () -> clock.set(Duration.ofSeconds(4).toNanos());
         stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
         for (int second = 4; second <= 28; second += 4) {
@@ -325,7 +433,22 @@ final class ZLinkStreamRuntimeIngressTest {
 
     private ZLinkStreamRuntime startDeterministic(
             FakeStream stream, java.util.concurrent.atomic.AtomicLong clock) {
-        var registration = streamRegistration(new DefaultZLinkFrameworkOptions(), 64 * 1024);
+        return startDeterministic(stream, clock, ignored -> {});
+    }
+
+    private ZLinkStreamRuntime startDeterministic(
+            FakeStream stream,
+            java.util.concurrent.atomic.AtomicLong clock,
+            java.util.function.Consumer<
+                            systems.zlink.framework.configuration.ZLinkStreamNodeBuilder>
+                    configure) {
+        var options = new DefaultZLinkFrameworkOptions();
+        var builder =
+                options.addStreamNode("stream")
+                        .bind("tcp://127.0.0.1:18081")
+                        .registerSession(TestSession.class);
+        configure.accept(builder);
+        var registration = options.registration();
         lastRegistration = registration;
         var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
         var runtime =
@@ -1479,7 +1602,16 @@ final class ZLinkStreamRuntimeIngressTest {
         stream.enqueue(PEER_A, frame("initial", "{}"));
         List<String> closeReasons = Collections.synchronizedList(new ArrayList<>());
         try (AutoCloseable ignored = installClosedMetricSink(closeReasons)) {
-            ZLinkStreamRuntime runtime = start(stream, 0);
+            ZLinkStreamRuntime runtime =
+                    start(
+                            stream,
+                            0,
+                            64 * 1024,
+                            registration -> {
+                                if (expectedReason.equals("idle_timeout"))
+                                    StreamBuilders.streamNode(registration.streamNodes().getFirst())
+                                            .idleTimeout(Duration.ofSeconds(30));
+                            });
             runtimes.add(runtime);
 
             TestSession session = awaitSession();

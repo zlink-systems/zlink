@@ -16,7 +16,7 @@ import type {
   ZLinkAuthorityStore,
   ZLinkObjectCreationStore
 } from '../locations/internal-store-contracts';
-import { ZLinkFrameworkException } from '../../contracts';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
 import {
   decodeServiceInstanceAuthorityPayload,
   decodeServiceReadySpotAuthority,
@@ -46,7 +46,6 @@ import {
 
 const CREATION_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const MAX_CREATION_REQUEST_BYTES = 1024 * 1024;
-const ACTIVATION_JOIN_POLL_INTERVAL_MS = 10;
 
 interface PendingReservation {
   readonly reservationId: string;
@@ -115,87 +114,81 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
     }
     let reserved: Awaited<ReturnType<ZLinkObjectCreationStore['reserve']>>;
     try {
-      for (;;) {
-        reserved = await this.options.store.reserve(
-          {
-            key: { kind: 'instance_spot', globalId: target.targetSpotId },
-            intent: {
-              stableType: target.stableType,
-              requestContentReference: stored.reference.value,
-              requestSha256: requestHash,
-              requestEncodedSize: BigInt(requestBytes.byteLength)
-            },
-            target: {
-              meshName: this.options.meshName,
-              nodeRid: target.targetNodeRid,
-              nodeLifecycleGeneration: target.targetNodeGeneration,
-              owner
-            },
-            creatingPayload: encodeServiceInstanceAuthorityPayload({
-              state: 'coldActivating',
-              stableType: target.stableType,
-              spotId: target.targetSpotId,
-              ownerId: owner.ownerId,
-              ownerLeaseGeneration: owner.leaseGeneration,
-              ownerMeshName: this.options.meshName,
-              ownerNodeRid: target.targetNodeRid,
-              ownerNodeGeneration: target.targetNodeGeneration
-            }),
-            capacity: {
-              actors: 0,
-              spots: 1,
-              spotType: {
-                objectKind: 'instance_spot',
-                stableType: target.stableType,
-                count: 1
-              }
-            }
+      reserved = await this.options.store.reserve(
+        {
+          key: { kind: 'instance_spot', globalId: target.targetSpotId },
+          intent: {
+            stableType: target.stableType,
+            requestContentReference: stored.reference.value,
+            requestSha256: requestHash,
+            requestEncodedSize: BigInt(requestBytes.byteLength)
           },
-          undefined,
-          activation.deadlineUnixMs
-        );
-        if (reserved.kind !== 'alreadyExists') break;
-        this.options.metrics?.recordInstanceSpotClaimConflict(
-          this.options.meshName,
-          target.stableType,
-          'already_exists'
-        );
-        await this.deleteOrphan(stored.reference);
-        return readyExisting(reserved.current, target);
-      }
+          target: {
+            meshName: this.options.meshName,
+            nodeRid: target.targetNodeRid,
+            nodeLifecycleGeneration: target.targetNodeGeneration,
+            owner
+          },
+          creatingPayload: encodeServiceInstanceAuthorityPayload({
+            state: 'coldActivating',
+            stableType: target.stableType,
+            spotId: target.targetSpotId,
+            ownerId: owner.ownerId,
+            ownerLeaseGeneration: owner.leaseGeneration,
+            ownerMeshName: this.options.meshName,
+            ownerNodeRid: target.targetNodeRid,
+            ownerNodeGeneration: target.targetNodeGeneration
+          }),
+          capacity: {
+            actors: 0,
+            spots: 1,
+            spotType: {
+              objectKind: 'instance_spot',
+              stableType: target.stableType,
+              count: 1
+            }
+          }
+        },
+        undefined,
+        activation.deadlineUnixMs
+      );
     } catch (error) {
       await this.deleteOrphan(stored.reference);
       throw error;
     }
-    if (
-      reserved.kind === 'conflict' &&
-      reserved.current.kind === 'snapshot' &&
-      reserved.current.allocation.objectKind === 'instance_spot' &&
-      reserved.current.allocation.stableType === target.stableType &&
-      reserved.current.allocation.state === 'reserved'
-    ) {
-      this.options.metrics?.recordInstanceSpotClaimConflict(
-        this.options.meshName,
-        target.stableType,
-        'activation_in_progress'
-      );
-      await this.deleteOrphan(stored.reference);
-      return await this.awaitConcurrentActivation(target, activation.deadlineUnixMs);
-    }
     if (reserved.kind !== 'reserved') {
+      const conflictReason =
+        reserved.kind === 'alreadyExists'
+          ? 'already_exists'
+          : reserved.kind === 'conflict' &&
+              reserved.current.kind === 'snapshot' &&
+              reserved.current.allocation.objectKind === 'instance_spot' &&
+              reserved.current.allocation.stableType === target.stableType &&
+              reserved.current.allocation.state === 'reserved'
+            ? 'activation_in_progress'
+            : reserved.kind;
       this.options.metrics?.recordInstanceSpotClaimConflict(
         this.options.meshName,
         target.stableType,
-        reserved.kind
+        conflictReason
       );
       await this.deleteOrphan(stored.reference);
+      if (reserved.kind === 'typeMismatch') {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.SpotTypeMismatch,
+          `Instance activation reservation failed: ${reserved.kind}.`
+        );
+      }
       if (reserved.kind === 'placementCapacityExhausted') {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
           `Instance Spot placement capacity is exhausted for '${String(target.targetSpotId)}'.`
         );
       }
-      throw new Error(`Instance activation reservation failed: ${reserved.kind}.`);
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.Unavailable,
+        `Instance activation reservation failed: ${reserved.kind}.`
+      );
     }
     const reservation: ServiceInstanceActivationReservation = {
       attempt: reserved.creating.objectGeneration,
@@ -455,34 +448,6 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
     }
   }
 
-  private async awaitConcurrentActivation(
-    target: ServiceInstanceActivationTarget,
-    deadlineUnixMs: bigint
-  ): Promise<Extract<ServiceInstanceAuthorityRead, { readonly kind: 'ready' }>> {
-    const key = authorityKey(target.targetSpotId);
-    const deadlineMs = performance.now() + Number(deadlineUnixMs - BigInt(Date.now()));
-    while (performance.now() <= deadlineMs) {
-      const current = await this.options.store.readAuthority(key);
-      if (current.kind === 'snapshot') {
-        if (
-          current.allocation.objectKind !== 'instance_spot' ||
-          current.allocation.stableType !== target.stableType
-        ) {
-          throw new Error('Concurrent Instance activation resolved to a different Spot type.');
-        }
-        if (current.allocation.state === 'active') {
-          return readyExisting(current, target);
-        }
-      } else {
-        throw new Error('Concurrent Instance activation ended before the Ready barrier.');
-      }
-      await waitForActivationJoin(deadlineMs);
-    }
-    throw new Error(
-      `Concurrent Instance activation for '${target.targetSpotId}' did not reach Ready before deadline.`
-    );
-  }
-
   private requirePending(reservation: ServiceInstanceActivationReservation): PendingReservation {
     const pending = this.pending.get(reservation.token);
     if (pending === undefined || pending.creating.objectGeneration !== reservation.attempt) {
@@ -537,38 +502,6 @@ function readyRead(
     return { kind: 'missing' };
   }
   return { kind: 'ready', route: routeFromSnapshot(snapshot), authority: snapshot };
-}
-
-function readyExisting(
-  snapshot: ZLinkAuthoritySnapshot,
-  target: ServiceInstanceActivationTarget
-): Extract<ServiceInstanceAuthorityRead, { readonly kind: 'ready' }> {
-  const decoded =
-    decodeServiceReadySpotAuthority(snapshot.payload) ??
-    decodeServiceClosingSpotAuthority(snapshot.payload);
-  if (
-    decoded?.kind !== 'instance_spot' ||
-    decoded.stableType !== target.stableType ||
-    decoded.spotId !== target.targetSpotId ||
-    snapshot.allocation.objectKind !== 'instance_spot' ||
-    snapshot.allocation.state !== 'active' ||
-    decoded.ownerId !== snapshot.ownerId ||
-    decoded.ownerLeaseGeneration !== snapshot.ownerLeaseGeneration ||
-    decoded.ownerMeshName !== snapshot.allocation.descriptor.meshName ||
-    decoded.ownerNodeGeneration !== snapshot.allocation.descriptorLifecycleGeneration ||
-    !routingIdsEqual(decoded.ownerNodeRid, snapshot.allocation.descriptor.rid)
-  ) {
-    throw new Error('Existing Instance authority is not a matching Ready allocation.');
-  }
-  return { kind: 'ready', route: routeFromSnapshot(snapshot), authority: snapshot };
-}
-
-async function waitForActivationJoin(deadlineMs: number): Promise<void> {
-  const remaining = deadlineMs - performance.now();
-  if (remaining <= 0) return;
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, Math.min(ACTIVATION_JOIN_POLL_INTERVAL_MS, remaining));
-  });
 }
 
 function requireCommitIdentity(

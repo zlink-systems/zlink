@@ -1577,6 +1577,54 @@ internal static partial class ZLinkServiceWireCodec
         return true;
     }
 
+    internal static byte[] EncodeInstanceSpotActivationRecovery(
+        InstanceSpotActivationOperation operation,
+        ReadOnlyMemory<byte>? metadata,
+        IReadOnlyList<ReadOnlyMemory<byte>> payload
+    )
+    {
+        var application = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(payload);
+        var context = new ServiceWireCodec.DecodeContext(
+            null,
+            null,
+            null,
+            application.Length,
+            application.Length
+        );
+        var hasMetadata = metadata is { IsEmpty: false };
+        var target = operation.Target;
+        return ServiceWireCodec.EncodeDurableInstanceActivationRecoveryV1(
+            new ServiceWireCodec.InstanceActivationRecoveryV1(
+                new(target.TargetSpotId),
+                new(target.StableType),
+                new(target.MeshName),
+                new(target.TargetNodeRid.ToBytes().ToArray()),
+                new(target.TargetNodeGeneration),
+                new(target.DescriptorVersion),
+                new(operation.SourceNodeRid.ToBytes().ToArray()),
+                new(operation.SourceNodeGeneration),
+                string.IsNullOrEmpty(operation.SourceSpotId)
+                    ? ServiceWireCodec.Bool8.False
+                    : ServiceWireCodec.Bool8.True,
+                string.IsNullOrEmpty(operation.SourceSpotId) ? null : new(operation.SourceSpotId),
+                operation.IsRequest
+                    ? ServiceWireCodec.InstanceOperationKind.Request
+                    : ServiceWireCodec.InstanceOperationKind.Send,
+                new(new(operation.OperationId.High), new(operation.OperationId.Low)),
+                operation.IsRequest
+                    ? new ServiceWireCodec.InstanceReplyRouteCase1(new(operation.ReplyRouteId))
+                    : new ServiceWireCodec.InstanceReplyRouteCase0(),
+                new(operation.DeadlineUnixMs),
+                hasMetadata ? ServiceWireCodec.Bool8.True : ServiceWireCodec.Bool8.False,
+                hasMetadata
+                    ? ServiceWireCodec.DecodeMetadataFrame(metadata!.Value.ToArray(), context)
+                    : null,
+                ServiceWireCodec.DecodeApplicationPayloadEnvelopeV1(application, context)
+            ),
+            context
+        );
+    }
+
     internal static byte[] EncodeInstanceSpotActivation(
         InstanceSpotActivationOperation operation,
         bool hasMetadata

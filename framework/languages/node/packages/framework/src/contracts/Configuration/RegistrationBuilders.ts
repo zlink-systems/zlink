@@ -689,6 +689,16 @@ class DefaultClientServerChannelServerBuilder implements ZLinkClientServerChanne
 }
 
 class DefaultStreamNodeBuilder implements ZLinkStreamNodeBuilder {
+  setHeartbeat(intervalMs: number, timeoutMs: number): this {
+    this.streamNode.heartbeatIntervalMs = intervalMs;
+    this.streamNode.heartbeatTimeoutMs = timeoutMs;
+    return this;
+  }
+  setIdleTimeout(timeoutMs: number): this {
+    this.streamNode.idleTimeoutMs = timeoutMs;
+    return this;
+  }
+
   constructor(private readonly streamNode: MutableStreamNodeOptions) {}
 
   bind(endpointOrPort: string | number = 0): this {
@@ -1605,6 +1615,9 @@ interface MutablePublisherCapabilityOptions {
 }
 
 interface MutableStreamNodeOptions {
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
+  idleTimeoutMs?: number;
   bind?: string;
   bindHost?: string;
   advertiseHost?: string;

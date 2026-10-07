@@ -16,7 +16,14 @@ public record SampleTopology(
         Boolean disableBots,
         Boolean allowEmptyZoneSet,
         String faultTickZone,
-        String meshAdvertiseHost) {
+        String meshAdvertiseHost,
+        Integer zoneCapacity) {
+
+    public int zoneCapacityValue() {
+        if (zoneCapacity == null || zoneCapacity < 1)
+            throw new IllegalArgumentException("sample.zone-capacity must be positive");
+        return zoneCapacity;
+    }
 
     public boolean is(String expected) {
         return expected.equalsIgnoreCase(role);

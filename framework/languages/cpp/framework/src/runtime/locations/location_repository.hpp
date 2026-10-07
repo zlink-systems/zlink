@@ -512,6 +512,13 @@ class location_repository_t
     virtual task_t<std::optional<creation_terminal_record_t>>
     read_creation_terminal (creation_operation_identity_t operation,
                             std::stop_token cancellation = {}) = 0;
+    virtual task_t<bool> release_ended_reservation (authority_key_t key,
+                                                    std::string expected_store_version,
+                                                    std::stop_token cancellation = {})
+    {
+        throw std::logic_error ("Reservation lifecycle recovery is not supported");
+        co_return false;
+    }
     virtual task_t<object_reserve_result_t> reserve (object_reserve_request_t request,
                                                      std::stop_token cancellation = {}) = 0;
     virtual task_t<object_complete_creation_result_t>

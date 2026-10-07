@@ -12,7 +12,7 @@ import type { ZLinkNestManualHandlerOptions } from './contracts';
 import type { ZLinkNestHandlerMetadata } from './handler-metadata';
 import type { DiscoveredNestProvider } from './provider-discovery';
 import { currentNestDispatchContext } from './dispatch-scope';
-import { createNestHandlerInstance } from './providers';
+import { createNestHandlerInstance, validateNestConstructorDependencies } from './providers';
 
 export function createDiscoveredRequestHandlers(
   providerRefs: readonly DiscoveredNestProvider[],
@@ -23,6 +23,7 @@ export function createDiscoveredRequestHandlers(
     providerRefs,
     handlerGroups,
     'request',
+    moduleRef,
     (ref, metadata) => ({
       async handle(payload: Buffer, context: ZLinkMessageContext) {
         const result = await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
@@ -43,6 +44,7 @@ export function createDiscoveredSendHandlers(
     providerRefs,
     handlerGroups,
     'send',
+    moduleRef,
     (ref, metadata) => ({
       async handle(payload: Buffer, context: ZLinkRouteMessageContext) {
         await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
@@ -60,6 +62,7 @@ export function createDiscoveredChannelSendHandlers(
     providerRefs,
     handlerGroups,
     'send',
+    moduleRef,
     (ref, metadata) => ({
       async handle(payload: Buffer, context: ZLinkMessageContext) {
         await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
@@ -77,6 +80,7 @@ export function createDiscoveredPublishHandlers(
     providerRefs,
     handlerGroups,
     'publish',
+    moduleRef,
     (ref, metadata) => ({
       async handle(payload: Buffer, context: ZLinkPublishMessageContext) {
         await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
@@ -131,29 +135,36 @@ function createManualHandlerRegistrations<TContext extends ManualHandlerContext,
     handle(payload: Buffer, context: TContext): Promise<TResult>;
   };
 }> {
-  return (handlerTypes ?? []).map((registration) => ({
-    packetName: registration.packetName,
-    handler: {
-      async handle(payload: Buffer, context: TContext): Promise<TResult> {
-        return result(
-          await invokeManualHandler(moduleRef, registration.handlerType, payload, context)
-        );
+  return (handlerTypes ?? []).map((registration) => {
+    validateNestConstructorDependencies(moduleRef, registration.handlerType);
+    return {
+      packetName: registration.packetName,
+      handler: {
+        async handle(payload: Buffer, context: TContext): Promise<TResult> {
+          return result(
+            await invokeManualHandler(moduleRef, registration.handlerType, payload, context)
+          );
+        }
       }
-    }
-  }));
+    };
+  });
 }
 
 function createDiscoveredHandlerRegistrations<THandler>(
   providerRefs: readonly DiscoveredNestProvider[],
   handlerGroups: readonly string[] | undefined,
   kind: string,
+  moduleRef: ModuleRef,
   createHandler: (ref: DiscoveredNestProvider, metadata: ZLinkNestHandlerMetadata) => THandler
 ): Array<{ readonly packetName: string; readonly handler: THandler }> {
   const descriptors = createDiscoveredHandlerDescriptors(providerRefs, handlerGroups, kind);
-  return descriptors.map(({ ref, metadata }) => ({
-    packetName: metadata.packetName,
-    handler: createHandler(ref, metadata)
-  }));
+  return descriptors.map(({ ref, metadata }) => {
+    validateNestConstructorDependencies(moduleRef, ref.handlerKey as Type);
+    return {
+      packetName: metadata.packetName,
+      handler: createHandler(ref, metadata)
+    };
+  });
 }
 
 function createDiscoveredHandlerDescriptors(

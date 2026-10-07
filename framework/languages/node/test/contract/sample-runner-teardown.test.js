@@ -8,34 +8,96 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../../samples/run-sample.mjs'), 'utf8');
-function declaration(start, end) {
-  return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
-}
-function runner(children) {
-  // Run the runner's actual lifecycle functions without its build/Redis/browser entry point.
-  const scope = vm.createContext({
-    children, cleaning: false, redisContainer: undefined, portLeases: new Map(),
-    process, fs, path, setTimeout, clearTimeout, sampleRoot: os.tmpdir(), runnerOptions: {},
-    nodeRoot: os.tmpdir(), logDir: os.tmpdir(), runDir: os.tmpdir(), workDir: os.tmpdir(),
-    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
-    reserveBrowserSafePort() {}, waitTcp() {}, waitHttp() {}, waitLog() {}, waitAnyLog() {}, assertLogCount() {}
-  });
-  vm.runInContext([
+function lifecycleDeclarations(scope) {
+  function declaration(start, end) {
+    return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
+  }
+  const functions = [
     declaration('function createContext(', 'async function waitForExit('),
     declaration('async function waitForExit(', 'async function reserveBrowserSafePort('),
     declaration('function ensureChildrenRunning(', 'function run('),
     declaration('async function cleanup()', 'function printLogs()')
-  ].join('\n'), scope);
-  return { context: scope.createContext('unused'), cleanup: scope.cleanup, ensure: scope.ensureChildrenRunning };
+  ];
+  const referenced = new Set();
+  for (const fn of functions) {
+    const parameters = [
+      ...[...fn.matchAll(/\bfunction(?:\s+[A-Za-z_$][\w$]*)?\s*\(([^)]*)\)/g)].map(
+        ([, names]) => names
+      ),
+      ...[...fn.matchAll(/\b(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{/g)]
+        .filter(([, name]) => !['if', 'for', 'while', 'switch', 'catch', 'with'].includes(name))
+        .map(([, , names]) => names),
+      ...[...fn.matchAll(/\(([^()]*)\)\s*=>/g)].map(([, names]) => names),
+      ...[...fn.matchAll(/\b([A-Za-z_$][\w$]*)\s*=>/g)].map(([, name]) => name)
+    ];
+    const localParameters = new Set(
+      parameters.flatMap((names) =>
+        [...names.matchAll(/\b[A-Za-z_$][\w$]*\b/g)].map(([name]) => name)
+      )
+    );
+    for (const [name] of fn.matchAll(/\b[A-Za-z_$][\w$]*\b/g)) {
+      if (!localParameters.has(name)) referenced.add(name);
+    }
+  }
+  const provided = new Set(Object.keys(scope));
+  const constants = [...source.matchAll(/^const\s+([A-Za-z_$][\w$]*)\s*=\s*[\s\S]*?;/gm)]
+    .filter(([, name]) => referenced.has(name) && !provided.has(name))
+    .map(([constant]) => constant);
+  return [...constants, ...functions];
+}
+function runner(children) {
+  // Run the runner's actual lifecycle functions without its build/Redis/browser entry point.
+  const scope = vm.createContext({
+    children,
+    cleaning: false,
+    redisContainer: undefined,
+    portLeases: new Map(),
+    process,
+    fs,
+    path,
+    setTimeout,
+    clearTimeout,
+    sampleRoot: os.tmpdir(),
+    runnerOptions: {},
+    nodeRoot: os.tmpdir(),
+    logDir: os.tmpdir(),
+    runDir: os.tmpdir(),
+    workDir: os.tmpdir(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    reserveBrowserSafePort() {},
+    waitTcp() {},
+    waitHttp() {},
+    waitLog() {},
+    waitAnyLog() {},
+    assertLogCount() {}
+  });
+  vm.runInContext(lifecycleDeclarations(scope).join('\n'), scope);
+  return {
+    context: scope.createContext('unused'),
+    cleanup: scope.cleanup,
+    ensure: scope.ensureChildrenRunning
+  };
 }
 async function role(t, behavior) {
-  const child = spawn(process.execPath, ['-e', `
+  const child = spawn(
+    process.execPath,
+    [
+      '-e',
+      `
     const timer = setInterval(() => {}, 1000);
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { ${behavior} });
     console.log('ready');
-  `], { stdio: ['pipe', 'pipe', 'pipe'] });
+  `
+    ],
+    { stdio: ['pipe', 'pipe', 'pipe'] }
+  );
   const state = { child, name: 'role', logPath: 'role.log', closed: false };
-  state.exited = new Promise(resolve => child.once('close', () => { state.closed = true; resolve(state.status); }));
+  state.exited = new Promise((resolve) =>
+    child.once('close', () => {
+      state.closed = true;
+      resolve(state.status);
+    })
+  );
   child.once('exit', (code, signal) => {
     state.exitCode = code;
     state.signalCode = signal;
@@ -52,7 +114,7 @@ async function role(t, behavior) {
   return state;
 }
 
-test('scenario reaps an intentional owner SIGKILL before clean teardown', async t => {
+test('scenario reaps an intentional owner SIGKILL before clean teardown', async (t) => {
   const owner = await role(t, 'clearInterval(timer);');
   const survivor = await role(t, 'clearInterval(timer);');
   survivor.name = 'survivor';
@@ -64,14 +126,21 @@ test('scenario reaps an intentional owner SIGKILL before clean teardown', async 
   assert.equal(survivor.exitCode, 0);
 });
 
-test('cleanup waits for the role termination boundary', async t => {
-  const state = await role(t, `
+test('cleanup waits for the role termination boundary', async (t) => {
+  const state = await role(
+    t,
+    `
     console.log('stopping');
     process.stdin.once('data', () => { clearInterval(timer); process.stdin.destroy(); });
-  `);
+  `
+  );
   const stopping = once(state.child.stdout, 'data');
   let completed = false;
-  const cleanup = runner([state]).cleanup().then(() => { completed = true; });
+  const cleanup = runner([state])
+    .cleanup()
+    .then(() => {
+      completed = true;
+    });
   await stopping;
   assert.equal(completed, false);
   state.child.stdin.end('finish');
@@ -79,7 +148,7 @@ test('cleanup waits for the role termination boundary', async t => {
   assert.equal(state.exitCode, 0);
 });
 
-test('cleanup reports an externally killed role that does not terminate', async t => {
+test('cleanup reports an externally killed role that does not terminate', async (t) => {
   const state = await role(t, "console.log('stopping');");
   const stopping = once(state.child.stdout, 'data');
   const rejected = assert.rejects(runner([state]).cleanup(), /role.*cleanup.*SIGKILL/);
@@ -88,12 +157,12 @@ test('cleanup reports an externally killed role that does not terminate', async 
   await rejected;
 });
 
-test('cleanup still reports a role killed after cleanup starts', async t => {
+test('cleanup still reports a role killed after cleanup starts', async (t) => {
   const state = await role(t, "process.kill(process.pid, 'SIGKILL');");
   await assert.rejects(runner([state]).cleanup(), /role.*cleanup.*SIGKILL/);
 });
 
-test('unexpected early exit remains a scenario failure', async t => {
+test('unexpected early exit remains a scenario failure', async (t) => {
   const state = await role(t, 'clearInterval(timer);');
   const exited = once(state.child, 'exit');
   state.child.kill('SIGINT');

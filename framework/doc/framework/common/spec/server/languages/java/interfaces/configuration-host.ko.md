@@ -244,8 +244,7 @@ public interface FanoutChannelBuilder {
 ```
 
 `configureInboundDispatch()`가 반환하는 `ZLinkInboundDispatchOptions`의 `coreHwmMemoryLimitBytes`,
-`coreHwmBudgetBytes`, `coreHwmProfile`은 Core에 전달한다. Java binding은
-양수 유한 `Runtime.maxMemory()`를 runtime memory hint로 전달한다. Core와 job queue profile은 기본값
+`coreHwmBudgetBytes`, `coreHwmProfile`은 Core에 전달한다. Core와 job queue profile은 기본값
 `BALANCED`인 독립된 enum과 계산이다. Manual job cap은 `1..2,147,483,647`이고 생략하면 common startup
 CPU snapshot과 32/64/128/256 계수를 사용한다. Pressure threshold 기본값은 pause `80`, resume `60`이고,
 pause는 `1..100`, resume은 `0..99`의 정수이며 resume은 pause보다 작아야 한다. 이 범위·순서 위반과
@@ -522,6 +521,8 @@ public interface systems.zlink.framework.configuration.ZLinkStreamNodeBuilder {
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder setTlsServer(java.lang.String, java.lang.String, boolean);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder registerSession(java.lang.Class<? extends systems.zlink.framework.streams.ZLinkSession>);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder enableActorDispatch();
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder heartbeat(java.time.Duration, java.time.Duration);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder idleTimeout(java.time.Duration);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder addSessionPacketHandler(java.lang.Class<?>);
 }
 public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
@@ -550,6 +551,8 @@ public interface systems.zlink.framework.configuration.ZLinkWorkerOptions {
  public abstract systems.zlink.framework.configuration.ZLinkWorkerOptions idleTimeout(java.time.Duration);
 }
 ```
+
+Heartbeat interval·timeout과 idle timeout의 기본값, 검증과 유휴 종료 규칙은 [STREAM session §7](../../../04-session/01-stream-session.ko.md#7-오류-경계)이 정한다.
 
 `ZLinkMessageFlowLogMode`의 네 값은 진단 비활성화, 오류만 기록, 주요 전이 기록, 상세 진단을 각각
 나타낸다. Startup에서 지정하지 않은 diagnostics level의 기본값은 `ERRORS`다. Framework는 application이
@@ -731,7 +734,7 @@ shutdown이 같은 `ZLinkFrameworkRuntime`에 한 번씩 전달되는지 확인�
 
 ## Inbound queue와 Session seal option
 
-Java binding은 양수 유한 `Runtime.maxMemory()`를 Core runtime memory hint로 전달한다. Core와 job queue
+Core와 job queue
 profile은 독립된 enum이며 둘 다 기본값은 `BALANCED`다. Manual job cap은 `1..2,147,483,647`이고 생략하면
 common startup CPU snapshot과 32/64/128/256 계수를 사용한다. 범위 위반과 overflow는 bind 전에 실패하며
 runtime 중 다시 계산하지 않는다.

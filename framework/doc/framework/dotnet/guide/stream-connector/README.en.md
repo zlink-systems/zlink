@@ -18,6 +18,8 @@ Web builds do not use this connector. Unity WebGL and Godot Web use the
 | 8 | [Unity](08-unity.en.md) | Using it from a native Unity build |
 | 9 | [Godot C#](09-godot-csharp.en.md) | Using it from a Godot C# project |
 | 10 | [Game Engine Integration](12-engine-integration.en.md) | Connector choice by engine and the Engine Lobby sample |
+| 11 | [Node Protobuf Messaging](../../../node/guide/stream-connector/40-protobuf.en.md) | protobufjs generation, fixed-type pushes, explicit reply types |
+| 12 | [Node Protobuf Codecs and Types](../../../node/guide/stream-connector/41-protobuf-codecs.en.md) | Codec selection, multiple-message limits, server packet names |
 
 The file number identifies the same chapter in every language. Chapters 1 to 7 are
 shared across all five.

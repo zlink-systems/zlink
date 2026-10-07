@@ -2836,10 +2836,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             envelope) {
         var store = requireUserSpotLocationStore();
         var recoveryStore = frameworkRegistration.relocationStore();
-        if (recoveryStore == null)
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "Instance cold activation requires a Relocation Store"));
         var local = routeMeshNodesByName.get(envelope.targetMeshName());
         if (local == null
                 || !local.routingId().equals(envelope.targetNodeRid())
@@ -5337,7 +5333,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     @Override
     CompletionStage<Boolean> completeInstanceSpotClose(ZLinkInstanceSpotActivation activation) {
-        boolean hasIntent = activation.context.ownerQueue().retainsPendingOrSealClosingAdmission();
+        return activation
+                .context
+                .ownerQueue()
+                .retainsPendingOrSealClosingAdmission()
+                .thenCompose(hasIntent -> completeInstanceSpotClose(activation, hasIntent));
+    }
+
+    private CompletionStage<Boolean> completeInstanceSpotClose(
+            ZLinkInstanceSpotActivation activation, boolean hasIntent) {
         if (!hasIntent || instanceCloseReleaseFailure() != null) {
             return releaseInstanceSpotAuthority(activation)
                     .thenApply(

@@ -36,7 +36,6 @@ static const public_ctx_option_descriptor_t public_ctx_options[] = {
   {ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS, true, true},
   {ZLINK_CTX_OPT_AUTO_HWM_PROFILE, true, true},
   {ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES, true, true},
-  {ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES, true, true},
   {ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES, true, true},
 };
 
@@ -64,7 +63,6 @@ static bool is_public_ctx_get_option (int option_)
 static bool is_auto_hwm_u64_option (int option_)
 {
     return option_ == ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES
-           || option_ == ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES
            || option_ == ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES;
 }
 

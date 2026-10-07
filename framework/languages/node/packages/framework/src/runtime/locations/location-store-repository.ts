@@ -1,3 +1,4 @@
+import { ServiceRelocationAuthorityPayloadCodec } from '../foundation/service-relocation-runtime';
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { createHash, randomUUID } from 'node:crypto';
 import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
@@ -17,6 +18,8 @@ import {
   type ZLinkStoreScanCursor,
   type ZLinkStoreVersion,
   type ZLinkStoreWriteRequest,
+  ZLinkFrameworkException,
+  ZLinkFrameworkErrorKind,
   ZLinkFrameworkRuntimeState,
   ZLinkObjectRole
 } from '../../contracts';
@@ -204,7 +207,30 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     private readonly nowProvider: () => Date = () => new Date()
   ) {
     super(nowProvider);
-    this.provider = provider;
+    // Classify only failures of the opaque SPI, before interpreting its records.
+    this.provider = {
+      async read(key, signal) {
+        try {
+          return await provider.read(key, signal);
+        } catch (error) {
+          throw locationStoreProviderFailure(error, signal);
+        }
+      },
+      async write(request, signal) {
+        try {
+          return await provider.write(request, signal);
+        } catch (error) {
+          throw locationStoreProviderFailure(error, signal);
+        }
+      },
+      async scan(request, signal) {
+        try {
+          return await provider.scan(request, signal);
+        } catch (error) {
+          throw locationStoreProviderFailure(error, signal);
+        }
+      }
+    };
     this.aggregateInventory = new ZLinkAggregateInventoryStore(this.provider);
   }
 
@@ -1099,6 +1125,77 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     }
   }
 
+  override async releaseEndedReservation(
+    key: ZLinkAuthorityKey,
+    expectedStoreVersion: string,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    const rowKey = authorityKey(key.value);
+    const current = await this.provider.read(rowKey, signal);
+    if (current.kind === 'missing' || current.value.version.value !== expectedStoreVersion)
+      return false;
+    const record = decodeAuthorityRecord(current.value.bytes);
+    const snapshot = record.snapshot;
+    if (
+      snapshot.allocation.state !== 'reserved' ||
+      snapshot.pendingCreation === undefined ||
+      record.aggregate !== undefined ||
+      hasRelocationAuthority(snapshot.payload)
+    )
+      return false;
+    const leaseKey = ownerKey(snapshot.ownerId);
+    const descriptorKey = meshKey(
+      snapshot.allocation.descriptor.meshName,
+      snapshot.allocation.descriptor.rid
+    );
+    const capacityRowKey = capacityKey(
+      snapshot.allocation.descriptor.meshName,
+      String(snapshot.allocation.descriptor.rid)
+    );
+    const [lease, descriptor, capacity] = await Promise.all([
+      this.provider.read(leaseKey, signal),
+      this.provider.read(descriptorKey, signal),
+      this.provider.read(capacityRowKey, signal)
+    ]);
+    if (lease.kind === 'found' && lease.value.expiresAt === undefined)
+      throw new Error('Location Store owner lease record is invalid.');
+    if (
+      sameLiveOwner(lease, snapshot) &&
+      descriptor.kind === 'found' &&
+      reviveMeshDescriptor(
+        decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(descriptor.value.bytes).descriptor
+      ).lifecycleGeneration === snapshot.allocation.descriptorLifecycleGeneration
+    )
+      return false;
+    const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [
+      { kind: 'delete', key: rowKey }
+    ];
+    if (capacity.kind === 'found') {
+      const stored = decodeJson<CapacityRecord>(capacity.value.bytes);
+      mutations.push({
+        kind: 'put',
+        key: capacityRowKey,
+        bytes: encodeJson({
+          active: stored.active,
+          pending: subtractCapacity(stored.pending, snapshot.allocation.capacity)
+        } satisfies CapacityRecord)
+      });
+    }
+    const result = await this.provider.write(
+      {
+        conditions: [
+          { kind: 'version', key: rowKey, expected: current.value.version },
+          conditionFor(leaseKey, lease),
+          conditionFor(descriptorKey, descriptor),
+          conditionFor(capacityRowKey, capacity)
+        ],
+        mutations
+      },
+      signal
+    );
+    return result.kind === 'applied';
+  }
+
   override async reserve(
     request: ZLinkObjectReserveRequest,
     signal?: AbortSignal,
@@ -1130,62 +1227,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           return { kind: 'alreadyExists', current: snapshot };
         }
         if (
-          record.aggregate !== undefined ||
-          isCanonicalAuthorityPayload(record.snapshot.payload)
-        ) {
-          // A relocation record carries its own recovery protocol. Reserve
-          // may reclaim only an unfinished plain creation.
+          !(await this.releaseEndedReservation(
+            encodedAuthorityKey,
+            current.value.version.value,
+            signal
+          ))
+        )
           return { kind: 'conflict', current: snapshot };
-        }
-        // The row is Reserved by another owner. An unfinished creation
-        // whose owner lease ended is cancellable, so reclaim it and retry
-        // instead of blocking the key forever.
-        const staleOwnerKey = ownerKey(snapshot.ownerId);
-        const staleCapacityKey = capacityKey(
-          snapshot.allocation.descriptor.meshName,
-          String(snapshot.allocation.descriptor.rid)
-        );
-        const [staleOwnerRead, staleCapacityRead] = await Promise.all([
-          this.provider.read(staleOwnerKey, signal),
-          this.provider.read(staleCapacityKey, signal)
-        ]);
-        if (staleOwnerRead.kind === 'found' && staleOwnerRead.value.expiresAt === undefined) {
-          // A lease is always written with a positive TTL, so a missing
-          // expiry is a corrupt record. Reclaiming deletes authority state,
-          // so refuse rather than read the absence as expiry.
-          throw new Error('Location Store owner lease record is invalid.');
-        }
-        if (sameLiveOwner(staleOwnerRead, record.snapshot)) {
-          return { kind: 'conflict', current: snapshot };
-        }
-        const staleCapacity =
-          staleCapacityRead.kind === 'missing'
-            ? emptyCapacityRecord()
-            : decodeJson<CapacityRecord>(staleCapacityRead.value.bytes);
-        await this.provider.write(
-          {
-            conditions: [
-              { kind: 'version', key: rowKey, expected: current.value.version },
-              versionCondition(staleOwnerKey, staleOwnerRead),
-              conditionFor(staleCapacityKey, staleCapacityRead)
-            ],
-            mutations: [
-              { kind: 'delete', key: rowKey },
-              {
-                kind: 'put',
-                key: staleCapacityKey,
-                bytes: encodeJson({
-                  active: staleCapacity.active,
-                  pending: subtractCapacity(
-                    staleCapacity.pending,
-                    record.snapshot.allocation.capacity
-                  )
-                } satisfies CapacityRecord)
-              }
-            ]
-          },
-          signal
-        );
         continue;
       }
       const [descriptorRead, leaseRead] = await Promise.all([
@@ -4037,15 +4085,10 @@ function sameCreationTarget(
   );
 }
 
-const CANONICAL_AUTHORITY_MAGIC = Buffer.from('ZLAU');
+const relocationAuthorityCodec = new ServiceRelocationAuthorityPayloadCodec();
 
-function isCanonicalAuthorityPayload(payload: Uint8Array): boolean {
-  return (
-    payload.byteLength >= CANONICAL_AUTHORITY_MAGIC.byteLength &&
-    Buffer.from(payload.buffer, payload.byteOffset, CANONICAL_AUTHORITY_MAGIC.byteLength).equals(
-      CANONICAL_AUTHORITY_MAGIC
-    )
-  );
+function hasRelocationAuthority(payload: Uint8Array): boolean {
+  return relocationAuthorityCodec.read(payload) !== undefined;
 }
 
 function sameLiveOwner(lease: ZLinkStoreReadResult, snapshot: StoredAuthoritySnapshot): boolean {
@@ -4440,4 +4483,20 @@ function throwIfOperationExpired(signal?: AbortSignal, deadlineUnixMs?: bigint):
   if (deadlineUnixMs !== undefined && Date.now() >= Number(deadlineUnixMs)) {
     throw new DOMException('Operation deadline exceeded.', 'TimeoutError');
   }
+}
+
+// Store SPI §6: preserve caller failures and classify provider failures once.
+function locationStoreProviderFailure(error: unknown, signal?: AbortSignal): unknown {
+  if (
+    error instanceof ZLinkFrameworkException ||
+    error instanceof TypeError ||
+    error instanceof RangeError ||
+    signal?.aborted === true
+  )
+    return error;
+  return new ZLinkFrameworkException(
+    ZLinkFrameworkErrorKind.Unavailable,
+    'Location Store provider is unavailable.',
+    error
+  );
 }

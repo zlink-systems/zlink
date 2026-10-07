@@ -42,6 +42,29 @@ internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registr
         return this;
     }
 
+    public IZLinkStreamNodeBuilder SetHeartbeat(TimeSpan interval, TimeSpan timeout)
+    {
+        if (interval <= TimeSpan.Zero)
+            throw new ZLinkConfigurationException("STREAM heartbeat interval must be positive.");
+        if (timeout <= TimeSpan.Zero)
+            throw new ZLinkConfigurationException("STREAM heartbeat timeout must be positive.");
+        if (timeout <= interval)
+            throw new ZLinkConfigurationException(
+                "STREAM heartbeat timeout must be greater than interval."
+            );
+        registration.HeartbeatInterval = interval;
+        registration.HeartbeatTimeout = timeout;
+        return this;
+    }
+
+    public IZLinkStreamNodeBuilder SetIdleTimeout(TimeSpan timeout)
+    {
+        if (timeout < TimeSpan.Zero)
+            throw new ZLinkConfigurationException("STREAM idle timeout must not be negative.");
+        registration.IdleTimeout = timeout;
+        return this;
+    }
+
     public IZLinkStreamNodeBuilder MaxMessageSize(long bytes)
     {
         registration.SocketConfig.MaxMessageSize = bytes;

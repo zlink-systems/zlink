@@ -9,6 +9,7 @@
 #include <string.h>
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
+#include "testutil_monitoring.hpp"
 
 SETUP_TEARDOWN_TESTCONTEXT
 
@@ -272,10 +273,6 @@ void test_ctx_option_auto_hwm_defaults ()
       get_u64_context_option (
         get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES));
     TEST_ASSERT_EQUAL_UINT64 (
-      ZLINK_CTX_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES_DFLT,
-      get_u64_context_option (
-        get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES));
-    TEST_ASSERT_EQUAL_UINT64 (
       ZLINK_CTX_AUTO_HWM_CORE_BUDGET_BYTES_DFLT,
       get_u64_context_option (
         get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES));
@@ -313,18 +310,30 @@ void test_ctx_option_auto_hwm_round_trip ()
       zlink_ctx_get (get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_PROFILE, NULL));
 }
 
+void test_removed_runtime_memory_hint_option_is_unknown ()
+{
+    void *ctx = get_test_context ();
+    uint64_t value = 4096;
+    size_t size = sizeof (value);
+    const zlink_ctx_option_t removed = static_cast<zlink_ctx_option_t> (20);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INVALID_ARGUMENT,
+                          zlink_ctx_set_data (ctx, removed, &value, size));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INVALID_ARGUMENT,
+                          zlink_ctx_get_data (ctx, removed, &value, &size));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, read_auto_hwm_budget_snapshot (ctx).runtime_memory_limit_bytes);
+}
+
 void test_ctx_option_auto_hwm_memory_budget_round_trip_and_snapshot ()
 {
     void *ctx = get_test_context ();
     const uint64_t memory_limit = 16ull * 1024ull * 1024ull;
-    const uint64_t runtime_memory_limit = 8ull * 1024ull * 1024ull;
     const uint64_t core_budget = 4ull * 1024ull * 1024ull;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_ctx_set_data (ctx, ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES,
                           &memory_limit, sizeof (memory_limit)));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_ctx_set_data (ctx, ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES,
-                          &runtime_memory_limit, sizeof (runtime_memory_limit)));
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_ctx_set_data (ctx, ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES,
                           &core_budget, sizeof (core_budget)));
@@ -333,16 +342,12 @@ void test_ctx_option_auto_hwm_memory_budget_round_trip_and_snapshot ()
       memory_limit,
       get_u64_context_option (ctx, ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES));
     TEST_ASSERT_EQUAL_UINT64 (
-      runtime_memory_limit,
-      get_u64_context_option (
-        ctx, ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES));
-    TEST_ASSERT_EQUAL_UINT64 (
       core_budget,
       get_u64_context_option (ctx, ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES));
 
     zlink_auto_hwm_budget_snapshot_t snapshot = read_auto_hwm_budget_snapshot (ctx);
     TEST_ASSERT_EQUAL_UINT64 (memory_limit, snapshot.configured_memory_limit_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (runtime_memory_limit, snapshot.runtime_memory_limit_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0, snapshot.runtime_memory_limit_bytes);
     TEST_ASSERT_EQUAL_UINT64 (memory_limit, snapshot.resolved_memory_limit_bytes);
     TEST_ASSERT_EQUAL_UINT64 (core_budget, snapshot.configured_core_budget_bytes);
     TEST_ASSERT_EQUAL_UINT64 (core_budget, snapshot.effective_core_budget_bytes);
@@ -801,13 +806,13 @@ void test_auto_hwm_inproc_pending_router_router_adds_completion_after_bind ()
 void test_auto_hwm_inproc_atomic_minimum_reservation_preserves_pending_connection ()
 {
     void *ctx = get_test_context ();
-    const uint64_t core_budget = 256ull * 1024ull;
+    const uint64_t memory_limit = 256ull * 1024ull;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_ctx_set (ctx, ZLINK_CTX_OPT_AUTO_HWM_PROFILE,
                      ZLINK_AUTO_HWM_PROFILE_BALANCED));
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_ctx_set_data (ctx, ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES,
-                          &core_budget, sizeof (core_budget)));
+      zlink_ctx_set_data (ctx, ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES,
+                          &memory_limit, sizeof (memory_limit)));
 
     const char *endpoint = "inproc://auto-hwm-atomic-minimum-reservation";
     void *first = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -826,10 +831,10 @@ void test_auto_hwm_inproc_atomic_minimum_reservation_preserves_pending_connectio
       read_auto_hwm_budget_snapshot (ctx);
     TEST_ASSERT_GREATER_THAN_UINT64 (before_attach.budget_generation,
                                      after_first_attach.budget_generation);
-    const uint64_t reduced_budget = 1;
+    const uint64_t reduced_limit = 1;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_ctx_set_data (ctx, ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES,
-                          &reduced_budget, sizeof (reduced_budget)));
+      zlink_ctx_set_data (ctx, ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES,
+                          &reduced_limit, sizeof (reduced_limit)));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_INTERNAL_ERROR,
                            zlink_connect (rejected, endpoint));
     TEST_ASSERT_EQUAL_INT (ENOBUFS, errno);
@@ -851,6 +856,81 @@ void test_auto_hwm_inproc_atomic_minimum_reservation_preserves_pending_connectio
     test_context_socket_close_zero_linger (first);
     test_context_socket_close_zero_linger (router);
 }
+
+void test_auto_hwm_attach_uses_current_limit_and_reports_budget_insufficient ()
+{
+    void *ctx = get_test_context ();
+    uint64_t limit = 128ull * 1024ull;
+    const uint64_t budget = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_set_data (
+      ctx, ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES, &limit, sizeof (limit)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_set_data (
+      ctx, ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES, &budget, sizeof (budget)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_auto_hwm_recalculate (ctx));
+    const uint64_t old_limit = read_auto_hwm_budget_snapshot (ctx).resolved_memory_limit_bytes;
+    // The stored option changes immediately; admission cannot use the old plan.
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_set (
+      ctx, ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS, 60000));
+    limit *= 2;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_set_data (
+      ctx, ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES, &limit, sizeof (limit)));
+    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *first = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *second = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *third = test_context_socket (ZLINK_SOCKET_DEALER);
+    const char *endpoint = "inproc://memory-admission-above-budget";
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (first, endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (second, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_INTERNAL_ERROR, zlink_connect (third, endpoint));
+    TEST_ASSERT_EQUAL_INT (ENOBUFS, errno);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_auto_hwm_recalculate (ctx));
+    const zlink_auto_hwm_budget_snapshot_t snapshot = read_auto_hwm_budget_snapshot (ctx);
+    test_context_socket_close (third);
+    test_context_socket_close (second);
+    test_context_socket_close (first);
+    test_context_socket_close (server);
+    TEST_ASSERT_EQUAL_UINT64 (128ull * 1024ull, old_limit);
+    TEST_ASSERT_EQUAL_UINT64 (4, snapshot.active_directional_queue_count);
+    TEST_ASSERT_EQUAL_UINT64 (limit, snapshot.total_planned_hwm_bytes);
+    TEST_ASSERT_TRUE (snapshot.flags & ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT);
+}
+
+#if defined ZLINK_HAVE_LINUX
+void test_auto_hwm_network_limit_rejection_closes_unpublished_connection ()
+{
+    void *ctx = get_test_context ();
+    const uint64_t limit = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_set_data (
+      ctx, ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES, &limit, sizeof (limit)));
+    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+    const zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_stream_option (
+      server, ZLINK_STREAM_OPT_RECV_MODE, &mode, sizeof (mode)));
+    test_monitor_probe_t probe;
+    void *monitor = open_test_monitor_probe (
+      server, ZLINK_EVENT_ACCEPT_FAILED | ZLINK_EVENT_CONNECTION_READY, &probe);
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+    const fd_t peer = connect_socket (endpoint);
+    int found = -1;
+    const bool rejected = test_monitor_probe_wait_event_after (
+      &probe, ZLINK_EVENT_ACCEPT_FAILED, 0, 3000, &found);
+    const uint64_t error = rejected ? test_monitor_probe_record_at (&probe, found).value : 0;
+    char byte = 0;
+    const int received = recv (peer, &byte, 1, MSG_DONTWAIT);
+    const int receive_errno = errno;
+    close (peer);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_auto_hwm_recalculate (ctx));
+    const zlink_auto_hwm_budget_snapshot_t snapshot = read_auto_hwm_budget_snapshot (ctx);
+    close_test_monitor_probe (&monitor, &probe);
+    test_context_socket_close (server);
+    TEST_ASSERT_TRUE (rejected);
+    TEST_ASSERT_EQUAL_UINT64 (ENOBUFS, error);
+    TEST_ASSERT_TRUE (received == 0 || (received == -1 && receive_errno == ECONNRESET));
+    TEST_ASSERT_EQUAL_UINT64 (0, snapshot.active_directional_queue_count);
+}
+#endif
 
 void test_removed_auto_hwm_message_unit_options_are_unknown ()
 {
@@ -1201,6 +1281,7 @@ int main (void)
     UNITY_BEGIN ();
     RUN_TEST (test_thread_priority_has_independent_context_option);
     RUN_TEST (test_ctx_option_max_sockets);
+    RUN_TEST (test_removed_runtime_memory_hint_option_is_unknown);
     RUN_TEST (test_ctx_option_socket_limit);
     RUN_TEST (test_ctx_option_io_threads);
     RUN_TEST (test_ctx_option_msg_t_size);
@@ -1220,6 +1301,10 @@ int main (void)
     RUN_TEST (test_auto_hwm_inproc_manual_endpoint_resolution_counts_queue_once);
     RUN_TEST (test_auto_hwm_inproc_pending_router_router_adds_completion_after_bind);
     RUN_TEST (test_auto_hwm_inproc_atomic_minimum_reservation_preserves_pending_connection);
+    RUN_TEST (test_auto_hwm_attach_uses_current_limit_and_reports_budget_insufficient);
+#if defined ZLINK_HAVE_LINUX
+    RUN_TEST (test_auto_hwm_network_limit_rejection_closes_unpublished_connection);
+#endif
     RUN_TEST (test_removed_auto_hwm_message_unit_options_are_unknown);
     RUN_TEST (test_socket_option_auto_hwm_buffer_options_do_not_change_snapshot_contract);
     RUN_TEST (test_socket_monitor_hwm_bytes_are_applied_without_conversion);
