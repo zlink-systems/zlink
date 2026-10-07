@@ -1375,10 +1375,6 @@ void app_t::_apply_zlink_framework ()
     for (const auto &registration : mesh_node_registrations) {
         registration->lane
           .run ([&] {
-              for (const auto &[name, lifecycle] : registration->spot_state->spot_lifecycles) {
-                  if (lifecycle.validate_dependencies)
-                      lifecycle.validate_dependencies (_state->services);
-              }
               registration->core_context = shared_core_context;
               registration->application_jobs = _state->application_job_queue;
           })
@@ -2859,6 +2855,18 @@ void app_t::_apply_zlink_framework ()
         add_hosted_service (std::make_unique<runtime::http_host_service_t> (
           http_snapshot, _state->health, options.handler_coroutine_workers (),
           _state->listener_statuses));
+    }
+    // Runtime services and application services share this registry. Validate
+    // the completed catalog before any hosted service starts accepting messages.
+    for (const auto &registration : callback_registrations) {
+        registration->lane
+          .run ([&] {
+              for (const auto &[name, lifecycle] : registration->spot_state->spot_lifecycles) {
+                  if (lifecycle.validate_dependencies)
+                      lifecycle.validate_dependencies (_state->services);
+              }
+          })
+          .get ();
     }
     detail::configure_handler_invocation_executor ();
     if (_state->framework_hosted_service_position) {
