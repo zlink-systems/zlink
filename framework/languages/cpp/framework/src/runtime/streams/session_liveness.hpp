@@ -1,15 +1,12 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <zlink/framework/contracts/streams/stream.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <optional>
 
-namespace zlink::framework
-{
-enum class stream_close_reason_t : std::uint8_t;
-}
 namespace zlink::framework::runtime
 {
 struct session_liveness_t
@@ -18,18 +15,20 @@ struct session_liveness_t
     clock_t::time_point last_application_inbound;
     clock_t::time_point last_ping;
     clock_t::time_point last_inbound;
-    static constexpr auto heartbeat_interval = std::chrono::seconds (1);
-    static constexpr auto heartbeat_timeout = std::chrono::seconds (5);
-    static constexpr auto application_idle_timeout = std::chrono::seconds (30);
+    const detail::stream_liveness_options_t options;
 
-    explicit session_liveness_t (clock_t::time_point now = clock_t::now ()) :
-        session_liveness_t (now, now)
+    explicit session_liveness_t (clock_t::time_point now = clock_t::now (),
+                                 detail::stream_liveness_options_t settings = {}) :
+        session_liveness_t (now, now, settings)
     {
     }
-    session_liveness_t (clock_t::time_point established, clock_t::time_point application_initial) :
+    session_liveness_t (clock_t::time_point established,
+                        clock_t::time_point application_initial,
+                        detail::stream_liveness_options_t settings = {}) :
         last_application_inbound (application_initial),
         last_ping (established),
-        last_inbound (established)
+        last_inbound (established),
+        options (settings)
     {
     }
     std::optional<stream_close_reason_t> forced_reason;
@@ -59,13 +58,18 @@ struct session_liveness_t
         if (forced_reason) {
             return decision_t::none;
         }
-        if (now - last_inbound >= heartbeat_timeout) {
+        if (std::chrono::duration_cast<std::chrono::milliseconds> (now - last_inbound)
+            >= options.heartbeat_timeout) {
             return decision_t::heartbeat_timeout;
         }
-        if (now - last_application_inbound >= application_idle_timeout) {
+        if (options.idle_timeout.count () > 0
+            && std::chrono::duration_cast<std::chrono::milliseconds> (now
+                                                                      - last_application_inbound)
+                 >= options.idle_timeout) {
             return decision_t::idle_timeout;
         }
-        if (now - last_ping >= heartbeat_interval) {
+        if (std::chrono::duration_cast<std::chrono::milliseconds> (now - last_ping)
+            >= options.heartbeat_interval) {
             last_ping = now;
             return decision_t::send_heartbeat;
         }
@@ -76,8 +80,16 @@ struct session_liveness_t
     {
         if (forced_reason)
             return clock_t::time_point::max ();
-        return std::min ({last_ping + heartbeat_interval, last_inbound + heartbeat_timeout,
-                          last_application_inbound + application_idle_timeout});
+        const auto due_at = [] (clock_t::time_point baseline, std::chrono::milliseconds timeout) {
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+              clock_t::time_point::max () - baseline);
+            return timeout >= remaining ? clock_t::time_point::max () : baseline + timeout;
+        };
+        const auto heartbeat_due = std::min (due_at (last_ping, options.heartbeat_interval),
+                                             due_at (last_inbound, options.heartbeat_timeout));
+        return options.idle_timeout.count () > 0
+                 ? std::min (heartbeat_due, due_at (last_application_inbound, options.idle_timeout))
+                 : heartbeat_due;
     }
 
     // The connection execution owner records facts and makes terminal decisions.

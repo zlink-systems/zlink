@@ -917,6 +917,12 @@ stream_builder_t &stream_builder_t::set_advertise_host (std::string host)
     return *this;
 }
 
+stream_builder_t &stream_builder_t::set_liveness (detail::stream_liveness_options_t options)
+{
+    _state->snapshot.liveness = options;
+    return *this;
+}
+
 stream_builder_t &stream_builder_t::set_max_message_size (std::int64_t value)
 {
     if (value < 0) {
