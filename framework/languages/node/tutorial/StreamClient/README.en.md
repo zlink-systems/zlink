@@ -43,5 +43,5 @@ The existing `npm start` runs the JSON flow using the procedure in the parent tu
 
 ## Guides
 
-- [Node Protobuf Messaging](../../../../doc/framework/node/guide/stream-connector/40-protobuf.en.md)
-- [Node Protobuf Codecs and Types](../../../../doc/framework/node/guide/stream-connector/41-protobuf-codecs.en.md)
+- [Node Protobuf Messaging](https://zlink.systems/node/guide/stream-connector/40-protobuf/)
+- [Node Protobuf Codecs and Types](https://zlink.systems/node/guide/stream-connector/41-protobuf-codecs/)

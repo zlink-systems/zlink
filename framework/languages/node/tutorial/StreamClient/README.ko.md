@@ -44,5 +44,5 @@ JSON 흐름을 실행하는 기존 `npm start`는 상위 tutorial README의 절�
 
 ## 가이드
 
-- [Node Protobuf 송수신](../../../../doc/framework/node/guide/stream-connector/40-protobuf.ko.md)
-- [Node Protobuf codec과 타입](../../../../doc/framework/node/guide/stream-connector/41-protobuf-codecs.ko.md)
+- [Node Protobuf 송수신](https://zlink.systems/ko/node/guide/stream-connector/40-protobuf/)
+- [Node Protobuf codec과 타입](https://zlink.systems/ko/node/guide/stream-connector/41-protobuf-codecs/)
