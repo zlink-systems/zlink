@@ -52,7 +52,7 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
         var available = services.GetRequiredService<IServiceProviderIsService>();
         var catalog = new ActivationServiceCatalog(available, runtimeDependencies);
         foreach (var type in types.Distinct())
-            CompileFactory(type, catalog);
+            SelectConstructor(type, catalog);
     }
 
     private sealed class ActivationServiceCatalog(
@@ -139,7 +139,7 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
         }
     }
 
-    private static Func<IServiceProvider, object> CompileFactory(
+    private static ConstructorInfo? SelectConstructor(
         Type handlerType,
         IServiceProviderIsService? available
     )
@@ -198,13 +198,27 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
                 throw new InvalidOperationException(
                     $"No constructor for type '{handlerType}' has all required dependencies registered."
                 );
-            var factory = ActivatorUtilities.CreateFactory(handlerType, Type.EmptyTypes);
-            return provider => factory(provider, null);
+            return null;
         }
         if (multiple)
             throw new InvalidOperationException(
                 $"Multiple constructors for type '{handlerType}' were found with length {bestLength}."
             );
+
+        return selected;
+    }
+
+    private static Func<IServiceProvider, object> CompileFactory(
+        Type handlerType,
+        IServiceProviderIsService? available
+    )
+    {
+        var selected = SelectConstructor(handlerType, available);
+        if (selected is null)
+        {
+            var factory = ActivatorUtilities.CreateFactory(handlerType, Type.EmptyTypes);
+            return provider => factory(provider, null);
+        }
 
         var services = Expression.Parameter(typeof(IServiceProvider), "services");
         var arguments = selected!
