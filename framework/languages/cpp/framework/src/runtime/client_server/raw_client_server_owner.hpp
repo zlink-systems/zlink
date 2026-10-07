@@ -178,14 +178,15 @@ struct raw_client_server_client_options_t
 class raw_client_server_client_t
 {
   public:
+    using transport_turn_t = std::function<task_t<void> (std::function<void ()>)>;
     explicit raw_client_server_client_t (raw_client_server_client_options_t options,
                                          std::shared_ptr<zlink::context_t> context = {});
     ~raw_client_server_client_t () noexcept;
 
     void start ();
-    task_t<void> start_task ();
+    task_t<void> start_task (transport_turn_t transport_turn = {});
     void close ();
-    task_t<void> close_task ();
+    task_t<void> close_task (transport_turn_t transport_turn = {});
     bool ready () const;
     task_t<bool> ready_task () const;
     struct pump_status_t

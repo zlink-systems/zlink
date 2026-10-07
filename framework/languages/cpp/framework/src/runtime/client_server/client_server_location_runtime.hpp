@@ -96,16 +96,20 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     struct snapshot_connection_t;
     struct snapshot_source_t;
     struct worker_lane_snapshot_t;
-    struct publication_request_t;
+    struct worker_request_t;
 
     void start_server (const channel_snapshot_t &channel,
                        const std::optional<location_owner_token_t> &publication_owner);
     void start_client (const channel_snapshot_t &channel);
     void run ();
     void reconcile ();
-    task_t<void> reconcile_task ();
-    task_t<void> reconcile_channel_task (client_channel_t &channel);
+    task_t<void> reconcile_task (raw_client_server_client_t::transport_turn_t transport_turn = {});
+    task_t<void>
+    reconcile_channel_task (client_channel_t &channel,
+                            const raw_client_server_client_t::transport_turn_t &transport_turn);
     bool request_publication () noexcept;
+    task_t<void> request_transport_turn (std::function<void ()> work);
+    void run_transport_turns ();
     task_t<bool> publish_servers_task ();
     task_t<void> pump ();
     task_t<worker_lane_snapshot_t> run_worker_turn ();
@@ -189,13 +193,12 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::shared_ptr<eventing::runtime_wake_timer_t> _wake_timer =
       std::make_shared<eventing::runtime_wake_timer_t> ();
     std::shared_ptr<std::atomic_bool> _stop = std::make_shared<std::atomic_bool> (false);
-    // Guards short updates only and is never held across a wait: queued publication
+    // Guards short updates only and is never held across a wait: queued worker
     // requests, _active_application_drains, server_entry_t::pump_task and publication of
-    // pump_task_state_t::task. The worker alone runs publication; it takes the queued
-    // requests when a maintenance turn starts and completes them when it ends.
+    // pump_task_state_t::task. The worker owns poller changes and publication.
     std::mutex _server_progress_mutex;
     std::condition_variable _server_progress_changed;
-    std::vector<std::shared_ptr<publication_request_t>> _publication_requests;
+    std::vector<std::shared_ptr<worker_request_t>> _worker_requests;
     std::size_t _active_application_drains = 0;
     std::thread _thread;
 };
