@@ -95,15 +95,15 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private static final long RELOCATION_TARGET_WAIT_POLL_MILLIS = 25;
     private static final long EXECUTOR_GRACEFUL_SHUTDOWN_SECONDS = 1;
     private static final long EXECUTOR_FORCED_SHUTDOWN_SECONDS = 4;
-    private final ZLinkChannelRuntime channels;
-    private final ZLinkMeshNodesRuntime meshNodes;
-    private final ZLinkSpotRuntime spots;
-    private final ZLinkActorRuntime actors;
-    private final systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime spotRetire;
-    private final ZLinkActorDirectory actorDirectory;
-    private final ZLinkActorClient actorClient;
-    private final ZLinkStreamRuntime streams;
-    private final ZLinkBackendContext backendContext;
+    private ZLinkChannelRuntime channels;
+    private ZLinkMeshNodesRuntime meshNodes;
+    private ZLinkSpotRuntime spots;
+    private ZLinkActorRuntime actors;
+    private systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime spotRetire;
+    private ZLinkActorDirectory actorDirectory;
+    private ZLinkActorClient actorClient;
+    private ZLinkStreamRuntime streams;
+    private ZLinkBackendContext backendContext;
     private final systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
             applicationJobQueue;
     private final ZLinkStateLane capacityStateLane = new ZLinkStateLane();
@@ -114,19 +114,18 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private systems.zlink.framework.monitoring.ZLinkCoreHwmStatus lastCoreHwmStatus;
     private final AtomicBoolean coreHwmContextActive = new AtomicBoolean(false);
     private final ZLinkFrameworkRegistration registration;
-    private final ZLinkRegisteredLocationStores locationStores;
+    private ZLinkRegisteredLocationStores locationStores;
     private final ZLinkMeshDrainCoordinator meshDrains;
-    private final ZLinkLocationRuntime locationRuntime;
-    private final ZLinkLocationRuntimeQuery locationRuntimeQuery;
-    private final ZLinkLocationLifecycle locationLifecycle;
-    private final ZLinkLocationAutoConnectHost locationAutoConnectHost;
-    private final ZLinkStatefulAuthorityRouteRuntime authorityRouteRuntime;
-    private final systems.zlink.framework.runtime.internal.locations
-                    .ZLinkObjectServerDescriptorPublisher
+    private ZLinkLocationRuntime locationRuntime;
+    private ZLinkLocationRuntimeQuery locationRuntimeQuery;
+    private ZLinkLocationLifecycle locationLifecycle;
+    private ZLinkLocationAutoConnectHost locationAutoConnectHost;
+    private ZLinkStatefulAuthorityRouteRuntime authorityRouteRuntime;
+    private systems.zlink.framework.runtime.internal.locations.ZLinkObjectServerDescriptorPublisher
             objectDescriptors;
     private volatile ZLinkRouteMeshRuntimeOptions routeMeshRuntimeOptions;
-    private final SpotTransportAddressResolver spotTransportAddressResolver;
-    private final ZLinkStoreLocationResolvers storeLocationResolvers;
+    private SpotTransportAddressResolver spotTransportAddressResolver;
+    private ZLinkStoreLocationResolvers storeLocationResolvers;
     private final AtomicBoolean spotRuntimeStopped = new AtomicBoolean(false);
     private final CompletableFuture<Void> startupReady = new CompletableFuture<>();
     private final AtomicReference<ZLinkFrameworkRuntimeState> runtimeState =
@@ -180,19 +179,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private final ZLinkRouteMeshRuntimeView routeMeshRuntime = new ZLinkRouteMeshRuntimeView(this);
 
     private ZLinkFrameworkRuntime(
-            DefaultZLinkFrameworkOptions options,
-            ZLinkBackendAdapterProvider backendFactory,
-            ZLinkMessageSerializer serializer,
-            ZLinkHandlerActivator handlerFactory,
-            ZLinkRuntimeEventDispatcher eventDispatcher,
-            AtomicReference<ZLinkFrameworkRuntime> opened) {
-        options.validate();
-        options.registration().codecs().freeze();
+            DefaultZLinkFrameworkOptions options, ZLinkRuntimeEventDispatcher eventDispatcher) {
         eventDispatcher =
                 eventDispatcher == null ? new ZLinkRuntimeEventDispatcher() : eventDispatcher;
         this.eventDispatcher = eventDispatcher;
         this.registration = options.registration();
-        handlerFactory.prepare(this.registration.applicationTypes());
         this.applicationJobQueue = this.registration.applicationJobQueue();
         this.meshDrains =
                 new systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator(
@@ -202,6 +193,16 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         var diagnostics = this.registration.dispatchOptions().diagnostics();
         this.messageFlowMode = new AtomicReference<>(diagnostics.messageFlow());
         diagnostics.installLiveMode(this.messageFlowMode);
+    }
+
+    private void startComponents(
+            DefaultZLinkFrameworkOptions options,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkHandlerActivator handlerFactory) {
+        options.validate();
+        registration.codecs().freeze();
+        handlerFactory.prepare(registration.applicationTypes());
+        ZLinkMessageSerializer serializer = serializerFor(options);
         ZLinkBackendAdapterOptions adapterOptions =
                 new ZLinkBackendAdapterOptions(options.defaultRequestTimeout());
         ZLinkStreamCodec defaultStreamCodec = defaultStreamCodec(options);
@@ -218,9 +219,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             .ZLinkRelocationAdapterRegistry.class,
                     relocationAdapters);
         }
-        //  From here on every resource the start opens is recorded in its field,
-        //  so start() can roll a failed start back through the close routine.
-        opened.set(this);
         ZLinkFrameworkLocationSubsystem locationSubsystem =
                 ZLinkFrameworkLocationSubsystem.create(
                         this.registration,
@@ -632,23 +630,31 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             ZLinkBackendAdapterProvider backendFactory,
             ZLinkHandlerActivator handlerFactory,
             ZLinkRuntimeEventDispatcher eventDispatcher) {
-        //  The constructor records itself here once it starts opening
-        //  resources; a failure after that point is rolled back through the
-        //  close routine, which releases what was opened.
-        AtomicReference<ZLinkFrameworkRuntime> opened = new AtomicReference<>();
+        ZLinkFrameworkRuntime runtime = prepareHost(options, eventDispatcher);
         try {
-            return new ZLinkFrameworkRuntime(
-                    options,
-                    backendFactory,
-                    serializerFor(options),
-                    handlerFactory,
-                    eventDispatcher,
-                    opened);
-        } catch (Throwable failure) {
-            ZLinkFrameworkRuntime partial = opened.get();
-            if (partial != null) {
-                partial.rollBackStartup(failure);
-            }
+            runtime.startComponents(options, backendFactory, handlerFactory);
+            return runtime;
+        } catch (RuntimeException | Error failure) {
+            runtime.rollBackStartup(failure);
+            throw failure;
+        }
+    }
+
+    static ZLinkFrameworkRuntime prepareHost(
+            DefaultZLinkFrameworkOptions options, ZLinkRuntimeEventDispatcher eventDispatcher) {
+        return new ZLinkFrameworkRuntime(options, eventDispatcher);
+    }
+
+    static void startPreparedHost(
+            ZLinkFrameworkRuntime runtime,
+            DefaultZLinkFrameworkOptions options,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkHandlerActivator handlerFactory) {
+        try {
+            runtime.startComponents(options, backendFactory, handlerFactory);
+            runtime.startupCompletion().toCompletableFuture().join();
+        } catch (RuntimeException | Error failure) {
+            runtime.rollBackStartup(failure);
             throw failure;
         }
     }
@@ -658,15 +664,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             ZLinkBackendAdapterProvider backendFactory,
             ZLinkHandlerActivator handlerFactory,
             ZLinkRuntimeEventDispatcher eventDispatcher) {
-        ZLinkFrameworkRuntime runtime =
-                start(options, backendFactory, handlerFactory, eventDispatcher);
-        try {
-            runtime.startupCompletion().toCompletableFuture().join();
-            return runtime;
-        } catch (RuntimeException | Error failure) {
-            runtime.rollBackStartup(failure);
-            throw failure;
-        }
+        ZLinkFrameworkRuntime runtime = prepareHost(options, eventDispatcher);
+        startPreparedHost(runtime, options, backendFactory, handlerFactory);
+        return runtime;
     }
 
     static ZLinkMessageSerializer serializerFor(DefaultZLinkFrameworkOptions options) {
@@ -2166,7 +2166,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return shutdown.closeAsync()
                 .whenComplete(
                         (ignored, failure) -> {
-                            channels.clearListenerRecords();
+                            if (channels != null) {
+                                channels.clearListenerRecords();
+                            }
                             if (!drainStarted.get() && failure == null) {
                                 drained.complete(new InternalDrained());
                             }

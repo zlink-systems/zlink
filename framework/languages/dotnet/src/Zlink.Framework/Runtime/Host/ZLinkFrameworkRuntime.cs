@@ -95,8 +95,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     )
     {
         Services = services;
-        handlerRegistry.PrepareInstances(services);
-        ZLinkScopedHandlerInstanceOwner.Prepare(services, registration.Filters);
+        handlerRegistry.PrepareInstances(services, registration);
+        ZLinkScopedHandlerInstanceOwner.Validate(services, registration.Filters);
         _actorHandoffAdmissions = new ZLinkActorHandoffAdmissions(diagnostic: LogActorHandoff);
         _backendAdapterFactory = backendAdapterFactory;
         _autoConnect = services.GetService<ZLinkLocationAutoConnectHost>();

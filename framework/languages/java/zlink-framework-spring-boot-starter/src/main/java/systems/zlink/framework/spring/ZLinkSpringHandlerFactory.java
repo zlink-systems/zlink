@@ -2,11 +2,20 @@ package systems.zlink.framework.spring;
 
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanFactory;
+import org.springframework.beans.factory.BeanFactoryUtils;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
+import org.springframework.beans.factory.ObjectFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.AutowireCapableBeanFactory;
+import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.config.DependencyDescriptor;
+import org.springframework.beans.factory.support.AutowireCandidateResolver;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.core.MethodParameter;
 
 import systems.zlink.framework.ZLinkHandlerFilter;
@@ -73,7 +82,110 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     public void prepare(Class<?> handlerType) {
         ZLinkHandlerActivator.super.prepare(handlerType);
         if (isZLinkManagedType(handlerType)) {
-            handlerPlan(handlerType);
+            HandlerPlan plan = handlerPlan(handlerType);
+            RuntimeException failure = null;
+            for (ConstructorPlan constructor : plan.constructors()) {
+                try {
+                    for (ParameterPlan parameter : constructor.parameters()) {
+                        validateDependency(handlerType, parameter.descriptor());
+                    }
+                    return;
+                } catch (NoSuchBeanDefinitionException error) {
+                    failure = error;
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
+    }
+
+    private void validateDependency(Class<?> owner, DependencyDescriptor parameter) {
+        Class<?> type = parameter.getDependencyType();
+        if ((ZLinkSpot.class.isAssignableFrom(owner)
+                        && type == systems.zlink.framework.spots.ZLinkSpotContext.class)
+                || (ZLinkEntrySpot.class.isAssignableFrom(owner)
+                        && type == systems.zlink.framework.spots.ZLinkEntrySpotContext.class)
+                || (systems.zlink.framework.spots.ZLinkInstanceSpot.class.isAssignableFrom(owner)
+                        && type == systems.zlink.framework.spots.ZLinkInstanceSpotContext.class)
+                || ((ZLinkSession.class.isAssignableFrom(owner)
+                                || owner.isAnnotationPresent(ZLinkStreamPacket.class)
+                                || owner.isAnnotationPresent(ZLinkStreamRaw.class))
+                        && (type == systems.zlink.framework.streams.ZLinkSessionContext.class
+                                || type
+                                        == systems.zlink.framework.streams
+                                                .ZLinkSessionPacketDispatcher.class))) {
+            return;
+        }
+        if (!(beanFactory instanceof DefaultListableBeanFactory source)) {
+            throw new IllegalStateException(
+                    "Spring startup validation requires a metadata bean factory");
+        }
+        var resolver = source.getAutowireCandidateResolver();
+        if (resolver.getSuggestedValue(parameter) != null
+                || type == ObjectProvider.class
+                || type == ObjectFactory.class
+                || type.isArray()
+                || java.util.Collection.class.isAssignableFrom(type)
+                || java.util.Map.class.isAssignableFrom(type)) {
+            return;
+        }
+        DependencyDescriptor descriptor = new DependencyDescriptor(parameter);
+        descriptor.initParameterNameDiscovery(new DefaultParameterNameDiscoverer());
+        if (type == Optional.class) {
+            descriptor.increaseNestingLevel();
+        }
+        Map<String, Object> candidates = new java.util.LinkedHashMap<>();
+        for (String name :
+                BeanFactoryUtils.beanNamesForTypeIncludingAncestors(
+                        source, descriptor.getResolvableType(), true, false)) {
+            if (source.isAutowireCandidate(name, descriptor)) {
+                candidates.put(name, source.getType(name, false));
+            }
+        }
+        if (candidates.isEmpty()) {
+            if (resolver.isRequired(parameter)) {
+                throw new NoSuchBeanDefinitionException(descriptor.getResolvableType());
+            }
+        } else if (candidates.size() > 1
+                && new MetadataCandidateSelector(source).select(candidates, descriptor) == null) {
+            throw new NoUniqueBeanDefinitionException(
+                    descriptor.getResolvableType(), candidates.keySet());
+        }
+    }
+
+    /** Spring owns candidate selection; this view exposes only bean definition metadata. */
+    private static final class MetadataCandidateSelector extends DefaultListableBeanFactory {
+        private final DefaultListableBeanFactory source;
+
+        MetadataCandidateSelector(DefaultListableBeanFactory source) {
+            super(source.getParentBeanFactory());
+            this.source = source;
+            setDependencyComparator(source.getDependencyComparator());
+        }
+
+        String select(Map<String, Object> candidates, DependencyDescriptor descriptor) {
+            return determineAutowireCandidate(candidates, descriptor);
+        }
+
+        @Override
+        public BeanDefinition getBeanDefinition(String name) {
+            return source.getBeanDefinition(name);
+        }
+
+        @Override
+        public boolean containsBeanDefinition(String name) {
+            return source.containsBeanDefinition(name);
+        }
+
+        @Override
+        public String[] getAliases(String name) {
+            return source.getAliases(name);
+        }
+
+        @Override
+        public AutowireCandidateResolver getAutowireCandidateResolver() {
+            return source.getAutowireCandidateResolver();
         }
     }
 
@@ -92,6 +204,13 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     @Override
     public Object findService(Class<?> serviceType) {
         return beanFactory.getBeanProvider(serviceType).getIfAvailable();
+    }
+
+    @Override
+    public Object findService(Constructor<?> constructor, int parameterIndex) {
+        return beanFactory.resolveDependency(
+                new DependencyDescriptor(new MethodParameter(constructor, parameterIndex), false),
+                constructor.getDeclaringClass().getName());
     }
 
     @Override
@@ -146,7 +265,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     }
 
     private final class SpringActivation implements Activation {
-        private final Map<DependencyKey, Object> scopedDependencies = new LinkedHashMap<>();
+        private final Map<Object, Object> scopedDependencies = new LinkedHashMap<>();
         private final List<Object> ownedDependencies = new ArrayList<>();
         private boolean closed;
 
@@ -194,16 +313,46 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                     arguments[index] = supplied;
                     continue;
                 }
-                Object cached = scopedDependencies.get(parameter.key());
-                if (cached != null) {
-                    arguments[index] = cached;
+                Object aggregate = scopedDependencies.get(parameter.key());
+                if (aggregate != null) {
+                    arguments[index] = aggregate;
                     continue;
                 }
-                ShortcutDependencyDescriptor shortcut = parameter.shortcut().get();
+                String shortcut = parameter.shortcut().get();
                 HashSet<String> beanNames = shortcut == null ? new HashSet<>() : null;
+                DependencyDescriptor descriptor =
+                        new DependencyDescriptor(parameter.descriptor()) {
+                            @Override
+                            public boolean usesStandardBeanLookup() {
+                                return false;
+                            }
+
+                            @Override
+                            public Object resolveShortcut(BeanFactory factory) {
+                                return shortcut == null
+                                        ? null
+                                        : resolveCandidate(shortcut, getDependencyType(), factory);
+                            }
+
+                            @Override
+                            public Object resolveCandidate(
+                                    String beanName, Class<?> requiredType, BeanFactory factory) {
+                                Object cached = scopedDependencies.get(beanName);
+                                if (cached != null) {
+                                    return cached;
+                                }
+                                Object dependency =
+                                        super.resolveCandidate(beanName, requiredType, factory);
+                                if (factory.isPrototype(beanName)) {
+                                    scopedDependencies.put(beanName, dependency);
+                                    ownedDependencies.add(dependency);
+                                }
+                                return dependency;
+                            }
+                        };
                 Object dependency =
                         beanFactory.resolveDependency(
-                                shortcut == null ? parameter.descriptor() : shortcut,
+                                descriptor,
                                 constructor.constructor().getDeclaringClass().getName(),
                                 beanNames,
                                 null);
@@ -211,17 +360,20 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                     throw new IllegalStateException(
                             "Spring dependency is unavailable: " + parameter.typeName());
                 }
-                boolean activationScoped =
-                        shortcut != null
-                                ? shortcut.activationScoped()
-                                : beanNames.stream().anyMatch(beanFactory::isPrototype);
-                if (activationScoped) {
-                    scopedDependencies.put(parameter.key(), dependency);
-                    ownedDependencies.add(dependency);
-                }
                 arguments[index] = dependency;
                 if (shortcut == null) {
-                    shortcutCandidate(parameter, beanNames)
+                    Optional<String> scalar = shortcutCandidate(parameter, beanNames);
+                    if (scalar.isEmpty() && beanNames.stream().anyMatch(beanFactory::isPrototype)) {
+                        scopedDependencies.put(parameter.key(), dependency);
+                        ownedDependencies.add(dependency);
+                    }
+                    scalar.filter(
+                                    ignored ->
+                                            beanFactory
+                                                            instanceof
+                                                            ConfigurableListableBeanFactory
+                                                                    configurable
+                                                    && configurable.isConfigurationFrozen())
                             .ifPresent(
                                     candidate ->
                                             parameter.shortcut().compareAndSet(null, candidate));
@@ -280,7 +432,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         return plan;
     }
 
-    private Optional<ShortcutDependencyDescriptor> preparedShortcut(ParameterPlan parameter) {
+    private Optional<String> preparedShortcut(ParameterPlan parameter) {
         if (!(beanFactory instanceof ConfigurableListableBeanFactory configurable)
                 || !configurable.isConfigurationFrozen()) {
             return Optional.empty();
@@ -298,26 +450,19 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         if (selected == null) {
             return Optional.empty();
         }
-        return Optional.of(
-                new ShortcutDependencyDescriptor(
-                        parameter.descriptor(), selected, beanFactory.isPrototype(selected)));
+        return Optional.of(selected);
     }
 
-    private java.util.Optional<ShortcutDependencyDescriptor> shortcutCandidate(
-            ParameterPlan parameter, HashSet<String> beanNames) {
-        if (!(beanFactory instanceof ConfigurableListableBeanFactory configurable)
-                || !configurable.isConfigurationFrozen()
-                || beanNames.size() != 1) {
-            return java.util.Optional.empty();
+    private Optional<String> shortcutCandidate(ParameterPlan parameter, HashSet<String> beanNames) {
+        if (beanNames.size() != 1) {
+            return Optional.empty();
         }
         String beanName = beanNames.iterator().next();
         if (!beanFactory.containsBean(beanName)
                 || !beanFactory.isTypeMatch(beanName, parameter.type())) {
-            return java.util.Optional.empty();
+            return Optional.empty();
         }
-        return java.util.Optional.of(
-                new ShortcutDependencyDescriptor(
-                        parameter.descriptor(), beanName, beanFactory.isPrototype(beanName)));
+        return Optional.of(beanName);
     }
 
     private record HandlerPlan(List<ConstructorPlan> constructors) {
@@ -357,38 +502,10 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
             String typeName,
             DependencyKey key,
             DependencyDescriptor descriptor,
-            AtomicReference<ShortcutDependencyDescriptor> shortcut) {}
-
-    private static final class ShortcutDependencyDescriptor extends DependencyDescriptor {
-        private final String beanName;
-        private final boolean activationScoped;
-
-        private ShortcutDependencyDescriptor(
-                DependencyDescriptor descriptor, String beanName, boolean activationScoped) {
-            super(descriptor);
-            this.beanName = beanName;
-            this.activationScoped = activationScoped;
-        }
-
-        private boolean activationScoped() {
-            return activationScoped;
-        }
-
-        @Override
-        public Object resolveShortcut(BeanFactory factory) {
-            return factory.getBean(beanName, getDependencyType());
-        }
-    }
+            AtomicReference<String> shortcut) {}
 
     private static int autowiredPriority(Constructor<?> constructor) {
         return constructor.isAnnotationPresent(Autowired.class) ? 1 : 0;
-    }
-
-    private static Throwable unwrap(Throwable failure) {
-        return failure instanceof InvocationTargetException invocation
-                        && invocation.getCause() != null
-                ? invocation.getCause()
-                : failure;
     }
 
     private record DependencyKey(String type, List<String> annotations) {
@@ -400,6 +517,13 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                             .sorted()
                             .toList());
         }
+    }
+
+    private static Throwable unwrap(Throwable failure) {
+        return failure instanceof InvocationTargetException invocation
+                        && invocation.getCause() != null
+                ? invocation.getCause()
+                : failure;
     }
 
     private static boolean isZLinkManagedType(Class<?> type) {
