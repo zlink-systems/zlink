@@ -756,7 +756,10 @@ MeshNode lifecycle 재시작에서 바뀌지 않을 수 있기 때문이다. Rec
 Framework는 그 reservation을 만든 자격 없이 `Reserved → Missing`으로 바꾸고 pending 수용 공간을
 반납한다. 요청은 처음 읽은 authority `StoreVersion`, 읽은 owner lease record의 상태(version 또는
 없음), 읽은 descriptor record의 상태와 수용 공간 record를 조건으로 함께 검사한다. 수용 공간
-record가 없으면 authority만 바꾼다. 반납 결과가 0보다 작아지면 Store 데이터 손상으로 판정하고
+record가 없으면 authority만 바꾼다. 수용 공간 record는 Mesh 이름과 RID마다 하나이고 MeshNode
+lifecycle이 바뀌어도 이어진다 — 해제하지 않은 모든 allocation을 집계하며 descriptor를 다시
+게시해도 초기화하지 않는다. 따라서 이전 lifecycle의 reservation을 해제할 때 같은 record에서
+반납한다. 반납 결과가 0보다 작아지면 Store 데이터 손상으로 판정하고
 아무것도 변경하지 않는다. 이 판정은 Location repository 한 곳이 내린다 — `Reserve`가 기존
 `Reserved`를 읽었을 때와 startup scan이 이전 lifecycle의 `Creating`을 넘겼을 때 같은 판정을 쓴다.
 Target owner lease가 유효하고 descriptor가 같은 lifecycle이면 해제하지 않는다.
@@ -942,7 +945,7 @@ Framework는 최초 message를 queue 선두에 복원한 뒤 새 message를 받�
 | Process가 종료된 시점 | 다시 시작한 Framework의 처리 |
 |---|---|
 | Payload 저장 뒤 `Creating` 기록 전 | 어느 위치 record도 가리키지 않는 데이터이므로 보관 기한이 끝나면 삭제한다. |
-| `Creating` 기록 뒤 `Ready` 전 | 같은 record와 generation으로 생성을 계속하거나 정확히 같은 record를 취소한다. |
+| `Creating` 기록 뒤 `Ready` 전 | [§6.1](#61-read와-cas)의 reservation 해제 판정을 따른다. |
 | `Ready` 뒤 최초 message 복원 전 | 저장 데이터로 최초 message부터 복원한다. 그 전에는 새 message를 받지 않는다. |
 
 이미 `Ready`인 authority가 다른 owner를 가리키거나 `Creating`이면, 수신 target은

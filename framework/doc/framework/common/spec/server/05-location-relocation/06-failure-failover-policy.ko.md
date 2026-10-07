@@ -130,9 +130,11 @@ owner인지 판단하는 기준 정보인 [authority](../00-foundation/02-glossa
 ### 4.3 Actor와 Spot 생성
 
 Object가 없는 상태에서 생성 요청이 경쟁하면 Location Store의 `Creating` record를 먼저 확보한
-target 하나만 factory를 실행한다. 생성 중 process가 종료되면 다음 Framework operation은 같은
-object ID와 generation의 생성 record를 다시 확인한다. 같은 생성을 계속하거나 정확히 그
-record를 취소할 수 있으며, factory는 같은 입력으로 다시 호출될 수 있다.
+target 하나만 factory를 실행한다. 생성 중 process가 종료돼 target lifecycle이 끝난
+reservation은 [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의 해제로 정리한다. 같은
+lifecycle에서 stored creation intent를 재개하는 범위는
+[Object lifecycle §3](../03-spot-actor/09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)을 따르며, factory는
+같은 입력으로 다시 호출될 수 있다.
 
 이 동작은 생성이 `Ready`로 공개되기 전의 recovery다. 이미 실행 중인 object의 owner 장애를
 복구하는 failover가 아니다. 생성 경쟁과 결과는

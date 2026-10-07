@@ -142,10 +142,12 @@ owner — or convert the next message into cold activation.
 ### 4.3 Actor and Spot Creation
 
 If creation requests compete while no object exists, only the target that first secures the
-Location Store's `Creating` record runs the factory. If the process terminates during creation,
-the next Framework operation re-checks the creation record for the same object ID and generation.
-It can continue the same creation or cancel exactly that record, and the factory can be called
-again with the same input.
+Location Store's `Creating` record runs the factory. A reservation whose target lifecycle ended
+because the process terminated during creation is cleaned up by the release in
+[Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas). The scope in which stored
+creation intent resumes in the same lifecycle follows
+[Object lifecycle §3](../03-spot-actor/09-object-lifecycle.en.md#3-when-to-build-a-missing-object), and
+the factory can be called again with the same input.
 
 This is creation recovery before the object is exposed as `Ready` — not failover recovering an
 owner failure for an already-running object. Creation competition and result are defined by
