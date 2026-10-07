@@ -61,12 +61,10 @@ import {
 import { createSessionDispatchContext, DefaultZLinkSessionContext } from './session-context';
 import { ZLinkSessionSerialExecutor } from './session-serial-executor';
 import { ownedMessage } from './stream-message-utils';
+import { normalizeStreamLiveness } from '../../contracts/Configuration/RegistrationNormalizers';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 const ZLINK_RECV_DONT_WAIT = 1;
-const ZLINK_STREAM_HEARTBEAT_INTERVAL_MS = 1_000;
-const ZLINK_STREAM_HEARTBEAT_TIMEOUT_MS = 5_000;
-const ZLINK_STREAM_APPLICATION_IDLE_TIMEOUT_MS = 30_000;
 const ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT = 64;
 const ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CLOSE_DELAY_MS = 100;
 const ZLINK_STREAM_MONITOR_IDLE_MIN_DELAY_MS = 1;
@@ -89,9 +87,11 @@ interface ZLinkStreamLivenessOptions {
   readonly claimApplicationWork?: () => ZLinkApplicationWorkClaim;
 }
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 const systemLivenessClock: ZLinkStreamLivenessClock = {
   now: () => performance.now(),
-  setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
+  setTimer: (callback, delayMs) => setTimeout(callback, Math.min(delayMs, MAX_TIMER_DELAY_MS)),
   clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)
 };
 
@@ -127,6 +127,9 @@ export interface ZLinkStreamSessionContextFactory {
 }
 
 export interface ZLinkStreamSessionRuntimeOptions {
+  readonly heartbeatIntervalMs?: number;
+  readonly heartbeatTimeoutMs?: number;
+  readonly idleTimeoutMs?: number;
   readonly socket: ZLinkBackendStreamSocket;
   readonly nativeSessionService?: StreamSessionService;
   readonly meshCompletions?: ZLinkMeshCompletionTable;
@@ -165,8 +168,10 @@ export class ZLinkStreamSessionRuntime {
   private closeReason = 'client_close';
   private metricsClosed = false;
   private readonly livenessClock: ZLinkStreamLivenessClock;
+  private readonly liveness: ReturnType<typeof normalizeStreamLiveness>;
   private lastApplicationActivityAt = 0;
   private lastInboundFrameAt = 0;
+  private lastHeartbeatPingAt = 0;
   private livenessTimer: unknown;
 
   constructor(
@@ -177,6 +182,7 @@ export class ZLinkStreamSessionRuntime {
       session: ZLinkStreamSessionRuntime
     ) => void = () => {}
   ) {
+    this.liveness = normalizeStreamLiveness(options);
     this.livenessClock = options.livenessClock ?? systemLivenessClock;
     this.stream = new ZLinkManagedStream(
       options.socket,
@@ -414,6 +420,7 @@ export class ZLinkStreamSessionRuntime {
     this.connected = true;
     const connectedAt = this.livenessClock.now();
     this.lastApplicationActivityAt = connectedAt;
+    this.lastHeartbeatPingAt = connectedAt;
     this.lastInboundFrameAt = Math.max(this.lastInboundFrameAt, connectedAt);
     this.scheduleLivenessCheck();
     this.options.metrics?.change(METRIC_NAMES.StreamConnectionsActive, 1, { transport: 'tcp' });
@@ -621,10 +628,21 @@ export class ZLinkStreamSessionRuntime {
     if (this.disposed || this.disconnected || this.livenessTimer !== undefined) {
       return;
     }
-    this.livenessTimer = this.livenessClock.setTimer(() => {
-      this.livenessTimer = undefined;
-      void this.runLivenessCheck().catch((error) => this.options.onError?.(error));
-    }, ZLINK_STREAM_HEARTBEAT_INTERVAL_MS);
+    const now = this.livenessClock.now();
+    const due = Math.min(
+      this.lastHeartbeatPingAt + this.liveness.heartbeatIntervalMs,
+      this.lastInboundFrameAt + this.liveness.heartbeatTimeoutMs,
+      this.liveness.idleTimeoutMs > 0
+        ? this.lastApplicationActivityAt + this.liveness.idleTimeoutMs
+        : Infinity
+    );
+    this.livenessTimer = this.livenessClock.setTimer(
+      () => {
+        this.livenessTimer = undefined;
+        void this.runLivenessCheck().catch((error) => this.options.onError?.(error));
+      },
+      Math.max(0, due - now)
+    );
   }
 
   private async runLivenessCheck(): Promise<void> {
@@ -632,7 +650,10 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     const now = this.livenessClock.now();
-    if (now - this.lastApplicationActivityAt >= ZLINK_STREAM_APPLICATION_IDLE_TIMEOUT_MS) {
+    if (
+      this.liveness.idleTimeoutMs > 0 &&
+      now - this.lastApplicationActivityAt >= this.liveness.idleTimeoutMs
+    ) {
       await this.closeForLiveness(
         ZLinkStreamCloseReasonCode.IdleTimeout,
         'idle_timeout',
@@ -640,7 +661,7 @@ export class ZLinkStreamSessionRuntime {
       );
       return;
     }
-    if (now - this.lastInboundFrameAt >= ZLINK_STREAM_HEARTBEAT_TIMEOUT_MS) {
+    if (now - this.lastInboundFrameAt >= this.liveness.heartbeatTimeoutMs) {
       await this.closeForLiveness(
         ZLinkStreamCloseReasonCode.HeartbeatTimeout,
         'heartbeat_timeout',
@@ -648,7 +669,10 @@ export class ZLinkStreamSessionRuntime {
       );
       return;
     }
-    await this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PING);
+    if (now - this.lastHeartbeatPingAt >= this.liveness.heartbeatIntervalMs) {
+      this.lastHeartbeatPingAt = now;
+      await this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PING);
+    }
     this.scheduleLivenessCheck();
   }
 
