@@ -149,6 +149,12 @@ public final class ZLinkInMemoryLocationStore
     }
 
     @Override
+    public CompletionStage<Boolean> releaseEndedReservation(
+            String key, String expectedStoreVersion, ZLinkStoreCancellation cancellation) {
+        return authority.releaseEndedReservation(key, expectedStoreVersion, cancellation);
+    }
+
+    @Override
     public CompletionStage<ZLinkObjectReserveResult> reserve(
             ZLinkObjectReservationRequest request, ZLinkStoreCancellation cancellation) {
         return authority.reserve(request, cancellation);

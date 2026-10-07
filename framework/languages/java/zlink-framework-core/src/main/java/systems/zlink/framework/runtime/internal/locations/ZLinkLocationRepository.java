@@ -97,6 +97,13 @@ public interface ZLinkLocationRepository {
             ZLinkCreationOperationTerminal terminal,
             ZLinkStoreCancellation cancellation);
 
+    default CompletionStage<Boolean> releaseEndedReservation(
+            String key, String expectedStoreVersion, ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException(
+                        "Reservation lifecycle recovery is not supported"));
+    }
+
     CompletionStage<ZLinkObjectAbortResult> abort(
             ZLinkObjectReservation reservation, ZLinkStoreCancellation cancellation);
 
