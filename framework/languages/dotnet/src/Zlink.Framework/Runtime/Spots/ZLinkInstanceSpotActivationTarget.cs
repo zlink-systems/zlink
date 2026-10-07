@@ -720,10 +720,30 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 snapshot.Payload.Span,
                 out var authority
             )
-            || authority.NodeRid != node.RoutingId
-            || authority.NodeGeneration != status.LifecycleGeneration
         )
             return;
+
+        if (
+            authority.NodeRid != node.RoutingId
+            || authority.NodeGeneration != status.LifecycleGeneration
+        )
+        {
+            if (
+                authority.State == ZLinkInstanceSpotAuthorityState.Creating
+                && snapshot.ReservedCreation is { } pending
+                && await authorityStore
+                    .ReleaseEndedReservationAsync(
+                        entry.Key,
+                        snapshot.StoreVersion,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false)
+            )
+                await relocationStore
+                    .DeleteRelocationAsync(pending.RequestContentReference, cancellationToken)
+                    .ConfigureAwait(false);
+            return;
+        }
 
         ZLinkInstanceSpotActivationRecoveryPointer recovery;
         if (authority.State == ZLinkInstanceSpotAuthorityState.Creating)

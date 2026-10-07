@@ -527,40 +527,51 @@ internal sealed partial class ZLinkProviderLocationRepository
             return StaleAuthorityReclaimResult.NotReclaimable;
 
         var ownerKey = OwnerKey(current.Snapshot.OwnerId);
+        var descriptorKey = MeshKey(
+            current.Snapshot.Allocation.Descriptor.MeshName,
+            current.Snapshot.Allocation.Descriptor.Rid
+        );
         var ownerRead = await _provider
             .ReadAsync(ownerKey, cancellationToken)
             .ConfigureAwait(false);
-        ZLinkStoreCondition staleOwnerCondition;
-        if (ownerRead is ZLinkStoreReadResult.Missing)
+        var descriptorRead = await _provider
+            .ReadAsync(descriptorKey, cancellationToken)
+            .ConfigureAwait(false);
+        var ownerLive = false;
+        ZLinkStoreCondition ownerCondition;
+        if (ownerRead is ZLinkStoreReadResult.Found ownerFound)
         {
-            staleOwnerCondition = new ZLinkStoreCondition.Missing(ownerKey);
+            var owner = DecodeOwner(ownerFound.Value.Bytes);
+            if (owner.OwnerId != current.Snapshot.OwnerId || ownerFound.Value.ExpiresAt is null)
+                throw new InvalidDataException("The Location Store owner lease record is invalid.");
+            ownerLive =
+                owner.LeaseGeneration == current.Snapshot.OwnerLeaseGeneration
+                && ownerFound.Value.ExpiresAt > ownerFound.Value.StoreNow;
+            ownerCondition = new ZLinkStoreCondition.Version(ownerKey, ownerFound.Value.Version);
         }
         else
+            ownerCondition = new ZLinkStoreCondition.Missing(ownerKey);
+        ZLinkStoreCondition descriptorCondition;
+        if (descriptorRead is ZLinkStoreReadResult.Found descriptorFound)
         {
-            var ownerFound = (ZLinkStoreReadResult.Found)ownerRead;
-            var owner = DecodeOwner(ownerFound.Value.Bytes);
+            var descriptor = DecodeDescriptor<ZLinkMeshNodeDescriptor>(
+                descriptorFound.Value.Bytes
+            ).Descriptor;
             if (
-                !string.Equals(owner.OwnerId, current.Snapshot.OwnerId, StringComparison.Ordinal)
-                || ownerFound.Value.ExpiresAt is null
-            )
-            {
-                // A lease is always written with a positive TTL, so a missing
-                // expiry is a corrupt record. Reclaiming deletes authority
-                // state, so refuse rather than read the absence as expiry.
-                throw new InvalidDataException("The Location Store owner lease record is invalid.");
-            }
-
-            if (
-                owner.LeaseGeneration == current.Snapshot.OwnerLeaseGeneration
-                && ownerFound.Value.ExpiresAt > ownerFound.Value.StoreNow
+                ownerLive
+                && descriptor.LifecycleGeneration
+                    == current.Snapshot.Allocation.DescriptorLifecycleGeneration
             )
                 return StaleAuthorityReclaimResult.OwnerLive;
-            staleOwnerCondition = new ZLinkStoreCondition.Value(ownerKey, ownerFound.Value.Bytes);
+            descriptorCondition = new ZLinkStoreCondition.Version(
+                descriptorKey,
+                descriptorFound.Value.Version
+            );
         }
+        else
+            descriptorCondition = new ZLinkStoreCondition.Missing(descriptorKey);
 
-        // A relocation record has its own recovery protocol. GetOrCreate may
-        // reclaim only a steady authority or an unfinished creation whose
-        // owner lease ended.
+        // Relocation authority retains its own recovery protocol.
         if (current.Meta.AggregateFence is not null)
             return StaleAuthorityReclaimResult.RecoveryRequired;
         if (
@@ -574,7 +585,8 @@ internal sealed partial class ZLinkProviderLocationRepository
         var conditions = new List<ZLinkStoreCondition>
         {
             new ZLinkStoreCondition.Version(AuthorityMetaKey(current.Key), current.Version),
-            staleOwnerCondition,
+            ownerCondition,
+            descriptorCondition,
         };
         var mutations = new List<ZLinkStoreMutation>
         {
@@ -589,8 +601,11 @@ internal sealed partial class ZLinkProviderLocationRepository
         conditions.Add(capacity.Condition);
         if (current.Meta.ReservedCreation is null)
             return StaleAuthorityReclaimResult.RecoveryRequired;
-        ApplyCapacity(nextCapacity, current.Snapshot.Allocation, pendingDelta: -1);
-        mutations.Add(new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null));
+        if (capacity.Condition is not ZLinkStoreCondition.Missing)
+        {
+            ApplyCapacity(nextCapacity, current.Snapshot.Allocation, pendingDelta: -1);
+            mutations.Add(new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null));
+        }
 
         var result = await _provider
             .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
@@ -598,6 +613,19 @@ internal sealed partial class ZLinkProviderLocationRepository
         return result is ZLinkStoreWriteResult.Applied
             ? StaleAuthorityReclaimResult.Reclaimed
             : StaleAuthorityReclaimResult.Conflict;
+    }
+
+    public async ValueTask<bool> ReleaseEndedReservationAsync(
+        ZLinkAuthorityKey key,
+        string expectedStoreVersion,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var current = await ReadAuthorityRecordAsync(key, cancellationToken).ConfigureAwait(false);
+        if (current is null || current.Snapshot.StoreVersion != expectedStoreVersion)
+            return false;
+        return await TryReclaimStaleAuthorityAsync(current, cancellationToken).ConfigureAwait(false)
+            == StaleAuthorityReclaimResult.Reclaimed;
     }
 
     public ValueTask<ZLinkObjectCommitResult> CommitAsync(
@@ -4405,7 +4433,10 @@ internal sealed partial class ZLinkProviderLocationRepository
         record.SpotsPending = checked(record.SpotsPending + vector.Spots * pendingDelta);
         record.SpotsActive = checked(record.SpotsActive + vector.Spots * activeDelta);
         if (vector.SpotType is not { } spotType)
+        {
+            RequireNonNegative(record);
             return;
+        }
         var key = CapacityTypeKey(spotType.ObjectKind, spotType.StableType);
         var current = record.SpotTypes.GetValueOrDefault(key);
         record.SpotTypes[key] = new CapacityCount(
