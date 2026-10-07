@@ -1375,6 +1375,10 @@ void app_t::_apply_zlink_framework ()
     for (const auto &registration : mesh_node_registrations) {
         registration->lane
           .run ([&] {
+              for (const auto &[name, lifecycle] : registration->spot_state->spot_lifecycles) {
+                  if (lifecycle.validate_dependencies)
+                      lifecycle.validate_dependencies (_state->services);
+              }
               registration->core_context = shared_core_context;
               registration->application_jobs = _state->application_job_queue;
           })

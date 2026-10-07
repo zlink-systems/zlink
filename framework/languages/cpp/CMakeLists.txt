@@ -1786,6 +1786,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_di.cpp
     "framework-unit;framework-regression;DI;scope")
   add_zlink_framework_test(
+    test_cpp_framework_startup_dependencies
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_startup_dependencies.cpp
+    "framework-unit;DI;framework-host")
+  add_zlink_framework_test(
     test_cpp_framework_runtime_integration
     tests/Zlink.Framework.UnitTests/test_cpp_framework_runtime_integration.cpp
     "framework-unit;framework-integration;runtime"
