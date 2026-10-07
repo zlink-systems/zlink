@@ -137,11 +137,13 @@ static void case_pair_retry_other_thread (void *ctx_, zlink_socket_type_t type_,
     const size_t expected_count = raw ? 1 : retry_record_capacity;
     set_int (rx, ZLINK_OPT_RCVTIMEO, receive_timeout_ms);
     send_record (tx, 1, static_cast<int> (expected_count));
-    zlink_msg_t small[1], large[retry_record_capacity];
+    zlink_msg_t short_buffer[1], large[retry_record_capacity];
     size_t n_small = 0, n_large = 0;
     int first = -1, other = -1;
     first_then_other_live_thread (
-      [&] { first = zlink_recv (rx, NULL, small, raw ? 0 : 1, &n_small, ZLINK_RECV_FLAGS_NONE); },
+      [&] {
+          first = zlink_recv (rx, NULL, short_buffer, raw ? 0 : 1, &n_small, ZLINK_RECV_FLAGS_NONE);
+      },
       [&] {
           other =
             zlink_recv (rx, NULL, large, retry_record_capacity, &n_large, ZLINK_RECV_FLAGS_NONE);
@@ -180,13 +182,13 @@ static void case_router_retry_other_thread (void *ctx_)
     send_record (dealer, 2, static_cast<int> (retry_record_capacity));
     const zlink_routing_id_t *rid = NULL;
     zlink_reply_token_t token = 0;
-    zlink_msg_t small[1], large[retry_record_capacity];
+    zlink_msg_t short_buffer[1], large[retry_record_capacity];
     size_t n_small = 0, n_large = 0;
     int first = -1, other = -1;
     first_then_other_live_thread (
       [&] {
-          first =
-            zlink_router_recv (router, &rid, &token, small, 1, &n_small, ZLINK_RECV_FLAGS_NONE);
+          first = zlink_router_recv (router, &rid, &token, short_buffer, 1, &n_small,
+                                     ZLINK_RECV_FLAGS_NONE);
       },
       [&] {
           other = zlink_router_recv (router, &rid, &token, large, retry_record_capacity, &n_large,
@@ -231,14 +233,14 @@ static void case_xpub_and_sub_retry_other_thread (void *ctx_, zlink_socket_type_
     // XPUB event: small topic buffer on thread A, sufficient on thread B.
     const zlink_routing_id_t *rid = NULL;
     int subscribed = -1;
-    char small[1];
+    char short_buffer[1];
     char large[64];
     size_t need = 0, len = 0;
     int first = -1, other = -1;
     first_then_other_live_thread (
       [&] {
-          first = zlink_xpub_recv (xpub, &rid, &subscribed, small, sizeof (small), &need,
-                                   ZLINK_RECV_FLAGS_NONE);
+          first = zlink_xpub_recv (xpub, &rid, &subscribed, short_buffer, sizeof (short_buffer),
+                                   &need, ZLINK_RECV_FLAGS_NONE);
       },
       [&] {
           other = zlink_xpub_recv (xpub, &rid, &subscribed, large, sizeof (large), &len,
