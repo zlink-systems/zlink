@@ -1479,3 +1479,112 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
 }
 
 } // namespace
+
+TEST (CppFrameworkInstanceSpotActivation, StartupReleasesPreviousLifecycleBeforeRecoveryRoot)
+{
+    using namespace std::chrono_literals;
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    namespace host = rt::host;
+    auto provider = std::make_shared<rt::in_memory_location_store_t> ();
+    auto store = std::make_shared<rt::provider_location_repository_t> (*provider);
+    const auto owner = std::get<fw::owner_lease_claimed_t> (
+                         store->claim_owner_lease ("startup-owner", 60s).result ().value ())
+                         .token;
+    fw::mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "startup-mesh";
+    descriptor.rid = zlink::routing_id_t::from ("startup-target");
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7100";
+    descriptor.owner_id = owner.owner_id;
+    descriptor.lease_generation = owner.lease_generation;
+    descriptor.object_role = fw::object_role_t::server;
+    descriptor.state = fw::framework_runtime_state_t::serving;
+    descriptor.object_capabilities.push_back ({fw::placement_object_kind_t::instance_spot, "room",
+                                               fw::maintenance_policy_kind_t::disabled, false, 1});
+    descriptor.capacity.spots.limit = 1;
+    descriptor.capacity.spot_types.push_back (
+      {fw::placement_object_kind_t::instance_spot, "room", {0, 0, 1}});
+    ASSERT_EQ (store->update_mesh_node (descriptor, fw::location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               fw::location_write_status_t::stored);
+    class roots_t final : public rt::stateful::relocation_store_port_t
+    {
+      public:
+        std::function<void ()> before_remove;
+        bool exists = true;
+        rt::stateful::relocation_stored_t put (const std::vector<std::uint8_t> &,
+                                               std::chrono::hours,
+                                               std::chrono::steady_clock::time_point) override
+        {
+            return {"startup-root", 0};
+        }
+        std::optional<std::vector<std::uint8_t>> get (const std::string &) override
+        {
+            ADD_FAILURE () << "Old lifecycle must not replay";
+            return std::nullopt;
+        }
+        void remove (const std::string &reference) override
+        {
+            EXPECT_EQ (reference, "startup-root");
+            before_remove ();
+            EXPECT_TRUE (exists);
+            exists = false;
+        }
+    };
+    auto roots = std::make_shared<roots_t> ();
+    fw::object_reserve_request_t request;
+    request.key = {fw::placement_object_kind_t::instance_spot, "startup-spot"};
+    request.intent = {"room", "startup-root", {}, 4};
+    request.target = {descriptor.mesh_name, fw::node_rid_t::from_string ("startup-target"), 1,
+                      owner};
+    const std::string marker = "zlink:instance-spot:creating:v1";
+    for (const auto ch : marker)
+        request.creating_payload.push_back (static_cast<std::byte> (ch));
+    request.capacity_bundle.spot_slots = 1;
+    request.capacity_bundle.spot_type =
+      fw::spot_type_capacity_delta_t{fw::placement_object_kind_t::instance_spot, "room", 1};
+    const auto reserved = store->reserve (request).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<fw::object_reserved_t> (reserved));
+    const auto key = rt::spot_authority_key ("startup-spot");
+    roots->before_remove = [&] {
+        EXPECT_TRUE (std::holds_alternative<fw::authority_missing_t> (
+          store->read_authority (key).result ().value ()));
+        const auto capacity = std::get<fw::store_found_t> (
+          provider->read ({"zlink:v11:capacity:startup-mesh:startup-target"}).result ().value ());
+        const auto counts =
+          nlohmann::json::parse (capacity.value.bytes.begin (), capacity.value.bytes.end ());
+        EXPECT_EQ (counts.at ("pending").at ("spots"), 0);
+    };
+    store->remove_mesh_node ({descriptor.mesh_name, descriptor.rid}, owner).result ().value ();
+    descriptor.lifecycle_generation = 2;
+    ASSERT_EQ (store->update_mesh_node (descriptor, fw::location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               fw::location_write_status_t::stored);
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{.mesh = {.descriptor = {.mesh_name = "startup-mesh",
+                                                   .node_routing_id = descriptor.rid.to_bytes (),
+                                                   .lifecycle_generation = 2,
+                                                   .descriptor_revision = 1,
+                                                   .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+    target->configure_instance_spot_operations (
+      store, roots, [owner] { return owner; },
+      host::instance_spot_activation_materializer_t{
+        [] (const auto &, const auto &) {
+            ADD_FAILURE () << "Old lifecycle must not prepare";
+            return false;
+        },
+        [] (auto, auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+            ADD_FAILURE () << "Old lifecycle must not activate";
+            co_return host::instance_spot_activation_result_t{};
+        }});
+    ASSERT_TRUE (roots->exists);
+    target->start ();
+    target->recover_instance_spot_activations ();
+    EXPECT_FALSE (roots->exists);
+}
