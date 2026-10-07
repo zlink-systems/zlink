@@ -12,6 +12,18 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.17.0]
+
+### Fixed
+
+- The `ws` and `wss` transports send each STREAM message as a separate WebSocket
+  message. Previously, Core could combine multiple length-prefixed STREAM frames
+  in one WebSocket message, and the receiver closed the connection with
+  `frame length does not match prefix` (#1545, #1553).
+- Renamed the local buffers from `small` to `short_buffer` in
+  `unittest_recv_admission.cpp` to avoid the Windows SDK macro collision that
+  prevented the test from compiling on Windows (#1553).
+
 ## [1.16.0]
 
 ### Changed
