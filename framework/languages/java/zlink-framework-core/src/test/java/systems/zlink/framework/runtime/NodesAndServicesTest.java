@@ -424,6 +424,23 @@ final class NodesAndServicesTest {
     }
 
     @Test
+    void disabledInstanceFactoryRequiresRelocationStore() {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addRouteMesh("game")
+                .listen("inproc://disabled-instance-store")
+                .objects()
+                .server()
+                .addInstanceSpotFactory(
+                        "room", RoomInstanceSpot.class, factory -> factory.disableRelocation());
+
+        var missingStore = assertThrows(ZLinkConfigurationException.class, options::validate);
+        assertTrue(missingStore.getMessage().contains("Relocation Store"));
+        options.addRelocationStore(new InMemoryRelocationStore());
+        assertDoesNotThrow(options::validate);
+    }
+
+    @Test
     void routeMeshDispatchesSpotRequestToTargetSpot() throws Exception {
         String suffix = Long.toUnsignedString(System.nanoTime());
         RoutingId nodeRid = RoutingId.from("game-node-" + suffix);
