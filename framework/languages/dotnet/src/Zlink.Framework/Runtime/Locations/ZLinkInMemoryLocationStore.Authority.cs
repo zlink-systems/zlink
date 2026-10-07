@@ -317,7 +317,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 return new ZLinkObjectReserveResult.Conflict(
                     new ZLinkAuthorityReadResult.Missing(now)
                 );
-            if (_authorities.TryGetValue(request.Key.Value, out var existing))
+            if (
+                _authorities.TryGetValue(request.Key.Value, out var existing)
+                && !TryReleaseEndedReservation(request.Key, existing, now)
+            )
                 return existing.Allocation.State == ZLinkPlacementAllocationState.Active
                     ? new ZLinkObjectReserveResult.AlreadyExists(existing)
                     : new ZLinkObjectReserveResult.Conflict(
@@ -588,6 +591,54 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 ? new ZLinkCreationTerminalReadResult.Found(terminal with { StoreNow = now })
                 : new ZLinkCreationTerminalReadResult.Missing(now);
         });
+    }
+
+    public ValueTask<bool> ReleaseEndedReservationAsync(
+        ZLinkAuthorityKey key,
+        string expectedStoreVersion,
+        CancellationToken cancellationToken = default
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return _lane.RunAsync(() =>
+            _authorities.TryGetValue(key.Value, out var current)
+            && current.StoreVersion == expectedStoreVersion
+            && TryReleaseEndedReservation(key, current, _time.GetUtcNow())
+        );
+    }
+
+    private bool TryReleaseEndedReservation(
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot current,
+        DateTimeOffset now
+    )
+    {
+        if (
+            current.Allocation.State != ZLinkPlacementAllocationState.Reserved
+            || current.ReservedCreation is null
+            || IsAuthorityInPreparedAggregate(key)
+        )
+            return false;
+        var descriptorKey = ZLinkLocationKeyCodec.EncodeMeshNodeKey(current.Allocation.Descriptor);
+        if (
+            MatchesLiveOwnerLease(
+                new ZLinkLocationOwnerToken(current.OwnerId, current.OwnerLeaseGeneration),
+                now
+            )
+            && _meshNodes.Rows.TryGetValue(descriptorKey, out var descriptor)
+            && descriptor.LifecycleGeneration == current.Allocation.DescriptorLifecycleGeneration
+        )
+            return false;
+        AdjustAllocationCapacity(_pendingPlacementCapacity, current.Allocation, -1);
+        _authorities.Remove(key.Value);
+        if (
+            _authorityReservations.TryGetValue(
+                current.ReservedCreation.ReservationId,
+                out var state
+            )
+        )
+            state.Status = ReservationStatus.Aborted;
+        return true;
     }
 
     public ValueTask<ZLinkObjectAbortResult> AbortAsync(

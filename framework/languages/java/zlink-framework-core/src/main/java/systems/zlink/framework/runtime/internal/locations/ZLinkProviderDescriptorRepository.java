@@ -602,7 +602,7 @@ final class ZLinkProviderDescriptorRepository {
         return node;
     }
 
-    private static ZLinkMeshNodeDescriptor decodeMeshNodeRecord(byte[] bytes) {
+    static ZLinkMeshNodeDescriptor decodeMeshNodeRecord(byte[] bytes) {
         JsonNode root;
         try {
             root = CANONICAL_JSON.readTree(bytes);
@@ -964,7 +964,7 @@ final class ZLinkProviderDescriptorRepository {
     // (21-location-runtime.md#2.4): "mesh-node\0{MeshName}\0{hex(RoutingId)}",
     // NUL-separated, no length prefix. A runtime in any language derives
     // the same SHA-256-hashed opaque record key from this same string.
-    private static ZLinkStoreKey meshKey(String meshName, RoutingId rid) {
+    static ZLinkStoreKey meshKey(String meshName, RoutingId rid) {
         return ZLinkOpaqueRecordKey.of("mesh-node", meshName, rid.toHex());
     }
 

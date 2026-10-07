@@ -767,6 +767,23 @@ class in_memory_location_repository_t : public location_repository_t
           .get ();
     }
 
+    task_t<bool> release_ended_reservation (authority_key_t key,
+                                            std::string expected_store_version,
+                                            std::stop_token cancellation = {}) override
+    {
+        if (cancellation.stop_requested ())
+            return cancelled<bool> ();
+        return _lane
+          .run ([&] {
+              const auto current = _authorities.find (key.value);
+              return completed (
+                current != _authorities.end ()
+                && current->second.store_version == expected_store_version
+                && release_ended_reservation_on_lane (key.value, current->second, clock_t::now ()));
+          })
+          .get ();
+    }
+
     task_t<object_reserve_result_t> reserve (object_reserve_request_t request,
                                              std::stop_token cancellation = {}) override
     {
@@ -786,7 +803,10 @@ class in_memory_location_repository_t : public location_repository_t
                       return completed (object_reserve_result_t{
                         object_reserve_conflict_t{authority_missing_t{now}}});
               }
-              const auto authority = _authorities.find (key);
+              auto authority = _authorities.find (key);
+              if (authority != _authorities.end ()
+                  && release_ended_reservation_on_lane (key, authority->second, now))
+                  authority = _authorities.end ();
               if (authority != _authorities.end ()) {
                   const auto type = _object_types.find (key);
                   if (type != _object_types.end () && type->second != request.intent.stable_type)
@@ -1264,6 +1284,34 @@ class in_memory_location_repository_t : public location_repository_t
     {
         return task_t<T> (detail::result_access_t::failure<T> (
           detail::make_cancellation_exception ("location store operation was cancelled")));
+    }
+
+    bool release_ended_reservation_on_lane (const std::string &key,
+                                            const authority_snapshot_t &snapshot,
+                                            clock_t::time_point now)
+    {
+        if (snapshot.allocation.state != placement_allocation_state_t::reserved
+            || !snapshot.pending_creation)
+            return false;
+        for (const auto &[id, aggregate] : _aggregates)
+            if (aggregate.status == aggregate_status_t::prepared)
+                for (const auto &participant : aggregate.request.participants)
+                    if (participant.key.value == key)
+                        return false;
+        const auto &target = snapshot.allocation.target;
+        const auto descriptor = _mesh_nodes.find (
+          mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
+        if (owner_token_is_live (snapshot.owner, now) && descriptor != _mesh_nodes.end ()
+            && descriptor->second.lifecycle_generation == target.node_lifecycle_generation)
+            return false;
+        const auto reservation = _reservations.find (key);
+        if (reservation == _reservations.end ())
+            return false;
+        release_pending (reservation->second);
+        reservation->second.status = reservation_status_t::aborted;
+        _authorities.erase (key);
+        _object_types.erase (key);
+        return true;
     }
 
     bool owner_token_is_live (const location_owner_token_t &token, clock_t::time_point now) const

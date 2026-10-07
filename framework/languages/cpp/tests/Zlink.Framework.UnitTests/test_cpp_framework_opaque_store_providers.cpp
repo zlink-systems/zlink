@@ -175,9 +175,8 @@ std::string segment (std::string_view value)
 
 store_key_t capacity_key (const mesh_node_descriptor_t &descriptor)
 {
-    return {"zlink:v11:capacity:" + segment (descriptor.mesh_name)
-            + segment (descriptor.rid.to_hex ())
-            + std::to_string (descriptor.lifecycle_generation)};
+    // These fixture Mesh names and RIDs contain URI-safe ASCII only.
+    return {"zlink:v11:capacity:" + descriptor.mesh_name + ":" + descriptor.rid.to_string ()};
 }
 
 TEST (ZLinkFrameworkOpaqueStoreProviders, ValueConditionFencesBytesButNotVersion)
@@ -350,7 +349,7 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, DescriptorCommitAcceptsConcurrentLease
     EXPECT_FALSE (store.renew_on_descriptor_write);
 }
 
-TEST (ZLinkFrameworkOpaqueStoreProviders, StaleReservationReclaimIgnoresNewLeaseRenewal)
+TEST (ZLinkFrameworkOpaqueStoreProviders, StaleReservationReclaimFencesNewLeaseRenewal)
 {
     renew_before_conditional_commit_store_t store;
     store.owner_id = "reclaim-source";
@@ -405,7 +404,13 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, StaleReservationReclaimIgnoresNewLease
                       target->token};
     store.renew_on_reclaim_write = true;
     const auto reserved = repository.reserve (request).result ().value ();
-    ASSERT_NE (std::get_if<object_reserved_t> (&reserved), nullptr);
+    // Location runtime §6.1 requires the observed lease version in the release batch.
+    ASSERT_TRUE (std::holds_alternative<object_reserve_conflict_t> (reserved));
+    EXPECT_EQ (
+      std::get<authority_snapshot_t> (
+        repository.read_authority (actor_authority_key (request.key.global_id)).result ().value ())
+        .store_version,
+      std::get<object_reserved_t> (original).creating.store_version);
     EXPECT_EQ (store.reclaim_writes, 1u);
     EXPECT_FALSE (store.renew_on_reclaim_write);
 }
@@ -681,17 +686,17 @@ class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
             .result ()
             .value ();
         const auto counts = capacity_record (provider, descriptor);
-        EXPECT_EQ (counts.at ("actorsPending"), 0);
+        EXPECT_EQ (counts.at ("pending").at ("actors"), 0);
         if (GetParam () == completion_kind_t::created) {
             const auto *ready = std::get_if<authority_snapshot_t> (&authority_result);
             ASSERT_NE (ready, nullptr);
             EXPECT_EQ (ready->allocation.state, placement_allocation_state_t::active);
             EXPECT_EQ (ready->payload, bytes ("ready"));
             EXPECT_FALSE (ready->pending_creation);
-            EXPECT_EQ (counts.at ("actorsActive"), 1);
+            EXPECT_EQ (counts.at ("active").at ("actors"), 1);
         } else {
             EXPECT_TRUE (std::holds_alternative<authority_missing_t> (authority_result));
-            EXPECT_EQ (counts.at ("actorsActive"), 0);
+            EXPECT_EQ (counts.at ("active").at ("actors"), 0);
         }
         // Replays cannot refresh retention or borrow another source's terminal.
         publication.operation_deadline += 1min;
@@ -838,6 +843,167 @@ void CreationTerminalTest::verify_creation_descriptor_conflict (bool user_spot)
     }
 }
 
+TEST_P (CreationTerminalTest, CapacityKeyUsesSharedUtf8UriPreimageAcrossLifecycles)
+{
+    auto escaped = descriptor;
+    escaped.mesh_name = "mesh /한";
+    escaped.rid = zlink::routing_id_t::from ("node /#?");
+    ASSERT_EQ (repository.update_mesh_node (escaped, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    auto request = reserve_request;
+    request.key.global_id = "escaped-capacity-actor";
+    request.target.mesh_name = escaped.mesh_name;
+    request.target.node_rid = node_rid_t::from_string (escaped.rid.to_string ());
+    const auto reserved = repository.reserve (request).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<object_reserved_t> (reserved));
+    const store_key_t expected{"zlink:v11:capacity:mesh%20%2F%ED%95%9C:node%20%2F%23%3F"};
+    const auto before = std::get<store_found_t> (provider.read (expected).result ().value ());
+    const auto counts =
+      nlohmann::json::parse (before.value.bytes.begin (), before.value.bytes.end ());
+    EXPECT_EQ (counts.at ("pending").at ("actors"), 1);
+    repository.remove_mesh_node ({escaped.mesh_name, escaped.rid}, fence.target.owner)
+      .result ()
+      .value ();
+    escaped.lifecycle_generation = 2;
+    ASSERT_EQ (repository.update_mesh_node (escaped, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    const auto unchanged = std::get<store_found_t> (provider.read (expected).result ().value ());
+    EXPECT_EQ (before.value.version.value, unchanged.value.version.value);
+    request.target.node_lifecycle_generation = 2;
+    ASSERT_TRUE (
+      std::holds_alternative<object_reserved_t> (repository.reserve (request).result ().value ()));
+    const auto after = std::get<store_found_t> (provider.read (expected).result ().value ());
+    EXPECT_EQ (nlohmann::json::parse (after.value.bytes.begin (), after.value.bytes.end ())
+                 .at ("pending")
+                 .at ("actors"),
+               1);
+}
+
+TEST_P (CreationTerminalTest, LiveTargetKeepsReservation)
+{
+    EXPECT_FALSE (repository
+                    .release_ended_reservation (actor_authority_key (reserve_request.key.global_id),
+                                                fence.expected_store_version)
+                    .result ()
+                    .value ());
+}
+
+TEST_P (CreationTerminalTest, ExpiredTargetReleasesPendingCapacity)
+{
+    owner_lease_time_store_t expired (provider.inner, fence.target.owner.owner_id,
+                                      owner_lease_time_store_t::lease_view_t::expired);
+    provider_location_repository_t recovery (expired);
+    EXPECT_TRUE (recovery
+                   .release_ended_reservation (actor_authority_key (reserve_request.key.global_id),
+                                               fence.expected_store_version)
+                   .result ()
+                   .value ());
+    EXPECT_TRUE (std::holds_alternative<authority_missing_t> (
+      repository.read_authority (actor_authority_key (reserve_request.key.global_id))
+        .result ()
+        .value ()));
+    const auto capacity =
+      std::get<store_found_t> (provider.read (capacity_key (descriptor)).result ().value ());
+    const auto json =
+      nlohmann::json::parse (capacity.value.bytes.begin (), capacity.value.bytes.end ());
+    EXPECT_EQ (json.at ("pending").at ("actors"), 0);
+    EXPECT_TRUE (std::holds_alternative<object_commit_conflict_t> (
+      repository.commit ({reserve_request.key, fence, bytes ("late")}).result ().value ()));
+}
+
+TEST_P (CreationTerminalTest, MissingCapacityReleasesOnlyAuthority)
+{
+    provider.write ({{}, {store_delete_t{capacity_key (descriptor)}}}).result ().value ();
+    repository.release_owner_lease (fence.target.owner).result ().value ();
+    EXPECT_TRUE (repository
+                   .release_ended_reservation (actor_authority_key (reserve_request.key.global_id),
+                                               fence.expected_store_version)
+                   .result ()
+                   .value ());
+    EXPECT_TRUE (std::holds_alternative<store_missing_t> (
+      provider.read (capacity_key (descriptor)).result ().value ()));
+}
+
+TEST_P (CreationTerminalTest, UnderflowLeavesAuthorityAndCapacityUnchanged)
+{
+    provider
+      .write ({{},
+               {store_put_t{capacity_key (descriptor),
+                            bytes ("{\"active\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}},"
+                                   "\"pending\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}}}"),
+                            std::nullopt}}})
+      .result ()
+      .value ();
+    repository.release_owner_lease (fence.target.owner).result ().value ();
+    const auto before =
+      std::get<store_found_t> (provider.read (capacity_key (descriptor)).result ().value ());
+    const auto result =
+      repository
+        .release_ended_reservation (actor_authority_key (reserve_request.key.global_id),
+                                    fence.expected_store_version)
+        .result ();
+    ASSERT_FALSE (result);
+    try {
+        (void) result.value ();
+        FAIL () << "Capacity underflow must fail";
+    }
+    catch (const framework_exception_t &error) {
+        EXPECT_EQ (error.kind (), framework_error_kind_t::data_lost);
+    }
+    const auto after =
+      std::get<store_found_t> (provider.read (capacity_key (descriptor)).result ().value ());
+    EXPECT_EQ (before.value.version.value, after.value.version.value);
+    EXPECT_EQ (before.value.bytes, after.value.bytes);
+    EXPECT_EQ (std::get<authority_snapshot_t> (
+                 repository.read_authority (actor_authority_key (reserve_request.key.global_id))
+                   .result ()
+                   .value ())
+                 .store_version,
+               fence.expected_store_version);
+}
+
+TEST_P (CreationTerminalTest, LateCommitWinsAgainstReleaseStoreBatch)
+{
+    repository.remove_mesh_node ({descriptor.mesh_name, descriptor.rid}, fence.target.owner)
+      .result ()
+      .value ();
+    provider.before_next_write = [&] () -> task_t<void> {
+        co_await repository.update_mesh_node (descriptor, location_write_intent_t::new_claim);
+        const auto committed =
+          co_await repository.commit ({reserve_request.key, fence, bytes ("ready")});
+        EXPECT_TRUE (std::holds_alternative<object_committed_t> (committed));
+    };
+    EXPECT_FALSE (repository
+                    .release_ended_reservation (actor_authority_key (reserve_request.key.global_id),
+                                                fence.expected_store_version)
+                    .result ()
+                    .value ());
+}
+
+TEST_P (CreationTerminalTest, DescriptorLifecycleReplacementReleasesReservedCapacity)
+{
+    ASSERT_EQ (
+      repository.remove_mesh_node ({descriptor.mesh_name, descriptor.rid}, fence.target.owner)
+        .result ()
+        .value (),
+      location_write_status_t::stored);
+    descriptor.lifecycle_generation = 2;
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    reserve_request.target.node_lifecycle_generation = 2;
+    const auto replacement = repository.reserve (reserve_request).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<object_reserved_t> (replacement));
+}
+
 TEST_P (CreationTerminalTest, CreationTransitionsFenceOwnerLeaseAndDescriptorVersion)
 {
     verify_creation_conditions (false);
@@ -927,8 +1093,8 @@ TEST_P (CreationTerminalTest, ConditionalAuthorityConflictLeavesReservationAndCa
     EXPECT_EQ (creating->allocation.state, placement_allocation_state_t::reserved);
     EXPECT_EQ (creating->payload, bytes ("creating"));
     EXPECT_NE (creating->store_version, fence.expected_store_version);
-    EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsPending"), 1);
-    EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsActive"), 0);
+    EXPECT_EQ (capacity_record (provider, descriptor).at ("pending").at ("actors"), 1);
+    EXPECT_EQ (capacity_record (provider, descriptor).at ("active").at ("actors"), 0);
 }
 
 TEST_P (CreationTerminalTest, SharedCapacityConflictReconstructsWithoutChangingReservation)
@@ -968,8 +1134,8 @@ TEST_P (CreationTerminalTest, ConcurrentTerminalEndsConflictReconstruction)
     const auto *reserved = std::get_if<authority_snapshot_t> (&authority);
     ASSERT_NE (reserved, nullptr);
     EXPECT_EQ (reserved->store_version, fence.expected_store_version);
-    EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsPending"), 1);
-    EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsActive"), 0);
+    EXPECT_EQ (capacity_record (provider, descriptor).at ("pending").at ("actors"), 1);
+    EXPECT_EQ (capacity_record (provider, descriptor).at ("active").at ("actors"), 0);
 }
 
 INSTANTIATE_TEST_SUITE_P (CreationTerminalStates,
@@ -1991,14 +2157,14 @@ TEST (CppFrameworkOpaqueLocationStore, AbortedReservationCanBeReservedAgainThrou
     ASSERT_NE (second_reservation, nullptr);
     EXPECT_NE (second_reservation->fence.reservation_id, first_reservation->fence.reservation_id);
     const auto capacity = capacity_record (provider, descriptor);
-    EXPECT_EQ (capacity.at ("actorsPending"), 1);
-    EXPECT_EQ (capacity.at ("actorsActive"), 0);
+    EXPECT_EQ (capacity.at ("pending").at ("actors"), 1);
+    EXPECT_EQ (capacity.at ("active").at ("actors"), 0);
 
     EXPECT_TRUE (std::holds_alternative<object_abort_stale_t> (
       repository.abort ({request.key, first_reservation->fence}).result ().value ()));
     EXPECT_TRUE (std::holds_alternative<object_aborted_t> (
       repository.abort ({request.key, second_reservation->fence}).result ().value ()));
-    EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsPending"), 0);
+    EXPECT_EQ (capacity_record (provider, descriptor).at ("pending").at ("actors"), 0);
 }
 
 TEST (CppFrameworkOpaqueLocationStore, AggregatePrepareAdoptsPeerLockAfterConditionalWriteConflict)
@@ -2084,8 +2250,8 @@ TEST (CppFrameworkOpaqueLocationStore, AggregatePrepareAdoptsPeerLockAfterCondit
     ASSERT_NE (spot, nullptr);
 
     const auto source_capacity = capacity_record (provider, source_descriptor);
-    EXPECT_EQ (source_capacity.at ("actorsActive"), 1);
-    EXPECT_EQ (source_capacity.at ("spotsActive"), 1);
+    EXPECT_EQ (source_capacity.at ("active").at ("actors"), 1);
+    EXPECT_EQ (source_capacity.at ("active").at ("spots"), 1);
     EXPECT_TRUE (std::holds_alternative<store_missing_t> (
       provider.read (capacity_key (target_descriptor)).result ().value ()));
 
@@ -2303,8 +2469,8 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     auto nodes = repository.list_mesh_nodes ("play").result ().value ();
     ASSERT_EQ (nodes.items.size (), 1u);
     auto capacity = capacity_record (provider, descriptor);
-    EXPECT_EQ (capacity.at ("actorsPending"), 1);
-    EXPECT_EQ (capacity.at ("actorsActive"), 0);
+    EXPECT_EQ (capacity.at ("pending").at ("actors"), 1);
+    EXPECT_EQ (capacity.at ("active").at ("actors"), 0);
     EXPECT_EQ (nodes.items.front ().capacity.actors.reserved, 0u);
     EXPECT_EQ (nodes.items.front ().capacity.actors.active, 0u);
 
@@ -2317,8 +2483,8 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     nodes = repository.list_mesh_nodes ("play").result ().value ();
     ASSERT_EQ (nodes.items.size (), 1u);
     capacity = capacity_record (provider, descriptor);
-    EXPECT_EQ (capacity.at ("actorsPending"), 0);
-    EXPECT_EQ (capacity.at ("actorsActive"), 1);
+    EXPECT_EQ (capacity.at ("pending").at ("actors"), 0);
+    EXPECT_EQ (capacity.at ("active").at ("actors"), 1);
 
     provider_location_repository_t reopened (provider);
     const auto actor_key = actor_authority_key ("actor-1");
@@ -2347,8 +2513,8 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     ASSERT_NE (moved_authority, nullptr);
     EXPECT_EQ (moved_authority->snapshot.payload, bytes ("moved"));
     capacity = capacity_record (provider, descriptor);
-    EXPECT_EQ (capacity.at ("actorsPending"), 0);
-    EXPECT_EQ (capacity.at ("actorsActive"), 1);
+    EXPECT_EQ (capacity.at ("pending").at ("actors"), 0);
+    EXPECT_EQ (capacity.at ("active").at ("actors"), 1);
 
     object_reserve_request_t spot_request;
     spot_request.key = {placement_object_kind_t::user_spot, "spot-1"};
@@ -2446,13 +2612,13 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     const auto *fenced = std::get_if<aggregate_prepared_t> (&fenced_prepared);
     ASSERT_NE (fenced, nullptr);
     capacity = capacity_record (provider, descriptor);
-    EXPECT_EQ (capacity.at ("actorsPending"), 1);
-    EXPECT_EQ (capacity.at ("spotsPending"), 1);
+    EXPECT_EQ (capacity.at ("pending").at ("actors"), 1);
+    EXPECT_EQ (capacity.at ("pending").at ("spots"), 1);
     EXPECT_EQ (reopened.commit_aggregate (fenced->fence).result ().value (),
                aggregate_commit_result_t::committed);
     capacity = capacity_record (provider, descriptor);
-    EXPECT_EQ (capacity.at ("actorsPending"), 0);
-    EXPECT_EQ (capacity.at ("spotsPending"), 0);
+    EXPECT_EQ (capacity.at ("pending").at ("actors"), 0);
+    EXPECT_EQ (capacity.at ("pending").at ("spots"), 0);
 
     const auto abort_actor =
       std::get<authority_snapshot_t> (reopened.read_authority (actor_key).result ().value ());
@@ -2470,8 +2636,8 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     EXPECT_EQ (reopened.abort_aggregate (abort_fence->fence).result ().value (),
                aggregate_abort_result_t::aborted);
     capacity = capacity_record (provider, descriptor);
-    EXPECT_EQ (capacity.at ("actorsPending"), 0);
-    EXPECT_EQ (capacity.at ("spotsPending"), 0);
+    EXPECT_EQ (capacity.at ("pending").at ("actors"), 0);
+    EXPECT_EQ (capacity.at ("pending").at ("spots"), 0);
 
     // A committed creation keeps its reservation record until the authority
     // is deleted. Deletion must derive that record from the encoded authority
@@ -2971,8 +3137,8 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
     EXPECT_EQ (moved_snapshot->snapshot.allocation.target.node_rid.value (), "target-node");
     auto source_capacity = capacity_record (provider, source_descriptor);
     auto target_capacity = capacity_record (provider, target_descriptor);
-    EXPECT_EQ (source_capacity.at ("actorsActive"), 0);
-    EXPECT_EQ (target_capacity.at ("actorsActive"), 1);
+    EXPECT_EQ (source_capacity.at ("active").at ("actors"), 0);
+    EXPECT_EQ (target_capacity.at ("active").at ("actors"), 1);
 
     auto atomic_actor = create_actor ("actor-atomic");
     const store_key_t node_source_capacity_key{"zlink:v11:capacity:retarget:source-node"};
@@ -2983,11 +3149,12 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
       {"pending", {{"actors", 0}, {"spots", 0}, {"spotTypes", nlohmann::json::object ()}}}};
     ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
       provider.inner
-        .write ({.conditions = {store_version_condition_t{capacity_key (source_descriptor),
-                                                          canonical_source_row.value.version},
-                                store_missing_condition_t{node_source_capacity_key}},
-                 .mutations = {store_delete_t{capacity_key (source_descriptor)},
-                               store_put_t{node_source_capacity_key,
+        .write ({.conditions =
+                   {
+                     store_version_condition_t{capacity_key (source_descriptor),
+                                               canonical_source_row.value.version},
+                   },
+                 .mutations = {store_put_t{node_source_capacity_key,
                                            bytes (node_source_capacity.dump ()), std::nullopt}}})
         .result ()
         .value ()));
@@ -3013,7 +3180,7 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
                                + node_source_row.value.bytes.size ());
     target_capacity = capacity_record (provider, target_descriptor);
     EXPECT_EQ (node_source.at ("active").at ("actors"), 1);
-    EXPECT_EQ (target_capacity.at ("actorsActive"), 1);
+    EXPECT_EQ (target_capacity.at ("active").at ("actors"), 1);
 
     atomic_actor = after_rejected;
     node_source["active"]["actors"] = 0;
@@ -3040,7 +3207,7 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
                                + node_source_row.value.bytes.size ());
     target_capacity = capacity_record (provider, target_descriptor);
     EXPECT_EQ (node_source.at ("active").at ("actors"), 0);
-    EXPECT_EQ (target_capacity.at ("actorsActive"), 1);
+    EXPECT_EQ (target_capacity.at ("active").at ("actors"), 1);
 }
 
 TEST (CppFrameworkOpaqueLocationStore, AggregateCommitUsesBoundedBatches)

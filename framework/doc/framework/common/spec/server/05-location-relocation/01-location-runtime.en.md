@@ -835,6 +835,22 @@ doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.
 
+**A reservation whose target lifecycle has ended is released.** If the target owner lease of a
+`Reserved` record is missing, has a different `LeaseGeneration`, or has expired, or if the target
+MeshNode descriptor record is missing or has a different `descriptorLifecycleGeneration`, that
+reservation's target lifecycle has ended. The Framework then changes `Reserved → Missing` and
+returns the pending capacity without the eligibility that created the reservation. The request
+checks, as conditions together, the authority `StoreVersion` as first read, the state of the owner
+lease record as read (version or absent), the state of the descriptor record as read, and the
+capacity record. If the capacity record is absent, only the authority changes. There's one capacity record per
+Mesh name and RID, and it carries over when the MeshNode lifecycle changes — it counts every
+unreleased allocation and isn't reset when the descriptor is published again. Releasing a previous
+lifecycle's reservation therefore returns capacity to the same record. If the return would
+go below zero, it's judged as Store data corruption and nothing changes. The Location repository
+alone makes this decision — `Reserve` uses the same decision when it reads an existing `Reserved`,
+and so does the startup scan when it passes a previous lifecycle's `Creating`. If the target owner
+lease is valid and the descriptor is the same lifecycle, the reservation isn't released.
+
 **An operation that receives `Conflict` continues after re-checking its eligibility.** A provider
 `Conflict` changed nothing but doesn't say which condition failed. The Framework re-reads the
 authority record and checks that the first-read state (still `Missing` if it was `Missing`, otherwise
@@ -1034,7 +1050,7 @@ It isn't used for Actor, other Spot kinds, `Creating`, `Closing`, `Relocating`, 
 | When the process terminated | Handling by the restarted Framework |
 |---|---|
 | After storing payload, before recording `Creating` | Data pointed to by no location record, so it's deleted once retention ends. |
-| After recording `Creating`, before `Ready` | Continues creation with the same record and generation, or cancels the same record. |
+| After recording `Creating`, before `Ready` | Follows the reservation release decision of [§6.1](#61-read-and-cas). |
 | After `Ready`, before restoring the first message | Restores starting from the first message using the stored data. No new message is received before that. |
 
 If an existing `Ready` authority points to another owner or authority is `Creating`, the

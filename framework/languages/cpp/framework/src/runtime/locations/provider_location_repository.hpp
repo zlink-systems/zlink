@@ -668,8 +668,8 @@ class provider_location_repository_t final : public location_repository_t
                 co_return object_reserve_result_t{object_type_mismatch_t{std::move (current)}};
             if (current.allocation.state == placement_allocation_state_t::active)
                 co_return object_reserve_result_t{object_already_exists_t{std::move (current)}};
-            const auto reclaim = co_await try_reclaim_reserved_authority_async (
-              request.key, authority_key, *found, current);
+            const auto reclaim =
+              co_await try_reclaim_reserved_authority_async (authority_key, *found, current);
             if (reclaim == stale_authority_reclaim_result_t::reclaimed
                 || reclaim == stale_authority_reclaim_result_t::conflict) {
                 *retry_reclaim = reclaim == stale_authority_reclaim_result_t::reclaimed;
@@ -775,51 +775,83 @@ class provider_location_repository_t final : public location_repository_t
           object_reserved_t{std::move (fence), std::move (creating)}};
     }
 
-    task_t<stale_authority_reclaim_result_t>
-    try_reclaim_reserved_authority_async (object_creation_key_t key,
-                                          store_key_t authority_key,
-                                          store_found_t stored_authority,
-                                          authority_snapshot_t current)
+    task_t<stale_authority_reclaim_result_t> try_reclaim_reserved_authority_async (
+      store_key_t authority_key, store_found_t stored_authority, authority_snapshot_t current)
     {
+        if (current.allocation.state != placement_allocation_state_t::reserved)
+            co_return stale_authority_reclaim_result_t::recovery_required;
         const auto owner_key = key_owner (current.owner.owner_id);
         auto owner = co_await _store.read (owner_key);
         auto stale_owner_condition = missing_condition (owner_key);
+        bool owner_live = false;
         if (const auto *found = std::get_if<store_found_t> (&owner)) {
             const auto lease = decode_owner_lease (*found);
             if (lease.token.owner_id != current.owner.owner_id)
-                throw framework_exception_t (framework_error_kind_t::internal_failure,
+                throw framework_exception_t (framework_error_kind_t::data_lost,
                                              "Location Store owner lease record is invalid");
-            if (lease.token.lease_generation == current.owner.lease_generation
-                && lease.lease_expires_at > lease.store_now)
+            owner_live = lease.token.lease_generation == current.owner.lease_generation
+                         && lease.lease_expires_at > lease.store_now;
+            stale_owner_condition = version_condition (owner_key, found->value.version);
+        }
+        const auto descriptor_key = key_mesh (
+          current.allocation.target.mesh_name,
+          zlink::routing_id_t::from (std::string (current.allocation.target.node_rid.value ())));
+        const auto descriptor_read = co_await _store.read (descriptor_key);
+        auto descriptor_condition = missing_condition (descriptor_key);
+        if (const auto *found = std::get_if<store_found_t> (&descriptor_read)) {
+            const auto record = parse_canonical_record (found->value.bytes, "MeshNode descriptor");
+            const auto descriptor =
+              decode_mesh_descriptor (record.at (location_record_fields::descriptor));
+            if (owner_live
+                && descriptor.lifecycle_generation
+                     == current.allocation.target.node_lifecycle_generation)
                 co_return stale_authority_reclaim_result_t::owner_live;
-            stale_owner_condition = owner_condition (lease.token);
+            descriptor_condition = version_condition (descriptor_key, found->value.version);
         }
 
-        // Relocation authority is recovered by its own protocol. Reserve may
-        // reclaim only a steady pending creation whose owner lease ended.
+        // Relocation authority retains its own recovery protocol.
         const auto actor = decode_direct_actor_authority_payload (current.payload);
         if (actor && actor->has_relocation_state)
             co_return stale_authority_reclaim_result_t::recovery_required;
         if (!current.pending_creation)
             co_return stale_authority_reclaim_result_t::recovery_required;
 
-        const auto target =
-          co_await read_target_descriptor_async (current.allocation.target, false, false);
-        if (!target)
-            co_return stale_authority_reclaim_result_t::recovery_required;
         auto capacity = co_await read_capacity_async (current.allocation.target);
-        if (!adjust_capacity (capacity.record, current.allocation.capacity_bundle, -1, 0))
-            co_return stale_authority_reclaim_result_t::recovery_required;
-
         store_write_request_t write_request{
           {version_condition (authority_key, stored_authority.value.version),
-           std::move (stale_owner_condition), capacity.condition},
-          {store_delete_t{authority_key},
-           store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}};
+           std::move (stale_owner_condition), std::move (descriptor_condition), capacity.condition},
+          {store_delete_t{authority_key}}};
+        if (!std::holds_alternative<store_missing_condition_t> (capacity.condition)) {
+            if (!adjust_capacity (capacity.record, current.allocation.capacity_bundle, -1, 0))
+                throw framework_exception_t (framework_error_kind_t::data_lost,
+                                             "Location Store capacity record is inconsistent");
+            write_request.mutations.push_back (
+              store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt});
+        }
         const auto written = co_await write_async (std::move (write_request));
         co_return std::holds_alternative<store_write_applied_t> (written)
           ? stale_authority_reclaim_result_t::reclaimed
           : stale_authority_reclaim_result_t::conflict;
+    }
+
+  public:
+    task_t<bool> release_ended_reservation (authority_key_t key,
+                                            std::string expected_store_version,
+                                            std::stop_token cancellation = {}) override
+    {
+        if (cancellation.stop_requested ())
+            co_return co_await cancelled<bool> ();
+        const auto row_key = key_authority (key.value);
+        if (co_await authority_mutation_locked_async (key.value))
+            co_return false;
+        const auto read = co_await _store.read (row_key);
+        const auto *found = std::get_if<store_found_t> (&read);
+        if (!found || found->value.version.value != expected_store_version)
+            co_return false;
+        const auto current =
+          decode_authority (found->value.bytes, found->value.version, found->value.store_now);
+        co_return co_await try_reclaim_reserved_authority_async (row_key, *found, current)
+          == stale_authority_reclaim_result_t::reclaimed;
     }
 
   public:
@@ -948,7 +980,7 @@ class provider_location_repository_t final : public location_repository_t
             auto target = co_await read_target_descriptor_async (request.fence.target, false);
             if (!target)
                 co_return object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}};
-            auto capacity = co_await read_capacity_async (request.fence.target, &*target);
+            auto capacity = co_await read_capacity_async (request.fence.target);
             if (!adjust_capacity (capacity.record, request.fence.capacity_bundle, -1, 1))
                 co_return object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}};
             snapshot.payload = std::move (request.ready_payload);
@@ -1013,7 +1045,7 @@ class provider_location_repository_t final : public location_repository_t
             auto target = co_await read_target_descriptor_async (request.fence.target, false);
             if (!target)
                 co_return object_abort_result_t{object_abort_conflict_t{snapshot}};
-            auto capacity = co_await read_capacity_async (request.fence.target, &*target);
+            auto capacity = co_await read_capacity_async (request.fence.target);
             if (!adjust_capacity (capacity.record, request.fence.capacity_bundle, -1, 0))
                 co_return object_abort_result_t{object_abort_conflict_t{snapshot}};
             store_write_request_t write_request{
@@ -1427,7 +1459,7 @@ class provider_location_repository_t final : public location_repository_t
             std::map<std::string, stored_target_t> descriptors;
             descriptors.emplace (target_descriptor->key.value, *target_descriptor);
             std::map<std::string, stored_capacity_t> capacities;
-            auto target_capacity = co_await read_capacity_async (target, &*target_descriptor);
+            auto target_capacity = co_await read_capacity_async (target);
             const auto target_capacity_key = target_capacity.key.value;
             capacities.emplace (target_capacity_key, std::move (target_capacity));
 
@@ -1501,8 +1533,7 @@ class provider_location_repository_t final : public location_repository_t
                         && source_state->second.provider_version != source->provider_version)
                         co_return aggregate_commit_result_t::stale;
                 }
-                auto source_capacity = co_await read_capacity_async (before.allocation.target,
-                                                                     source ? &*source : nullptr);
+                auto source_capacity = co_await read_capacity_async (before.allocation.target);
                 auto [capacity_state, capacity_inserted] =
                   capacities.emplace (source_capacity.key.value, std::move (source_capacity));
                 (void) capacity_inserted;
@@ -1940,7 +1971,7 @@ class provider_location_repository_t final : public location_repository_t
         capacity_count_t actors;
         capacity_count_t spots;
         std::map<std::string, capacity_count_t> spot_types;
-        capacity_record_format_t format = capacity_record_format_t::canonical;
+        capacity_record_format_t format = capacity_record_format_t::node_compatible;
     };
 
     struct stored_capacity_t
@@ -2520,14 +2551,6 @@ class provider_location_repository_t final : public location_repository_t
         return {preimage ({"mesh-node", mesh_name, rid_hex})};
     }
 
-    static store_key_t key_capacity (std::string_view mesh_name,
-                                     const zlink::routing_id_t &rid,
-                                     std::uint64_t lifecycle_generation)
-    {
-        return {std::string (prefix) + "capacity:" + segment (mesh_name) + segment (rid.to_hex ())
-                + std::to_string (lifecycle_generation)};
-    }
-
     static std::string encode_uri_component (std::string_view value)
     {
         static constexpr char digits[] = "0123456789ABCDEF";
@@ -2549,7 +2572,7 @@ class provider_location_repository_t final : public location_repository_t
         return result;
     }
 
-    static store_key_t key_node_capacity (std::string_view mesh_name, std::string_view node_rid)
+    static store_key_t key_capacity (std::string_view mesh_name, std::string_view node_rid)
     {
         return {std::string (prefix) + "capacity:" + encode_uri_component (mesh_name) + ":"
                 + encode_uri_component (node_rid)};
@@ -3387,6 +3410,7 @@ class provider_location_repository_t final : public location_repository_t
             decode_usage (value.at (location_record_fields::active), true);
             decode_usage (value.at (location_record_fields::pending), false);
         } else {
+            result.format = capacity_record_format_t::canonical;
             result.actors.active =
               value.at (location_record_fields::actorsActive).get<std::int64_t> ();
             result.actors.pending =
@@ -3445,32 +3469,14 @@ class provider_location_repository_t final : public location_repository_t
         return to_bytes (value.dump ());
     }
 
-    task_t<stored_capacity_t> read_capacity_async (object_creation_target_t target,
-                                                   const stored_target_t *descriptor = nullptr)
+    task_t<stored_capacity_t> read_capacity_async (object_creation_target_t target)
     {
-        const auto canonical_key = key_capacity (
-          descriptor ? descriptor->descriptor.mesh_name : target.mesh_name,
-          descriptor ? descriptor->descriptor.rid
-                     : zlink::routing_id_t::from (std::string (target.node_rid.value ())),
-          target.node_lifecycle_generation);
-        auto current = co_await _store.read (canonical_key);
+        const auto key = key_capacity (target.mesh_name, target.node_rid.value ());
+        const auto current = co_await _store.read (key);
         if (const auto *found = std::get_if<store_found_t> (&current))
-            co_return stored_capacity_t{canonical_key,
-                                        version_condition (canonical_key, found->value.version),
+            co_return stored_capacity_t{key, version_condition (key, found->value.version),
                                         decode_capacity_record (found->value.bytes)};
-
-        // Node's current repository uses a node-keyed active/pending JSON
-        // shape. Preserve that row's key and encoding when it owns the
-        // allocation so a cross-language retarget can update its source
-        // accounting in the same CAS.
-        const auto node_key = key_node_capacity (target.mesh_name, target.node_rid.value ());
-        auto node_current = co_await _store.read (node_key);
-        if (const auto *found = std::get_if<store_found_t> (&node_current))
-            co_return stored_capacity_t{node_key,
-                                        version_condition (node_key, found->value.version),
-                                        decode_capacity_record (found->value.bytes)};
-        co_return stored_capacity_t{canonical_key, missing_condition (canonical_key),
-                                    capacity_record_t{}};
+        co_return stored_capacity_t{key, missing_condition (key), capacity_record_t{}};
     }
 
     static bool capacity_available (const mesh_node_descriptor_t &descriptor,

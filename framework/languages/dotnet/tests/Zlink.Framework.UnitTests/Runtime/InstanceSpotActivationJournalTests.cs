@@ -12,6 +12,47 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class InstanceSpotActivationJournalTests
 {
     [Fact]
+    public async Task RestartReleasesEndedCreatingReservationBeforeDeletingRoot()
+    {
+        var repository = new ZLinkProviderLocationRepository(
+            new ZLinkInMemoryProviderLocationStore()
+        );
+        var (store, reservation, envelope) = await ReserveCreatingAsync(
+            "ended-startup",
+            repository
+        );
+        var descriptors = await store.ListMeshNodesAsync("mesh", new ZLinkPageRequest(10));
+        var descriptor = Assert.Single(descriptors.Items);
+        await store.RemoveMeshNodeAsync(reservation.TargetDescriptor, reservation.TargetOwner);
+        _ = await store.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                LifecycleGeneration = 4,
+            },
+            ZLinkLocationWriteIntent.NewClaim
+        );
+        var relocations = new InMemoryRelocationStore();
+        relocations.Payloads["activation-root"] = envelope;
+        Assert.True(relocations.Contains("activation-root"));
+        var node = RecoverySpotNode.Create(reservation.TargetDescriptor.Rid, 4);
+        var target = new ZLinkInstanceSpotActivationTarget(
+            store,
+            relocations,
+            null!,
+            node,
+            null!,
+            reservation.TargetOwner
+        );
+        await target.RecoverAsync(CancellationToken.None);
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
+            await store.ReadAuthorityAsync(reservation.Key)
+        );
+        Assert.False(relocations.Contains("activation-root"));
+        var after = await store.ListMeshNodesAsync("mesh", new ZLinkPageRequest(10));
+        Assert.Equal(0, Assert.Single(after.Items).Capacity.Spots.Reserved);
+    }
+
+    [Fact]
     public void ColdActivationRootUsesCanonicalCodecAndIndependentReplyRoute()
     {
         var operation = Operation(new MeshOperationId(101, 103));
@@ -389,12 +430,12 @@ public sealed class InstanceSpotActivationJournalTests
         );
 
     private static async Task<(
-        ZLinkInMemoryLocationStore Store,
+        IZLinkLocationRepository Store,
         ZLinkObjectReservation Reservation,
         byte[] ActivationEnvelope
-    )> ReserveCreatingAsync(string spotId)
+    )> ReserveCreatingAsync(string spotId, IZLinkLocationRepository? repository = null)
     {
-        var store = new ZLinkInMemoryLocationStore();
+        var store = repository ?? new ZLinkInMemoryLocationStore();
         var owner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
             await store.ClaimOwnerLeaseAsync($"owner-{spotId}", TimeSpan.FromMinutes(1))
         );

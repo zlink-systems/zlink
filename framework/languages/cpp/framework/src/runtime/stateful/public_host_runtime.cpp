@@ -2232,6 +2232,20 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
         if (!page)
             break;
         for (const auto &entry : page->items) {
+            if (entry.snapshot.allocation.object_kind == placement_object_kind_t::instance_spot
+                && entry.snapshot.allocation.state == placement_allocation_state_t::reserved
+                && entry.snapshot.pending_creation
+                && (entry.snapshot.allocation.target.node_rid.value ()
+                      != zlink::routing_id_t::from (local.node_routing_id).to_string ()
+                    || entry.snapshot.allocation.target.node_lifecycle_generation
+                         != local.lifecycle_generation)) {
+                if (store->release_ended_reservation (entry.key, entry.snapshot.store_version)
+                      .result ()
+                      .value ())
+                    relocations->remove (
+                      entry.snapshot.pending_creation->request_content_reference);
+                continue;
+            }
             if (const auto closing = decode_instance_closing_state (entry.snapshot.payload);
                 closing
                 && entry.snapshot.allocation.object_kind == placement_object_kind_t::instance_spot
