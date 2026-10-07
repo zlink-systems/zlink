@@ -341,6 +341,8 @@ export interface ZLinkNestStreamNodeBuilder extends ZLinkNestFrameworkOptionsBui
     setBindHost(bindHost: string): this;
     setAdvertiseHost(advertiseHost: string): this;
     enableActorDispatch(): this;
+    setHeartbeat(intervalMs: number, timeoutMs: number): this;
+    setIdleTimeout(timeoutMs: number): this;
     setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
     registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
 }
@@ -352,6 +354,8 @@ export declare function zlinkPublishHandler(groupName: string, packetName?: stri
 export declare function zlinkRequestHandler(groupName: string, packetName?: string, options?: ZLinkNestHandlerOptions): ClassDecorator;
 
 ```
+
+Heartbeat interval·timeout과 idle timeout의 기본값, 검증과 유휴 종료 규칙은 [STREAM session §7](../../../04-session/01-stream-session.ko.md#7-오류-경계)이 정한다.
 
 ## 6. Spot handler decorator
 

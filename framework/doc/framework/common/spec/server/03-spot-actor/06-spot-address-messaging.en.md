@@ -469,9 +469,12 @@ and completes the original operation with the `Unavailable` result in §4.2.
 ### 4.1.1 If the Target Process Terminates During Activation
 
 **If the target process terminates after `Reserve`, the startup complete
-authority scan re-reads the Pending creation information.** It either
-continues factory, initialize, and durable inbox restoration with the same
-reservation and generation, or aborts creation with the same fence.
+authority scan re-reads the Pending creation information and aborts the
+creation with the exact fence.** A restarted process has a new lifecycle
+generation, so it can't continue a reservation fenced to the previous
+lifecycle. The source caller has already received its terminal through the
+failed Core request. The abort removes both the reservation and the recovery
+root.
 
 **If the process terminates after the `Ready` commit but before restoring
 the queue head, the recovery root and cursor are used to restore the first
