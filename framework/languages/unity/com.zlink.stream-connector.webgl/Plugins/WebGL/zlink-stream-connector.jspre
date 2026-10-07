@@ -1496,8 +1496,8 @@ var ZlinkStreamConnectorBundle = (() => {
 
   // packages/stream-connector/src/Runtime/Protocol/ZlinkStreamFrameCodec.ts
   var ZlinkStreamFrameCodec = class {
-    static encode(header, payload, maxPayloadSize = ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES) {
-      validatePayload(payload.length, maxPayloadSize);
+    static encode(header, payload, maxPayloadSize) {
+      validatePayload(payload.length, maxPayloadSize != null ? maxPayloadSize : ZLINK_STREAM_DEFAULT_PAYLOAD_BYTES);
       try {
         return encodeStreamWireFrame(header, payload);
       } catch (cause) {
@@ -1933,7 +1933,8 @@ var ZlinkStreamConnectorBundle = (() => {
           cause instanceof Error ? cause.cause : void 0
         );
       }
-      const { slot, actorId } = binding;
+      const slot = binding.slot;
+      const actorId = binding.actorId;
       if (actorId.length === 0 || this.bySlot.has(slot) || this.byId.has(actorId)) {
         throw invalidControl("Actor bound identity is already in use.");
       }
@@ -2189,7 +2190,8 @@ var ZlinkStreamConnectorBundle = (() => {
             this.events.runUserCallback(queued.callback, "Connector callback failed.");
             continue;
           }
-          const { message, signal } = queued;
+          const message = queued.message;
+          const signal = queued.signal;
           const handlers = this.receiversOf(message);
           for (const handler of currentRegistrations(this.handlers.get(message.name), handlers)) {
             if (!receives(handler, message)) continue;
@@ -3056,14 +3058,14 @@ var ZlinkStreamConnectorBundle = (() => {
      *   server `session-closing` and the heartbeat timeout. Every other ending
      *   takes it from {@link closeReasonFor}.
      */
-    async disconnectForTransportFailure(error, origin, generation, reason = closeReasonFor(error)) {
+    async disconnectForTransportFailure(error, origin, generation, reason) {
       if (this.closeRequested || this.currentState === "closed" /* Closed */) {
         return;
       }
       if (origin !== void 0 && !this.isCurrentConnection(origin, generation)) {
         return;
       }
-      this.closeReasonValue = reason;
+      this.closeReasonValue = reason != null ? reason : closeReasonFor(error);
       if (this.disconnectTask !== void 0) {
         return await this.disconnectTask;
       }
