@@ -55,7 +55,7 @@ class ZlinkFrameworkConan(ConanFile):
         cmake_layout(self)
 
     def requirements(self):
-        self.requires("zlink-cpp/1.16.0", transitive_headers=True,
+        self.requires("zlink-cpp/1.17.0", transitive_headers=True,
                       transitive_libs=True)
         for dependency in ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS:
             self.requires(dependency, transitive_headers=True, transitive_libs=True)
