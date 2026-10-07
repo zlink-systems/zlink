@@ -2,11 +2,20 @@ package systems.zlink.framework.spring;
 
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanFactory;
+import org.springframework.beans.factory.BeanFactoryUtils;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
+import org.springframework.beans.factory.ObjectFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.AutowireCapableBeanFactory;
+import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.config.DependencyDescriptor;
+import org.springframework.beans.factory.support.AutowireCandidateResolver;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.core.MethodParameter;
 
 import systems.zlink.framework.ZLinkHandlerFilter;
@@ -73,7 +82,110 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     public void prepare(Class<?> handlerType) {
         ZLinkHandlerActivator.super.prepare(handlerType);
         if (isZLinkManagedType(handlerType)) {
-            handlerPlan(handlerType);
+            HandlerPlan plan = handlerPlan(handlerType);
+            RuntimeException failure = null;
+            for (ConstructorPlan constructor : plan.constructors()) {
+                try {
+                    for (ParameterPlan parameter : constructor.parameters()) {
+                        validateDependency(handlerType, parameter.descriptor());
+                    }
+                    return;
+                } catch (NoSuchBeanDefinitionException error) {
+                    failure = error;
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
+    }
+
+    private void validateDependency(Class<?> owner, DependencyDescriptor parameter) {
+        Class<?> type = parameter.getDependencyType();
+        if ((ZLinkSpot.class.isAssignableFrom(owner)
+                        && type == systems.zlink.framework.spots.ZLinkSpotContext.class)
+                || (ZLinkEntrySpot.class.isAssignableFrom(owner)
+                        && type == systems.zlink.framework.spots.ZLinkEntrySpotContext.class)
+                || (systems.zlink.framework.spots.ZLinkInstanceSpot.class.isAssignableFrom(owner)
+                        && type == systems.zlink.framework.spots.ZLinkInstanceSpotContext.class)
+                || ((ZLinkSession.class.isAssignableFrom(owner)
+                                || owner.isAnnotationPresent(ZLinkStreamPacket.class)
+                                || owner.isAnnotationPresent(ZLinkStreamRaw.class))
+                        && (type == systems.zlink.framework.streams.ZLinkSessionContext.class
+                                || type
+                                        == systems.zlink.framework.streams
+                                                .ZLinkSessionPacketDispatcher.class))) {
+            return;
+        }
+        if (!(beanFactory instanceof DefaultListableBeanFactory source)) {
+            throw new IllegalStateException(
+                    "Spring startup validation requires a metadata bean factory");
+        }
+        var resolver = source.getAutowireCandidateResolver();
+        if (resolver.getSuggestedValue(parameter) != null
+                || type == ObjectProvider.class
+                || type == ObjectFactory.class
+                || type.isArray()
+                || java.util.Collection.class.isAssignableFrom(type)
+                || java.util.Map.class.isAssignableFrom(type)) {
+            return;
+        }
+        DependencyDescriptor descriptor = new DependencyDescriptor(parameter);
+        descriptor.initParameterNameDiscovery(new DefaultParameterNameDiscoverer());
+        if (type == Optional.class) {
+            descriptor.increaseNestingLevel();
+        }
+        Map<String, Object> candidates = new java.util.LinkedHashMap<>();
+        for (String name :
+                BeanFactoryUtils.beanNamesForTypeIncludingAncestors(
+                        source, descriptor.getResolvableType(), true, false)) {
+            if (source.isAutowireCandidate(name, descriptor)) {
+                candidates.put(name, source.getType(name, false));
+            }
+        }
+        if (candidates.isEmpty()) {
+            if (resolver.isRequired(parameter)) {
+                throw new NoSuchBeanDefinitionException(descriptor.getResolvableType());
+            }
+        } else if (candidates.size() > 1
+                && new MetadataCandidateSelector(source).select(candidates, descriptor) == null) {
+            throw new NoUniqueBeanDefinitionException(
+                    descriptor.getResolvableType(), candidates.keySet());
+        }
+    }
+
+    /** Spring owns candidate selection; this view exposes only bean definition metadata. */
+    private static final class MetadataCandidateSelector extends DefaultListableBeanFactory {
+        private final DefaultListableBeanFactory source;
+
+        MetadataCandidateSelector(DefaultListableBeanFactory source) {
+            super(source.getParentBeanFactory());
+            this.source = source;
+            setDependencyComparator(source.getDependencyComparator());
+        }
+
+        String select(Map<String, Object> candidates, DependencyDescriptor descriptor) {
+            return determineAutowireCandidate(candidates, descriptor);
+        }
+
+        @Override
+        public BeanDefinition getBeanDefinition(String name) {
+            return source.getBeanDefinition(name);
+        }
+
+        @Override
+        public boolean containsBeanDefinition(String name) {
+            return source.containsBeanDefinition(name);
+        }
+
+        @Override
+        public String[] getAliases(String name) {
+            return source.getAliases(name);
+        }
+
+        @Override
+        public AutowireCandidateResolver getAutowireCandidateResolver() {
+            return source.getAutowireCandidateResolver();
         }
     }
 
