@@ -20,3 +20,8 @@ dependencies {
     testImplementation("io.micrometer:micrometer-core:1.15.8")
     testImplementation(project(":zlink-framework-testkit"))
 }
+
+// Spring resolves Java parameter names from MethodParameters metadata.
+tasks.named<JavaCompile>("compileTestJava") {
+    options.compilerArgs.add("-parameters")
+}
