@@ -23,6 +23,10 @@ public interface IZLinkStreamNodeBuilder
 
     IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
 
+    IZLinkStreamNodeBuilder SetHeartbeat(TimeSpan interval, TimeSpan timeout);
+
+    IZLinkStreamNodeBuilder SetIdleTimeout(TimeSpan timeout);
+
     IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
 
     IZLinkStreamSocketConfig ConfigureSocket();
