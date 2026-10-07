@@ -143,6 +143,8 @@ plugins:
             Getting started: 시작
             Feature guide: 기능별 가이드
             How it works: 동작 원리
+            Protobuf messaging: Protobuf 송수신
+            Protobuf codecs and types: Protobuf codec과 타입
             Operations: 운영
 
             # 공통 스펙
@@ -532,6 +534,8 @@ nav:
           - Browser: node/guide/stream-connector/08-browser.md
           - Unity WebGL: node/guide/stream-connector/09-unity-webgl.md
           - Game engine integration: node/guide/stream-connector/12-engine-integration.md
+          - Protobuf messaging: node/guide/stream-connector/40-protobuf.md
+          - Protobuf codecs and types: node/guide/stream-connector/41-protobuf-codecs.md
       - HTTP client:
           - Contents: node/guide/http-client/README.md
           - Overview: node/guide/http-client/01-overview.md

@@ -300,7 +300,8 @@ export class ZlinkStreamReceivedMessages {
           this.events.runUserCallback(queued.callback, 'Connector callback failed.');
           continue;
         }
-        const { message, signal } = queued;
+        const message = queued.message;
+        const signal = queued.signal;
         const handlers = this.receiversOf(message);
         for (const handler of currentRegistrations(this.handlers.get(message.name)!, handlers)) {
           if (!receives(handler, message)) continue;

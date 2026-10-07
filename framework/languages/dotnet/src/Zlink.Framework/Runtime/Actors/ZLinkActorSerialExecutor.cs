@@ -27,6 +27,9 @@ internal sealed class ZLinkActorSerialExecutor
         );
     }
 
+    internal void BindExecutionOwner(Func<ZLinkSerialExecutionQueue?> provider) =>
+        _queue.BindExecutionOwner(provider);
+
     public int PendingRequestCount
     {
         get => AwaitStateLane(_lane.RunAsync(() => _pendingRequests));
@@ -312,6 +315,12 @@ internal sealed class ZLinkActorSerialExecutor
                 _owner.OnWaiterFinished(this);
                 return;
             }
+            if (_owner._queue.HasSharedConsumer)
+            {
+                var turn = ZLinkSerialTurn.Current!;
+                turn.Item.AddTerminalRelease(() => _owner.OnWaiterFinished(this));
+                turn.SignalSuspended();
+            }
             await _released.Task.ConfigureAwait(false);
         }
 
@@ -319,7 +328,8 @@ internal sealed class ZLinkActorSerialExecutor
         {
             if (Interlocked.Exchange(ref _releasedOnce, 1) == 0)
             {
-                _owner.OnWaiterFinished(this);
+                if (!_owner._queue.HasSharedConsumer)
+                    _owner.OnWaiterFinished(this);
                 _released.TrySetResult();
             }
         }

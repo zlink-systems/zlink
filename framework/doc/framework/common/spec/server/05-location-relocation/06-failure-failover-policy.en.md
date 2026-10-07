@@ -142,10 +142,12 @@ owner — or convert the next message into cold activation.
 ### 4.3 Actor and Spot Creation
 
 If creation requests compete while no object exists, only the target that first secures the
-Location Store's `Creating` record runs the factory. If the process terminates during creation,
-the next Framework operation re-checks the creation record for the same object ID and generation.
-It can continue the same creation or cancel exactly that record, and the factory can be called
-again with the same input.
+Location Store's `Creating` record runs the factory. A reservation whose target lifecycle ended
+because the process terminated during creation is cleaned up by the release in
+[Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas). The scope in which stored
+creation intent resumes in the same lifecycle follows
+[Object lifecycle §3](../03-spot-actor/09-object-lifecycle.en.md#3-when-to-build-a-missing-object), and
+the factory can be called again with the same input.
 
 This is creation recovery before the object is exposed as `Ready` — not failover recovering an
 owner failure for an already-running object. Creation competition and result are defined by
@@ -155,8 +157,10 @@ owner failure for an already-running object. Creation competition and result are
 
 The process of creating and preparing an Instance Spot when the first message arrives is called
 [cold activation](../00-foundation/02-glossary.en.md#cold-activation). Since the Framework stores the first
-message and creation record, if the process terminates while `Creating` or while restoring the
-first message, it can continue or cancel creation under the same generation. It doesn't process
+message and creation record, if `Creating` or first-message restoration is interrupted within the
+same target lifecycle, it continues creation under the same generation. A reservation whose target
+lifecycle ended because the process terminated is cleaned up by the release in
+[Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas). It doesn't process
 new messages before restoring the first message to the head of the queue.
 
 An Instance Spot is created from the `Missing` state by the first message, without a separate
@@ -170,7 +174,7 @@ distinguishes what the Framework does based on current authority when a message 
 | Current state | Handling of a new message with Instance intent |
 |---|---|
 | `Missing`, with no authority record | Selects one eligible node and starts cold activation of a new `ObjectGeneration`. |
-| `Creating`, or `Ready` with the first message not yet restored | Uses the stored creation record and first message to continue or cancel creation of the same `ObjectGeneration`. Doesn't create a new incarnation. |
+| `Creating`, or `Ready` with the first message not yet restored | Within the same target lifecycle, uses the stored creation record and first message to continue creation of the same `ObjectGeneration`. A `Creating` whose target lifecycle has ended becomes `Missing` after the [Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas) release. Doesn't create a new incarnation before the release. |
 | `Ready` with a valid owner lease | Sends the message to the current owner. Doesn't start cold activation. |
 | The `Ready` owner process terminated, or the owner lease is invalid | Doesn't automatically release the authority record or create a new incarnation on a different node. The operation ends with `Unavailable`. |
 | The application's explicit `Close` finished, including authority release | A subsequent lookup returns `Missing`. The next Instance-intent message can start cold activation of a new `ObjectGeneration`. |

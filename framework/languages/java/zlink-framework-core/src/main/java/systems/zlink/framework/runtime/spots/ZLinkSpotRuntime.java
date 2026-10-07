@@ -2836,10 +2836,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             envelope) {
         var store = requireUserSpotLocationStore();
         var recoveryStore = frameworkRegistration.relocationStore();
-        if (recoveryStore == null)
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "Instance cold activation requires a Relocation Store"));
         var local = routeMeshNodesByName.get(envelope.targetMeshName());
         if (local == null
                 || !local.routingId().equals(envelope.targetNodeRid())

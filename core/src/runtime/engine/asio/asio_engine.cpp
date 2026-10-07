@@ -1331,6 +1331,20 @@ bool zlink::asio_engine_t::prepare_output_buffer ()
     _outpos = NULL;
     _outsize = _encoder->encode (&_outpos, 0);
 
+    //  A message-framed transport writes this buffer as one wire message.
+    //  STREAM has no protocol header: encode its complete payload alone,
+    //  retaining the encoder's message ownership until write completion.
+    if (_options.type == ZLINK_CORE_SOCKET_STREAM && transport_has_message_boundaries ()) {
+        if (_outsize > 0)
+            return true;
+        if ((this->*_next_msg) (&_pipeline.tx_msg) == -1)
+            return false;
+        _encoder->load_msg (&_pipeline.tx_msg);
+        _outpos = NULL;
+        _outsize = _encoder->encode (&_outpos, 0);
+        return _outsize > 0;
+    }
+
     size_t target_out_batch =
       zlink::asio_stream_fastpath_policy::output_target_batch (*this, _options);
 

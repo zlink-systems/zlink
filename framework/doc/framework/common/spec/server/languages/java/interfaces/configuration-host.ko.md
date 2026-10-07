@@ -521,6 +521,8 @@ public interface systems.zlink.framework.configuration.ZLinkStreamNodeBuilder {
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder setTlsServer(java.lang.String, java.lang.String, boolean);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder registerSession(java.lang.Class<? extends systems.zlink.framework.streams.ZLinkSession>);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder enableActorDispatch();
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder heartbeat(java.time.Duration, java.time.Duration);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder idleTimeout(java.time.Duration);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder addSessionPacketHandler(java.lang.Class<?>);
 }
 public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
@@ -549,6 +551,8 @@ public interface systems.zlink.framework.configuration.ZLinkWorkerOptions {
  public abstract systems.zlink.framework.configuration.ZLinkWorkerOptions idleTimeout(java.time.Duration);
 }
 ```
+
+Heartbeat interval·timeout과 idle timeout의 기본값, 검증과 유휴 종료 규칙은 [STREAM session §7](../../../04-session/01-stream-session.ko.md#7-오류-경계)이 정한다.
 
 `ZLinkMessageFlowLogMode`의 네 값은 진단 비활성화, 오류만 기록, 주요 전이 기록, 상세 진단을 각각
 나타낸다. Startup에서 지정하지 않은 diagnostics level의 기본값은 `ERRORS`다. Framework는 application이

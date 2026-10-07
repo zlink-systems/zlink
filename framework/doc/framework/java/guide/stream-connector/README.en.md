@@ -13,6 +13,8 @@ and test tools.
 | 6 | [Connection Lifecycle](06-lifecycle.en.md) | Connection state, reconnecting, heartbeat, the close reason |
 | 7 | [Error Handling](07-error-handling.en.md) | The closed set of error codes and how each language delivers them |
 | 8 | [Game Engine Integration](12-engine-integration.en.md) | Connector choice by engine and the Engine Lobby sample |
+| 9 | [Node Protobuf Messaging](../../../node/guide/stream-connector/40-protobuf.en.md) | protobufjs generation, fixed-type pushes, explicit reply types |
+| 10 | [Node Protobuf Codecs and Types](../../../node/guide/stream-connector/41-protobuf-codecs.en.md) | Codec selection, multiple-message limits, server packet names |
 
 The file number identifies the same chapter in every language. Chapters 1 to 7 are
 shared across all five.

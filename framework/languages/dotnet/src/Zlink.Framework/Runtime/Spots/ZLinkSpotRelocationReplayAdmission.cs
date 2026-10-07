@@ -13,16 +13,19 @@ internal sealed class ZLinkSpotRelocationActorQueueReservation(string actorId)
         TaskCreationOptions.RunContinuationsAsynchronously
     );
     private Task? _execution;
-    private int _claimed;
+    private Action? _notifyReady;
+
+    internal bool IsReady => _work.Task.IsCompletedSuccessfully;
 
     internal string ActorId { get; } = actorId;
 
     internal ValueTask RunAsync(CancellationToken cancellationToken) =>
         RunReservedAsync(cancellationToken);
 
-    internal void BindExecution(Task execution)
+    internal void BindExecution(Task execution, Action notifyReady)
     {
         ArgumentNullException.ThrowIfNull(execution);
+        _notifyReady = notifyReady;
         if (Interlocked.CompareExchange(ref _execution, execution, null) is not null)
             throw new InvalidOperationException(
                 "SPOT relocation Actor queue reservation was already bound."
@@ -41,10 +44,11 @@ internal sealed class ZLinkSpotRelocationActorQueueReservation(string actorId)
             throw new InvalidOperationException(
                 "SPOT relocation Actor queue reservation changed Actor."
             );
-        if (Interlocked.Exchange(ref _claimed, 1) != 0 || !_work.TrySetResult(operation))
+        if (!_work.TrySetResult(operation))
             throw new InvalidOperationException(
                 "SPOT relocation Actor queue reservation was already consumed."
             );
+        _notifyReady?.Invoke();
         var execution =
             Volatile.Read(ref _execution)
             ?? throw new InvalidOperationException(
@@ -55,8 +59,10 @@ internal sealed class ZLinkSpotRelocationActorQueueReservation(string actorId)
 
     internal void Discard()
     {
-        if (Interlocked.Exchange(ref _claimed, 1) == 0)
-            _work.TrySetResult(static _ => ValueTask.CompletedTask);
+        if (_work.TrySetResult(static _ => ValueTask.CompletedTask))
+        {
+            _notifyReady?.Invoke();
+        }
     }
 
     private async ValueTask RunReservedAsync(CancellationToken cancellationToken)

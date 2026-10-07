@@ -47,6 +47,9 @@ import {
   zoneOf
 } from '../Shared/spec';
 import { readConfigPath, validateConfiguration } from '../Server/Configuration/configuration';
+import { adjacentZones } from '../Server/ZoneNode/Domain/world';
+import type { ZoneId } from '../Shared/spec';
+import { boundaryRoute } from './boundary-route';
 import { joinAndWaitForOwnedState } from './join-readiness';
 
 async function main(): Promise<void> {
@@ -97,7 +100,7 @@ async function runFailureTransition(gatewayEndpoint: string, opsEndpoint: string
   try {
     await Promise.all([source.connect(), target.connect(), ops.connect()]);
     const pair = await relocationPair(ops);
-    const boundary = boundaryRoute(pair.targetZoneId);
+    const boundary = boundaryRoute(pair.targetZoneId, pair.sourceZoneId);
     const nodes = await watch(ops);
     const targetNode = requireZoneOwner(nodes, pair.targetZoneId);
     const sourceJoin = await joinAndWaitForOwnedState(source, 'player-b4-west');
@@ -251,7 +254,13 @@ async function runMaintenance(gatewayEndpoint: string, opsEndpoint: string): Pro
     const targetNode = requireZoneOwner(nodes, pair.targetZoneId);
     await resetMaintenance(ops);
     await verifyTargetIsolation(ops, targetNode);
-    await verifyMaintainedLocalMovement(gatewayEndpoint, ops, pair.sourceZoneId, sourceNode);
+    const localPair = sameOwnerPair(nodes);
+    await verifyMaintainedLocalMovement(
+      gatewayEndpoint,
+      ops,
+      localPair.sourceZoneId,
+      localPair.node
+    );
     await verifyNewJoinRejection(gatewayEndpoint, ops, sourceNode.nodeId);
     const diagnostics = await diagnose(ops, targetNode.nodeId);
     zlinkStreamAssert.ensure(
@@ -292,14 +301,13 @@ async function verifyMaintainedLocalMovement(
   try {
     await game.connect();
     const joined = await joinAndWaitForOwnedState(game, 'player-e1');
-    const sameOwnerTarget = sourceNode.zones.find(
-      (zoneId) =>
-        zoneId !== sourceZoneId && (zoneId === ZoneIds.northEast || zoneId === ZoneIds.southWest)
+    const sameOwnerTarget = adjacentZones(sourceZoneId as ZoneId).find((zoneId) =>
+      sourceNode.zones.includes(zoneId)
     );
     if (sameOwnerTarget === undefined) {
       throw new Error(`ZW-E4 Ops layout has no adjacent same-owner zone for '${sourceZoneId}'.`);
     }
-    const boundary = boundaryRoute(sameOwnerTarget);
+    const boundary = boundaryRoute(sameOwnerTarget, sourceZoneId);
     await walkTo(game, joined.playerId, joined, boundary.sourceEdge.x, boundary.sourceEdge.y);
     await setMaintenance(ops, sourceNode.nodeId, true);
     await expectMaintenanceRejection(game, boundary.targetInside.x, boundary.targetInside.y);
@@ -363,30 +371,40 @@ async function runMaintenanceRestore(opsEndpoint: string, targetNodeId: string):
   const ops = connector(opsEndpoint);
   try {
     await ops.connect();
-    // Status payloads have no incarnation token, so accept ready only after this connection observes the old node leave.
-    const targetStopped = ops
+    // Consume status in arrival order so readiness before the stop cannot be reused.
+    const observationTimeoutMs = 20_000;
+    let deadline = performance.now() + observationTimeoutMs;
+    let targetStopped = ops
       .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-      .where(
-        (message) =>
-          message.payload.nodeId === targetNodeId &&
-          (!message.payload.registered || !message.payload.connected)
-      )
-      .timeout(20_000)
+      .timeout(observationTimeoutMs)
       .submit();
     console.log('scenario ZW-E5 restore armed');
-    await targetStopped;
-    const replacementReady = ops
+    for (;;) {
+      const node = (await targetStopped).payload;
+      if (node.nodeId === targetNodeId && !node.connected) break;
+      const remaining = deadline - performance.now();
+      zlinkStreamAssert.ensure(remaining > 0, 'ZW-E5 stopped status observation timed out.');
+      targetStopped = ops
+        .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+        .timeout(remaining)
+        .submit();
+    }
+    deadline = performance.now() + observationTimeoutMs;
+    let replacementReady = ops
       .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-      .where(
-        (message) =>
-          message.payload.nodeId === targetNodeId &&
-          message.payload.registered &&
-          message.payload.connected
-      )
-      .timeout(20_000)
+      .timeout(observationTimeoutMs)
       .submit();
     console.log('scenario ZW-E5 replacement waiting');
-    await replacementReady;
+    for (;;) {
+      const node = (await replacementReady).payload;
+      if (node.nodeId === targetNodeId && node.registered && node.connected) break;
+      const remaining = deadline - performance.now();
+      zlinkStreamAssert.ensure(remaining > 0, 'ZW-E5 replacement status observation timed out.');
+      replacementReady = ops
+        .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+        .timeout(remaining)
+        .submit();
+    }
     const diagnostics = await diagnose(ops, targetNodeId);
     zlinkStreamAssert.ensure(
       diagnostics.error === null,
@@ -653,22 +671,15 @@ function requireZoneOwner(nodes: WatchNodesRes, zoneId: string): WatchNodesRes['
   return owner;
 }
 
-function boundaryRoute(targetZoneId: string) {
-  if (targetZoneId === ZoneIds.northEast) {
-    return {
-      observer: { x: 45, y: 25 },
-      sourceEdge: { x: 49, y: 25 },
-      targetInside: { x: 52, y: 25 }
-    } as const;
+function sameOwnerPair(nodes: WatchNodesRes) {
+  for (const node of nodes.nodes.filter((candidate) => candidate.registered)) {
+    for (const sourceZoneId of node.zones) {
+      if (adjacentZones(sourceZoneId as ZoneId).some((zone) => node.zones.includes(zone))) {
+        return { node, sourceZoneId };
+      }
+    }
   }
-  if (targetZoneId === ZoneIds.southWest) {
-    return {
-      observer: { x: 25, y: 45 },
-      sourceEdge: { x: 25, y: 49 },
-      targetInside: { x: 25, y: 52 }
-    } as const;
-  }
-  throw new Error(`Unsupported Ops-selected target zone '${targetZoneId}'.`);
+  throw new Error('ZW-E4 Ops layout has no adjacent same-owner zones.');
 }
 
 async function diagnose(ops: ZlinkStreamConnector, nodeId: string): Promise<NodeDiagnosticsRes> {

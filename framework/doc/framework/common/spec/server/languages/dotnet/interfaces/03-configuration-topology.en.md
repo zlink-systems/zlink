@@ -263,6 +263,8 @@ public interface IZLinkStreamNodeBuilder
  IZLinkStreamNodeBuilder SetBindHost(string bindHost);
  IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
  IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
+ IZLinkStreamNodeBuilder SetHeartbeat(TimeSpan interval, TimeSpan timeout);
+ IZLinkStreamNodeBuilder SetIdleTimeout(TimeSpan timeout);
  IZLinkStreamSocketConfig ConfigureSocket();
  IZLinkStreamNodeBuilder EnableActorDispatch();
  IZLinkStreamNodeBuilder SetTlsServer(
@@ -288,6 +290,8 @@ public interface IZLinkMetadataPolicyBuilder
 }
 
 ```
+
+The defaults, validation, and idle closing rule of the heartbeat interval, heartbeat timeout, and idle timeout are owned by [STREAM session §7](../../../04-session/01-stream-session.en.md#7-error-boundary).
 
 `IZLinkStreamNodeBuilder.MaxMessageSize(long bytes)` defaults to
 `64 KiB`. It is used only when a StreamNode's Core STREAM inbound path checks

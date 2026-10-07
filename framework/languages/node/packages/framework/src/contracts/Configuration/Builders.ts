@@ -188,6 +188,8 @@ export interface ZLinkFanoutChannelBuilder {
 }
 
 export interface ZLinkStreamNodeBuilder {
+  setHeartbeat(intervalMs: number, timeoutMs: number): this;
+  setIdleTimeout(timeoutMs: number): this;
   bind(endpointOrPort?: string | number): this;
   setBindHost(bindHost: string): this;
   setAdvertiseHost(advertiseHost: string): this;

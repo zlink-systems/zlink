@@ -3021,7 +3021,10 @@ test('production repository rejects an ambiguous owner lease without an expiry a
   provider.replaceFirstMutationBeforeFailure = true;
   await assert.rejects(
     repository.claimOwnerLease('owner-conflict', 30_000),
-    { name: 'TimeoutError' }
+    (error) =>
+      error instanceof framework.ZLinkFrameworkException &&
+      error.kind === framework.ZLinkFrameworkErrorKind.Unavailable &&
+      error.cause.name === 'TimeoutError'
   );
 
   await assert.rejects(repository.readOwnerLease('owner-conflict'), /invalid/);

@@ -176,8 +176,16 @@ interface ZlinkStreamRequestCall {
   timeout(timeoutMs: number): ZlinkStreamRequestCall;
   compress(): ZlinkStreamRequestCall;
   submit<TReply = unknown>(signal?: AbortSignal): Promise<TReply>;
+  submit<TReply>(
+    replyType: abstract new (...args: never[]) => TReply,
+    signal?: AbortSignal
+  ): Promise<TReply>;
   submitEncoded(signal?: AbortSignal): Promise<ZlinkStreamEncodedPayload>;
-  submit(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
+  submitCallback(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
+  submitCallback<TReply>(
+    replyType: abstract new (...args: never[]) => TReply,
+    callback: (result: ZlinkStreamResultOf<TReply>) => void
+  ): void;
 }
 
 interface ZlinkStreamWaitCall<TPayload = ZlinkStreamEncodedPayload> {
@@ -292,7 +300,7 @@ TLS 실패를 일반 연결 실패와 구분해 주지 않기 때문이다. 코�
 TypeScript는 오류를 `ZlinkStreamError`로 전달하고, 던지는 표면은 그 값을 `ZlinkStreamException`에
 담는다([공통 스펙 §9.2](../../32-stream-connector.ko.md#92-전달--받는-쪽이-코드를-읽을-수-있어야-한다)).
 `Error`를 그대로 던지지 않으므로 호출자는 `catch`한 값의 `error.code`로 [공통 스펙
-§9](../../32-stream-connector.ko.md#9-오류-의미)의 13개 중 무엇인지 판정한다. callback 종결자는
+§9](../../32-stream-connector.ko.md#9-오류-의미)의 13개 중 무엇인지 판정한다. callback 종결자(`submitCallback`)는
 같은 값을 `ZlinkStreamResultOf<T>.error`로 전달한다.
 
 [공통 스펙 §5](../../32-stream-connector.ko.md#5-packet-모델)가 요구하는 **타입에 packet 이름을

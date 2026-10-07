@@ -312,6 +312,10 @@ internal sealed class ZLinkChannelSubscriberCapabilityRegistration
 
 internal sealed class ZLinkStreamNodeRegistration
 {
+    public TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(1);
+    public TimeSpan HeartbeatTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan IdleTimeout { get; set; } = TimeSpan.Zero;
+
     public required string StreamNodeName { get; init; }
 
     public string? BindEndpoint { get; set; }

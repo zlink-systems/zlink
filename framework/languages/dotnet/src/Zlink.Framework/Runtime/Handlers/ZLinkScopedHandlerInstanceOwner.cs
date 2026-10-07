@@ -43,6 +43,34 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
 
     internal void Prepare(Type handlerType) => GetFactory(handlerType);
 
+    internal static void Validate(
+        IServiceProvider services,
+        IEnumerable<Type> types,
+        params Type[] runtimeDependencies
+    )
+    {
+        var available = services.GetRequiredService<IServiceProviderIsService>();
+        var catalog = new ActivationServiceCatalog(available, runtimeDependencies);
+        foreach (var type in types.Distinct())
+            SelectConstructor(type, catalog);
+    }
+
+    private sealed class ActivationServiceCatalog(
+        IServiceProviderIsService services,
+        Type[] runtimeDependencies
+    ) : IServiceProviderIsService, IServiceProviderIsKeyedService
+    {
+        public bool IsService(Type serviceType) =>
+            runtimeDependencies.Contains(serviceType) || services.IsService(serviceType);
+
+        public bool IsKeyedService(Type serviceType, object? key) =>
+            services is IServiceProviderIsKeyedService keyed
+                ? keyed.IsKeyedService(serviceType, key)
+                : throw new InvalidOperationException(
+                    "This service provider doesn't support keyed services."
+                );
+    }
+
     public THandler Resolve<THandler>()
         where THandler : class
     {
@@ -111,7 +139,7 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
         }
     }
 
-    private static Func<IServiceProvider, object> CompileFactory(
+    private static ConstructorInfo? SelectConstructor(
         Type handlerType,
         IServiceProviderIsService? available
     )
@@ -166,13 +194,31 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
 
         if (bestLength < 0)
         {
-            var factory = ActivatorUtilities.CreateFactory(handlerType, Type.EmptyTypes);
-            return provider => factory(provider, null);
+            if (available is not null)
+                throw new InvalidOperationException(
+                    $"No constructor for type '{handlerType}' has all required dependencies registered."
+                );
+            return null;
         }
         if (multiple)
             throw new InvalidOperationException(
                 $"Multiple constructors for type '{handlerType}' were found with length {bestLength}."
             );
+
+        return selected;
+    }
+
+    private static Func<IServiceProvider, object> CompileFactory(
+        Type handlerType,
+        IServiceProviderIsService? available
+    )
+    {
+        var selected = SelectConstructor(handlerType, available);
+        if (selected is null)
+        {
+            var factory = ActivatorUtilities.CreateFactory(handlerType, Type.EmptyTypes);
+            return provider => factory(provider, null);
+        }
 
         var services = Expression.Parameter(typeof(IServiceProvider), "services");
         var arguments = selected!

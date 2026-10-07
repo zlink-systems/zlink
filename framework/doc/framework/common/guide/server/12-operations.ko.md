@@ -736,6 +736,24 @@ host lifecycle 상태(preparing · serving · relocating · relocated · drainin
 stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Status의 relocation·termination 결과는 해당 operation의 terminal 결과와 같아야 한다.
 수치로 보려면 [런타임 메트릭](#2-런타임-메트릭)의 `zlink.host.*` 계기를 사용한다.
 
+### 8.2 같은 RoutingId로 재시작
+
+Fixed RoutingId를 사용하는 서버를 강제 종료한 직후 다시 시작하면 이전 process의 owner lease가
+아직 유효할 수 있다. 같은 MeshName과 RoutingId의 descriptor를 게시할 때 `REJECTED_CONFLICT`가
+발생하며 host startup이 실패한다. 모든 언어에서 host 시작 호출이 실패로 끝난다. 열린 포트만으로
+readiness를 판정하지 않고, 시작이 성공한 뒤 공개 runtime 상태를 확인한다.
+
+배포 절차는 이전 서버의 정상 종료 결과를 확인한 뒤 replacement를 시작한다. 강제 종료했다면
+이전 owner lease가 만료된 뒤 새 process를 시작한다. Owner lease TTL의 기본값은 15초이며
+설정에 따라 달라진다. 같은 시작 operation 안에서 충돌을 재시도하거나 다른 RoutingId로
+바꾸는 동작은 Framework가 제공하지 않는다. 두 process가 동시에 같은 fixed RoutingId를
+사용하고 있지는 않은지도 확인한다.
+
+정상 shutdown은 자신이 소유한 descriptor와 owner lease를 정리한다. 강제 종료에서는 이 정리가
+실행되지 않을 수 있으며, owner lease의 갱신이 끊겨 만료될 때까지 active claim이 남는다.
+Shutdown이 기한 안에 정리를 마쳤는지는 termination 결과로 확인한다. Process가 종료되었거나
+shutdown을 호출했다는 사실만으로 즉시 재시작할 수 있다고 판단하지 않는다.
+
 ## 9. 관련 문서
 
 - 이 챕터 계약의 실행 검증 예문: [주요 타입 사용 색인](13-interface-catalog.ko.md) — 검증 클래스 `FrameworkRuntimeContracts`

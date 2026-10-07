@@ -346,6 +346,8 @@ export interface ZLinkNestStreamNodeBuilder extends ZLinkNestFrameworkOptionsBui
  setBindHost(bindHost: string): this;
  setAdvertiseHost(advertiseHost: string): this;
  enableActorDispatch(): this;
+ setHeartbeat(intervalMs: number, timeoutMs: number): this;
+ setIdleTimeout(timeoutMs: number): this;
  setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
  registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
 }
@@ -357,6 +359,8 @@ export declare function zlinkPublishHandler(groupName: string, packetName?: stri
 export declare function zlinkRequestHandler(groupName: string, packetName?: string, options?: ZLinkNestHandlerOptions): ClassDecorator;
 
 ```
+
+The defaults, validation, and idle closing rule of the heartbeat interval, heartbeat timeout, and idle timeout are owned by [STREAM session §7](../../../04-session/01-stream-session.en.md#7-error-boundary).
 
 ## 6. Spot Handler Decorator
 

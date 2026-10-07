@@ -118,6 +118,7 @@ write_role_config() {
       "redisEndpoint": "tcp://127.0.0.1:${redis_port}",
       "redisKeyPrefix": "zoneworld:cpp:${RUN_ID}:",
       "nodeId": "$node_id",
+      "zoneCapacity": $(case "$node_id" in zone-node-1) echo 1;; zone-node-2) echo 3;; *) echo 0;; esac),
       "meshEndpoint": "$mesh_endpoint",
       "streamEndpoint": "$stream_endpoint",
       "broadcastEndpoint": "$BROADCAST",
@@ -369,8 +370,10 @@ MAIN_BOT_JOIN_FAILURES="$(awk \
   '/zoneworld-join-failed player=bot-/{count++} END{print count + 0}' \
   "$LOG_DIR"/zone-node-[12].log)"
 MAIN_BOT_RELOCATION=0
-if grep -hEq 'zoneworld-actor-joined.*player=bot-.*initial=false' \
-  "$LOG_DIR"/zone-node-[12].log; then
+bot_boundary="$(grep -F 'ops-bot-boundary ' "$LOG_DIR/client.log" | head -1)"
+boundary_bot="${bot_boundary#*bot=}"; boundary_bot="${boundary_bot%% source=*}"
+boundary_target="${bot_boundary##* target=}"
+if [[ -n "$bot_boundary" ]] && grep -E "zoneworld-actor-joined.*player=$boundary_bot .*initial=false"   "$LOG_DIR/$boundary_target.log" >/dev/null; then
   MAIN_BOT_RELOCATION=1
 fi
 

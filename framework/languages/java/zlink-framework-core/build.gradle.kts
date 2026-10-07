@@ -25,6 +25,10 @@ sourceSets {
         resources.srcDir("../../../runtime/protocol/golden")
     }
 
+    named("integrationTest") {
+        compileClasspath += sourceSets.test.get().output
+    }
+
     val m5Foundation by creating {
         java.setSrcDirs(listOf(
             "src/main/java",

@@ -279,6 +279,8 @@ export interface ZLinkNestClientServerChannelServerBuilder extends ZLinkNestFram
 }
 
 export interface ZLinkNestStreamNodeBuilder extends ZLinkNestFrameworkOptionsBuilder {
+  setHeartbeat(intervalMs: number, timeoutMs: number): this;
+  setIdleTimeout(timeoutMs: number): this;
   bind(endpoint: string | undefined): this;
   bind(port?: number): this;
   setBindHost(bindHost: string): this;

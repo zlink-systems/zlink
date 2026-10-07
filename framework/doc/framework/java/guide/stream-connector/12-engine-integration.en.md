@@ -10,7 +10,7 @@ title: "Game Engine Integration · Java"
 # Game Engine Integration
 
 <!-- framework-adapter-nav:start -->
-[Contents](README.en.md) | [Previous: Error Handling](07-error-handling.en.md)
+[Contents](README.en.md) | [Previous: Error Handling](07-error-handling.en.md) | [Next: Node Protobuf Messaging](../../../node/guide/stream-connector/40-protobuf.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

@@ -4,11 +4,16 @@ internal sealed class ZLinkSerialTurn
 {
     private static readonly AsyncLocal<ZLinkSerialTurn?> CurrentTurn = new();
 
-    private readonly Func<ZLinkSerialTurn, Action, ZLinkSerialPostAdmission> _postResume;
+    private readonly Func<
+        ZLinkSerialTurn,
+        Action<ZLinkSerialPostAdmission>,
+        ZLinkSerialPostAdmission
+    > _postResume;
     private readonly Func<Func<CancellationToken, ValueTask>, bool> _postCallback;
     private readonly Action<Exception> _reportError;
     private readonly CancellationToken _executionToken;
     internal ZLinkSerialWorkItem Item { get; }
+    internal ZLinkSerialExecutionQueue? ExecutionGate { get; }
 
     internal ZLinkSerialWorkItem? LifecycleOwner =>
         Item.LifecycleOwner ?? (Item.Lane == ZLinkSerialWorkLane.Lifecycle ? Item : null);
@@ -21,11 +26,16 @@ internal sealed class ZLinkSerialTurn
     private int _suspendSignaled;
 
     public ZLinkSerialTurn(
-        Func<ZLinkSerialTurn, Action, ZLinkSerialPostAdmission> postResume,
+        Func<
+            ZLinkSerialTurn,
+            Action<ZLinkSerialPostAdmission>,
+            ZLinkSerialPostAdmission
+        > postResume,
         Func<Func<CancellationToken, ValueTask>, bool> postCallback,
         Action<Exception> reportError,
         CancellationToken executionToken,
-        ZLinkSerialWorkItem item
+        ZLinkSerialWorkItem item,
+        ZLinkSerialExecutionQueue? executionGate = null
     )
     {
         _postResume = postResume;
@@ -33,6 +43,7 @@ internal sealed class ZLinkSerialTurn
         _reportError = reportError;
         _executionToken = executionToken;
         Item = item;
+        ExecutionGate = executionGate;
     }
 
     public static ZLinkSerialTurn? Current => CurrentTurn.Value;
@@ -128,7 +139,7 @@ internal sealed class ZLinkSerialTurn
         }
     }
 
-    private void SignalSuspended()
+    internal void SignalSuspended()
     {
         if (Interlocked.Exchange(ref _suspendSignaled, 1) == 0)
             Volatile.Read(ref _suspended).TrySetResult();
@@ -137,14 +148,21 @@ internal sealed class ZLinkSerialTurn
     private Task AwaitResumePermitAsync()
     {
         var resume = new TaskCompletionSource();
-        var admission = _postResume(this, () => resume.TrySetResult());
+        void CompleteResume(ZLinkSerialPostAdmission result)
+        {
+            if (result == ZLinkSerialPostAdmission.Accepted)
+                resume.TrySetResult();
+            else
+                resume.TrySetException(
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.ShuttingDown,
+                        "The serial execution queue is closed before a yielded turn can resume."
+                    )
+                );
+        }
+        var admission = _postResume(this, CompleteResume);
         if (admission != ZLinkSerialPostAdmission.Accepted)
-            resume.TrySetException(
-                new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.ShuttingDown,
-                    "The serial execution queue is closed before a yielded turn can resume."
-                )
-            );
+            CompleteResume(admission);
 
         return resume.Task;
     }

@@ -11,7 +11,72 @@ int main ()
 {
     using decision = session_liveness_t::decision_t;
     const auto established = session_liveness_t::clock_t::time_point{};
+    session_liveness_t default_idle (established);
+    for (int second = 1; second <= 35; ++second) {
+        default_idle.record_inbound (established + second * 1s);
+        if (default_idle.evaluate (established + second * 1s) != decision::send_heartbeat) {
+            std::cerr << "FAIL: default idle must remain disabled beyond 30 seconds\n";
+            return 1;
+        }
+    }
+    zlink::framework::detail::stream_liveness_options_t settings;
+    for (const auto pair :
+         {std::pair{0ms, 5000ms}, std::pair{-1ms, 5000ms}, std::pair{1000ms, 0ms},
+          std::pair{1000ms, -1ms}, std::pair{1000ms, 1000ms}, std::pair{1000ms, 999ms}}) {
+        const auto message =
+          pair.first.count () <= 0    ? "STREAM heartbeat interval must be positive."
+          : pair.second.count () <= 0 ? "STREAM heartbeat timeout must be positive."
+                                      : "STREAM heartbeat timeout must be greater than interval.";
+        try {
+            settings.set_heartbeat (pair.first, pair.second);
+            return 1;
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            if (error.kind () != zlink::framework::framework_error_kind_t::protocol_error
+                || std::string{error.what ()} != message)
+                return 1;
+        }
+    }
+    try {
+        settings.set_idle_timeout (-1ms);
+        return 1;
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        if (error.kind () != zlink::framework::framework_error_kind_t::protocol_error
+            || std::string{error.what ()} != "STREAM idle timeout must not be negative.")
+            return 1;
+    }
+    settings.set_heartbeat (2s, 6s);
+    settings.set_idle_timeout (0ms);
+    if (settings.heartbeat_interval != 2s || settings.heartbeat_timeout != 6s
+        || settings.idle_timeout != 0ms)
+        return 1;
+    std::cout << "PASS settings reject invalid heartbeat/idle before host start\n";
     session_liveness_t silent (established);
+    session_liveness_t configured (
+      established, {.heartbeat_interval = 2s, .heartbeat_timeout = 6s, .idle_timeout = 3s});
+    if (configured.evaluate (established + 1s) != decision::none
+        || configured.evaluate (established + 2s) != decision::send_heartbeat)
+        return 1;
+    configured.record_inbound (established + 2999ms);
+    if (configured.evaluate (established + 2999ms) == decision::idle_timeout
+        || configured.evaluate (established + 3s) != decision::idle_timeout)
+        return 1;
+    session_liveness_t custom_heartbeat (established,
+                                         {.heartbeat_interval = 2s, .heartbeat_timeout = 6s});
+    if (custom_heartbeat.evaluate (established + 5999ms) == decision::heartbeat_timeout
+        || custom_heartbeat.evaluate (established + 6s) != decision::heartbeat_timeout)
+        return 1;
+    session_liveness_t idle_due (
+      established, {.heartbeat_interval = 2s, .heartbeat_timeout = 6s, .idle_timeout = 500ms});
+    if (idle_due.next_due () != established + 500ms)
+        return 1;
+    session_liveness_t maximum_duration (
+      established, {.heartbeat_interval = std::chrono::milliseconds::max () - 1ms,
+                    .heartbeat_timeout = std::chrono::milliseconds::max ()});
+    if (maximum_duration.next_due () != session_liveness_t::clock_t::time_point::max ()
+        || maximum_duration.evaluate (established + 35s) != decision::none)
+        return 1;
     silent.record_inbound (established - 1s);
     if (silent.evaluate (established + 4999ms) == decision::heartbeat_timeout)
         return 1;
@@ -59,7 +124,7 @@ int main ()
     }
     if (periodic.evaluate (established + 5s) != decision::heartbeat_timeout)
         return 1;
-    session_liveness_t controls (established);
+    session_liveness_t controls (established, {.idle_timeout = 30s});
     controls.record_inbound (established + 30s);
     if (controls.evaluate (established + 30s) != decision::idle_timeout)
         return 1;

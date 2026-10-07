@@ -605,6 +605,59 @@ void test_zlink_ws_pair_message ()
     teardown_zlink_ctx ();
 }
 
+static const size_t ws_stream_send_burst_size = 200;
+
+template <typename WebSocketStream>
+size_t receive_ws_stream_send_burst (void *server_,
+                                     const zlink_routing_id_t &rid_,
+                                     WebSocketStream &client_)
+{
+    //  Queue a burst containing both small payloads and payloads larger than
+    //  the encoder buffer. Each routed send must remain one binary message.
+    std::vector<std::vector<unsigned char>> burst;
+    for (size_t i = 0; i < ws_stream_send_burst_size; ++i) {
+        const size_t body_size = i % 5 == 0 ? 130000 : 17 + i * 19;
+        const std::string body =
+          patterned_ws_stream_body (body_size, static_cast<unsigned int> (i));
+        burst.push_back (ws_stream_packet ("", body.c_str ()));
+    }
+    size_t accepted = 0;
+    std::thread sender ([&] () {
+        for (size_t i = 0; i < burst.size (); ++i) {
+            zlink_msg_t message;
+            if (zlink_msg_init_size (&message, burst[i].size ()) != 0)
+                break;
+            memcpy (zlink_msg_data (&message), burst[i].data (), burst[i].size ());
+            const zlink_submit_result_t rc =
+              zlink_send_rid (server_, &rid_, &message, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
+            zlink_msg_close (&message);
+            if (rc != ZLINK_SUBMIT_OK)
+                break;
+            ++accepted;
+        }
+    });
+    size_t received_count = 0;
+    for (; received_count < burst.size (); ++received_count) {
+        beast::flat_buffer received;
+        boost::system::error_code ec;
+        client_.read (received, ec);
+        const std::string bytes = beast::buffers_to_string (received.data ());
+        const size_t expected_message_size = burst[received_count].size ();
+        const bool payload_matches =
+          !ec && client_.got_binary () && bytes.size () == expected_message_size
+          && memcmp (bytes.data (), burst[received_count].data (), expected_message_size) == 0;
+        if (!payload_matches) {
+            printf ("STREAM WS message %zu: expected %zu bytes, received %zu, "
+                    "binary=%d, error=%s\n",
+                    received_count, expected_message_size, bytes.size (), client_.got_binary (),
+                    ec.message ().c_str ());
+            break;
+        }
+    }
+    sender.join ();
+    return std::min (received_count, accepted);
+}
+
 //  A STREAM socket with packet pull remains writable by routing id from
 //  socket threads. This is the path used when bound-session ingress
 //  forwards a complete framework frame to a WebSocket client.
@@ -681,22 +734,23 @@ void test_zlink_ws_stream_packet_pull_routed_send ()
           ZLINK_SUBMIT_OK, send_result.load (std::memory_order_acquire));
     }
 
-    std::string received_bytes;
-    const size_t expected_size = first.size () + second.size ();
-    while (received_bytes.size () < expected_size) {
+    for (size_t i = 0; i < 2; ++i) {
         beast::flat_buffer received;
         client.read (received);
-        received_bytes += beast::buffers_to_string (received.data ());
+        const std::string received_bytes = beast::buffers_to_string (received.data ());
+        TEST_ASSERT_TRUE (client.got_binary ());
+        TEST_ASSERT_EQUAL_UINT64 (messages[i]->size (), received_bytes.size ());
+        TEST_ASSERT_EQUAL_MEMORY (messages[i]->data (), received_bytes.data (),
+                                  messages[i]->size ());
     }
-    TEST_ASSERT_EQUAL_UINT64 (expected_size, received_bytes.size ());
-    TEST_ASSERT_EQUAL_MEMORY (&first[0], received_bytes.data (), first.size ());
-    TEST_ASSERT_EQUAL_MEMORY (&second[0], received_bytes.data () + first.size (),
-                              second.size ());
+
+    const size_t burst_count = receive_ws_stream_send_burst (server, rid, client);
 
     boost::system::error_code ignored;
     client.close (websocket::close_code::normal, ignored);
     zlink_close (server);
     teardown_zlink_ctx ();
+    TEST_ASSERT_EQUAL_UINT64 (ws_stream_send_burst_size, burst_count);
 }
 
 void test_zlink_ws_stream_fragmented_partial_read ()
@@ -1004,12 +1058,15 @@ void test_zlink_wss_stream_fragmented_partial_read ()
     TEST_ASSERT_EQUAL_MEMORY (
       &response[0], received_bytes.data (), response.size ());
 
+    const size_t burst_count = receive_ws_stream_send_burst (server, rid, client);
+
     boost::system::error_code ignored;
     client.close (websocket::close_code::normal, ignored);
     beast::get_lowest_layer (client).close (ignored);
     zlink_close (server);
     cleanup_tls_test_files (files);
     teardown_zlink_ctx ();
+    TEST_ASSERT_EQUAL_UINT64 (ws_stream_send_burst_size, burst_count);
 }
 #endif // ZLINK_HAVE_WSS
 

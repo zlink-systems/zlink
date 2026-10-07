@@ -469,9 +469,11 @@ and completes the original operation with the `Unavailable` result in §4.2.
 ### 4.1.1 If the Target Process Terminates During Activation
 
 **If the target process terminates after `Reserve`, the startup complete
-authority scan re-reads the Pending creation information.** It either
-continues factory, initialize, and durable inbox restoration with the same
-reservation and generation, or aborts creation with the same fence.
+authority scan passes the previous lifecycle's `Creating` authority to the
+reservation release of [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas).**
+After the release is confirmed, the activation recovery work deletes that
+reservation's recovery root. The scope in which stored creation intent resumes
+follows [Object lifecycle §3](09-object-lifecycle.en.md#3-when-to-build-a-missing-object).
 
 **If the process terminates after the `Ready` commit but before restoring
 the queue head, the recovery root and cursor are used to restore the first

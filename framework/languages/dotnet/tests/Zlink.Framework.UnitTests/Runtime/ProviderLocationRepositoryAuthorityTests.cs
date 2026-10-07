@@ -14,6 +14,175 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
+    [Fact]
+    public async Task ReplacedDescriptorLifecycleReleasesReservedCapacity()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "restarted-owner");
+        var descriptor = Descriptor("target", owner, actorLimit: 1);
+        _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("restarted-reservation", descriptor, owner);
+        var first = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request)
+        );
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            await repository.RemoveMeshNodeAsync(request.TargetDescriptor, owner)
+        );
+        var replacement = descriptor with { LifecycleGeneration = 2 };
+        _ = await repository.UpdateMeshNodeAsync(replacement, ZLinkLocationWriteIntent.NewClaim);
+        var next = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(Reservation("restarted-reservation", replacement, owner))
+        );
+        Assert.NotEqual(first.Reservation.StoreVersion, next.Reservation.StoreVersion);
+        Assert.IsType<ZLinkObjectCommitResult.Stale>(
+            await repository.CommitAsync(first.Reservation, new byte[] { 1 })
+        );
+    }
+
+    [Fact]
+    public async Task LateCommitWinsAgainstReservationReleaseBatch()
+    {
+        var provider = new InspectAuthorityBatchLocationStore(
+            new ZLinkInMemoryProviderLocationStore()
+        );
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "late-commit-owner");
+        var descriptor = Descriptor("target", owner);
+        _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("late-commit", descriptor, owner);
+        var reservation = Assert
+            .IsType<ZLinkObjectReserveResult.Reserved>(await repository.ReserveAsync(request))
+            .Reservation;
+        await repository.RemoveMeshNodeAsync(request.TargetDescriptor, owner);
+        var committed = false;
+        provider.Inspect = async batch =>
+        {
+            Assert.Contains(batch.Mutations, mutation => mutation is ZLinkStoreMutation.Delete);
+            provider.Inspect = null;
+            _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+            Assert.IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(reservation, new byte[] { 1 })
+            );
+            committed = true;
+        };
+        Assert.False(
+            await repository.ReleaseEndedReservationAsync(request.Key, reservation.StoreVersion)
+        );
+        Assert.True(committed);
+    }
+
+    [Theory]
+    [InlineData("live")]
+    [InlineData("expired")]
+    [InlineData("missingCapacity")]
+    [InlineData("underflow")]
+    public async Task EndedReservationReleaseFencesAuthorityAndCapacity(string scenario)
+    {
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "release-owner");
+        var descriptor = Descriptor("target", owner);
+        _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("release-reservation", descriptor, owner);
+        var reservation = Assert
+            .IsType<ZLinkObjectReserveResult.Reserved>(await repository.ReserveAsync(request))
+            .Reservation;
+        if (scenario == "expired")
+            time.Advance(TimeSpan.FromMinutes(3));
+        else if (scenario != "live")
+            await repository.ReleaseOwnerLeaseAsync(owner);
+        var capacityKey = CapacityKey(descriptor);
+        if (scenario == "missingCapacity" || scenario == "underflow")
+        {
+            var capacity = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await provider.ReadAsync(capacityKey)
+            );
+            ZLinkStoreMutation mutation =
+                scenario == "missingCapacity"
+                    ? new ZLinkStoreMutation.Delete(capacityKey)
+                    : new ZLinkStoreMutation.Put(
+                        capacityKey,
+                        Encoding.UTF8.GetBytes(
+                            "{\"active\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}},\"pending\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}}}"
+                        ),
+                        null
+                    );
+            await provider.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Version(capacityKey, capacity.Value.Version)],
+                    [mutation]
+                )
+            );
+        }
+        if (scenario == "underflow")
+        {
+            var capacityBefore = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await provider.ReadAsync(capacityKey)
+            );
+            await Assert.ThrowsAsync<InvalidDataException>(async () =>
+                await repository.ReleaseEndedReservationAsync(request.Key, reservation.StoreVersion)
+            );
+            var capacityAfter = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await provider.ReadAsync(capacityKey)
+            );
+            Assert.Equal(capacityBefore.Value.Version, capacityAfter.Value.Version);
+            Assert.Equal(capacityBefore.Value.Bytes.ToArray(), capacityAfter.Value.Bytes.ToArray());
+            Assert.Equal(
+                reservation.StoreVersion,
+                Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await repository.ReadAuthorityAsync(request.Key)
+                    )
+                    .Snapshot.StoreVersion
+            );
+        }
+        else
+        {
+            Assert.Equal(
+                scenario != "live",
+                await repository.ReleaseEndedReservationAsync(request.Key, reservation.StoreVersion)
+            );
+            if (scenario == "live")
+                Assert.IsType<ZLinkObjectCommitResult.Committed>(
+                    await repository.CommitAsync(reservation, new byte[] { 1 })
+                );
+            else
+                Assert.IsType<ZLinkAuthorityReadResult.Missing>(
+                    await repository.ReadAuthorityAsync(request.Key)
+                );
+            if (scenario == "missingCapacity")
+                Assert.IsType<ZLinkStoreReadResult.Missing>(await provider.ReadAsync(capacityKey));
+        }
+    }
+
+    [Fact]
+    public async Task CommitWinsBeforeEndedReservationRelease()
+    {
+        var repository = new ZLinkProviderLocationRepository(
+            new ZLinkInMemoryProviderLocationStore()
+        );
+        var owner = await ClaimAsync(repository, "commit-owner");
+        var descriptor = Descriptor("target", owner);
+        _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("commit-wins", descriptor, owner);
+        var reservation = Assert
+            .IsType<ZLinkObjectReserveResult.Reserved>(await repository.ReserveAsync(request))
+            .Reservation;
+        Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await repository.CommitAsync(reservation, new byte[] { 1 })
+        );
+        await repository.ReleaseOwnerLeaseAsync(owner);
+        Assert.False(
+            await repository.ReleaseEndedReservationAsync(request.Key, reservation.StoreVersion)
+        );
+        Assert.IsType<ZLinkAuthorityReadResult.Found>(
+            await repository.ReadAuthorityAsync(request.Key)
+        );
+    }
+
     [Theory]
     [InlineData("Reserve", false, false)]
     [InlineData("Commit", false, false)]
@@ -1918,9 +2087,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
 
         provider.ThrowAfterNextWrite = true;
         provider.BlockWritesAfterThrownResponse = true;
-        await Assert.ThrowsAsync<IOException>(async () =>
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.CommitAggregateAsync(prepared.Fence)
         );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.IsType<IOException>(failure.InnerException);
 
         var visible = Assert
             .IsType<ZLinkAuthorityReadResult.Found>(
@@ -2670,9 +2841,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         // sequence. The retry must fill any rows that were not written.
         provider.SkipWritesBeforeThrow = 2;
         provider.BlockWritesAfterThrownResponse = true;
-        await Assert.ThrowsAnyAsync<IOException>(async () =>
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.CommitAggregateAsync(prepared.Fence)
         );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.IsType<IOException>(failure.InnerException);
 
         foreach (var participant in participants)
         {
@@ -2808,9 +2981,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         provider.ThrowAfterNextWrite = true;
         provider.SkipWritesBeforeThrow = 1;
         provider.BlockWritesAfterThrownResponse = true;
-        await Assert.ThrowsAsync<IOException>(async () =>
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.PrepareAggregateAsync(request)
         );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.IsType<IOException>(failure.InnerException);
         Assert.Equal(
             ZLinkAggregateCommitResult.Stale,
             await repository.CommitAggregateAsync(fence)
@@ -3011,9 +3186,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         provider.ThrowAfterNextWrite = true;
         provider.SkipWritesBeforeThrow = 1;
         provider.BlockWritesAfterThrownResponse = true;
-        await Assert.ThrowsAsync<IOException>(async () =>
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.PrepareAggregateAsync(abandoned)
         );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.IsType<IOException>(failure.InnerException);
         provider.BlockWrites = false;
         await BackdateAggregateRootAsync(inner, abandonedFence);
         Assert.Equal(
@@ -3326,9 +3503,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
 
         provider.ThrowAfterNextWrite = true;
         provider.BlockWritesAfterThrownResponse = true;
-        await Assert.ThrowsAsync<IOException>(async () =>
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.CommitAggregateAsync(prepared.Fence)
         );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.IsType<IOException>(failure.InnerException);
         provider.ResetInventoryReadCount();
         for (var index = 0; index < projectedCount; index++)
         {

@@ -257,7 +257,11 @@ connector owns a per-connector-instance typed codec option
 The session error callback is limited to surfacing a monitor-observable
 transport error at the session level.
 
-A server STREAM session follows the heartbeat rule and defaults of [Stream Connector §6](../../stream-connector/32-stream-connector.en.md#6-connection-lifecycle). On the server, the result of the no-inbound timeout is closing the session with `heartbeat_timeout`, not reconnecting.
+A server STREAM session follows the heartbeat rule of [Stream Connector §6](../../stream-connector/32-stream-connector.en.md#6-connection-lifecycle). The heartbeat interval and timeout default to that section's defaults and can be changed in the Stream node configuration. On the server, the result of the no-inbound timeout is closing the session with `heartbeat_timeout`, not reconnecting.
+
+Application idle closing runs only when the Stream node idle timeout is set to a positive value. The default is 0, and 0 means no idle closing. When enabled, a session whose last application packet arrived more than the idle timeout ago is closed with `idle_timeout`. Heartbeat control frames don't count as application activity.
+
+The heartbeat interval and timeout must be positive, and the timeout must be greater than the interval. The idle timeout must be 0 or greater. A configuration that breaks these conditions is rejected as a configuration error before the host starts.
 
 The termination reason when a session closes matches the closed set in
 [Stream Connector §6.2](../../stream-connector/32-stream-connector.en.md#62-close-reason),

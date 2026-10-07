@@ -715,135 +715,169 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
+    CompletionStage<Boolean> releaseEndedReservation(
+            String key,
+            String expectedStoreVersion,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        ZLinkStoreKey rowKey = authorityKey(key);
+        return provider.read(rowKey, cancellation)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkStoreReadFound found)
+                                    || !found.value()
+                                            .version()
+                                            .value()
+                                            .equals(expectedStoreVersion)) return completed(false);
+                            return tryReclaimStaleAuthority(
+                                            rowKey,
+                                            found,
+                                            decode(found.value().bytes()),
+                                            cancellation)
+                                    .thenApply(result -> result == StaleAuthorityReclaim.RECLAIMED);
+                        });
+    }
+
     private CompletionStage<StaleAuthorityReclaim> tryReclaimStaleAuthority(
             ZLinkStoreKey authorityKey,
             ZLinkStoreReadFound authority,
             AuthorityRecord current,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        if (current.allocation().state() == ZLinkPlacementAllocationState.ACTIVE) {
+        if (current.allocation().state() != ZLinkPlacementAllocationState.PENDING
+                || current.pendingCreation().isEmpty()
+                || current.aggregate() != null
+                || ZLinkCanonicalRelocationAuthorityStateCodec.decode(current.payload()) != null)
             return completed(StaleAuthorityReclaim.NOT_RECLAIMABLE);
-        }
-
-        ZLinkStoreKey staleOwnerKey = ownerKey(current.ownerId());
-        return provider.read(staleOwnerKey, cancellation)
+        ZLinkStoreKey leaseKey = ownerKey(current.ownerId());
+        var target = current.allocation().descriptor();
+        ZLinkStoreKey descriptorKey =
+                ZLinkProviderDescriptorRepository.meshKey(target.meshName(), target.rid());
+        ZLinkStoreKey capacityKey = capacityKey(target);
+        return provider.read(leaseKey, cancellation)
                 .thenCompose(
-                        ownerRead -> {
-                            ZLinkStoreCondition ownerCondition;
-                            if (ownerRead instanceof ZLinkStoreReadFound ownerFound) {
-                                var owner =
-                                        ZLinkOwnerLeaseRecordCodec.decode(
-                                                ownerFound.value().bytes());
-                                if (!owner.ownerId().equals(current.ownerId())
-                                        || ownerFound.value().expiresAt() == null) {
-                                    // Lease writers always apply a positive TTL. Reclaiming
-                                    // deletes authority, so a missing expiry is corruption,
-                                    // not evidence that the owner has died.
-                                    throw new IllegalStateException(
-                                            "Location Store owner lease record is invalid");
-                                }
-                                if (owner.leaseGeneration() == current.ownerLeaseGeneration()
-                                        && ownerFound
-                                                .value()
-                                                .expiresAt()
-                                                .isAfter(ownerFound.value().storeNow())) {
-                                    return completed(StaleAuthorityReclaim.OWNER_LIVE);
-                                }
-                                ownerCondition =
-                                        new ZLinkStoreVersionCondition(
-                                                staleOwnerKey, ownerFound.value().version());
-                            } else {
-                                ownerCondition = new ZLinkStoreMissingCondition(staleOwnerKey);
-                            }
-                            if (current.aggregate() != null
-                                    || ZLinkCanonicalRelocationAuthorityStateCodec.decode(
-                                                    current.payload())
-                                            != null) {
-                                return completed(StaleAuthorityReclaim.RECOVERY_REQUIRED);
-                            }
-                            return readCapacity(current.allocation(), cancellation)
-                                    .thenCompose(
-                                            capacity -> {
-                                                CapacitySnapshot stored = capacity.orElse(null);
-                                                CapacityRecord next =
-                                                        stored == null
-                                                                ? null
-                                                                : stored.record()
-                                                                        .adjustPending(
-                                                                                current.allocation()
-                                                                                        .capacityBundle(),
-                                                                                -1);
-                                                if (next == null) {
-                                                    // The expired reservation's capacity row may be
-                                                    // gone or
-                                                    // recreated from zero, so it no longer accounts
-                                                    // for the
-                                                    // pending allocation and cannot be decremented.
-                                                    // The
-                                                    // exact authority version and owner-lease
-                                                    // condition
-                                                    // still fence deletion against an owner
-                                                    // resurrection.
-                                                    return deleteOrphanAuthority(
-                                                            authorityKey,
-                                                            authority,
-                                                            ownerCondition,
-                                                            cancellation);
-                                                }
-                                                return provider.write(
-                                                                new ZLinkStoreWriteRequest(
-                                                                        List.of(
-                                                                                new ZLinkStoreVersionCondition(
-                                                                                        authorityKey,
-                                                                                        authority
-                                                                                                .value()
-                                                                                                .version()),
-                                                                                ownerCondition,
-                                                                                new ZLinkStoreVersionCondition(
-                                                                                        stored
-                                                                                                .key(),
-                                                                                        stored.value()
-                                                                                                .version())),
-                                                                        List.of(
-                                                                                new ZLinkStoreDelete(
-                                                                                        authorityKey),
-                                                                                new ZLinkStorePut(
-                                                                                        stored
-                                                                                                .key(),
-                                                                                        encodeCapacity(
-                                                                                                next),
-                                                                                        null))),
-                                                                cancellation)
-                                                        .thenApply(
-                                                                result ->
-                                                                        result
-                                                                                        instanceof
-                                                                                        ZLinkStoreWriteApplied
-                                                                                ? StaleAuthorityReclaim
-                                                                                        .RECLAIMED
-                                                                                : StaleAuthorityReclaim
-                                                                                        .CONFLICT);
-                                            });
-                        });
-    }
-
-    private CompletionStage<StaleAuthorityReclaim> deleteOrphanAuthority(
-            ZLinkStoreKey authorityKey,
-            ZLinkStoreReadFound authority,
-            ZLinkStoreCondition ownerCondition,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        return provider.write(
-                        new ZLinkStoreWriteRequest(
-                                List.of(
-                                        new ZLinkStoreVersionCondition(
-                                                authorityKey, authority.value().version()),
-                                        ownerCondition),
-                                List.of(new ZLinkStoreDelete(authorityKey))),
-                        cancellation)
-                .thenApply(
-                        result ->
-                                result instanceof ZLinkStoreWriteApplied
-                                        ? StaleAuthorityReclaim.RECLAIMED
-                                        : StaleAuthorityReclaim.CONFLICT);
+                        lease ->
+                                provider.read(descriptorKey, cancellation)
+                                        .thenCompose(
+                                                descriptor -> {
+                                                    boolean ownerLive = false;
+                                                    ZLinkStoreCondition leaseCondition;
+                                                    if (lease
+                                                            instanceof ZLinkStoreReadFound found) {
+                                                        var owner =
+                                                                ZLinkOwnerLeaseRecordCodec.decode(
+                                                                        found.value().bytes());
+                                                        if (!owner.ownerId()
+                                                                        .equals(current.ownerId())
+                                                                || found.value().expiresAt()
+                                                                        == null)
+                                                            throw new IllegalStateException(
+                                                                    "Location Store owner lease record is invalid");
+                                                        ownerLive =
+                                                                owner.leaseGeneration()
+                                                                                == current
+                                                                                        .ownerLeaseGeneration()
+                                                                        && found.value()
+                                                                                .expiresAt()
+                                                                                .isAfter(
+                                                                                        found.value()
+                                                                                                .storeNow());
+                                                        leaseCondition =
+                                                                new ZLinkStoreVersionCondition(
+                                                                        leaseKey,
+                                                                        found.value().version());
+                                                    } else
+                                                        leaseCondition =
+                                                                new ZLinkStoreMissingCondition(
+                                                                        leaseKey);
+                                                    ZLinkStoreCondition descriptorCondition;
+                                                    if (descriptor
+                                                            instanceof ZLinkStoreReadFound found) {
+                                                        if (ownerLive
+                                                                && ZLinkProviderDescriptorRepository
+                                                                                .decodeMeshNodeRecord(
+                                                                                        found.value()
+                                                                                                .bytes())
+                                                                                .lifecycleGeneration()
+                                                                        == current.allocation()
+                                                                                .descriptorLifecycleGeneration())
+                                                            return completed(
+                                                                    StaleAuthorityReclaim
+                                                                            .OWNER_LIVE);
+                                                        descriptorCondition =
+                                                                new ZLinkStoreVersionCondition(
+                                                                        descriptorKey,
+                                                                        found.value().version());
+                                                    } else
+                                                        descriptorCondition =
+                                                                new ZLinkStoreMissingCondition(
+                                                                        descriptorKey);
+                                                    return provider.read(capacityKey, cancellation)
+                                                            .thenCompose(
+                                                                    capacity -> {
+                                                                        List<ZLinkStoreCondition>
+                                                                                conditions =
+                                                                                        new ArrayList<>(
+                                                                                                List
+                                                                                                        .of(
+                                                                                                                new ZLinkStoreVersionCondition(
+                                                                                                                        authorityKey,
+                                                                                                                        authority
+                                                                                                                                .value()
+                                                                                                                                .version()),
+                                                                                                                leaseCondition,
+                                                                                                                descriptorCondition));
+                                                                        List<ZLinkStoreMutation>
+                                                                                mutations =
+                                                                                        new ArrayList<>(
+                                                                                                List
+                                                                                                        .of(
+                                                                                                                new ZLinkStoreDelete(
+                                                                                                                        authorityKey)));
+                                                                        if (capacity
+                                                                                instanceof
+                                                                                ZLinkStoreReadFound
+                                                                                        found) {
+                                                                            var next =
+                                                                                    decodeCapacity(
+                                                                                                    found.value()
+                                                                                                            .bytes())
+                                                                                            .adjustPending(
+                                                                                                    current.allocation()
+                                                                                                            .capacityBundle(),
+                                                                                                    -1);
+                                                                            if (next == null)
+                                                                                throw new IllegalStateException(
+                                                                                        "Location Store capacity record is inconsistent");
+                                                                            conditions.add(
+                                                                                    new ZLinkStoreVersionCondition(
+                                                                                            capacityKey,
+                                                                                            found.value()
+                                                                                                    .version()));
+                                                                            mutations.add(
+                                                                                    new ZLinkStorePut(
+                                                                                            capacityKey,
+                                                                                            encodeCapacity(
+                                                                                                    next),
+                                                                                            null));
+                                                                        } else
+                                                                            conditions.add(
+                                                                                    new ZLinkStoreMissingCondition(
+                                                                                            capacityKey));
+                                                                        return provider.write(
+                                                                                        new ZLinkStoreWriteRequest(
+                                                                                                conditions,
+                                                                                                mutations),
+                                                                                        cancellation)
+                                                                                .thenApply(
+                                                                                        result ->
+                                                                                                result
+                                                                                                                instanceof
+                                                                                                                ZLinkStoreWriteApplied
+                                                                                                        ? StaleAuthorityReclaim
+                                                                                                                .RECLAIMED
+                                                                                                        : StaleAuthorityReclaim
+                                                                                                                .CONFLICT);
+                                                                    });
+                                                }));
     }
 
     CompletionStage<ZLinkObjectCommitResult> commit(

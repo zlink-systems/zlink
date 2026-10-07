@@ -36,7 +36,6 @@ import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
-import systems.zlink.framework.configuration.ZLinkEndpointConnections;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.framework.handlers.ZLinkPacket;
@@ -45,13 +44,15 @@ import systems.zlink.framework.locations.ZLinkLocationRuntimeQuery;
 import systems.zlink.framework.locations.ZLinkLocationRuntimeStatus;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
+import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
+import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
-import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -80,7 +81,6 @@ import systems.zlink.framework.testkit.FakeZLinkBackendAdapterFactory;
 import systems.zlink.httpclient.ZLinkFrameworkHttpExecutionTurn;
 import systems.zlink.httpclient.ZLinkHttpExecutionTurn;
 
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -90,6 +90,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -554,17 +555,13 @@ final class ZLinkFrameworkAutoConfigurationTest {
     }
 
     @Test
-    void routeMeshExplicitHandlersAreCreatedThroughSpringDependencyInjection() {
-        AtomicReference<ZLinkEndpointConnections> sourceConnections = new AtomicReference<>();
-        AtomicReference<ZLinkEndpointConnections> targetConnections = new AtomicReference<>();
+    void routeMeshExplicitHandlersAreCreatedThroughSpringDependencyInjection() throws Exception {
         RoutingId sourceRid = RoutingId.from("spring-route-source");
         RoutingId targetRid = RoutingId.from("spring-route-target");
 
         try (AnnotationConfigApplicationContext context =
                 new AnnotationConfigApplicationContext()) {
-            context.registerBean(
-                    RouteMeshEndpoints.class,
-                    () -> new RouteMeshEndpoints(targetRid, targetConnections));
+            context.registerBean(RoutingId.class, () -> targetRid);
             context.register(RouteMeshHandlerConfig.class, ZLinkFrameworkAutoConfiguration.class);
             context.refresh();
 
@@ -576,21 +573,25 @@ final class ZLinkFrameworkAutoConfigurationTest {
                         ZLinkFrameworkConfigurer.class,
                         () ->
                                 options -> {
-                                    var channel =
-                                            ZLinkLegacyTopology.addRouteMeshChannel(
-                                                    options, "route");
-                                    channel.enableServer("tcp://127.0.0.1:0");
-                                    channel.setRoutingId(sourceRid);
-                                    sourceConnections.set(channel.clientConnections());
+                                    var mesh =
+                                            options.addRouteMesh("route")
+                                                    .listen("tcp://127.0.0.1:0")
+                                                    .setRoutingId(sourceRid);
+                                    mesh.peerConnections()
+                                            .connect(
+                                                    targetRid,
+                                                    context.getBean(ZLinkFrameworkRuntime.class)
+                                                            .listenerStatus(
+                                                                    ZLinkListenerKind.ROUTE_MESH,
+                                                                    "route")
+                                                            .endpoint());
                                 });
                 sourceContext.register(
                         SourceRouteMeshConfig.class, ZLinkFrameworkAutoConfiguration.class);
                 sourceContext.refresh();
 
-                ZLinkFrameworkRuntime source = sourceContext.getBean(ZLinkFrameworkRuntime.class);
-                ZLinkFrameworkRuntime target = context.getBean(ZLinkFrameworkRuntime.class);
-                sourceConnections.get().connect(legacyRouteBoundEndpoint(target, "route"));
-                targetConnections.get().connect(legacyRouteBoundEndpoint(source, "route"));
+                awaitPeerReady(
+                        sourceContext.getBean(ZLinkRouteMeshRuntime.class), "route", targetRid);
 
                 String reply =
                         sourceContext
@@ -1096,17 +1097,14 @@ final class ZLinkFrameworkAutoConfigurationTest {
         }
 
         @Bean
-        ZLinkFrameworkConfigurer routeMeshHandlerConfigurer(RouteMeshEndpoints endpoints) {
+        ZLinkFrameworkConfigurer routeMeshHandlerConfigurer(RoutingId targetRid) {
             return options -> {
-                var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route");
-                channel.enableServer("tcp://127.0.0.1:0");
-                channel.setRoutingId(endpoints.targetRid());
-                endpoints.targetConnections().set(channel.clientConnections());
-                channel.addRequestHandler(
-                        InjectedRouteRequestHandler.class,
-                        SpringRouteRequest.class,
-                        String.class,
-                        "SpringRoute");
+                var mesh =
+                        options.addRouteMesh("route")
+                                .listen("tcp://127.0.0.1:0")
+                                .setRoutingId(targetRid);
+                mesh.addRouteRequestHandler(
+                        InjectedRouteRequestHandler.class, SpringRouteRequest.class, String.class);
             };
         }
     }
@@ -1547,9 +1545,6 @@ final class ZLinkFrameworkAutoConfigurationTest {
 
     public record ProfileReply(String value) {}
 
-    record RouteMeshEndpoints(
-            RoutingId targetRid, AtomicReference<ZLinkEndpointConnections> targetConnections) {}
-
     interface ProfileDecorator {
         String decorate(String value);
     }
@@ -1652,21 +1647,49 @@ final class ZLinkFrameworkAutoConfigurationTest {
         };
     }
 
-    /**
-     * Reads the endpoint a legacy route channel ROUTER actually bound, straight from the router
-     * that owns it. Legacy route channels are not public listeners, so listenerStatus does not
-     * report them.
-     */
-    private static String legacyRouteBoundEndpoint(
-            ZLinkFrameworkRuntime runtime, String channelName) {
+    private static void awaitPeerReady(
+            ZLinkRouteMeshRuntime runtime, String meshName, RoutingId peerRid) throws Exception {
+        var ready = new CompletableFuture<Void>();
+        var subscription = new AtomicReference<Flow.Subscription>();
+        runtime.observe(meshName, 16)
+                .subscribe(
+                        new Flow.Subscriber<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>() {
+                            @Override
+                            public void onSubscribe(Flow.Subscription value) {
+                                subscription.set(value);
+                                value.request(Long.MAX_VALUE);
+                            }
+
+                            @Override
+                            public void onNext(
+                                    ZLinkObservedStatus<ZLinkMeshNodeSnapshot> observed) {
+                                if (observed.status().peers().stream()
+                                        .anyMatch(
+                                                peer ->
+                                                        peer.nodeRid().equals(peerRid)
+                                                                && peer.state()
+                                                                        == ZLinkPeerState.READY)) {
+                                    ready.complete(null);
+                                }
+                            }
+
+                            @Override
+                            public void onError(Throwable error) {
+                                ready.completeExceptionally(error);
+                            }
+
+                            @Override
+                            public void onComplete() {
+                                ready.completeExceptionally(
+                                        new AssertionError(
+                                                "Peer observation completed before READY"));
+                            }
+                        });
         try {
-            Method router =
-                    ZLinkChannelRuntime.class.getDeclaredMethod("requireRouteRouter", String.class);
-            router.setAccessible(true);
-            return ((ZLinkBackendRouterSocket) router.invoke(runtime.client(), channelName))
-                    .lastEndpoint();
-        } catch (ReflectiveOperationException error) {
-            throw new IllegalStateException(error);
+            ready.get(3, TimeUnit.SECONDS);
+        } finally {
+            var active = subscription.get();
+            if (active != null) active.cancel();
         }
     }
 }

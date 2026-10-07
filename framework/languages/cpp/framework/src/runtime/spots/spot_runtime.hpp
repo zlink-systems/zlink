@@ -657,53 +657,17 @@ class spot_serial_executor_t
             return executor->execute_actor (std::move (name), std::move (work),
                                             std::move (options));
 
-        auto spot_options = options;
-        spot_options.transfer_owner_reservation = {};
-        spot_options.refuse_when_actor_handoff_fenced = false;
-        spot_options.actor_handoff_fence_refused = nullptr;
         return executor->execute_actor (
           std::move (name),
-          [this, work = std::move (work), spot_options,
-           rejected = std::move (rejected)] (auto actor_complete) mutable {
-              const auto posted =
-                _spot_queue
-                && _spot_queue->try_post_async (
-                  "spot-handler",
-                  [work = std::move (work), actor_complete] (auto spot_complete) mutable {
-                      const auto spot_turn = detail::capture_current_serial_turn ();
-                      auto actor_terminal = std::make_shared<std::atomic_bool> (false);
-                      work ([spot_complete = std::move (spot_complete), actor_complete, spot_turn,
-                             actor_terminal] (std::function<void ()> finish) mutable {
-                          auto complete_actor = [finish = std::move (finish), actor_complete,
-                                                 actor_terminal] () mutable {
-                              if (actor_terminal->exchange (true, std::memory_order_acq_rel))
-                                  return;
-                              std::exception_ptr error;
-                              try {
-                                  if (finish)
-                                      finish ();
-                              }
-                              catch (...) {
-                                  error = std::current_exception ();
-                              }
-                              actor_complete ([error] {
-                                  if (error)
-                                      std::rethrow_exception (error);
-                              });
-                          };
-                          if (spot_turn && spot_turn->released ()) {
-                              complete_actor ();
-                              return;
-                          }
-                          spot_complete (std::move (complete_actor));
-                      });
-                  },
-                  spot_options);
-              if (!posted) {
+          [gate = _spot_queue, work = std::move (work),
+           rejected = std::move (rejected)] (auto complete) mutable {
+              if (!gate || gate->closed ()) {
                   if (rejected)
                       rejected ();
-                  actor_complete ([] {});
+                  complete ([] {});
+                  return;
               }
+              work (std::move (complete));
           },
           std::move (options));
     }
@@ -753,6 +717,16 @@ class spot_serial_executor_t
         if (!executor)
             return result_t<actor_queue_submission_t>::failure (
               framework_error_kind_t::shutting_down, "Actor handoff queue is unavailable");
+        if (uses_spot_execution_gate ()) {
+            work = [gate = _spot_queue, work = std::move (work)] (auto complete) mutable {
+                // Replay is infrastructure that can deliver new Spot records. Its Actor
+                // claim stays active, while those records need the shared Spot gate.
+                if (auto turn = detail::capture_current_serial_turn ();
+                    turn && turn->belongs_to (gate.get ()))
+                    (void) turn->release ();
+                work (std::move (complete));
+            };
+        }
         const auto submitted = executor->execute_actor (std::move (name), std::move (work),
                                                         std::move (cancel), std::move (options));
         if (!submitted)
@@ -804,7 +778,9 @@ class spot_serial_executor_t
         assert_on_lane ();
         auto &executor = _actor_executors[actor_id];
         if (!executor && _worker_executor) {
-            executor = std::make_shared<actor_executor_t> (_worker_executor);
+            executor = std::make_shared<actor_executor_t> (
+              _worker_executor, queue_ptr_t{},
+              uses_spot_execution_gate () ? _spot_queue : queue_ptr_t{});
             publish_actor_executor_snapshot ();
         }
         return executor;
@@ -837,8 +813,9 @@ class spot_serial_executor_t
     {
         assert_on_lane ();
         _actor_executors.insert_or_assign (
-          std::move (actor_id),
-          std::make_shared<actor_executor_t> (_worker_executor, std::move (queue)));
+          std::move (actor_id), std::make_shared<actor_executor_t> (
+                                  _worker_executor, std::move (queue),
+                                  uses_spot_execution_gate () ? _spot_queue : queue_ptr_t{}));
         publish_actor_executor_snapshot ();
     }
 

@@ -120,10 +120,9 @@ test('ZoneWorld runner proves the canonical scenario with generated routing iden
   }
   assert.match(specialClient, /join\(newcomer, 'player-e3'\)/);
   assert.match(client, /player\.playerId === joined\.playerId && player\.zoneId === pair\.targetZoneId/);
-  assert.match(zoneNodeMain, /await spawnBots\(app, zones\);[\s\S]*?state\.enableBotTicks\(\);/);
   assert.match(
     zoneNodeMain,
-    /await spawnBots\(app, zones\);[\s\S]*?bot-start=ready[\s\S]*?waitForBotStart\(node\.botStartSignalPath\)[\s\S]*?state\.enableBotTicks\(\)/
+    /await spawnBots\(app, zones\);[\s\S]*?bot-start=ready[\s\S]*?waitForBotStart\(node\.botStartSignalPath, botStartAbort\.signal\)\.then\(\(\) => \{[^}]*state\.enableBotTicks\(\);[^}]*\}\);/
   );
   assert.match(runner, /waitLog\('zone-node-1', 'bot-start=ready'\)[\s\S]*?writeFileSync\(botStartSignalPath/);
 });
@@ -166,7 +165,10 @@ test('ZoneWorld replacements start empty and prove on-demand creation after the 
   const reports = read('samples/ZoneWorld/Server/ZoneNode/Infrastructure/ZLink/Monitoring/ops-report-adapter.ts');
   assert.match(reports, /new ReportNodeStatusMsg\([\s\S]*?\[\.\.\.this\.state\.zones\(\)\]/);
   assert.match(zoneNodeMain, /await reports\.reportNodeStatus\(\)/);
-  assert.match(runner, /zoneCapacity:\s*2/);
+  assert.match(
+    runner,
+    /const zoneNodeCapacities = new Map\(\[\['zone-node-1', 1\], \['zone-node-2', 3\]\]\);[\s\S]*?zoneCapacity: zoneNodeCapacities\.get\(nodeId\) \?\? 0/
+  );
 });
 
 test('ZoneWorld applies the Node sample configuration policy without environment settings', () => {

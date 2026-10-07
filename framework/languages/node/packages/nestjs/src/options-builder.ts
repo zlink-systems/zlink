@@ -678,6 +678,17 @@ class DefaultZLinkNestStreamNodeBuilder
     super(state);
   }
 
+  setHeartbeat(intervalMs: number, timeoutMs: number): this {
+    this.streamOptions.heartbeatIntervalMs = intervalMs;
+    this.streamOptions.heartbeatTimeoutMs = timeoutMs;
+    return this;
+  }
+
+  setIdleTimeout(timeoutMs: number): this {
+    this.streamOptions.idleTimeoutMs = timeoutMs;
+    return this;
+  }
+
   bind(endpointOrPort?: string | number): this {
     if (typeof endpointOrPort === 'string') {
       this.streamOptions.bind = endpointOrPort;
