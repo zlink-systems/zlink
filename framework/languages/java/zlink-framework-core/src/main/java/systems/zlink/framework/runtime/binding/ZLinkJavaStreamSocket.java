@@ -20,6 +20,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonito
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamErrorHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkSocketMonitorDrainLoop;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
@@ -189,11 +190,9 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                             MonitorEventType.CONNECTION_READY,
                                             MonitorEventType.DISCONNECTED));
                     ZLinkJavaSocketMonitor eventMonitor = monitor;
-                    // Native poller waits pin a virtual-thread carrier.
-                    Thread.ofPlatform()
-                            .daemon()
-                            .name("zlink-stream-monitor")
-                            .start(() -> receiveMonitorEvents(eventMonitor, handler));
+                    ZLinkSocketMonitorDrainLoop.start(
+                            "zlink-stream-monitor",
+                            () -> receiveMonitorEvents(eventMonitor, handler));
                     return null;
                 });
     }
