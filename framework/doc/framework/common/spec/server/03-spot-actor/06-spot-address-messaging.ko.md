@@ -394,9 +394,11 @@ sequenceDiagram
 
 ### 4.1.1 Target process가 activation 도중 종료된 경우
 
-**Target process가 `Reserve` 뒤 종료되면 startup의 complete authority scan이 Pending creation
-정보를 다시 읽는다.** 같은 reservation과 generation으로 factory, initialize와 durable inbox
-복원을 이어가거나, 정확한 fence로 생성을 중단한다.
+**Target process가 `Reserve` 뒤 종료되면 startup의 complete authority scan이 이전 lifecycle의
+`Creating` authority를 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의
+reservation 해제에 넘긴다.** 해제가 확인된 뒤 activation recovery 작업이 그 reservation의
+recovery root를 삭제한다. Stored creation intent를 재개하는 범위는
+[Object lifecycle §3](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)을 따른다.
 
 **`Ready` commit 뒤 queue 선두를 복원하기 전에 종료되었다면 recovery root와 cursor로 최초
 record를 먼저 복원한다.** 이 복원이 끝나기 전에는 해당 owner가 application message를 받도록

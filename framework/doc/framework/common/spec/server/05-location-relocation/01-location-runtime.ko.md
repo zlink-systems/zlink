@@ -750,6 +750,17 @@ MeshNode lifecycle 재시작에서 바뀌지 않을 수 있기 때문이다. Rec
 `Conflict`이며 아무것도 변경하지 않는다. Target 정보 조합 자체가 잘못됐으면 Store를
 호출하기 전에 Framework 내부 오류로 끝낸다.
 
+**Target lifecycle이 끝난 reservation은 해제한다.** `Reserved` record의 target owner lease가 없거나,
+다른 `LeaseGeneration`이거나, 만료됐으면, 또는 target MeshNode descriptor record가 없거나 다른
+`descriptorLifecycleGeneration`을 가지면 그 reservation의 target lifecycle은 끝난 것이다. 이때
+Framework는 그 reservation을 만든 자격 없이 `Reserved → Missing`으로 바꾸고 pending 수용 공간을
+반납한다. 요청은 처음 읽은 authority `StoreVersion`, 읽은 owner lease record의 상태(version 또는
+없음), 읽은 descriptor record의 상태와 수용 공간 record를 조건으로 함께 검사한다. 수용 공간
+record가 없으면 authority만 바꾼다. 반납 결과가 0보다 작아지면 Store 데이터 손상으로 판정하고
+아무것도 변경하지 않는다. 이 판정은 Location repository 한 곳이 내린다 — `Reserve`가 기존
+`Reserved`를 읽었을 때와 startup scan이 이전 lifecycle의 `Creating`을 넘겼을 때 같은 판정을 쓴다.
+Target owner lease가 유효하고 descriptor가 같은 lifecycle이면 해제하지 않는다.
+
 **`Conflict`를 받은 작업은 작업 자격을 다시 확인해 이어 간다.** Provider `Conflict`는 아무것도 변경하지
 않았지만 어느 조건이 맞지 않았는지는 알려 주지 않는다. Framework는 authority record를 다시 읽어, 처음
 읽은 상태(처음에 `Missing`이었으면 여전히 `Missing`, 아니면 처음 읽은 `StoreVersion`)와 그 작업에 있는
