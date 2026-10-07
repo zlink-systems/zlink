@@ -10,6 +10,79 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvi
 import systems.zlink.framework.testkit.FakeZLinkBackendAdapterFactory;
 
 final class SpringEagerRuntimeInjectionTest {
+    private static final long OBSERVATION_TIMEOUT_SECONDS = 3;
+
+    @Test
+    void eagerTopologyReadinessObservesPreparingAndStartedMesh() throws Exception {
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(
+                    ZLinkBackendAdapterProvider.class,
+                    systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory::new);
+            context.registerBean(
+                    systems.zlink.contracts.core.RoutingId.class,
+                    () -> systems.zlink.contracts.core.RoutingId.from("eager-route"));
+            context.register(
+                    ZLinkFrameworkAutoConfigurationTest.RouteMeshHandlerConfig.class,
+                    ZLinkFrameworkAutoConfiguration.class);
+            context.registerBean(EagerTopologyConsumer.class);
+            assertDoesNotThrow(context::refresh);
+            var consumer = context.getBean(EagerTopologyConsumer.class);
+            assertTrue(consumer.meshes.isReady("route"));
+            consumer.ready.get(OBSERVATION_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
+    static final class EagerTopologyConsumer {
+        final systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime meshes;
+        final java.util.concurrent.CompletableFuture<Void> ready =
+                new java.util.concurrent.CompletableFuture<>();
+
+        EagerTopologyConsumer(systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime meshes) {
+            this.meshes = meshes;
+            assertFalse(meshes.isReady("route"));
+            assertEquals(
+                    systems.zlink.framework.monitoring.ZLinkTopologyState.STARTING,
+                    meshes.snapshot("route").state());
+            assertThrows(
+                    systems.zlink.framework.errors.ZLinkConfigurationException.class,
+                    () -> meshes.snapshot("missing"));
+            var initial =
+                    new java.util.concurrent.CompletableFuture<
+                            systems.zlink.framework.monitoring.ZLinkTopologyState>();
+            meshes.observe("route", 16)
+                    .subscribe(
+                            new java.util.concurrent.Flow.Subscriber<>() {
+                                public void onSubscribe(
+                                        java.util.concurrent.Flow.Subscription subscription) {
+                                    subscription.request(Long.MAX_VALUE);
+                                }
+
+                                public void onNext(
+                                        systems.zlink.framework.monitoring.ZLinkObservedStatus<
+                                                        systems.zlink.framework.monitoring
+                                                                .ZLinkMeshNodeSnapshot>
+                                                value) {
+                                    initial.complete(value.status().state());
+                                    if (value.status().isReady()) ready.complete(null);
+                                }
+
+                                public void onError(Throwable error) {
+                                    initial.completeExceptionally(error);
+                                    ready.completeExceptionally(error);
+                                }
+
+                                public void onComplete() {}
+                            });
+            assertEquals(
+                    systems.zlink.framework.monitoring.ZLinkTopologyState.STARTING,
+                    assertDoesNotThrow(
+                            () ->
+                                    initial.get(
+                                            OBSERVATION_TIMEOUT_SECONDS,
+                                            java.util.concurrent.TimeUnit.SECONDS)));
+        }
+    }
+
     @Test
     void eagerApplicationBeanCanInjectExistingPublicRuntime() throws Exception {
         try (var context = new AnnotationConfigApplicationContext()) {
@@ -26,7 +99,7 @@ final class SpringEagerRuntimeInjectionTest {
                     context.getBean(EagerConsumer.class).runtime());
             context.getBean(EagerConsumer.class)
                     .serving
-                    .get(3, java.util.concurrent.TimeUnit.SECONDS);
+                    .get(OBSERVATION_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
         }
     }
 

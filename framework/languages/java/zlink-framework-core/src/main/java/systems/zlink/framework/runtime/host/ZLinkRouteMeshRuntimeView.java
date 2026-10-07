@@ -81,28 +81,37 @@ final class ZLinkRouteMeshRuntimeView
 
     private ZLinkMeshNodeSnapshot buildSnapshot(String meshName, ZLinkMeshNodeSnapshot previous) {
         ZLinkFrameworkRuntimeState hostState = runtime.status().state();
-        if (previous != null
-                && (runtime.closing()
-                        || hostState == ZLinkFrameworkRuntimeState.STOPPED
-                        || hostState == ZLinkFrameworkRuntimeState.ERROR)) {
+        if (hostState == ZLinkFrameworkRuntimeState.PREPARING
+                || (previous != null
+                        && (runtime.closing()
+                                || hostState == ZLinkFrameworkRuntimeState.STOPPED
+                                || hostState == ZLinkFrameworkRuntimeState.ERROR))) {
+            List<ZLinkMeshChannelSnapshot> channels =
+                    previous == null
+                            ? runtime.monitoringMeshNodeChannelNames(meshName).stream()
+                                    .distinct()
+                                    .sorted()
+                                    .map(name -> new ZLinkMeshChannelSnapshot(name, false, 0))
+                                    .toList()
+                            : previous.channels().stream()
+                                    .map(
+                                            channel ->
+                                                    new ZLinkMeshChannelSnapshot(
+                                                            channel.channelName(),
+                                                            false,
+                                                            channel.readyTargetCount()))
+                                    .toList();
             return new ZLinkMeshNodeSnapshot(
                     meshName,
                     ZLinkTopologyRuntimeProjection.hostState(hostState),
                     false,
-                    previous.readyPeerCount(),
-                    previous.channels().stream()
-                            .map(
-                                    channel ->
-                                            new ZLinkMeshChannelSnapshot(
-                                                    channel.channelName(),
-                                                    false,
-                                                    channel.readyTargetCount()))
-                            .toList(),
-                    previous.peers(),
+                    previous == null ? 0 : previous.readyPeerCount(),
+                    channels,
+                    previous == null ? List.of() : previous.peers(),
                     new ZLinkPlacementSnapshot(
                             false,
-                            previous.placement().activeActorCount(),
-                            previous.placement().activeSpotCount(),
+                            previous == null ? 0 : previous.placement().activeActorCount(),
+                            previous == null ? 0 : previous.placement().activeSpotCount(),
                             Optional.of(placementUnavailableReason(hostState, true))),
                     0,
                     Instant.now());
@@ -208,10 +217,7 @@ final class ZLinkRouteMeshRuntimeView
         }
         signalHubs.compute(
                 meshName,
-                (ignored, existing) ->
-                        existing == null
-                                ? new SignalHub(meshName, requireNode(meshName))
-                                : existing);
+                (ignored, existing) -> existing == null ? new SignalHub(meshName) : existing);
         return publisher;
     }
 
@@ -241,6 +247,10 @@ final class ZLinkRouteMeshRuntimeView
 
     void signalAll() {
         statuses.signalAll();
+    }
+
+    void startObserving() {
+        signalHubs.values().forEach(SignalHub::register);
     }
 
     @Override
@@ -348,15 +358,13 @@ final class ZLinkRouteMeshRuntimeView
 
     private final class SignalHub implements AutoCloseable {
         private final String meshName;
-        private final ZLinkInternalMeshNode node;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private boolean stopped;
         private boolean subscriptionStarted;
         private AutoCloseable subscription;
 
-        SignalHub(String meshName, ZLinkInternalMeshNode node) {
+        SignalHub(String meshName) {
             this.meshName = meshName;
-            this.node = node;
             statuses.onActiveSubscriptions(
                     meshName,
                     active -> {
@@ -368,13 +376,18 @@ final class ZLinkRouteMeshRuntimeView
             stateLane
                     .runAsync(
                             () -> {
-                                if (stopped || subscriptionStarted) return false;
+                                if (stopped
+                                        || subscriptionStarted
+                                        || runtime.status().state()
+                                                == ZLinkFrameworkRuntimeState.PREPARING)
+                                    return null;
+                                ZLinkInternalMeshNode node = requireNode(meshName);
                                 subscriptionStarted = true;
-                                return true;
+                                return node;
                             })
                     .thenAccept(
-                            start -> {
-                                if (!start) return;
+                            node -> {
+                                if (node == null) return;
                                 AutoCloseable created;
                                 try {
                                     created = node.onStateChanged(this::signal);
