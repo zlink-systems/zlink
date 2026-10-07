@@ -17,6 +17,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly TimeProvider _timeProvider;
+    private readonly ZLinkStreamNodeRegistration _livenessOptions;
     private readonly string _transport;
     private readonly long _maxMessageSize;
     private readonly ZLinkApplicationJobQueue _applicationJobQueue;
@@ -68,6 +69,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _maxMessageSize = maxMessageSize;
         var runtime = services.GetRequiredService<ZLinkFrameworkRuntime>();
         _errorSink = runtime.ErrorSink;
+        _livenessOptions =
+            runtime.Registration.StreamNodes.GetValueOrDefault(nodeName)
+            ?? new ZLinkStreamNodeRegistration { StreamNodeName = nodeName };
         _sessionIngress = new ZLinkSessionSerialExecutor(runtime.ExecutionOwner, runtime.ErrorSink);
         _controlIngress = new ZLinkSessionSerialExecutor(runtime.ExecutionOwner, runtime.ErrorSink);
         _sessions = new ZLinkStreamSessionTable(
@@ -78,7 +82,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             transport,
             _timeProvider,
             actorDispatchEnabled,
-            _errorSink
+            _errorSink,
+            _livenessOptions
         );
     }
 
@@ -296,10 +301,18 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             _stopSource.Token,
             runtimeToken
         );
+        var sweepInterval =
+            _livenessOptions.HeartbeatInterval < ZLinkStreamSessionLiveness.SweepInterval
+                ? _livenessOptions.HeartbeatInterval
+                : ZLinkStreamSessionLiveness.SweepInterval;
+        if (
+            _livenessOptions.IdleTimeout > TimeSpan.Zero
+            && _livenessOptions.IdleTimeout < sweepInterval
+        )
+            sweepInterval = _livenessOptions.IdleTimeout;
         while (!stop.IsCancellationRequested)
         {
-            await Task.Delay(ZLinkStreamSessionLiveness.SweepInterval, _timeProvider, stop.Token)
-                .ConfigureAwait(false);
+            await Task.Delay(sweepInterval, _timeProvider, stop.Token).ConfigureAwait(false);
             foreach (var session in await _sessions.SnapshotAsync().ConfigureAwait(false))
                 session.CheckLiveness();
         }

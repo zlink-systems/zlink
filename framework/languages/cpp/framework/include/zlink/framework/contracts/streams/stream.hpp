@@ -10,6 +10,7 @@
 #include <zlink/framework/contracts/messaging/message_context.hpp>
 
 #include <concepts>
+#include <chrono>
 #include <cstdint>
 #include <cstddef>
 #include <functional>
@@ -280,6 +281,39 @@ class packet_stream_session_t
     }
 };
 
+namespace detail
+{
+struct stream_liveness_options_t
+{
+    std::chrono::milliseconds heartbeat_interval{1000};
+    std::chrono::milliseconds heartbeat_timeout{5000};
+    std::chrono::milliseconds idle_timeout{0};
+
+    void set_heartbeat (std::chrono::milliseconds interval, std::chrono::milliseconds timeout)
+    {
+        if (interval.count () <= 0)
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "STREAM heartbeat interval must be positive.");
+        if (timeout.count () <= 0)
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "STREAM heartbeat timeout must be positive.");
+        if (timeout <= interval)
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "STREAM heartbeat timeout must be greater than interval.");
+        heartbeat_interval = interval;
+        heartbeat_timeout = timeout;
+    }
+
+    void set_idle_timeout (std::chrono::milliseconds timeout)
+    {
+        if (timeout.count () < 0)
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "STREAM idle timeout must not be negative.");
+        idle_timeout = timeout;
+    }
+};
+}
+
 struct stream_snapshot_t
 {
     std::string name;
@@ -291,6 +325,7 @@ struct stream_snapshot_t
     // Complete header plus payload bytes accepted from a client. Zero means
     // that Framework adds no separate limit.
     std::int64_t max_message_size = 64 * 1024;
+    detail::stream_liveness_options_t liveness;
 };
 
 class stream_builder_t
@@ -316,6 +351,7 @@ class stream_builder_t
     friend class stream_node_options_builder_t;
     friend class detail::stream_runtime_t;
     explicit stream_builder_t (std::shared_ptr<detail::stream_builder_state_t> state);
+    stream_builder_t &set_liveness (detail::stream_liveness_options_t options);
     stream_builder_t &set_max_message_size (std::int64_t value);
     stream_builder_t &configure_tls_server (std::string certificate_file,
                                             std::string private_key_file,

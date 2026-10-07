@@ -1168,7 +1168,6 @@ for (const inboundKind of ['data', 'pong']) {
     await clock.advance(4999);
     assert.deepEqual(socket.disconnects, []);
     await clock.advance(1);
-    await runtime.findSession('active-heartbeat-session').runLivenessCheck();
     assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1], streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
     assert.deepEqual(socket.disconnects, ['active-heartbeat-session']);
     await runtime.dispose();
@@ -1232,12 +1231,78 @@ for (const wallJumpMs of [60_000, -60_000]) {
   });
 }
 
+test('configured heartbeat interval and timeout control session liveness', async (t) => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const runtime = createStreamRuntime({
+    socket, livenessClock: clock, heartbeatIntervalMs: 2500, heartbeatTimeoutMs: 6500,
+    sessionFactory(context) { return { context }; }
+  });
+  t.after(() => runtime.dispose());
+  runtime.start();
+  runtime.markConnected('configured-heartbeat');
+  await clock.flush();
+  await clock.advance(2499);
+  assert.equal(socket.sent.length, 0);
+  await clock.advance(1);
+  assert.equal(controlHeader(socket.sent[0]).name, '$zlink.heartbeat.ping');
+  await clock.advance(3999);
+  assert.deepEqual(socket.disconnects, []);
+  await clock.advance(1);
+  assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1], streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
+  assert.deepEqual(socket.disconnects, ['configured-heartbeat']);
+});
+
+test('configured idle deadline shorter than heartbeat interval closes at that deadline', async (t) => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const runtime = createStreamRuntime({
+    socket, livenessClock: clock, idleTimeoutMs: 250,
+    sessionFactory(context) { return { context }; }
+  });
+  t.after(() => runtime.dispose());
+  runtime.start();
+  runtime.markConnected('short-idle');
+  await clock.flush();
+  await clock.advance(249);
+  assert.deepEqual(socket.disconnects, []);
+  await clock.advance(1);
+  assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1], streamProtocol.ZLinkStreamCloseReasonCode.IdleTimeout);
+  assert.deepEqual(socket.disconnects, ['short-idle']);
+});
+
+test('default idle is disabled beyond 30 seconds with heartbeat traffic', async (t) => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    sessionFactory(context) { return { context }; }
+  });
+  t.after(() => runtime.dispose());
+  runtime.start();
+  runtime.markConnected('default-idle-session');
+  await clock.flush();
+  for (let second = 1; second <= 35; second += 1) {
+    socket.emitPacket('default-idle-session', fakeHeader({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.None,
+      name: '$zlink.heartbeat.pong'
+    }), fakeMessage(''));
+    await waitForReceive(socket);
+    await clock.advance(1000);
+    assert.deepEqual(socket.disconnects, []);
+  }
+});
+
 test('stream session runtime closes application-idle sessions with idle_timeout', async () => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
   const runtime = createStreamRuntime({
     socket,
     livenessClock: clock,
+    idleTimeoutMs: 30_000,
     sessionFactory(context) { return { context }; }
   });
 

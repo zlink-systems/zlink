@@ -142,7 +142,7 @@ public sealed class StreamSessionForcedCleanupTests
             requireConnectionReady: true
         );
 
-        time.Advance(ZLinkStreamSessionLiveness.HeartbeatTimeout);
+        time.Advance(TimeSpan.FromSeconds(5));
         session.CheckLiveness();
         Assert.Equal(0, socket.DisconnectCount);
         Assert.False(socket.SendAsyncStarted.Task.IsCompleted);
@@ -155,9 +155,7 @@ public sealed class StreamSessionForcedCleanupTests
         {
             for (var cycle = 0; cycle < 3; cycle++)
             {
-                time.Advance(
-                    ZLinkStreamSessionLiveness.HeartbeatTimeout - TimeSpan.FromMilliseconds(1)
-                );
+                time.Advance(TimeSpan.FromSeconds(5) - TimeSpan.FromMilliseconds(1));
                 var header = new ZlinkStreamHeader(
                     kind,
                     ZlinkStreamCodec.Raw,
@@ -191,12 +189,9 @@ public sealed class StreamSessionForcedCleanupTests
             }
         }
 
-        time.Advance(
-            ZLinkStreamSessionLiveness.HeartbeatTimeout
-                - ZLinkStreamSessionLiveness.HeartbeatInterval
-        );
+        time.Advance(TimeSpan.FromSeconds(5) - TimeSpan.FromSeconds(1));
         session.EnqueueConnected("duplicate-local", "duplicate-remote");
-        time.Advance(ZLinkStreamSessionLiveness.HeartbeatInterval);
+        time.Advance(TimeSpan.FromSeconds(1));
         session.CheckLiveness();
         await socket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         AssertHeartbeatTimeoutFrame(socket.SentFrames.Last());

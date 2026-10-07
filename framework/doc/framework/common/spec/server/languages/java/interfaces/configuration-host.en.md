@@ -574,6 +574,8 @@ public interface systems.zlink.framework.configuration.ZLinkStreamNodeBuilder {
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder setTlsServer(java.lang.String, java.lang.String, boolean);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder registerSession(java.lang.Class<? extends systems.zlink.framework.streams.ZLinkSession>);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder enableActorDispatch();
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder heartbeat(java.time.Duration, java.time.Duration);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder idleTimeout(java.time.Duration);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder addSessionPacketHandler(java.lang.Class<?>);
 }
 public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
@@ -602,6 +604,8 @@ public interface systems.zlink.framework.configuration.ZLinkWorkerOptions {
  public abstract systems.zlink.framework.configuration.ZLinkWorkerOptions idleTimeout(java.time.Duration);
 }
 ```
+
+The defaults, validation, and idle closing rule of the heartbeat interval, heartbeat timeout, and idle timeout are owned by [STREAM session §7](../../../04-session/01-stream-session.en.md#7-error-boundary).
 
 The four `ZLinkMessageFlowLogMode` values respectively mean disabled
 diagnostics, errors only, key transitions, and detailed diagnostics. The
