@@ -2,6 +2,7 @@
 
 #include <zlink/framework.hpp>
 #include "runtime/handlers/handler_registry_runtime.hpp"
+#include "runtime/dispatch/offload_executor.hpp"
 
 #include <chrono>
 #include <coroutine>
@@ -413,6 +414,7 @@ int main ()
         return std::distance (std::filesystem::directory_iterator ("/proc/self/task"),
                               std::filesystem::directory_iterator{});
     };
+    const auto workers_unchanged = [&] (auto before) { return worker_count () == before; };
     const auto workers_before = worker_count ();
     bool allocated_workers = false;
     {
@@ -421,7 +423,7 @@ int main ()
           manager.create (zlink::framework::actor_id_t ("worker-create"), "WorkerActor");
         auto get =
           manager.get_or_create (zlink::framework::actor_id_t ("worker-get"), "WorkerActor");
-        if (worker_count () != workers_before) {
+        if (!workers_unchanged (workers_before)) {
             std::cerr << "Actor create calls allocated OS workers\n";
             allocated_workers = true;
         }
@@ -433,21 +435,34 @@ int main ()
     zlink::framework::handler_registry_t filter_registry;
     filter_registry.on_send<handler_t, command_t> ("game", "worker", &handler_t::on_command,
                                                    {.packet_name = "worker"});
-    filter_registry
-      .invoke ("game", "worker", "worker", filter_provider, filter_serializers,
-               zlink::message_t::from (std::string ("7")))
-      .value ();
-    const auto filter_workers_before = worker_count ();
-    filter_registry.add_filter (
+    // Keep an earlier application job active so invocation submission cannot reuse it.
+    auto worker_started = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    auto release_worker = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    const bool hold_worker = std::thread::hardware_concurrency () > 1;
+    if (hold_worker) {
+        executor->submit ([worker_started, release_worker] {
+            worker_started->complete (zlink::framework::result_t<void>::success ());
+            release_worker->task ().result ().value ();
+        });
+        worker_started->task ().result ().value ();
+    }
+    // Invocation submission may grow the shared pool. Measure only the filter chain,
+    // while the earlier job and this invocation keep their workers active.
+    const auto worker_filter =
       [&] (auto &, auto &, const auto &,
            zlink::framework::handler_next_t next) -> zlink::framework::task_t<void> {
-          if (worker_count () != filter_workers_before)
-              throw std::runtime_error ("Filter level allocated an OS worker");
-          co_await next ();
-      });
+        const auto filter_workers_before = worker_count ();
+        co_await next ();
+        if (!workers_unchanged (filter_workers_before))
+            throw std::runtime_error ("Filter level allocated an OS worker");
+    };
+    filter_registry.add_filter (worker_filter).add_filter (worker_filter);
     auto filtered =
       filter_registry.invoke ("game", "worker", "worker", filter_provider, filter_serializers,
                               zlink::message_t::from (std::string ("7")));
+    if (hold_worker) {
+        release_worker->complete (zlink::framework::result_t<void>::success ());
+    }
     if (!filtered) {
         std::cerr << filtered.error ()->what () << '\n';
         allocated_workers = true;
