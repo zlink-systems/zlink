@@ -96,7 +96,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private static final long EXECUTOR_GRACEFUL_SHUTDOWN_SECONDS = 1;
     private static final long EXECUTOR_FORCED_SHUTDOWN_SECONDS = 4;
     private ZLinkChannelRuntime channels;
-    private ZLinkMeshNodesRuntime meshNodes;
+    private final ZLinkMeshNodesRuntime meshNodes = new ZLinkMeshNodesRuntime();
     private ZLinkSpotRuntime spots;
     private ZLinkActorRuntime actors;
     private systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime spotRetire;
@@ -267,7 +267,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 eventDispatcher)
                         .channels();
         this.channels.setHostStateSupplier(runtimeState::get);
-        this.meshNodes = new ZLinkMeshNodesRuntime();
         if (!this.registration.meshNodes().isEmpty()) {
             ZLinkMeshBackendAdapter meshAdapter = backendFactory.createMeshAdapter(adapterOptions);
             this.meshNodes.start(
@@ -559,6 +558,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             throw new IllegalStateException("Framework startup was interrupted by shutdown");
         }
         publishRuntimeState(ZLinkFrameworkRuntimeState.SERVING);
+        routeMeshRuntime.startObserving();
         startupReady.complete(null);
         Logger.getLogger(ZLinkFrameworkRuntime.class.getName()).info("ZLINK_FRAMEWORK_READY");
     }
@@ -2128,9 +2128,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (storeLocationResolvers != null) {
             shutdown.defer("location_resolvers_close", storeLocationResolvers::close);
         }
-        if (meshNodes != null) {
-            shutdown.defer("mesh_nodes_close", meshNodes::close);
-        }
+        shutdown.defer("mesh_nodes_close", meshNodes::close);
         if (locationRuntime != null) {
             shutdown.defer("location_close", locationRuntime::close);
             shutdown.defer("location_lifecycle_close", locationLifecycle::close);

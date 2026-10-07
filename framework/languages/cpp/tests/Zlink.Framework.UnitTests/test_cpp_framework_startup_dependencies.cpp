@@ -15,7 +15,15 @@ class startup_spot_t final : public zlink::framework::spot_t<zlink::framework::a
 {
   public:
     static inline int constructed = 0;
-    startup_spot_t (zlink::framework::spot_context_t context, startup_dependency_t &) :
+    startup_spot_t (zlink::framework::spot_context_t context,
+                    startup_dependency_t &,
+                    zlink::framework::actor_client_t &,
+                    zlink::framework::actor_manager_t &,
+                    zlink::framework::spot_manager_t &,
+                    zlink::framework::spot_publisher_client_t &,
+                    zlink::framework::route_mesh_runtime_t &,
+                    zlink::framework::route_mesh_runtime_options_t &,
+                    zlink::framework::client_server_runtime_t &) :
         _context (std::move (context))
     {
         ++constructed;
@@ -69,7 +77,9 @@ bool verify_spot_startup_metadata (bool supply_dependency)
       .set_routing_id (zlink::routing_id_t::from ("metadata"))
       .objects ()
       .server ()
-      .add_spot_factory<startup_spot_t, startup_dependency_t> ("metadata")
+      .add_spot_factory<startup_spot_t, startup_dependency_t, actor_client_t, actor_manager_t,
+                        spot_manager_t, spot_publisher_client_t, route_mesh_runtime_t,
+                        route_mesh_runtime_options_t, client_server_runtime_t> ("metadata")
       .disable_relocation ();
     app.add_hosted_service (std::make_unique<stop_after_start_t> (app));
     const auto result = app.run (0, nullptr);
