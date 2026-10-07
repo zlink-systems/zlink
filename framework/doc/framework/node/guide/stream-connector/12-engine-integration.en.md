@@ -10,7 +10,7 @@ title: "Game Engine Integration · Node/TypeScript"
 # Game Engine Integration
 
 <!-- framework-adapter-nav:start -->
-[Contents](README.en.md) | [Previous: Unity WebGL](09-unity-webgl.en.md)
+[Contents](README.en.md) | [Previous: Unity WebGL](09-unity-webgl.en.md) | [Next: Node Protobuf Messaging](40-protobuf.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

@@ -108,6 +108,12 @@ internal interface IZLinkLocationRepository
         CancellationToken cancellationToken = default
     );
 
+    ValueTask<bool> ReleaseEndedReservationAsync(
+        ZLinkAuthorityKey key,
+        string expectedStoreVersion,
+        CancellationToken cancellationToken = default
+    ) => throw new NotSupportedException("Reservation lifecycle recovery is not supported.");
+
     ValueTask<ZLinkObjectCommitResult> CommitAsync(
         ZLinkObjectReservation reservation,
         ReadOnlyMemory<byte> readyPayload,

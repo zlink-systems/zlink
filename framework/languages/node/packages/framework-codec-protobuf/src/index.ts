@@ -14,7 +14,7 @@ export interface ProtobufType<T> {
 
 export interface ProtobufEnvelopeCodecOptions {
   encode(payload: unknown, context?: ProtobufEncodeContext | Function): ZlinkStreamEncodedPayload;
-  decode<TPayload = unknown>(payload: ZlinkStreamEncodedPayload): TPayload;
+  decode<TPayload = unknown>(payload: ZlinkStreamEncodedPayload, messageType?: Function): TPayload;
 }
 
 export type ProtobufMessageDirection = 'Request' | 'Response' | 'Error' | 'Send';
@@ -32,10 +32,19 @@ export type ZlinkStreamProtobufEnvelopeCodec = ZlinkStreamPayloadCodec & {
 export function createZlinkStreamProtobufCodec<T>(type: ProtobufType<T>): ZlinkStreamPayloadCodec {
   return {
     encode(payload: unknown, messageType?: Function): ZlinkStreamEncodedPayload {
-      return toProto(payload as T, type, messageType);
+      const payloadType = (messageType ?? inferMessageType(payload)) as
+        (Function & Partial<ProtobufType<T>>) | undefined;
+      return toProto(
+        payload as T,
+        typeof payloadType?.encode === 'function' ? (payloadType as ProtobufType<T>) : type,
+        payloadType
+      );
     },
-    decode<TPayload = unknown>(payload: ZlinkStreamEncodedPayload): TPayload {
-      return fromProto(payload, type) as unknown as TPayload;
+    decode<TPayload = unknown>(
+      payload: ZlinkStreamEncodedPayload,
+      messageType?: Function
+    ): TPayload {
+      return fromProto(payload, (messageType ?? type) as unknown as ProtobufType<TPayload>);
     }
   };
 }
@@ -50,8 +59,11 @@ export function createZlinkStreamProtobufEnvelopeCodec(
     ): ZlinkStreamEncodedPayload {
       return options.encode(payload, context);
     },
-    decode<TPayload = unknown>(payload: ZlinkStreamEncodedPayload): TPayload {
-      return options.decode<TPayload>(payload);
+    decode<TPayload = unknown>(
+      payload: ZlinkStreamEncodedPayload,
+      messageType?: Function
+    ): TPayload {
+      return options.decode<TPayload>(payload, messageType);
     }
   };
 }

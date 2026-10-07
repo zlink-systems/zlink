@@ -324,7 +324,8 @@ public sealed class SpotCloseAdmissionSealTests
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateExecutor(errorSink);
-        Assert.True(executor.TrySealRelocation(out var seal));
+        var seal = await executor.TrySealRelocationAsync();
+        Assert.NotNull(seal);
 
         Assert.Equal(
             ZLinkAcceptedWorkAdmission.Accepted,
@@ -335,7 +336,8 @@ public sealed class SpotCloseAdmissionSealTests
                 out _
             )
         );
-        Assert.True(executor.TryFreezeRelocationIngress(seal, out var held));
+        var (heldSucceeded, held) = await executor.TryFreezeRelocationIngressAsync(seal);
+        Assert.True(heldSucceeded);
         Assert.Single(held);
     }
 

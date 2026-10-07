@@ -1,3 +1,4 @@
+import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import { createHash } from 'node:crypto';
 import type {
   ZLinkAuthorityKey,
@@ -175,12 +176,25 @@ export class ZLinkStatefulAuthorityRouteRuntime {
 
       const status = sink.status();
       for (const pending of snapshot.pending) {
+        if (pending.targetMeshName !== meshName) continue;
         if (
-          pending.targetMeshName === meshName &&
           routingIdsEqual(status.routingId, pending.targetNodeRid) &&
           status.lifecycleGeneration === pending.targetNodeGeneration
         ) {
           await this.recoverPendingInstanceActivation(sink, pending, signal);
+        } else {
+          const release = this.options.creationStore?.releaseEndedReservation;
+          if (release === undefined)
+            throw new Error('Reservation lifecycle recovery requires a Location repository.');
+          if (
+            await release.call(
+              this.options.creationStore,
+              encodeAuthorityKey('instance_spot', pending.spotId),
+              pending.pending.storeVersion,
+              signal
+            )
+          )
+            await this.clearRecoveryRoot(pending.pending.requestReference, signal);
         }
       }
 
@@ -386,19 +400,18 @@ export class ZLinkStatefulAuthorityRouteRuntime {
         signal
       );
       if (aborted.kind === 'aborted' || aborted.kind === 'alreadyAborted') {
-        try {
-          await this.options.relocationStore?.delete(
-            relocationBlobReference(recovery.pending.requestReference)
-          );
-        } catch {
-          // The authority no longer publishes this root. Retention owns a
-          // failed best-effort orphan cleanup.
-        }
+        await this.clearRecoveryRoot(recovery.pending.requestReference, signal);
       }
       return;
     }
     if ((await sink.recoverPendingInstanceActivation(envelope, recovery.pending, null)) === false)
       return;
+  }
+
+  private async clearRecoveryRoot(reference: string, signal?: AbortSignal): Promise<void> {
+    if (this.options.relocationStore === undefined)
+      throw new Error('Instance activation recovery requires a Relocation Store.');
+    await this.options.relocationStore.delete(relocationBlobReference(reference), signal);
   }
 
   private async readRecoveryEnvelope(

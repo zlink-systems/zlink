@@ -7,6 +7,7 @@ import {
   SELF_DECLARED_DEPS_METADATA
 } from '@nestjs/common/constants';
 import { ContextIdFactory, DiscoveryService, ModuleRef } from '@nestjs/core';
+import { UnknownElementException } from '@nestjs/core/errors/exceptions/unknown-element.exception';
 import type { Type } from '@zlink-systems/framework';
 import type {
   ZLinkFrameworkRegistration,
@@ -352,6 +353,30 @@ export function createRuntimeHost(
   moduleRef: ModuleRef,
   discovery: DiscoveryService
 ): RuntimeHostWithNestLifecycle {
+  const types = new Set<Type>([...registration.spotFactories, ...registration.filterTypes]);
+  for (const node of registration.spotNodes.values()) {
+    if (node.entrySpotType !== undefined) types.add(node.entrySpotType);
+    for (const type of node.spotFactories ?? []) types.add(type);
+    for (const type of Object.values(node.instanceSpotFactories ?? {})) types.add(type);
+    for (const value of Object.values(node.spotFactoryRegistrations ?? {}))
+      types.add(value.implementation);
+    for (const value of Object.values(node.instanceSpotFactoryRegistrations ?? {}))
+      types.add(value.implementation);
+    for (const handler of [
+      ...(node.entrySpotTimerHandlers ?? []),
+      ...(node.entrySpotPacketHandlers ?? []),
+      ...(node.entrySpotSubscriptionHandlers ?? []),
+      ...(node.entrySpotActorSendHandlers ?? []),
+      ...(node.entrySpotActorRequestHandlers ?? []),
+      ...(node.spotTimerHandlers ?? []),
+      ...(node.spotPacketHandlers ?? []),
+      ...(node.spotSubscriptionHandlers ?? []),
+      ...(node.spotActorSendHandlers ?? []),
+      ...(node.spotActorRequestHandlers ?? [])
+    ])
+      types.add(handler.handlerType);
+  }
+  for (const type of types) validateNestConstructorDependencies(moduleRef, type);
   const runtime = framework.createIntegrationRuntimeHost(
     registration,
     createProviderResolver(moduleRef, discovery)
@@ -475,18 +500,7 @@ export async function createNestHandlerInstance<T>(
   dependencies: Map<unknown, Promise<unknown>>,
   type: Type<T>
 ): Promise<T> {
-  const reflected = [
-    ...((Reflect.getMetadata(PARAMTYPES_METADATA, type) as readonly InjectionToken[] | undefined) ??
-      [])
-  ];
-  const declared = Reflect.getMetadata(SELF_DECLARED_DEPS_METADATA, type) as
-    readonly { readonly index: number; readonly param: InjectionToken }[] | undefined;
-  for (const dependency of declared ?? []) {
-    reflected[dependency.index] = dependency.param;
-  }
-  const optional = new Set<number>(
-    (Reflect.getMetadata(OPTIONAL_DEPS_METADATA, type) as readonly number[] | undefined) ?? []
-  );
+  const { reflected, optional } = nestConstructorDependencies(type);
   const parameters = await Promise.all(
     reflected.map((token, index) =>
       resolveNestHandlerDependency(moduleRef, contextId, dependencies, token, optional.has(index))
@@ -514,6 +528,43 @@ export async function createNestHandlerInstance<T>(
   return instance;
 }
 
+function nestConstructorDependencies(type: Type) {
+  const reflected = [
+    ...((Reflect.getMetadata(PARAMTYPES_METADATA, type) as readonly InjectionToken[] | undefined) ??
+      [])
+  ];
+  const declared = Reflect.getMetadata(SELF_DECLARED_DEPS_METADATA, type) as
+    readonly { readonly index: number; readonly param: InjectionToken }[] | undefined;
+  for (const dependency of declared ?? []) {
+    reflected[dependency.index] = dependency.param;
+  }
+  const optional = new Set<number>(
+    (Reflect.getMetadata(OPTIONAL_DEPS_METADATA, type) as readonly number[] | undefined) ?? []
+  );
+  return { reflected, optional };
+}
+
+export function validateNestConstructorDependencies(moduleRef: ModuleRef, type: Type): void {
+  const { reflected, optional } = nestConstructorDependencies(type);
+  for (const [index, token] of reflected.entries()) {
+    try {
+      moduleRef.introspect(nestDependencyToken(token) as Parameters<ModuleRef['introspect']>[0]);
+    } catch (error) {
+      if (!(error instanceof UnknownElementException) || !optional.has(index)) throw error;
+    }
+  }
+}
+
+function nestDependencyToken(token: unknown): unknown {
+  const forwardReference =
+    typeof token === 'object' && token !== null && 'forwardRef' in token
+      ? (token as { readonly forwardRef?: unknown })
+      : undefined;
+  return typeof forwardReference?.forwardRef === 'function'
+    ? (forwardReference.forwardRef as () => unknown)()
+    : token;
+}
+
 async function resolveNestHandlerDependency(
   moduleRef: ModuleRef,
   contextId: import('@nestjs/core').ContextId,
@@ -521,14 +572,7 @@ async function resolveNestHandlerDependency(
   token: unknown,
   optional: boolean
 ): Promise<unknown> {
-  const forwardReference =
-    typeof token === 'object' && token !== null && 'forwardRef' in token
-      ? (token as { readonly forwardRef?: unknown })
-      : undefined;
-  const resolvedToken =
-    typeof forwardReference?.forwardRef === 'function'
-      ? (forwardReference.forwardRef as () => unknown)()
-      : token;
+  const resolvedToken = nestDependencyToken(token);
   let dependency = dependencies.get(resolvedToken);
   if (dependency === undefined) {
     dependency = moduleRef.resolve(resolvedToken as Parameters<ModuleRef['get']>[0], contextId, {

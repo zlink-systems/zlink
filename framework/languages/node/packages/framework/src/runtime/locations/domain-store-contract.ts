@@ -140,6 +140,11 @@ export interface ZLinkDomainLocationStore {
     request: ZLinkObjectCreationCompleteRequest,
     signal?: AbortSignal
   ): Promise<ZLinkObjectCreationCompleteResult>;
+  releaseEndedReservation?(
+    key: ZLinkAuthorityKey,
+    expectedStoreVersion: string,
+    signal?: AbortSignal
+  ): Promise<boolean>;
   abort(
     request: ZLinkObjectAbortRequest,
     signal?: AbortSignal,

@@ -1,6 +1,6 @@
 {
   "name": "zlink-sample-gamequest",
-  "version-string": "0.28.0",
+  "version-string": "0.29.0",
   "dependencies": [
     "zlink",
     "zlink-framework"

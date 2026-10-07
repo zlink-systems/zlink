@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { NodeView, ReportNodeStatusMsg } from '../../Shared/contracts';
+import { adjacentZones } from '../ZoneNode/Domain/world';
 import { ZoneIds, ZoneWorldSpec } from '../../Shared/spec';
 
 @Injectable()
@@ -76,20 +77,18 @@ class NodeRegistry {
         readonly targetOwnerNodeRid: string;
       }
     | undefined {
-    const sourceZoneId = ZoneIds.northWest;
-    const source = this.snapshot().find(
-      (node) => node.registered && node.zones.includes(sourceZoneId)
-    );
-    if (source === undefined) return undefined;
-    for (const targetZoneId of [ZoneIds.northEast, ZoneIds.southWest]) {
-      const target = this.snapshot().find(
-        (node) => node.registered && node.zones.includes(targetZoneId)
-      );
-      if (target === undefined || target.nodeId === source.nodeId) continue;
-      const sourceOwnerNodeRid = this.routingIdByNode.get(source.nodeId);
-      const targetOwnerNodeRid = this.routingIdByNode.get(target.nodeId);
-      if (sourceOwnerNodeRid === undefined || targetOwnerNodeRid === undefined) continue;
-      return { sourceZoneId, targetZoneId, sourceOwnerNodeRid, targetOwnerNodeRid };
+    const nodes = this.snapshot();
+    for (const sourceZoneId of Object.values(ZoneIds)) {
+      const source = nodes.find((node) => node.registered && node.zones.includes(sourceZoneId));
+      if (source === undefined) continue;
+      for (const targetZoneId of adjacentZones(sourceZoneId)) {
+        const target = nodes.find((node) => node.registered && node.zones.includes(targetZoneId));
+        if (target === undefined || target.nodeId === source.nodeId) continue;
+        const sourceOwnerNodeRid = this.routingIdByNode.get(source.nodeId);
+        const targetOwnerNodeRid = this.routingIdByNode.get(target.nodeId);
+        if (sourceOwnerNodeRid === undefined || targetOwnerNodeRid === undefined) continue;
+        return { sourceZoneId, targetZoneId, sourceOwnerNodeRid, targetOwnerNodeRid };
+      }
     }
     return undefined;
   }

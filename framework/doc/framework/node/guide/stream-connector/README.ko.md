@@ -16,6 +16,8 @@ Unity WebGL과 Godot Web 빌드가 이 connector를 사용한다. Node.js는 이
 | 8 | [브라우저](08-browser.ko.md) | 브라우저에서의 사용과 WebSocket 제약 |
 | 9 | [Unity WebGL](09-unity-webgl.ko.md) | Unity WebGL 빌드에서의 사용 |
 | 10 | [게임 엔진 통합](12-engine-integration.ko.md) | 엔진별 connector 선택과 Engine Lobby sample |
+| 11 | [Node Protobuf 송수신](40-protobuf.ko.md) | protobufjs 코드 생성, 고정 타입 push와 명시 응답 타입 |
+| 12 | [Node Protobuf codec과 타입](41-protobuf-codecs.ko.md) | codec 선택, 여러 메시지 제약, 서버 packet 이름 |
 
 파일 번호는 언어에 상관없이 같은 장을 가리키는 식별자다. 1~7장은 다섯 언어가 공유한다.
 

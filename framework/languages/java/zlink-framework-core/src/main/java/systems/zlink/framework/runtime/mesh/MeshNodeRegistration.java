@@ -237,6 +237,10 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     }
 
     public boolean requiresRelocationStore() {
+        return !relocatableInstanceSpotFactories.isEmpty() || hasRelocatableFactories();
+    }
+
+    public boolean hasRelocatableFactories() {
         return Stream.of(
                         relocatableSpotFactories.values().stream()
                                 .map(RelocatableSpotFactory::relocationPolicy),

@@ -79,7 +79,7 @@ async function resolveModuleProviders(module, requestedTokens) {
  * handshake. The listener does not keep the process alive.
  */
 async function holdTcpEndpoint() {
-  const server = net.createServer(socket => socket.destroy());
+  const server = net.createServer((socket) => socket.destroy());
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve);
@@ -92,22 +92,8 @@ async function holdTcpEndpoint() {
   };
 }
 
-async function reserveTcpEndpoint() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const { port } = server.address();
-  await new Promise((resolve, reject) => {
-    server.close((error) => error ? reject(error) : resolve());
-  });
-  return `tcp://127.0.0.1:${port}`;
-}
-
 module.exports = {
   holdTcpEndpoint,
   providerTokens,
-  reserveTcpEndpoint,
   resolveModuleProviders
 };

@@ -321,6 +321,13 @@ FRAMEWORK_SCALAR_FIELDS = (
         required=False,
     ),
     FrameworkField(
+        "framework/languages/node/tutorial/StreamClient/package.json",
+        "node",
+        "tutorial StreamClient @zlink-systems/framework-codec-protobuf",
+        rf'("@zlink-systems/framework-codec-protobuf": "\^?)(?P<version>{SEMVER})(")',
+        required=False,
+    ),
+    FrameworkField(
         "framework/languages/node/tutorial/HttpClient/package.json",
         "node",
         "tutorial HttpClient @zlink-systems/http-client",

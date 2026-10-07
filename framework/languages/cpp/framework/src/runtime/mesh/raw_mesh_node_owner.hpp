@@ -413,7 +413,8 @@ class raw_mesh_node_owner_t
                              std::vector<std::uint8_t> header,
                              const protocol::application_payload_t &application_payload,
                              detail::backend::raw_send_stage_trace_t trace = {},
-                             bool target_claimed = false);
+                             bool target_claimed = false,
+                             std::optional<std::vector<std::uint8_t>> metadata = {});
     task_t<bool> send_header_only (const std::vector<std::uint8_t> &target_routing_id,
                                    std::vector<std::uint8_t> header);
     send_start_state_t submit_header_only (const std::vector<std::uint8_t> &target_routing_id,

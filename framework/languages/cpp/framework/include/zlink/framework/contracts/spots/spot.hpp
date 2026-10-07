@@ -1845,6 +1845,7 @@ namespace detail
 {
 struct spot_lifecycle_callbacks_t
 {
+    std::function<void (const service_collection_t &)> validate_dependencies;
     std::function<std::shared_ptr<void> (spot_context_t, service_provider_t &)>
       create_spot_context_instance;
     std::function<std::shared_ptr<void> (entry_spot_context_t, service_provider_t &)>
@@ -2124,9 +2125,11 @@ class spot_node_builder_t
     template <typename TSpot, typename TContext>
     void register_context_lifecycle (
       std::string spot_name,
-      std::function<std::shared_ptr<TSpot> (TContext, service_provider_t &)> factory)
+      std::function<std::shared_ptr<TSpot> (TContext, service_provider_t &)> factory,
+      std::function<void (const service_collection_t &)> validate_dependencies = {})
     {
         detail::spot_lifecycle_callbacks_t callbacks;
+        callbacks.validate_dependencies = std::move (validate_dependencies);
         auto create = [factory = std::move (factory)] (TContext context,
                                                        service_provider_t &services) {
             const auto expected_state = context._state;
@@ -2188,9 +2191,19 @@ class spot_node_builder_t
           std::constructible_from<TSpot, TContext, TDependencies &...>,
           "Spot must be constructible from its Context followed by the declared dependencies");
         register_context_lifecycle<TSpot, TContext> (
-          std::move (spot_name), [] (TContext context, service_provider_t &services) {
+          std::move (spot_name),
+          [] (TContext context, service_provider_t &services) {
               return std::make_shared<TSpot> (std::move (context),
                                               services.get_required<TDependencies> ()...);
+          },
+          [] (const service_collection_t &services) {
+              const auto require = [&services] (std::type_index type) {
+                  if (!services.contains (type))
+                      throw framework_exception_t (framework_error_kind_t::not_found,
+                                                   std::string ("service is not registered: ")
+                                                     + type.name ());
+              };
+              (require (std::type_index (typeid (TDependencies))), ...);
           });
     }
     void register_lifecycle_erased (std::string spot_name,

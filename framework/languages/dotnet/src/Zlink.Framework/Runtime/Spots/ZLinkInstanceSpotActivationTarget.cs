@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Systems.Zlink.Framework.Runtime.Protocol;
@@ -418,155 +417,6 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
     }
 }
 
-internal static class ZLinkInstanceSpotActivationEnvelopeCodec
-{
-    private const int MaximumPayloadParts = 1024;
-    private const int MaximumFieldBytes = 4 * 1024 * 1024;
-    private static readonly byte[] Magic = "ZLIA"u8.ToArray();
-    private const byte Version = 2;
-
-    internal sealed record ActivationRecord(
-        bool IsRequest,
-        MeshOperationId OperationId,
-        ulong DeadlineUnixMs,
-        RoutingId SourceNodeRid,
-        ulong SourceNodeGeneration,
-        ZLinkServiceWireCodec.RequestSourceFence RequestSource,
-        string SourceSpotId,
-        ReadOnlyMemory<byte>? Metadata,
-        IReadOnlyList<ReadOnlyMemory<byte>> Payload
-    );
-
-    internal static byte[] Encode(
-        InstanceSpotActivationOperation operation,
-        ZLinkServiceWireCodec.RequestSourceFence requestSource,
-        ReadOnlyMemory<byte>? metadata,
-        IReadOnlyList<ReadOnlyMemory<byte>> payload
-    )
-    {
-        if (
-            requestSource.NodeRid != operation.SourceNodeRid
-            || requestSource.NodeGeneration != operation.SourceNodeGeneration
-            || string.IsNullOrWhiteSpace(requestSource.OwnerId)
-            || requestSource.LeaseGeneration == 0
-        )
-            throw new ArgumentException(
-                "The Instance Spot activation source fence is invalid.",
-                nameof(requestSource)
-            );
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
-        writer.Write(Magic);
-        writer.Write(Version);
-        writer.Write((byte)1);
-        writer.Write(operation.IsRequest);
-        writer.Write(operation.OperationId.High);
-        writer.Write(operation.OperationId.Low);
-        writer.Write(operation.DeadlineUnixMs);
-        WriteBytes(writer, operation.SourceNodeRid.ToBytes());
-        writer.Write(operation.SourceNodeGeneration);
-        WriteText(writer, requestSource.OwnerId);
-        writer.Write(requestSource.LeaseGeneration);
-        WriteText(writer, operation.SourceSpotId);
-        writer.Write(metadata.HasValue);
-        if (metadata.HasValue)
-            WriteBytes(writer, metadata.Value.Span);
-        writer.Write(payload.Count);
-        foreach (var part in payload)
-            WriteBytes(writer, part.Span);
-        return stream.ToArray();
-    }
-
-    internal static bool TryDecodeActivation(
-        ReadOnlySpan<byte> encoded,
-        out ActivationRecord record
-    )
-    {
-        record = null!;
-        try
-        {
-            using var stream = new MemoryStream(encoded.ToArray(), writable: false);
-            using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
-            if (
-                !reader.ReadBytes(Magic.Length).AsSpan().SequenceEqual(Magic)
-                || reader.ReadByte() != Version
-                || reader.ReadByte() != 1
-            )
-                return false;
-            var request = reader.ReadBoolean();
-            var operationId = new MeshOperationId(reader.ReadUInt64(), reader.ReadUInt64());
-            var deadline = reader.ReadUInt64();
-            var sourceRid = RoutingId.From(ReadBytes(reader));
-            var sourceGeneration = reader.ReadUInt64();
-            var sourceOwnerId = ReadText(reader);
-            var sourceOwnerLeaseGeneration = reader.ReadUInt64();
-            if (
-                sourceRid.IsEmpty
-                || sourceGeneration == 0
-                || string.IsNullOrWhiteSpace(sourceOwnerId)
-                || sourceOwnerLeaseGeneration == 0
-            )
-                return false;
-            var requestSource = new ZLinkServiceWireCodec.RequestSourceFence(
-                sourceOwnerId,
-                sourceOwnerLeaseGeneration,
-                sourceRid,
-                sourceGeneration
-            );
-            var sourceSpotId = ReadText(reader);
-            ReadOnlyMemory<byte>? metadata = reader.ReadBoolean() ? ReadBytes(reader) : null;
-            var count = reader.ReadInt32();
-            if (count is < 1 or > MaximumPayloadParts)
-                return false;
-            var payload = new ReadOnlyMemory<byte>[count];
-            for (var index = 0; index < count; index++)
-                payload[index] = ReadBytes(reader);
-            if (stream.Position != stream.Length)
-                return false;
-            record = new ActivationRecord(
-                request,
-                operationId,
-                deadline,
-                sourceRid,
-                sourceGeneration,
-                requestSource,
-                sourceSpotId,
-                metadata,
-                payload
-            );
-            return true;
-        }
-        catch (Exception error)
-            when (error is EndOfStreamException or IOException or ArgumentException)
-        {
-            return false;
-        }
-    }
-
-    private static void WriteText(BinaryWriter writer, string value) =>
-        WriteBytes(writer, Encoding.UTF8.GetBytes(value));
-
-    private static void WriteBytes(BinaryWriter writer, ReadOnlySpan<byte> value)
-    {
-        writer.Write(value.Length);
-        writer.Write(value);
-    }
-
-    private static byte[] ReadBytes(BinaryReader reader)
-    {
-        var length = reader.ReadInt32();
-        if (length is < 0 or > MaximumFieldBytes)
-            throw new InvalidDataException("Instance Spot activation field length is invalid.");
-        var value = reader.ReadBytes(length);
-        if (value.Length != length)
-            throw new EndOfStreamException();
-        return value;
-    }
-
-    private static string ReadText(BinaryReader reader) =>
-        Encoding.UTF8.GetString(ReadBytes(reader));
-}
-
 internal sealed class ZLinkInstanceSpotOperationGate
 {
     private readonly ConcurrentDictionary<
@@ -612,8 +462,6 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
 ) : IInstanceSpotActivationTarget
 {
     private const int RecoveryScanPageSize = 128;
-    private const int AuthorityConvergencePollMilliseconds = 10;
-    private const int RequestForwardPollMilliseconds = 2;
     private static readonly TimeSpan RecoveryRetention = TimeSpan.FromHours(24);
     private readonly ZLinkInstanceSpotOperationGate operationGate = new();
     private readonly ZLinkInstanceSpotMonitoring monitoring = new();
@@ -680,9 +528,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
             )
             .ConfigureAwait(false);
 
-        var envelope = ZLinkInstanceSpotActivationEnvelopeCodec.Encode(
+        var envelope = ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
             operation,
-            requestSource,
             metadata,
             payload
         );
@@ -740,18 +587,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 throw ReserveFailure(operation, reserve);
             }
             if (reserve is not ZLinkObjectReserveResult.Reserved reserved)
-                return await JoinExistingAsync(
-                        operation,
-                        metadata,
-                        payload,
-                        reserve,
-                        stored,
-                        envelopeHash,
-                        envelope.Length,
-                        requestSource,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
+                throw ReserveFailure(operation, reserve);
             reservation = reserved.Reservation;
             prepared = await catalog
                 .PrepareInstanceReservedAsync(
@@ -884,10 +720,30 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 snapshot.Payload.Span,
                 out var authority
             )
-            || authority.NodeRid != node.RoutingId
-            || authority.NodeGeneration != status.LifecycleGeneration
         )
             return;
+
+        if (
+            authority.NodeRid != node.RoutingId
+            || authority.NodeGeneration != status.LifecycleGeneration
+        )
+        {
+            if (
+                authority.State == ZLinkInstanceSpotAuthorityState.Creating
+                && snapshot.ReservedCreation is { } pending
+                && await authorityStore
+                    .ReleaseEndedReservationAsync(
+                        entry.Key,
+                        snapshot.StoreVersion,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false)
+            )
+                await relocationStore
+                    .DeleteRelocationAsync(pending.RequestContentReference, cancellationToken)
+                    .ConfigureAwait(false);
+            return;
+        }
 
         ZLinkInstanceSpotActivationRecoveryPointer recovery;
         if (authority.State == ZLinkInstanceSpotAuthorityState.Creating)
@@ -932,16 +788,69 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 ZLinkFrameworkErrorKind.DataLost,
                 $"Instance Spot '{authority.SpotId}' activation recovery payload is unavailable."
             );
+        var context = new ServiceWireCodec.DecodeContext(
+            null,
+            null,
+            null,
+            found.Payload.Length,
+            found.Payload.Length
+        );
+        ServiceWireCodec.InstanceActivationRecoveryV1 record;
+        try
+        {
+            record = ServiceWireCodec.DecodeDurableInstanceActivationRecoveryV1(
+                found.Payload.ToArray(),
+                context
+            );
+        }
+        catch (Exception error) when (error is IOException or ArgumentException)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                $"Instance Spot '{authority.SpotId}' activation recovery payload is invalid.",
+                innerException: error
+            );
+        }
         if (
-            recovery.ReplayCursor >= recovery.InboxSequence
-            || !ZLinkInstanceSpotActivationEnvelopeCodec.TryDecodeActivation(
-                found.Payload.Span,
-                out var record
+            record.TargetSpotId.Value != authority.SpotId
+            || record.StableType.Value != authority.StableType
+            || record.TargetMeshName.Value != authority.MeshName
+            || RoutingId.From(record.TargetNodeRid.Value) != authority.NodeRid
+            || record.TargetNodeGeneration.Value != authority.NodeGeneration
+        )
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                "The activation recovery root does not match its authority."
+            );
+        var sourceNodeRid = RoutingId.From(record.SourceNodeRid.Value);
+        var requestSource = await ResolveRequestSourceAsync(
+                authority.MeshName,
+                sourceNodeRid,
+                record.SourceNodeGeneration.Value,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        var application = ServiceWireCodec.EncodeApplicationPayloadEnvelopeV1(
+            record.ApplicationPayload,
+            context
+        );
+        if (
+            !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                application,
+                out var parts
             )
         )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                $"Instance Spot '{authority.SpotId}' activation recovery payload is invalid."
+                "The activation recovery application payload is invalid."
+            );
+        var payload = parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray();
+        ZLinkMessageParts.DisposeAll(parts);
+        ReadOnlyMemory<byte>? metadata = record.Metadata is null
+            ? null
+            : ServiceWireCodec.EncodeMetadataFrame(
+                record.Metadata,
+                ServiceWireCodec.DecodeContext.Empty
             );
 
         var activation = await catalog
@@ -1034,28 +943,30 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
 
         var operation = new InstanceSpotActivationOperation(
             new InstanceSpotActivationTarget(
-                authority.MeshName,
-                authority.NodeRid,
-                authority.NodeGeneration,
-                authority.SpotId,
-                authority.StableType,
-                snapshot.StoreVersion
+                record.TargetMeshName.Value,
+                RoutingId.From(record.TargetNodeRid.Value),
+                record.TargetNodeGeneration.Value,
+                record.TargetSpotId.Value,
+                record.StableType.Value,
+                record.TargetDescriptorVersion.Value
             ),
-            record.SourceNodeRid,
-            record.SourceNodeGeneration,
-            record.SourceSpotId,
-            record.OperationId,
-            record.IsRequest,
-            0,
-            record.DeadlineUnixMs
+            sourceNodeRid,
+            record.SourceNodeGeneration.Value,
+            record.SourceSpotId?.Value ?? string.Empty,
+            new MeshOperationId(record.Operation.High.Value, record.Operation.Low.Value),
+            record.OperationKind == ServiceWireCodec.InstanceOperationKind.Request,
+            record.ReplyRoute is ServiceWireCodec.InstanceReplyRouteCase1 route
+                ? route.ReplyRouteId.Value
+                : 0,
+            record.DeadlineUnixMs.Value
         );
-        await DispatchFirstMessageAsync(
+        _ = await DispatchFirstMessageAsync(
                 activation,
                 operation,
-                record.RequestSource,
+                requestSource,
                 snapshot,
-                record.Metadata,
-                record.Payload,
+                metadata,
+                payload,
                 cancellationToken,
                 _ =>
                     CompleteAndClearRecoveryAsync(
@@ -1066,294 +977,6 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     )
             )
             .ConfigureAwait(false);
-    }
-
-    private async ValueTask<InstanceSpotActivationTerminal> JoinExistingAsync(
-        InstanceSpotActivationOperation operation,
-        ReadOnlyMemory<byte>? metadata,
-        IReadOnlyList<ReadOnlyMemory<byte>> payload,
-        ZLinkObjectReserveResult reserve,
-        ZLinkRelocationStored operationRoot,
-        byte[] operationSha256,
-        int operationEncodedSize,
-        ZLinkServiceWireCodec.RequestSourceFence requestSource,
-        CancellationToken cancellationToken
-    )
-    {
-        var deadline =
-            Stopwatch.GetElapsedTime(0)
-            + (
-                DateTimeOffset.FromUnixTimeMilliseconds(checked((long)operation.DeadlineUnixMs))
-                - DateTimeOffset.UtcNow
-            );
-        var current = reserve switch
-        {
-            ZLinkObjectReserveResult.AlreadyExists value => value.Current,
-            ZLinkObjectReserveResult.Conflict { Current: ZLinkAuthorityReadResult.Found value } =>
-                value.Snapshot,
-            _ => throw ReserveFailure(operation, reserve),
-        };
-        while (true)
-        {
-            if (current.Allocation.ObjectKind != ZLinkPlacementObjectKind.InstanceSpot)
-            {
-                ZLinkRuntimeMetrics.RecordInstanceSpotClaimConflict(
-                    operation.Target.MeshName,
-                    operation.Target.StableType,
-                    "spot_kind"
-                );
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.TypeMismatch,
-                    $"Instance Spot '{operation.Target.TargetSpotId}' has another stable type."
-                );
-            }
-            if (
-                !string.Equals(
-                    current.Allocation.StableType,
-                    operation.Target.StableType,
-                    StringComparison.Ordinal
-                )
-            )
-            {
-                ZLinkRuntimeMetrics.RecordInstanceSpotClaimConflict(
-                    operation.Target.MeshName,
-                    operation.Target.StableType,
-                    "spot_type"
-                );
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.TypeMismatch,
-                    $"Instance Spot '{operation.Target.TargetSpotId}' has another stable type."
-                );
-            }
-            if (
-                !ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                    current.Payload.Span,
-                    out var authority
-                )
-            )
-            {
-                ZLinkRuntimeMetrics.RecordInstanceSpotClaimConflict(
-                    operation.Target.MeshName,
-                    operation.Target.StableType,
-                    "authority"
-                );
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"Instance Spot '{operation.Target.TargetSpotId}' activation moved to another owner.",
-                    ZLinkRetryAdvice.RetryAfterBackoff
-                );
-            }
-            if (
-                authority.NodeRid != node.RoutingId
-                || authority.NodeGeneration != node.MeshStatus().LifecycleGeneration
-            )
-            {
-                var forwarded = operation with
-                {
-                    Target = new InstanceSpotActivationTarget(
-                        authority.MeshName,
-                        authority.NodeRid,
-                        authority.NodeGeneration,
-                        authority.SpotId,
-                        authority.StableType,
-                        current.StoreVersion
-                    ),
-                };
-                while (true)
-                {
-                    try
-                    {
-                        var terminal = await node.ForwardInstanceSpotActivationAsync(
-                                forwarded,
-                                payload,
-                                metadata,
-                                cancellationToken
-                            )
-                            .ConfigureAwait(false);
-                        await relocationStore
-                            .DeleteRelocationAsync(operationRoot.Reference, CancellationToken.None)
-                            .ConfigureAwait(false);
-                        return terminal;
-                    }
-                    catch (ZlinkSubmitException exception)
-                        when (exception.Result
-                                is ZlinkSubmitException.ErrorCode.Backpressured
-                                    or ZlinkSubmitException.ErrorCode.NotConnected
-                        )
-                    {
-                        // The accepted operation remains durable while the
-                        // winner route is temporarily unavailable.
-                    }
-
-                    var forwardRemaining = (
-                        deadline - Stopwatch.GetElapsedTime(0)
-                    ).TotalMilliseconds;
-                    if (forwardRemaining <= 0)
-                        throw new TimeoutException(
-                            $"Instance Spot '{operation.Target.TargetSpotId}' activation forwarding deadline elapsed."
-                        );
-                    await Task.Delay(
-                            TimeSpan.FromMilliseconds(
-                                Math.Min(RequestForwardPollMilliseconds, forwardRemaining)
-                            ),
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                }
-            }
-            var anotherOperationIsAccepted =
-                authority.ActivationRecovery is { } acceptedRecovery
-                && acceptedRecovery.ReplayCursor < acceptedRecovery.InboxSequence
-                && !string.Equals(
-                    acceptedRecovery.Reference,
-                    operationRoot.Reference,
-                    StringComparison.Ordinal
-                );
-            // A Missing intent can reach its owner after another operation
-            // has already started Close. Its original operation remains the
-            // accepted application record behind the owner's lifecycle item.
-            if (
-                authority.State == ZLinkInstanceSpotAuthorityState.Closing
-                && await catalog
-                    .TryGetInstanceActivationAsync(
-                        authority.SpotId,
-                        authority.StableType,
-                        current.ObjectGeneration
-                    )
-                    .ConfigureAwait(false)
-                    is { } closingActivation
-            )
-            {
-                var terminal = await DispatchFirstMessageAsync(
-                        closingActivation,
-                        operation,
-                        requestSource,
-                        current,
-                        metadata,
-                        payload,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                await relocationStore
-                    .DeleteRelocationAsync(operationRoot.Reference, CancellationToken.None)
-                    .ConfigureAwait(false);
-                return terminal;
-            }
-            if (
-                authority.State == ZLinkInstanceSpotAuthorityState.Ready
-                && !anotherOperationIsAccepted
-                && (
-                    await catalog
-                        .TryGetInstanceActivationAsync(
-                            authority.SpotId,
-                            authority.StableType,
-                            current.ObjectGeneration
-                        )
-                        .ConfigureAwait(false)
-                )
-                    is { } activation
-            )
-            {
-                var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(
-                    operation.Target.TargetSpotId
-                );
-                var claimedAuthority = authority with
-                {
-                    ActivationRecovery = new ZLinkInstanceSpotActivationRecoveryPointer(
-                        operationRoot.Reference,
-                        operationSha256,
-                        checked((uint)operationEncodedSize),
-                        1,
-                        0
-                    ),
-                };
-                var claimed = await authorityStore
-                    .CompareExchangeAuthorityAsync(
-                        key,
-                        current.StoreVersion,
-                        new ZLinkAuthorityMutation.Put(
-                            ZLinkInstanceSpotAuthorityPayloadCodec.Encode(claimedAuthority),
-                            ZLinkAuthorityGenerationTransition.Preserve,
-                            null,
-                            null
-                        ),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                if (claimed is not ZLinkAuthorityCompareExchangeResult.Stored stored)
-                {
-                    if (
-                        claimed is ZLinkAuthorityCompareExchangeResult.Conflict
-                        {
-                            Current: ZLinkAuthorityReadResult.Found conflict
-                        }
-                    )
-                    {
-                        current = conflict.Snapshot;
-                        continue;
-                    }
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        $"Instance Spot '{operation.Target.TargetSpotId}' operation claim conflicted.",
-                        ZLinkRetryAdvice.RetryAfterBackoff
-                    );
-                }
-                if (
-                    authority.ActivationRecovery is { } previousRecovery
-                    && !string.Equals(
-                        previousRecovery.Reference,
-                        operationRoot.Reference,
-                        StringComparison.Ordinal
-                    )
-                )
-                    await relocationStore
-                        .DeleteRelocationAsync(previousRecovery.Reference, CancellationToken.None)
-                        .ConfigureAwait(false);
-                return await DispatchFirstMessageAsync(
-                        activation,
-                        operation,
-                        requestSource,
-                        stored.Snapshot,
-                        metadata,
-                        payload,
-                        cancellationToken,
-                        _ =>
-                            CompleteAndClearRecoveryAsync(
-                                key,
-                                stored.Snapshot,
-                                claimedAuthority,
-                                operationRoot.Reference
-                            )
-                    )
-                    .ConfigureAwait(false);
-            }
-
-            var remaining = (deadline - Stopwatch.GetElapsedTime(0)).TotalMilliseconds;
-            if (remaining <= 0)
-                throw new TimeoutException(
-                    $"Instance Spot '{operation.Target.TargetSpotId}' activation deadline elapsed."
-                );
-            await Task.Delay(
-                    TimeSpan.FromMilliseconds(
-                        Math.Min(AuthorityConvergencePollMilliseconds, remaining)
-                    ),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            var read = await authorityStore
-                .ReadAuthorityAsync(
-                    ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(operation.Target.TargetSpotId),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (read is not ZLinkAuthorityReadResult.Found found)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"Instance Spot '{operation.Target.TargetSpotId}' activation authority disappeared.",
-                    ZLinkRetryAdvice.RetryAfterBackoff
-                );
-            current = found.Snapshot;
-        }
     }
 
     private async ValueTask<InstanceSpotActivationTerminal> DispatchFirstMessageAsync(

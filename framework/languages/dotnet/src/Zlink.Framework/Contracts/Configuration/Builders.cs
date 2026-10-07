@@ -25,6 +25,10 @@ public interface IZLinkStreamNodeBuilder
 
     IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
 
+    IZLinkStreamNodeBuilder SetHeartbeat(TimeSpan interval, TimeSpan timeout);
+
+    IZLinkStreamNodeBuilder SetIdleTimeout(TimeSpan timeout);
+
     IZLinkStreamSocketConfig ConfigureSocket();
 
     IZLinkStreamNodeBuilder EnableActorDispatch();

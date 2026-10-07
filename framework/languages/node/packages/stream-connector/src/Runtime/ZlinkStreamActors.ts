@@ -169,7 +169,8 @@ export class ZlinkStreamActors {
         cause instanceof Error ? cause.cause : undefined
       );
     }
-    const { slot, actorId } = binding;
+    const slot = binding.slot;
+    const actorId = binding.actorId;
     if (actorId.length === 0 || this.bySlot.has(slot) || this.byId.has(actorId)) {
       throw invalidControl('Actor bound identity is already in use.');
     }

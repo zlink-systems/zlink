@@ -1460,7 +1460,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
                             List.of(application.toByteArray())));
             assertEquals(
-                    ServiceWireConstants.COMMAND_REPLY,
+                    -1,
                     ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
                             List.of(reply.toByteArray())));
             assertEquals(

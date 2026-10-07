@@ -10,7 +10,7 @@ title: "게임 엔진 통합 · Node/TypeScript"
 # 게임 엔진 통합
 
 <!-- framework-adapter-nav:start -->
-[목차](README.ko.md) | [이전: Unity WebGL](09-unity-webgl.ko.md)
+[목차](README.ko.md) | [이전: Unity WebGL](09-unity-webgl.ko.md) | [다음: Node Protobuf 송수신](40-protobuf.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

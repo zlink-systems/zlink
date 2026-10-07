@@ -130,9 +130,11 @@ owner인지 판단하는 기준 정보인 [authority](../00-foundation/02-glossa
 ### 4.3 Actor와 Spot 생성
 
 Object가 없는 상태에서 생성 요청이 경쟁하면 Location Store의 `Creating` record를 먼저 확보한
-target 하나만 factory를 실행한다. 생성 중 process가 종료되면 다음 Framework operation은 같은
-object ID와 generation의 생성 record를 다시 확인한다. 같은 생성을 계속하거나 정확히 그
-record를 취소할 수 있으며, factory는 같은 입력으로 다시 호출될 수 있다.
+target 하나만 factory를 실행한다. 생성 중 process가 종료돼 target lifecycle이 끝난
+reservation은 [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의 해제로 정리한다. 같은
+lifecycle에서 stored creation intent를 재개하는 범위는
+[Object lifecycle §3](../03-spot-actor/09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)을 따르며, factory는
+같은 입력으로 다시 호출될 수 있다.
 
 이 동작은 생성이 `Ready`로 공개되기 전의 recovery다. 이미 실행 중인 object의 owner 장애를
 복구하는 failover가 아니다. 생성 경쟁과 결과는
@@ -143,8 +145,9 @@ record를 취소할 수 있으며, factory는 같은 입력으로 다시 호출�
 
 최초 message가 도착했을 때 Instance Spot을 만들고 준비하는 과정을
 [cold activation](../00-foundation/02-glossary.ko.md#cold-activation)이라고 한다. Framework는 최초 message와
-생성 record를 저장하므로 process가 `Creating` 또는 최초 message 복원 중에 종료돼도 같은
-generation으로 생성을 계속하거나 취소할 수 있다. 최초 message를 queue 선두에 복원하기 전에는
+생성 record를 저장하므로 같은 target lifecycle 안에서 `Creating` 또는 최초 message 복원이 끊겨도
+같은 generation으로 생성을 계속한다. Process가 종료돼 target lifecycle이 끝난 reservation은
+[Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의 해제로 정리한다. 최초 message를 queue 선두에 복원하기 전에는
 새 message를 처리하지 않는다.
 
 Instance Spot은 별도 create API를 호출하지 않고 `Missing` 상태에서 첫 message로 생성한다. 이
@@ -157,7 +160,7 @@ Instance Spot은 별도 create API를 호출하지 않고 `Missing` 상태에서
 | 현재 상태 | Instance intent가 있는 새 message의 처리 |
 |---|---|
 | Authority record가 없는 `Missing` | Eligible node 하나를 선택해 새 `ObjectGeneration`의 cold activation을 시작한다. |
-| `Creating` 또는 최초 message를 아직 복원하지 않은 `Ready` | 저장한 생성 record와 최초 message를 사용해 같은 `ObjectGeneration`의 생성을 계속하거나 취소한다. 새 incarnation을 만들지 않는다. |
+| `Creating` 또는 최초 message를 아직 복원하지 않은 `Ready` | 같은 target lifecycle이면 저장한 생성 record와 최초 message로 같은 `ObjectGeneration`의 생성을 계속한다. Target lifecycle이 끝난 `Creating`은 [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas) 해제 뒤 `Missing`이 된다. 해제 전에는 새 incarnation을 만들지 않는다. |
 | Owner lease가 유효한 `Ready` | 현재 owner로 message를 보낸다. Cold activation을 시작하지 않는다. |
 | `Ready` owner process가 종료되었거나 owner lease가 무효임 | Authority record를 자동 해제하지 않고 다른 node에서 새 incarnation을 만들지 않는다. Operation은 `Unavailable`로 끝난다. |
 | Application의 explicit `Close`가 authority release까지 완료됨 | 이후 조회 결과는 `Missing`이다. 다음 Instance intent message는 새 `ObjectGeneration`의 cold activation을 시작할 수 있다. |

@@ -16,6 +16,8 @@ connector's product runtime; it is used by tests and tools.
 | 8 | [Browser](08-browser.en.md) | Using it in a browser and the WebSocket constraints |
 | 9 | [Unity WebGL](09-unity-webgl.en.md) | Using it from a Unity WebGL build |
 | 10 | [Game Engine Integration](12-engine-integration.en.md) | Connector choice by engine and the Engine Lobby sample |
+| 11 | [Node Protobuf Messaging](40-protobuf.en.md) | protobufjs generation, fixed-type pushes, explicit reply types |
+| 12 | [Node Protobuf Codecs and Types](41-protobuf-codecs.en.md) | Codec selection, multiple-message limits, server packet names |
 
 The file number identifies the same chapter in every language. Chapters 1 to 7 are
 shared across all five.

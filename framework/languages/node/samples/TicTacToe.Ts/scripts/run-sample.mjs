@@ -48,6 +48,8 @@ let workDir;
 const children = [];
 const portLeases = new Map();
 const dockerCommandTimeoutMs = 10_000;
+const processExitPollIntervalMs = 50;
+const sampleProcessShutdownGracePeriodMs = 30_000;
 let redisContainer;
 let failed = false;
 let cleaning = false;
@@ -244,7 +246,7 @@ function createContext(redisEndpoint) {
 
 async function waitForExit(state) {
   const deadline = Date.now() + 10_000;
-  while (state.status === undefined && Date.now() < deadline) await sleep(50);
+  while (state.status === undefined && Date.now() < deadline) await sleep(processExitPollIntervalMs);
   if (state.status === undefined) throw new Error(`${state.name} did not stop within 10 seconds.`);
   await state.exited;
 }
@@ -375,11 +377,12 @@ function startCommand(name, command, args, options = {}) {
   const logPath = path.join(logDir, `${name}.log`);
   const output = fs.openSync(logPath, 'a');
   const invocation = platformCommand(command, args);
+  const childEnv = { ...(options.env ?? process.env), TEMP: workDir, TMP: workDir, TMPDIR: workDir };
   let child;
   try {
     child = spawn(invocation.executable, invocation.args, {
       cwd: options.cwd ?? sampleRoot,
-      env: options.env ?? process.env,
+      env: childEnv,
       detached: process.platform !== 'win32',
       windowsHide: true,
       // Descendants inherit these pipes. 'close' waits for their output handles too.
@@ -527,6 +530,13 @@ async function cleanChildren() {
   const exited = active.map((state) => state.exited);
   for (const state of [...active].reverse()) {
     signalChild(state, 'SIGTERM');
+  }
+  const shutdownDeadline = Date.now() + sampleProcessShutdownGracePeriodMs;
+  while (active.some((state) => !state.closed) && Date.now() < shutdownDeadline) {
+    await sleep(processExitPollIntervalMs);
+  }
+  for (const state of [...active].reverse()) {
+    signalChild(state, 'SIGKILL');
   }
   await Promise.all(exited);
   for (const state of active) {

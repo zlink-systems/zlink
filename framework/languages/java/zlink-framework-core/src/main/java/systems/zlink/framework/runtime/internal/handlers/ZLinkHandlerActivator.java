@@ -22,6 +22,10 @@ public interface ZLinkHandlerActivator {
         return create(serviceType);
     }
 
+    default Object findService(Constructor<?> constructor, int parameterIndex) {
+        return findService(constructor.getParameterTypes()[parameterIndex]);
+    }
+
     /** Prepares reusable construction metadata without creating an instance. */
     default void prepare(Class<?> handlerType) {
         PublicConstructorPlan.prepare(handlerType);
@@ -127,7 +131,7 @@ public interface ZLinkHandlerActivator {
                 }
                 for (Constructor<?> constructor :
                         PublicConstructorPlan.forType(handlerType).constructors()) {
-                    Object[] arguments = resolveArguments(constructor.getParameterTypes());
+                    Object[] arguments = resolveArguments(constructor);
                     if (arguments != null && arguments.length > 0) {
                         return constructor.newInstance(arguments);
                     }
@@ -143,6 +147,14 @@ public interface ZLinkHandlerActivator {
         public Object findService(Class<?> serviceType) {
             Object registered = findRuntimeService(serviceType);
             return registered != null ? registered : fallback.findService(serviceType);
+        }
+
+        @Override
+        public Object findService(Constructor<?> constructor, int parameterIndex) {
+            Object registered = findRuntimeService(constructor.getParameterTypes()[parameterIndex]);
+            return registered != null
+                    ? registered
+                    : fallback.findService(constructor, parameterIndex);
         }
 
         @Override
@@ -195,7 +207,8 @@ public interface ZLinkHandlerActivator {
             };
         }
 
-        private Object[] resolveArguments(Class<?>[] parameterTypes) {
+        private Object[] resolveArguments(Constructor<?> constructor) {
+            Class<?>[] parameterTypes = constructor.getParameterTypes();
             Object[] arguments = new Object[parameterTypes.length];
             boolean allowFallbackServices = false;
             for (Class<?> parameterType : parameterTypes) {
@@ -207,7 +220,7 @@ public interface ZLinkHandlerActivator {
             for (int i = 0; i < parameterTypes.length; i++) {
                 Object service = findRuntimeService(parameterTypes[i]);
                 if (service == null && allowFallbackServices) {
-                    service = findFallbackService(parameterTypes[i]);
+                    service = fallback.findService(constructor, i);
                 }
                 if (service == null) {
                     return null;
@@ -252,10 +265,6 @@ public interface ZLinkHandlerActivator {
                 }
             }
             return Map.copyOf(index);
-        }
-
-        private Object findFallbackService(Class<?> parameterType) {
-            return fallback.findService(parameterType);
         }
     }
 }

@@ -201,6 +201,14 @@ export class ZLinkInMemoryLocationStore
     return this.authority.readCreationTerminal(operation, signal);
   }
 
+  async releaseEndedReservation(
+    key: ZLinkAuthorityKey,
+    expectedStoreVersion: string,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    return this.authority.releaseEndedReservation(key, expectedStoreVersion, signal);
+  }
+
   async abort(
     request: ZLinkObjectAbortRequest,
     signal?: AbortSignal

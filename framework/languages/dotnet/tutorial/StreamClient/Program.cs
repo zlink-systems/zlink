@@ -1,6 +1,17 @@
 using Systems.Zlink.Stream.Connector.Contracts;
 using Tutorial.Shared;
 
+if (args.Contains("--receiving"))
+{
+    await Receiving.RunAsync(
+        new Uri(
+            Environment.GetEnvironmentVariable("STREAM_RECEIVING_ENDPOINT")
+                ?? throw new InvalidOperationException("STREAM_RECEIVING_ENDPOINT is required.")
+        )
+    );
+    return;
+}
+
 // --8<-- [start:stream-client]
 // A game client outside the mesh. It references the connector only, never the
 // Framework, and speaks to the port the stream node opened.
@@ -60,6 +71,7 @@ var singleChanged = new TaskCompletionSource<ZlinkStreamMessage<NicknameChanged>
     TaskCreationOptions.RunContinuationsAsynchronously
 );
 using (
+    // --8<-- [start:typed-receive]
     connector.On<NicknameChanged>(
         (message, _) =>
         {
@@ -67,6 +79,7 @@ using (
             return ValueTask.CompletedTask;
         }
     )
+// --8<-- [end:typed-receive]
 )
 {
     await connector.Send(new ChangeNickname("speedy")).Async();

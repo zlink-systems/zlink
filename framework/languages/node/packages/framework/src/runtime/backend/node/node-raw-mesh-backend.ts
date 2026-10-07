@@ -297,19 +297,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   selectObjectPlacement(stableType: string): ZLinkBackendObjectPlacement {
     const runtime = this.requireRuntime();
     const localNodeRid = runtime.topology.localDescriptor().nodeRoutingId;
-    const status = runtime.topology.objectPlacementStatus(
+    const { status, descriptor } = runtime.topology.selectObjectPlacementWithStatus(
       stableType,
       (candidate) =>
         candidate.nodeRoutingId === localNodeRid ||
         runtime.isPeerRouteReady(candidate.nodeRoutingId)
     );
     if (status !== 'available') return { kind: status };
-    const descriptor = runtime.topology.selectObjectPlacement(
-      stableType,
-      (candidate) =>
-        candidate.nodeRoutingId === localNodeRid ||
-        runtime.isPeerRouteReady(candidate.nodeRoutingId)
-    );
     return descriptor === undefined
       ? { kind: 'unavailable' }
       : {

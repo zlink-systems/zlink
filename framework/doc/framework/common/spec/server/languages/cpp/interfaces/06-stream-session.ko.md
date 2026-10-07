@@ -149,6 +149,9 @@ public:
       bool require_client_certificate = false);
     stream_socket_config_t &configure_socket() noexcept;
     stream_node_options_builder_t &enable_actor_dispatch();
+    stream_node_options_builder_t &set_heartbeat(std::chrono::milliseconds interval,
+                                                 std::chrono::milliseconds timeout);
+    stream_node_options_builder_t &set_idle_timeout(std::chrono::milliseconds timeout);
     stream_node_options_builder_t &register_session(std::string session_name);
 
     template <typename TSession>
@@ -156,6 +159,8 @@ public:
     stream_node_options_builder_t &register_session();
 };
 ```
+
+Heartbeat interval·timeout과 idle timeout의 기본값, 검증과 유휴 종료 규칙은 [STREAM session §7](../../../04-session/01-stream-session.ko.md#7-오류-경계)이 정한다.
 
 `configure_socket().max_message_size`는 StreamNode의 Core STREAM inbound 상한이다. 기본값은
 `64 KiB`이며 complete message 크기를 6-byte prefix를 제외한 header byte와 payload byte의 합으로

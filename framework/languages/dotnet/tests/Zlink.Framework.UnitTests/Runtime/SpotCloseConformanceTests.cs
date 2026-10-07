@@ -688,6 +688,7 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
     )
     {
         var node = host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node;
+        var operationId = node.AllocateOperationId();
         var operation = new InstanceSpotActivationOperation(
             new InstanceSpotActivationTarget(
                 SpotCloseHost.MeshName,
@@ -700,9 +701,9 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
             node.RoutingId,
             node.MeshStatus().LifecycleGeneration,
             string.Empty,
-            node.AllocateOperationId(),
+            operationId,
             true,
-            0,
+            operationId.Low,
             checked((ulong)DateTimeOffset.UtcNow.Add(Wait).ToUnixTimeMilliseconds())
         );
         var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
@@ -1041,6 +1042,13 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
     [Fact]
     public async Task Spot_close_fixture_scenarios_hold_on_the_dotnet_runtime()
     {
+        var flowPath = Path.Combine(
+            Path.GetTempPath(),
+            "zlink-close-dotnet",
+            $"fixture-{Guid.NewGuid():N}.flow"
+        );
+        using var flow = new TestHostMessageFlowListener(flowPath);
+        output.WriteLine($"Message flow file: {flowPath}");
         using var fixture = JsonDocument.Parse(
             await File.ReadAllTextAsync(
                 Path.Combine(

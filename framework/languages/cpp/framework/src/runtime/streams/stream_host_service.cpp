@@ -1395,14 +1395,15 @@ class stream_host_service_t::listener_t
                         session_actor_manager_t &actors_,
                         stream_t stream_,
                         runtime::stateful::stream_connection_t transport_connection_,
-                        session_liveness_t::clock_t::time_point established) :
+                        session_liveness_t::clock_t::time_point established,
+                        detail::stream_liveness_options_t liveness_options) :
             scope (std::move (scope_)),
             session (&session_),
             actors (&actors_),
             stream (std::move (stream_)),
             transport_connection (std::move (transport_connection_)),
-            liveness (std::make_shared<session_liveness_t> (established,
-                                                            session_liveness_t::clock_t::now ()))
+            liveness (std::make_shared<session_liveness_t> (
+              established, session_liveness_t::clock_t::now (), liveness_options))
         {
         }
     };
@@ -2200,9 +2201,9 @@ class stream_host_service_t::listener_t
             request_core_peer_disconnect (rid, "session_relocation_seal_timeout");
         });
         detail::session_actor_manager_access_t::attach (actors, stream);
-        auto created =
-          std::make_shared<core_session_t> (std::move (scope), session, actors, std::move (stream),
-                                            std::move (transport_connection), established);
+        auto created = std::make_shared<core_session_t> (
+          std::move (scope), session, actors, std::move (stream), std::move (transport_connection),
+          established, _stream.liveness);
         auto replacement = register_replacement_session (
           rid, created->stream,
           [this, rid] { request_core_peer_disconnect (rid, "actor_binding_replaced"); },
@@ -3312,8 +3313,8 @@ class stream_host_service_t::listener_t
             -> task_t<void> { return submit_frame (owner, connection, header, payload); });
         bool connected_session = false;
         std::optional<stream_error_t> session_transport_error;
-        auto liveness =
-          std::make_shared<session_liveness_t> (established, session_liveness_t::clock_t::now ());
+        auto liveness = std::make_shared<session_liveness_t> (
+          established, session_liveness_t::clock_t::now (), _stream.liveness);
         try {
             if (auto connected = _runtime.dispatch_connected_async (
                   session, stream,

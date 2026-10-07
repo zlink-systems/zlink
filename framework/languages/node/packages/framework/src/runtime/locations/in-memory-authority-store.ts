@@ -276,6 +276,42 @@ export class ZLinkInMemoryAuthorityStore {
     return BigInt(removed);
   }
 
+  async releaseEndedReservation(
+    key: ZLinkAuthorityKey,
+    expectedStoreVersion: string,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    signal?.throwIfAborted();
+    return this.tryReleaseEndedReservation(key, expectedStoreVersion);
+  }
+
+  private tryReleaseEndedReservation(
+    key: ZLinkAuthorityKey,
+    expectedStoreVersion: string
+  ): boolean {
+    const current = this.rows.get(key.value);
+    if (
+      current === undefined ||
+      current.snapshot.storeVersion.value !== expectedStoreVersion ||
+      current.snapshot.allocation.state !== 'reserved' ||
+      current.creation === undefined ||
+      this.validation.isTargetLive(
+        current.snapshot.allocation.descriptor,
+        current.snapshot.allocation.descriptorLifecycleGeneration,
+        {
+          ownerId: current.snapshot.ownerId,
+          leaseGeneration: current.snapshot.ownerLeaseGeneration
+        }
+      )
+    )
+      return false;
+    this.adjustCapacity(this.pendingCapacity, current.snapshot.allocation, -1);
+    this.rows.delete(key.value);
+    this.creationTerminals.set(current.creation.reservationId, 'aborted');
+    this.scanRevision++;
+    return true;
+  }
+
   async reserve(
     request: ZLinkObjectReserveRequest,
     signal?: AbortSignal
@@ -297,15 +333,13 @@ export class ZLinkInMemoryAuthorityStore {
       if (current.snapshot.allocation.state === 'active') {
         return { kind: 'alreadyExists', current: this.snapshot(current.snapshot) };
       }
-      // An unfinished creation whose owner lease ended is cancellable.
-      // Reclaim it so the key does not stay blocked forever.
-      if (this.isOwnerLive(current.snapshot) || current.creation === undefined) {
+      if (
+        !this.tryReleaseEndedReservation(
+          encodeAuthorityKey(request.key.kind, request.key.globalId),
+          current.snapshot.storeVersion.value
+        )
+      )
         return { kind: 'conflict', current: this.read(key) };
-      }
-      this.adjustCapacity(this.pendingCapacity, current.snapshot.allocation, -1);
-      this.rows.delete(key);
-      this.creationTerminals.set(current.creation.reservationId, 'aborted');
-      this.scanRevision++;
     }
     const target = creationTarget(request);
     if (

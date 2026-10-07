@@ -31,8 +31,8 @@ task_t<T> with_request_deadline (task_t<T> operation,
         detail::deadline_scheduler_t::instance ().schedule (
           *at, deadline, [weak = std::weak_ptr (source)] {
               if (auto current = weak.lock ())
-                  current->complete (result_t<T>::failure (
-                    framework_error_kind_t::deadline_exceeded, "request deadline expired"));
+                  current->complete (detail::boundary_failure<T> (
+                    detail::boundary_error_t::timed_out, "request deadline expired"));
           });
     }
     return output;

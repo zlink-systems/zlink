@@ -1,6 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const internal = require('../../packages/framework/dist/internal');
+const {
+  ZLinkFrameworkException,
+  ZLinkFrameworkErrorKind
+} = require('../../packages/framework/dist');
 const { ZLinkRedisLocationStore } = require('../../packages/framework-locations-redis/dist');
 
 test('in-memory Store counts key and expected version bytes in encoded batch bounds', async () => {
@@ -48,7 +52,10 @@ test('owner lease renewal preserves an unapplied provider error', async () => {
   failWrites = true;
   await assert.rejects(
     repository.renewOwnerLease(claimed.token, 30000),
-    (error) => error === failure
+    (error) =>
+      error instanceof ZLinkFrameworkException &&
+      error.kind === ZLinkFrameworkErrorKind.Unavailable &&
+      error.cause === failure
   );
 });
 
@@ -67,7 +74,10 @@ test('owner lease claim preserves an error before a late provider commit', async
   const repository = new internal.ZLinkLocationStoreRepository(provider);
   await assert.rejects(
     repository.claimOwnerLease('node-store-late-claim', 30000),
-    (error) => error === failure
+    (error) =>
+      error instanceof ZLinkFrameworkException &&
+      error.kind === ZLinkFrameworkErrorKind.Unavailable &&
+      error.cause === failure
   );
   assert.deepEqual(await repository.readOwnerLease('node-store-late-claim'), { kind: 'missing' });
   assert.equal((await inner.write(pending)).kind, 'applied');

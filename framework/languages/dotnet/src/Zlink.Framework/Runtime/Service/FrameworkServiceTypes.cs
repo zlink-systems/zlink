@@ -409,8 +409,7 @@ internal readonly record struct InstanceSpotActivationOperation(
 internal sealed record InstanceSpotActivationTerminal(
     RequestResult Result,
     ServiceWireConstants.FrameworkErrorCode FailureCode,
-    IReadOnlyList<ReadOnlyMemory<byte>> ReplyParts,
-    bool Forwarded = false
+    IReadOnlyList<ReadOnlyMemory<byte>> ReplyParts
 );
 
 internal interface IInstanceSpotActivationTarget
