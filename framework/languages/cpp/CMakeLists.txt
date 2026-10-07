@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.28.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.29.0 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")

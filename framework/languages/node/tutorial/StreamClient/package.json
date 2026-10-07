@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@zlink-systems/framework-codec-protobuf": "0.28.0",
-    "@zlink-systems/stream-connector": "0.28.0",
+    "@zlink-systems/stream-connector": "0.29.0",
     "protobufjs": "8.8.0"
   },
   "devDependencies": {

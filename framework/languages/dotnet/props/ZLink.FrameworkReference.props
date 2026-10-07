@@ -17,7 +17,7 @@
     <ZLinkSampleRepositoryDetected Condition="'$(ZLinkSampleRepositoryDetected)' == ''">false</ZLinkSampleRepositoryDetected>
     <ZLinkSampleFrameworkVersionFile Condition="'$(ZLinkSampleRepositoryDetected)' == 'true'">$(ZLinkSampleDotnetRoot)/VERSION</ZLinkSampleFrameworkVersionFile>
     <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true' and Exists('$(ZLinkSampleFrameworkVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkSampleFrameworkVersionFile)').Trim().Replace('ZLINK_FRAMEWORK_VERSION=', ''))</ZLinkSampleFrameworkVersion>
-    <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' != 'true'">0.28.0</ZLinkSampleFrameworkVersion>
+    <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' != 'true'">0.29.0</ZLinkSampleFrameworkVersion>
     <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true'">true</ZLinkSampleUseLocalSource>
     <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == ''">false</ZLinkSampleUseLocalSource>
   </PropertyGroup>

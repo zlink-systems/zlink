@@ -31,9 +31,9 @@ connector는 서버 framework와 별도로 배포되므로, client project는 co
 
 ```kotlin
 dependencies {
-    implementation("systems.zlink:zlink-stream-connector:0.28.0")
+    implementation("systems.zlink:zlink-stream-connector:0.29.0")
     // coroutine wrapper. await()로 기다리는 표면이 이 module에 있다.
-    implementation("systems.zlink:zlink-framework-kotlin:0.28.0")
+    implementation("systems.zlink:zlink-framework-kotlin:0.29.0")
 }
 ```
 
