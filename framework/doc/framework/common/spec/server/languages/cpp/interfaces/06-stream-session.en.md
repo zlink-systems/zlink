@@ -150,6 +150,9 @@ public:
       bool require_client_certificate = false);
     stream_socket_config_t &configure_socket() noexcept;
     stream_node_options_builder_t &enable_actor_dispatch();
+    stream_node_options_builder_t &set_heartbeat(std::chrono::milliseconds interval,
+                                                 std::chrono::milliseconds timeout);
+    stream_node_options_builder_t &set_idle_timeout(std::chrono::milliseconds timeout);
     stream_node_options_builder_t &register_session(std::string session_name);
 
     template <typename TSession>
@@ -157,6 +160,8 @@ public:
     stream_node_options_builder_t &register_session();
 };
 ```
+
+The defaults, validation, and idle closing rule of the heartbeat interval, heartbeat timeout, and idle timeout are owned by [STREAM session §7](../../../04-session/01-stream-session.en.md#7-error-boundary).
 
 `configure_socket().max_message_size` is the StreamNode's Core STREAM
 inbound ceiling. It defaults to `64 KiB`; a complete message is measured

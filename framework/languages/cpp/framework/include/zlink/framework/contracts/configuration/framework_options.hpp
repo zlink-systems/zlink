@@ -1266,6 +1266,21 @@ class stream_node_options_builder_t
         return *this;
     }
 
+    stream_node_options_builder_t &set_heartbeat (std::chrono::milliseconds interval,
+                                                  std::chrono::milliseconds timeout)
+    {
+        _liveness.set_heartbeat (interval, timeout);
+        apply ();
+        return *this;
+    }
+
+    stream_node_options_builder_t &set_idle_timeout (std::chrono::milliseconds timeout)
+    {
+        _liveness.set_idle_timeout (timeout);
+        apply ();
+        return *this;
+    }
+
     stream_node_options_builder_t &set_tls_server (std::string certificate_file,
                                                    std::string private_key_file,
                                                    bool require_client_certificate = false)
@@ -1349,6 +1364,7 @@ class stream_node_options_builder_t
         const auto bind_host_override = _bind_host_override;
         const auto session_name = _session_name;
         const auto max_message_size = _socket_config.max_message_size;
+        const auto liveness = _liveness;
         const auto tls_certificate_file = _tls_certificate_file;
         const auto tls_private_key_file = _tls_private_key_file;
         const auto tls_require_client_certificate = _tls_require_client_certificate;
@@ -1358,9 +1374,10 @@ class stream_node_options_builder_t
           "stream_node:" + stream_name,
           [stream_name, endpoint, port, bind_host_override, options, session_name, max_message_size,
            tls_certificate_file, tls_private_key_file, tls_require_client_certificate,
-           advertise_host_override] (zlink_builder_t &zlink) {
+           advertise_host_override, liveness] (zlink_builder_t &zlink) {
               auto stream = zlink.stream (stream_name);
               stream.set_max_message_size (max_message_size);
+              stream.set_liveness (liveness);
               if (port) {
                   stream.bind ("tcp://" + bind_host_override.value_or (options->bind_host) + ":"
                                + std::to_string (*port));
@@ -1393,6 +1410,7 @@ class stream_node_options_builder_t
     std::string _tls_certificate_file;
     std::string _tls_private_key_file;
     stream_socket_config_t _socket_config;
+    detail::stream_liveness_options_t _liveness;
     bool _tls_require_client_certificate = false;
     bool _session_configured = false;
 };

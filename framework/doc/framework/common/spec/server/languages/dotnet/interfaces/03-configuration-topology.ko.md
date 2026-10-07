@@ -261,6 +261,8 @@ public interface IZLinkStreamNodeBuilder
     IZLinkStreamNodeBuilder SetBindHost(string bindHost);
     IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
     IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
+    IZLinkStreamNodeBuilder SetHeartbeat(TimeSpan interval, TimeSpan timeout);
+    IZLinkStreamNodeBuilder SetIdleTimeout(TimeSpan timeout);
     IZLinkStreamSocketConfig ConfigureSocket();
     IZLinkStreamNodeBuilder EnableActorDispatch();
     IZLinkStreamNodeBuilder SetTlsServer(
@@ -286,6 +288,8 @@ public interface IZLinkMetadataPolicyBuilder
 }
 
 ```
+
+Heartbeat interval·timeout과 idle timeout의 기본값, 검증과 유휴 종료 규칙은 [STREAM session §7](../../../04-session/01-stream-session.ko.md#7-오류-경계)이 정한다.
 
 `IZLinkStreamNodeBuilder.MaxMessageSize(long bytes)`의 기본값은 `64 KiB`다. 이 값은
 StreamNode의 Core STREAM inbound에서 client→server complete message를 검사할 때만 사용하며,

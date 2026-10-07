@@ -748,7 +748,7 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
         await client.RequestToNode("bench", Target, payload).Async<BenchPayload>(cancellationToken);
 
     public async ValueTask SendAsync(int stream, BenchPayload payload, CancellationToken cancellationToken) =>
-        await client.SendToNode("bench", Target, payload).Async(cancellationToken);
+        await client.SendToNode("bench", Target, payload).Async();
 
     public async ValueTask DisposeAsync()
     {

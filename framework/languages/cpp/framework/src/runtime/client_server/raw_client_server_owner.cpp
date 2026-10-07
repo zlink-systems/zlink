@@ -792,16 +792,20 @@ void raw_client_server_client_t::start ()
     start_task ().result ().value ();
 }
 
-task_t<void> raw_client_server_client_t::start_task ()
+task_t<void> raw_client_server_client_t::start_task (transport_turn_t transport_turn)
 {
-    co_await _lane.run_task ([this] {
+    std::unique_ptr<zlink::dealer_socket_t> dealer;
+    std::unique_ptr<zlink::socket_monitor_t> monitor;
+    decltype (_port) port;
+    application_job_queue_t::receive_flow_registration_t receive_flow_registration;
+    const bool starting = co_await _lane.run_task ([&] {
         if (_port) {
-            return true;
+            return false;
         }
         if (_closed) {
             throw std::logic_error ("ClientServer client cannot restart after close");
         }
-        auto dealer = std::make_unique<zlink::dealer_socket_t> (*_context);
+        dealer = std::make_unique<zlink::dealer_socket_t> (*_context);
         dealer->options ().linger (std::chrono::milliseconds (0));
         dealer->options ().max_message_size (
           zlink::byte_size_t::bytes (_options.admission.effective_max_message_bytes));
@@ -811,22 +815,33 @@ task_t<void> raw_client_server_client_t::start_task ()
                    + std::to_string (dealer->options ().max_message_size ().bytes ());
         });
         dealer->set_routing_id (zlink::routing_id_t::from (_options.client_routing_id));
-        application_job_queue_t::receive_flow_registration_t receive_flow_registration;
         if (_options.application_jobs) {
             receive_flow_registration = _options.application_jobs->register_receive_flow_socket (
               [socket = dealer.get ()] (application_job_queue_pressure_state_t state) {
                   return apply_application_job_receive_flow_state (*socket, state);
               });
         }
-        auto monitor = std::make_unique<zlink::socket_monitor_t> (dealer->monitor_open (
+        monitor = std::make_unique<zlink::socket_monitor_t> (dealer->monitor_open (
           zlink::monitor_event::connection_ready | zlink::monitor_event::disconnected));
         dealer->connect (_options.expected_server.advertised_endpoint);
+        return true;
+    });
+    if (!starting)
+        co_return;
+    const auto register_transport = [&] {
         // Monitor events wake the transport poller's owner; drains read them without waiting.
         if (_options.transport_poller)
             _options.transport_poller->add (*monitor, zlink::poll_event_flag_t::pollin,
                                             _options.transport_monitor_slot);
-        _port = std::make_shared<detail::backend::raw_dealer_port_t> (
+        port = std::make_shared<detail::backend::raw_dealer_port_t> (
           *dealer, _socket_mutex, _options.transport_poller, _options.transport_poller_slot);
+    };
+    if (transport_turn)
+        co_await transport_turn (register_transport);
+    else
+        register_transport ();
+    co_await _lane.run_task ([&] {
+        _port = std::move (port);
         _monitor = std::move (monitor);
         _dealer = std::move (dealer);
         _receive_flow_registration = std::move (receive_flow_registration);
@@ -839,7 +854,7 @@ void raw_client_server_client_t::close ()
     close_task ().result ().value ();
 }
 
-task_t<void> raw_client_server_client_t::close_task ()
+task_t<void> raw_client_server_client_t::close_task (transport_turn_t transport_turn)
 {
     std::tuple<decltype (_port), decltype (_monitor), decltype (_dealer)> resources;
     co_await _lane.run_task ([this, &resources] {
@@ -849,8 +864,14 @@ task_t<void> raw_client_server_client_t::close_task ()
     });
     std::exception_ptr failure;
     try {
-        close_client_server_resources (std::get<0> (resources), _options.transport_poller,
-                                       std::get<1> (resources), std::get<2> (resources));
+        const auto close_transport = [&] {
+            close_client_server_resources (std::get<0> (resources), _options.transport_poller,
+                                           std::get<1> (resources), std::get<2> (resources));
+        };
+        if (transport_turn)
+            co_await transport_turn (close_transport);
+        else
+            close_transport ();
     }
     catch (const std::exception &) {
         failure = std::current_exception ();

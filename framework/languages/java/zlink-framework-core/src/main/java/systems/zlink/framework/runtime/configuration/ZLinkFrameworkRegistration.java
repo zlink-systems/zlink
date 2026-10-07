@@ -306,7 +306,7 @@ public final class ZLinkFrameworkRegistration {
         }
         if (relocationStoreRequired && relocationStore == null) {
             throw new ZLinkConfigurationException(
-                    "Recreate or Snapshot relocation policy requires a Relocation Store");
+                    "Relocatable factories or Instance Spot factories require a Relocation Store");
         }
         Set<String> streamSessionTypeNames = new LinkedHashSet<>();
         for (StreamNodeRegistration streamNode : streamNodes) {

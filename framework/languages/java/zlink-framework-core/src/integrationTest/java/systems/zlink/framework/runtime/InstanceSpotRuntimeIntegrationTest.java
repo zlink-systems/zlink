@@ -50,7 +50,7 @@ final class InstanceSpotRuntimeIntegrationTest {
     void publicRequestColdActivatesApplicationInstanceOnRemoteNode() throws Exception {
         Zlink.version();
         EchoInstanceSpot.initializations.set(0);
-        EchoInstanceSpot.sends.set(0);
+        EchoInstanceSpot.warmups.set(0);
         EchoInstanceSpot.closes.set(null);
         EchoInstanceSpot.closeCompleted = new CompletableFuture<>();
         SourceEntrySpot.reset();
@@ -60,6 +60,7 @@ final class InstanceSpotRuntimeIntegrationTest {
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
+        targetOptions.addRelocationStore(new InMemoryRelocationStore());
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var targetNode = targetOptions.addRouteMesh("game");
         targetNode
@@ -99,7 +100,7 @@ final class InstanceSpotRuntimeIntegrationTest {
 
             assertEquals("echo:hello|echo:again|echo:after-close", reply);
             assertEquals(2, EchoInstanceSpot.initializations.get());
-            assertEquals(1, EchoInstanceSpot.sends.get());
+            assertEquals(1, EchoInstanceSpot.warmups.get());
             assertTrue(EchoInstanceSpot.closes.get());
         }
     }
@@ -109,7 +110,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         Zlink.version();
         EchoInstanceSpot.initializations.set(0);
         EchoInstanceSpot.generations.clear();
-        EchoInstanceSpot.sends.set(0);
+        EchoInstanceSpot.warmups.set(0);
         EchoInstanceSpot.closes.set(null);
         EchoInstanceSpot.closingCalls.set(0);
         SourceEntrySpot.reset();
@@ -120,6 +121,7 @@ final class InstanceSpotRuntimeIntegrationTest {
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
+        targetOptions.addRelocationStore(new InMemoryRelocationStore());
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var targetNode = targetOptions.addRouteMesh("game");
         targetNode
@@ -301,6 +303,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
+        targetOptions.addRelocationStore(new InMemoryRelocationStore());
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         if (failureStage.equals("callback")) {
             targetOptions
@@ -680,6 +683,7 @@ final class InstanceSpotRuntimeIntegrationTest {
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
+        targetOptions.addRelocationStore(new InMemoryRelocationStore());
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         targetOptions
                 .addRouteMesh("game")
@@ -785,7 +789,7 @@ final class InstanceSpotRuntimeIntegrationTest {
     void publicRequestReactivatesInstanceSpotAfterIdleEviction() throws Exception {
         Zlink.version();
         EchoInstanceSpot.initializations.set(0);
-        EchoInstanceSpot.sends.set(0);
+        EchoInstanceSpot.warmups.set(0);
         EchoInstanceSpot.closes.set(null);
         EchoInstanceSpot.closeReason.set(null);
         EchoInstanceSpot.idleEvicted = new CompletableFuture<>();
@@ -798,6 +802,7 @@ final class InstanceSpotRuntimeIntegrationTest {
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
+        targetOptions.addRelocationStore(new InMemoryRelocationStore());
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var targetNode = targetOptions.addRouteMesh("game");
         targetNode
@@ -898,22 +903,23 @@ final class InstanceSpotRuntimeIntegrationTest {
         public CompletionStage<Void> onInitialize() {
             return start.thenCompose(
                     ignored -> {
-                        CompletionStage<Void> warmup =
+                        CompletionStage<String> warmup =
                                 context.outbound()
-                                        .sendToSpot(request.get().spotId(), new Warmup("warmup"))
+                                        .requestToSpot(request.get().spotId(), new Warmup("warmup"))
                                         .instanceSpot("EchoInstance")
                                         .inMesh("game")
-                                        .submit();
+                                        .submit(String.class);
                         CompletionStage<String> first =
                                 warmup.thenCompose(
-                                        sendCompleted ->
-                                                context.outbound()
-                                                        .requestToSpot(
-                                                                request.get().spotId(), "hello")
-                                                        .instanceSpot("EchoInstance")
-                                                        .inMesh("game")
-                                                        .timeout(Duration.ofSeconds(5))
-                                                        .submit(String.class));
+                                        warmupReply -> {
+                                            assertEquals("warmup:ready", warmupReply);
+                                            return context.outbound()
+                                                    .requestToSpot(request.get().spotId(), "hello")
+                                                    .instanceSpot("EchoInstance")
+                                                    .inMesh("game")
+                                                    .timeout(Duration.ofSeconds(5))
+                                                    .submit(String.class);
+                                        });
                         CompletionStage<String> firstAndSecond =
                                 first.thenCompose(
                                         firstValue -> {
@@ -1340,7 +1346,7 @@ final class InstanceSpotRuntimeIntegrationTest {
     public static final class EchoInstanceSpot implements ZLinkInstanceSpot {
         static final AtomicInteger initializations = new AtomicInteger();
         static final List<Long> generations = new CopyOnWriteArrayList<>();
-        static final AtomicInteger sends = new AtomicInteger();
+        static final AtomicInteger warmups = new AtomicInteger();
         static final AtomicReference<Boolean> closes = new AtomicReference<>();
         static volatile CompletableFuture<Boolean> closeCompleted = new CompletableFuture<>();
         static final AtomicInteger closingCalls = new AtomicInteger();
@@ -1364,7 +1370,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         @Override
         public void configure() {
             context.handlers().addPacket(EchoHandler.class);
-            context.handlers().addPacket(EchoPacketHandler.class);
+            context.handlers().addPacket(EchoWarmupHandler.class);
             context.handlers().addPacket(CloseHandler.class);
         }
 
@@ -1397,12 +1403,12 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
     }
 
-    public static final class EchoPacketHandler
-            implements ZLinkSpotPacketHandler<EchoInstanceSpot, Warmup> {
+    public static final class EchoWarmupHandler
+            implements ZLinkSpotRequestHandler<EchoInstanceSpot, Warmup, String> {
         @Override
-        public CompletionStage<Void> handle(EchoInstanceSpot spot, Warmup request) {
-            EchoInstanceSpot.sends.incrementAndGet();
-            return CompletableFuture.completedFuture(null);
+        public CompletionStage<String> handle(EchoInstanceSpot spot, Warmup request) {
+            EchoInstanceSpot.warmups.incrementAndGet();
+            return CompletableFuture.completedFuture("warmup:ready");
         }
     }
 

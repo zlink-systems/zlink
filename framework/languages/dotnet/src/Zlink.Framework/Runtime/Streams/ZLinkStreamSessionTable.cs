@@ -13,7 +13,8 @@ internal sealed class ZLinkStreamSessionTable(
     string transport,
     TimeProvider timeProvider,
     bool actorDispatchEnabled,
-    IZLinkRuntimeFailureReporter errorSink
+    IZLinkRuntimeFailureReporter errorSink,
+    ZLinkStreamNodeRegistration? livenessOptions = null
 )
 {
     private readonly ZLinkStateLane _lane = new();
@@ -80,7 +81,8 @@ internal sealed class ZLinkStreamSessionTable(
                         transport,
                         timeProvider,
                         actorDispatchEnabled,
-                        requireConnectionReady: true
+                        requireConnectionReady: true,
+                        livenessOptions: livenessOptions
                     )
                     .ConfigureAwait(false);
                 var completion = await _lane

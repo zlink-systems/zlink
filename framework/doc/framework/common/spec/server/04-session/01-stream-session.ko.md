@@ -222,7 +222,11 @@ connector는 connector instance별 typed codec option
 Session 오류 callback은 monitor에서 관찰 가능한 transport 오류를 session 단위로 다시
 올려주는 축으로만 제한한다.
 
-서버 STREAM session의 liveness는 [Stream Connector §6](../../stream-connector/32-stream-connector.ko.md#6-연결-생명주기)의 heartbeat 규칙과 기본값을 따른다. 서버에서 무수신 timeout의 결과는 reconnect가 아니라 `heartbeat_timeout`으로 session을 닫는 것이다.
+서버 STREAM session의 liveness는 [Stream Connector §6](../../stream-connector/32-stream-connector.ko.md#6-연결-생명주기)의 heartbeat 규칙을 따른다. Heartbeat interval과 timeout의 기본값은 그 절의 기본값이며 Stream node 설정으로 바꿀 수 있다. 서버에서 무수신 timeout의 결과는 reconnect가 아니라 `heartbeat_timeout`으로 session을 닫는 것이다.
+
+애플리케이션 유휴 종료는 Stream node의 idle timeout을 양수로 설정했을 때만 동작한다. 기본값은 0이며 0은 유휴 종료를 하지 않음을 뜻한다. 켜면 마지막 애플리케이션 packet을 받은 뒤 idle timeout이 지난 session을 `idle_timeout`으로 닫는다. Heartbeat control frame은 애플리케이션 활동으로 세지 않는다.
+
+Heartbeat interval과 timeout은 양수이고 timeout이 interval보다 커야 한다. Idle timeout은 0 이상이다. 이 조건을 어긴 설정은 host 시작 전에 설정 오류로 거부한다.
 
 세션이 닫힐 때의 종료 사유는
 [Stream Connector §6.2](../../stream-connector/32-stream-connector.ko.md#62-종료-사유)의

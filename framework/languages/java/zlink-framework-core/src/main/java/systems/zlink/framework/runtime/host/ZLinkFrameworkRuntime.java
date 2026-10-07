@@ -1644,7 +1644,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                     registration.meshNodes().stream()
                             .anyMatch(
                                     systems.zlink.framework.runtime.mesh.MeshNodeRegistration
-                                            ::requiresRelocationStore);
+                                            ::hasRelocatableFactories);
             if (!relocationPolicyConfigured) {
                 return CompletableFuture.completedFuture(
                         ZLinkTerminationReason.RELOCATION_DISABLED);
