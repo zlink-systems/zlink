@@ -1,5 +1,7 @@
 package systems.zlink.framework.spring;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -21,6 +23,26 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 
 final class StartupFailureTest {
+    @Test
+    void applicationBeanInjectsPublicRuntimeProviderAndObservesServing() throws Exception {
+        try (var context =
+                context(
+                        new ZLinkInMemoryProviderLocationStore(),
+                        "inproc://public-runtime-status")) {
+            context.registerBean(PublicRuntimeConsumer.class);
+            context.refresh();
+            var runtime = context.getBean(PublicRuntimeConsumer.class).runtime().getObject();
+            assertSame(context.getBean(ZLinkFrameworkRuntime.class), runtime);
+            assertEquals(
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState.SERVING,
+                    runtime.status().state());
+            awaitReady(runtime);
+        }
+    }
+
+    record PublicRuntimeConsumer(
+            org.springframework.beans.factory.ObjectProvider<ZLinkFrameworkRuntime> runtime) {}
+
     @Test
     void routingIdConflictFailsContextRefresh() throws Exception {
         ZLinkLocationStore store = new ZLinkInMemoryProviderLocationStore();
@@ -57,7 +79,9 @@ final class StartupFailureTest {
                             @Override
                             public void onNext(
                                     ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus> value) {
-                                if (runtime.isReady()) {
+                                if (value.status().state()
+                                        == systems.zlink.framework.runtime.host
+                                                .ZLinkFrameworkRuntimeState.SERVING) {
                                     ready.complete(null);
                                     subscription.cancel();
                                 }
