@@ -1012,6 +1012,7 @@ Framework는 host가 message를 받기 전에 최소한 다음 설정을 검증�
 - [ClientServer Channel](02-glossary.ko.md#clientserver-channel)의 Client·Server 역할, automatic discovery 사용 시 location store 등록
 - process-local ChannelName 송신 경로 중복과 빈 ChannelName 등록
 - handler key 중복과 필요한 handler 누락
+- 등록한 Spot·Actor·handler 생성자 dependency를 application DI가 하나로 해석할 수 있는지(후보가 없거나 여럿이면 시작 실패). 생성자를 application이 직접 제공하는 언어는 해당하지 않는다
 - channel 종류와 handler 종류의 일치
 - Object Client·Server 또는 automatic location 기능을 사용할 때 location store 등록
 - manual peer endpoint와 expected RID 형식

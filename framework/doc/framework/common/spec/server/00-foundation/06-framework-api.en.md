@@ -1159,7 +1159,7 @@ messages.
 - [ClientServer Channel](02-glossary.en.md#clientserver-channel)'s Client/Server roles, and
   location-store registration when automatic discovery is used
 - duplicate process-local ChannelName send paths and empty ChannelName registration
-- duplicate handler keys and missing required handlers
+- whether application DI resolves each constructor dependency of a registered Spot, Actor, or handler to exactly one candidate (startup fails when there is none or more than one). This doesn't apply to languages where the application supplies the constructor itself
 - matching of channel kind and handler kind
 - location-store registration when using Object Client/Server or automatic location
   features
