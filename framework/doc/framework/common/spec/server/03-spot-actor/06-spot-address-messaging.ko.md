@@ -395,10 +395,8 @@ sequenceDiagram
 ### 4.1.1 Target process가 activation 도중 종료된 경우
 
 **Target process가 `Reserve` 뒤 종료되면 startup의 complete authority scan이 Pending creation
-정보를 다시 읽고, 정확한 fence로 생성을 중단한다.** 다시 시작한 process는 새 lifecycle
-generation을 가지므로 이전 lifecycle에 묶인 reservation을 이어갈 수 없다. Source caller는 연결이
-끊길 때 실패한 Core request로 이미 terminal을 받았다. 중단은 reservation과 recovery root를 함께
-지운다.
+정보를 다시 읽는다.** 같은 reservation과 generation으로 factory, initialize와 durable inbox
+복원을 이어가거나, 정확한 fence로 생성을 중단한다.
 
 **`Ready` commit 뒤 queue 선두를 복원하기 전에 종료되었다면 recovery root와 cursor로 최초
 record를 먼저 복원한다.** 이 복원이 끝나기 전에는 해당 owner가 application message를 받도록
